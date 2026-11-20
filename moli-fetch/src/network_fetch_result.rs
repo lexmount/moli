@@ -198,11 +198,13 @@ pub(crate) struct NetworkObservationRecorder {
 }
 
 #[derive(Clone)]
-pub(crate) struct NetworkRequestObserver(Arc<dyn Fn(usize, NetworkRequestExtraInfo) + Send + Sync>);
+pub(crate) struct NetworkRequestObserver(
+    Arc<dyn Fn(Vec<RedirectInfo>, NetworkRequestExtraInfo) + Send + Sync>,
+);
 
 impl NetworkRequestObserver {
     pub(crate) fn new(
-        observer: impl Fn(usize, NetworkRequestExtraInfo) + Send + Sync + 'static,
+        observer: impl Fn(Vec<RedirectInfo>, NetworkRequestExtraInfo) + Send + Sync + 'static,
     ) -> Self {
         Self(Arc::new(observer))
     }
@@ -235,8 +237,12 @@ impl NetworkObservationRecorder {
     ) {
         let mut state = self.state.lock();
         state.current_request_cookie_report = cookie_report;
-        state.current_hop = request.redirect_chain().len();
         state.request_observer = request.network_request_observer().cloned();
+        state.redirect_chain = if state.request_observer.is_some() {
+            request.redirect_chain().to_vec()
+        } else {
+            Vec::new()
+        };
     }
 
     pub(crate) fn record_request_header_block(&self, data: &[u8]) {
@@ -250,17 +256,17 @@ impl NetworkObservationRecorder {
             data,
             state.current_request_cookie_report.clone(),
         );
-        let hop = state.current_hop;
+        let hop = state.redirect_chain.len();
         let notification = if state.last_reported_hop == Some(hop) {
             None
         } else {
-            state.request_observer.clone().map(|observer| {
+            state.request_observer.take().map(|observer| {
                 state.last_reported_hop = Some(hop);
                 let info = NetworkRequestExtraInfo {
                     headers: request.headers.clone(),
                     cookie_report: request.cookie_report.clone().unwrap_or_default(),
                 };
-                (observer, info)
+                (observer, std::mem::take(&mut state.redirect_chain), info)
             })
         };
         state
@@ -268,8 +274,8 @@ impl NetworkObservationRecorder {
             .exchanges
             .push(NetworkExchangeObservation::request_only(request));
         drop(state);
-        if let Some((observer, info)) = notification {
-            (observer.0)(hop, info);
+        if let Some((observer, redirects, info)) = notification {
+            (observer.0)(redirects, info);
         }
     }
 
@@ -339,7 +345,7 @@ impl NetworkObservationRecorder {
 struct NetworkObservationRecorderState {
     journal: NetworkObservationJournal,
     current_request_cookie_report: Option<StoredCookieQueryReport>,
-    current_hop: usize,
+    redirect_chain: Vec<RedirectInfo>,
     last_reported_hop: Option<usize>,
     request_observer: Option<NetworkRequestObserver>,
     pending_response: Option<PendingResponseObservation>,

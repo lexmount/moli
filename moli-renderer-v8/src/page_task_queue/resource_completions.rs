@@ -397,8 +397,24 @@ impl RendererResourceCompletionSender {
         self
     }
 
-    pub(crate) fn observes_request_headers(&self) -> bool {
-        self.observes_request_headers
+    pub(crate) fn observe_subresource_request(
+        &self,
+        request: moli_fetch::Request,
+        internal_id: u64,
+    ) -> moli_fetch::Request {
+        if !self.observes_request_headers {
+            return request;
+        }
+        let sender = self.clone();
+        request.with_network_request_observer(move |redirects, info| {
+            let _ = sender.send_async_subresource_event(
+                crate::types::AsyncSubresourceFetchEvent::RequestExtraInfo {
+                    internal_id,
+                    redirects: redirects.into_iter().map(Into::into).collect(),
+                    info: Box::new(info),
+                },
+            );
+        })
     }
 
     fn send_page_completion(

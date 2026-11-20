@@ -1048,10 +1048,10 @@ impl Request {
 
     /// On fetches with network metadata, report the first HTTP request header
     /// block for each hop. The callback runs on the fetch thread and receives
-    /// the number of redirects already followed and that hop's cookie report.
+    /// the redirects already followed and that hop's request headers and cookie report.
     pub fn with_network_request_observer(
         mut self,
-        observer: impl Fn(usize, NetworkRequestExtraInfo) + Send + Sync + 'static,
+        observer: impl Fn(Vec<RedirectInfo>, NetworkRequestExtraInfo) + Send + Sync + 'static,
     ) -> Self {
         self.network_request_observer = Some(NetworkRequestObserver::new(observer));
         self

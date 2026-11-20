@@ -987,6 +987,7 @@ impl ScriptVm {
             fetch.discard_response_body();
         }
 
+        let network_response_extra_info = pending.response.network_response_extra_info().cloned();
         let activity = self.resolve_pending_subresource_fetch_body(
             pending.pending,
             pending.request_url,
@@ -997,8 +998,8 @@ impl ScriptVm {
             false,
             None,
             None,
-            Ok(
-                response_body.into_navigation_response(moli_fetch::ResponseHead {
+            Ok(response_body
+                .into_navigation_response(moli_fetch::ResponseHead {
                     status_text: None,
                     final_url: pending.response.final_url,
                     status: response_code,
@@ -1010,8 +1011,8 @@ impl ScriptVm {
                     from_cache: pending.response.from_cache,
                     cache_state: pending.response.cache_state,
                     negotiated_http_version: pending.response.negotiated_http_version,
-                }),
-            ),
+                })
+                .with_network_response_extra_info(network_response_extra_info)),
         )?;
         Ok(AsyncSubresourceCommandExecution::after_body((), activity))
     }
@@ -1109,8 +1110,13 @@ impl ScriptVm {
         if intercepted_window {
             state.pending.update_request_snapshot(request.clone());
         }
+        let request = self
+            ._context_host
+            .borrow()
+            .resource_completion_sender()
+            .observe_subresource_request(request, state.pending.info.internal_id);
         let response = async move {
-            let result = if intercepted_window {
+            if intercepted_window {
                 crate::network_host::fetch_intercepted_window_hop(
                     request_client,
                     request,
@@ -1124,14 +1130,14 @@ impl ScriptVm {
                     cancel_handle,
                 )
                 .await
-            };
-            result.map(|observed| {
-                let (response, request_observation) = observed.into_parts();
-                crate::protocol_types::NavigationResponse::from(response)
-                    .with_network_request_headers(
-                        request_observation.map(|observation| observation.into_headers()),
-                    )
-            })
+                .map(|observed| {
+                    let (response, request_observation) = observed.into_parts();
+                    crate::protocol_types::NavigationResponse::from(response)
+                        .with_network_request_headers(
+                            request_observation.map(|observation| observation.into_headers()),
+                        )
+                })
+            }
         };
         self.spawn_running_subresource_response(state, response);
     }

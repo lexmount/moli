@@ -29,7 +29,7 @@ pub(crate) async fn fetch_intercepted_window_hop(
     loader: ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
-) -> Result<NetworkFetchResult<Response>, String> {
+) -> Result<crate::protocol_types::NavigationResponse, String> {
     let mode = request.redirect_mode();
     let preflight_headers = request.request_headers.to_byte_strings();
     let cancel = cancel_handle.unwrap_or_default();
@@ -43,6 +43,7 @@ pub(crate) async fn fetch_intercepted_window_hop(
     )
     .await?;
     let (response, journal) = observed.into_parts_with_observation_journal();
+    let extra_info = network_response_extra_info(&response.head, &journal);
     let redirect = matches!(response.head.status, 301 | 302 | 303 | 307 | 308)
         && (mode == RequestRedirectMode::Manual
             || response
@@ -58,10 +59,15 @@ pub(crate) async fn fetch_intercepted_window_hop(
         cancel.adopt_response_progress(&response_cancel);
         response.materialize().await?.0
     };
-    Ok(NetworkFetchResult::with_observation_journal(
-        materialized,
-        journal,
-    ))
+    Ok(
+        crate::protocol_types::NavigationResponse::from(materialized)
+            .with_network_request_headers(
+                journal
+                    .final_request_observation()
+                    .map(|observation| observation.headers().to_vec()),
+            )
+            .with_network_response_extra_info(extra_info),
+    )
 }
 
 #[cfg(any(test, feature = "devtools"))]
@@ -586,20 +592,7 @@ pub(crate) fn spawn_async_subresource_fetch(
     request_body: Option<String>,
 ) {
     let request = request.with_body_text(request_body.as_deref().map(std::sync::Arc::from));
-    let request = if completion_tx.observes_request_headers() {
-        let completion_tx = completion_tx.clone();
-        request.with_network_request_observer(move |hop, info| {
-            let _ = completion_tx.send_async_subresource_event(
-                AsyncSubresourceFetchEvent::RequestExtraInfo {
-                    internal_id,
-                    hop,
-                    info: Box::new(info),
-                },
-            );
-        })
-    } else {
-        request
-    };
+    let request = completion_tx.observe_subresource_request(request, internal_id);
     let parkable_image_manager = matches!(
         request.browser_request_metadata(),
         Some(BrowserRequestMetadata::Image)

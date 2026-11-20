@@ -925,7 +925,7 @@ pub(super) enum AsyncSubresourceFetchEvent {
     ObservedNetworkRecord(Box<SubresourceNetworkRecord>),
     RequestExtraInfo {
         internal_id: u64,
-        hop: usize,
+        redirects: Vec<NavigationRedirect>,
         info: Box<moli_fetch::NetworkRequestExtraInfo>,
     },
     StreamingStarted(Box<AsyncSubresourceStreamingStarted>),

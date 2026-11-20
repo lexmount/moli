@@ -580,9 +580,6 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
             && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
         {
             slot.record_fetch_pause_announced_request_id(network_request_id.clone());
-            if output.network_output().redirect().is_some() {
-                slot.record_fetch_pause_announced_redirect(&network_request_id);
-            }
         }
         if !network_session_ids.is_empty() {
             // A request is already observable at the Fetch pause. Its body
@@ -604,6 +601,12 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
                 )
             })
             .collect::<Vec<_>>();
+        if !network_events.is_empty()
+            && output.network_output().redirect().is_some()
+            && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
+        {
+            slot.record_subresource_announced_redirects(&network_request_id, 1);
+        }
         let Some(fetch) = output.into_fetch_event_parts() else {
             // Response-only and URL-nonmatching native interceptions still
             // publish this initial Network event. Their terminal record must
