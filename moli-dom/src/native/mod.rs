@@ -46,7 +46,7 @@ pub use html_serialization::{
 pub use interaction::{ContentEditableState, FocusSupport};
 pub use node::{
     CDataSection, Comment, LiveDomNodeMetadata, NativeNodeId, Node, NodeData, NodeFlags, NodeType,
-    ProcessingInstruction, Text,
+    ProcessingInstruction, ProcessingInstructionAttributes, Text,
 };
 pub use parser_construction::ParserConstruction;
 pub(crate) use queries::select_display_size;
@@ -1098,7 +1098,7 @@ mod tests {
         assert_eq!(size_of::<Text>(), size_of::<String>());
         assert_eq!(size_of::<CDataSection>(), 16);
         assert_eq!(size_of::<Comment>(), 16);
-        assert_eq!(size_of::<ProcessingInstruction>(), 32);
+        assert_eq!(size_of::<ProcessingInstruction>(), 40);
         assert!(
             size_of::<Attribute>() <= 40,
             "Attribute common record grew to {} bytes",
