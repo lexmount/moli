@@ -696,6 +696,105 @@ fn exec_command_insert_text_preserves_inline_formatting_at_text_boundaries() {
 }
 
 #[test]
+fn exec_command_insert_html_uses_the_native_editing_range() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-insert-html.test/",
+        "<!doctype html><div id='editor' contenteditable>ABC</div>",
+    );
+
+    let result = vm
+        .eval(
+            r##"
+(() => {
+  const editor = document.querySelector("#editor");
+  const selection = document.getSelection();
+  selection.setBaseAndExtent(editor.firstChild, 1, editor.firstChild, 2);
+  for (const name of ["deleteContents", "insertNode", "createContextualFragment"]) {
+    Range.prototype[name] = () => { throw new Error("execCommand called an author method"); };
+  }
+  const events = [];
+  for (const type of ["beforeinput", "input"]) {
+    editor.addEventListener(type, event => {
+      events.push([type, event.inputType, event.data, event.isTrusted]);
+    });
+  }
+  const inline = {
+    enabled: document.queryCommandEnabled("insertHTML"),
+    inserted: document.execCommand("insertHTML", false, "<style>i{font-weight:bold}</style><b>in</b><i>sert</i>"),
+    html: editor.innerHTML,
+    caret: selection.isCollapsed && selection.anchorNode === editor ? selection.anchorOffset : -1,
+    events: events.slice(),
+  };
+  editor.innerHTML = '<p id="original"><b>ABC</b></p>';
+  const text = editor.querySelector("b").firstChild;
+  selection.setBaseAndExtent(text, 1, text, 2);
+  const pastedParagraphs = document.execCommand("insertHTML", false, "<p>one</p><p>two</p>");
+  const validParagraphs = editor.querySelector("p p") === null
+    && editor.querySelectorAll("#original").length === 1 && editor.textContent === "AonetwoC";
+
+  editor.innerHTML = 'A<span style="color:red">B</span>C';
+  const styled = editor.querySelector("span").firstChild;
+  selection.setBaseAndExtent(styled, 1, styled, 0);
+  const replacedFormatting = document.execCommand("insertHTML", false, "<i>one</i>");
+  const withoutEmptyWrapper = editor.innerHTML;
+
+  editor.innerHTML = "<p><span><!--before--><br><!--after--></span></p>";
+  selection.collapse(editor.firstChild, 1);
+  const replacedPlaceholder = document.execCommand("insertHTML", false, "one");
+  const filledLine = editor.innerHTML;
+
+  return JSON.stringify({
+    inline, pastedParagraphs, validParagraphs, replacedFormatting, withoutEmptyWrapper,
+    replacedPlaceholder, filledLine,
+  });
+})()
+"##,
+        )
+        .expect("insertHTML should replace the current editing range");
+
+    assert_eq!(
+        result,
+        concat!(
+            r#"{"inline":{"enabled":true,"inserted":true,"html":"A<b>in</b><i>sert</i>C","caret":3,"events":[["input","",null,true]]},"pastedParagraphs":true,"validParagraphs":true,"#,
+            r#""replacedFormatting":true,"withoutEmptyWrapper":"A<i>one</i>C","replacedPlaceholder":true,"filledLine":"<p><span><!--before-->one<!--after--></span></p>"}"#,
+        )
+    );
+}
+
+#[test]
+fn exec_command_insert_html_keeps_the_tail_when_a_callback_moves_the_paragraph() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-insert-html.test/",
+        "<!doctype html><div id='source' contenteditable><p>ABC<move-on-detach>marker</move-on-detach>DEF</p></div><div id='destination' contenteditable></div>",
+    );
+    let result = vm
+        .eval(
+            r##"
+(() => {
+  const source = document.querySelector("#source");
+  const destination = document.querySelector("#destination");
+  const paragraph = source.firstChild;
+  let disconnects = 0;
+  customElements.define("move-on-detach", class extends HTMLElement {
+    disconnectedCallback() {
+      if (++disconnects === 1) destination.append(paragraph);
+    }
+  });
+  source.focus();
+  document.getSelection().collapse(paragraph.firstChild, 1);
+  const inserted = document.execCommand("insertHTML", false, "<p>one</p>");
+  return [inserted, disconnects, source.innerHTML, destination.innerHTML].join("|");
+})()
+"##,
+        )
+        .expect("a reparenting callback should preserve the original paragraph contents");
+    assert_eq!(
+        result,
+        "false|1||<p>ABC<move-on-detach>marker</move-on-detach>DEF</p>"
+    );
+}
+
+#[test]
 fn selection_to_string_uses_rendered_native_range_projection() {
     let mut vm = new_storage_test_vm("https://selection-rendered-string.test/");
 

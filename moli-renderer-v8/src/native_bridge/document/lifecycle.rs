@@ -3,14 +3,14 @@ use super::super::node::{
     node_runtime_and_handle_from_args_or_detached, node_runtime_and_handle_from_object_or_detached,
     remove_child_in_reaction_scope,
 };
-use super::insert_text::{exec_command_insert_text, insert_text_command_target};
+use super::insert_html::{exec_command_insert_html, insert_html_command_target};
+use super::insert_text::{editing_insertion_target, exec_command_insert_text};
 use super::{PageScriptHost, document_has_browsing_context, is_html_document, throw_dom_exception};
 use crate::native_bridge::element::{
     contenteditable_editing_host, dispatch_text_control_event, document_copy_command_supported,
-    form_control_is_effectively_disabled, is_text_control,
-    queue_text_control_document_selection_change_event,
-    replace_text_control_selection_for_insert_html, restore_focused_text_control_selection,
-    run_document_copy_command, text_control_value_dom_string,
+    is_text_control, queue_text_control_document_selection_change_event,
+    restore_focused_text_control_selection, run_document_copy_command,
+    text_control_value_dom_string,
 };
 use crate::{
     custom_elements,
@@ -777,7 +777,7 @@ fn execute_document_editing_command<'s>(
             let Some(value) = editing_command_insert_html_value(scope, runtime_ptr, args) else {
                 return;
             };
-            let inserted = exec_command_insert_html(scope, runtime_ptr, &value);
+            let inserted = exec_command_insert_html(scope, runtime_ptr, document_handle, &value);
             rv.set(v8::Boolean::new(scope, inserted).into());
             return;
         }
@@ -829,7 +829,7 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
     let runtime = unsafe { &*runtime_ptr };
     let enabled = match command.parse::<EditingCommand>() {
         Ok(EditingCommand::InsertText) => {
-            insert_text_command_target(runtime, document_handle).is_some()
+            editing_insertion_target(runtime, document_handle).is_some()
         }
         Ok(EditingCommand::Delete | EditingCommand::ForwardDelete) => {
             runtime.document_design_mode_enabled(document_handle)
@@ -838,7 +838,9 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
                         || contenteditable_editing_host(runtime, active).is_some()
                 })
         }
-        Ok(EditingCommand::InsertHtml) => exec_command_insert_html_target(runtime).is_some(),
+        Ok(EditingCommand::InsertHtml) => {
+            insert_html_command_target(runtime, document_handle).is_some()
+        }
         Ok(EditingCommand::SelectAll) => {
             exec_command_select_all_target(runtime, document_handle).is_some()
         }
@@ -983,33 +985,6 @@ fn editing_command_insert_html_value<'s>(
         "Document execCommand",
         "execCommand",
     )
-}
-
-fn exec_command_insert_html(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    value: &str,
-) -> bool {
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(target) = exec_command_insert_html_target(runtime) else {
-        return false;
-    };
-    let insertion_text = super::insert_html::text_control_text_from_html(runtime, target, value);
-    replace_text_control_selection_for_insert_html(scope, runtime_ptr, target, &insertion_text)
-}
-
-fn exec_command_insert_html_target(runtime: &PageScriptHost) -> Option<DomHandle> {
-    let handle = runtime.active_element_handle()?;
-    let element = runtime.dom_host().node(handle)?.as_element()?;
-    let accepts_plain_text = element.is_html_textarea()
-        || (element.is_html_input() && element.input_type().supports_text_length_validation());
-    if !accepts_plain_text
-        || element.has_attribute("readonly")
-        || form_control_is_effectively_disabled(runtime, handle)
-    {
-        return None;
-    }
-    Some(handle)
 }
 
 fn exec_command_delete_selection<'s>(

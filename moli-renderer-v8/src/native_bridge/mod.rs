@@ -13,8 +13,8 @@ pub(crate) use context_host::{
     ChildDocumentFetch, DecodedImageContent, DocumentDomainState, InputImageRequestId,
     NavigationImageDocumentCompletion, NavigationImageDocumentLoad, PageScriptHost,
     PageScriptHostTaskCapabilities, PendingScrollObservableEffects, PostParseAutofocusAdmission,
-    ServiceWorkerWindowOwner, SharedResourceTimingBufferRegistry, WindowAccessOrigin,
-    WindowOriginKey,
+    SelectionBoundarySnapshot, ServiceWorkerWindowOwner, SharedResourceTimingBufferRegistry,
+    WindowAccessOrigin, WindowOriginKey,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use current_input::CurrentInputEventScope;

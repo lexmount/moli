@@ -1,28 +1,28 @@
 use super::PageScriptHost;
 use crate::context_bootstrap::replace_editable_selection_text;
 use crate::document_runtime::DomHandle;
-use crate::dom::native::NodeType;
+use crate::dom::native::{ContentEditableState, NodeType};
 use crate::native_bridge::element::{
     TextEditInputType, construct_input_event, dispatch_public_event, is_text_control_user_editable,
     replace_text_control_selection_with_input_event,
 };
 
-pub(super) enum InsertTextTarget {
+pub(super) enum EditingInsertionTarget {
     TextControl(DomHandle),
     EditingHost(DomHandle),
 }
 
-pub(super) fn insert_text_command_target(
+pub(super) fn editing_insertion_target(
     runtime: &PageScriptHost,
     document: DomHandle,
-) -> Option<InsertTextTarget> {
+) -> Option<EditingInsertionTarget> {
     if !runtime.document_is_fully_active(document) {
         return None;
     }
     if let Some(control) = runtime.document_selected_text_control(document) {
         return (runtime.active_element_handle() == Some(control)
             && is_text_control_user_editable(runtime, control))
-        .then_some(InsertTextTarget::TextControl(control));
+        .then_some(EditingInsertionTarget::TextControl(control));
     }
 
     let selection = runtime.document_editing_selection(document)?;
@@ -36,10 +36,10 @@ pub(super) fn insert_text_command_target(
     }
     let host = editing_host_at_boundary(runtime, document, selection.start.container)?;
     (editing_host_at_boundary(runtime, document, selection.end.container) == Some(host))
-        .then_some(InsertTextTarget::EditingHost(host))
+        .then_some(EditingInsertionTarget::EditingHost(host))
 }
 
-fn editing_host_at_boundary(
+pub(super) fn editing_host_at_boundary(
     runtime: &PageScriptHost,
     document: DomHandle,
     node: DomHandle,
@@ -47,6 +47,25 @@ fn editing_host_at_boundary(
     let dom = runtime.dom_host();
     if dom.owner_document_handle(node) != Some(document) || !dom.is_connected(node) {
         return None;
+    }
+    if runtime.document_design_mode_enabled(document) {
+        let document_node = dom.node(document)?.as_document()?;
+        let body = document_node
+            .body_handle(dom.dom(), document)
+            .or_else(|| document_node.document_element_handle(dom.dom(), document));
+        let mut current = Some(node);
+        while let Some(handle) = current {
+            let ancestor = dom.node(handle)?;
+            if ancestor.as_element().is_some_and(|element| {
+                element.content_editable_state() == ContentEditableState::False
+            }) {
+                break;
+            }
+            if Some(handle) == body {
+                return Some(handle);
+            }
+            current = ancestor.parent_node_id();
+        }
     }
     dom.dom().contenteditable_editing_host(node)
 }
@@ -57,11 +76,12 @@ pub(super) fn exec_command_insert_text(
     document: DomHandle,
     replacement: &str,
 ) -> bool {
-    let Some(target) = insert_text_command_target(unsafe { &*runtime_ptr }, document) else {
+    let Some(target) = editing_insertion_target(unsafe { &*runtime_ptr }, document) else {
         return false;
     };
     let handle = match target {
-        InsertTextTarget::TextControl(handle) | InsertTextTarget::EditingHost(handle) => handle,
+        EditingInsertionTarget::TextControl(handle)
+        | EditingInsertionTarget::EditingHost(handle) => handle,
     };
     let Some(context) =
         crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
@@ -72,7 +92,7 @@ pub(super) fn exec_command_insert_text(
     let input_type = TextEditInputType::InsertText;
     let data = input_type.data(replacement);
 
-    if let InsertTextTarget::TextControl(_) = target {
+    if let EditingInsertionTarget::TextControl(_) = target {
         return replace_text_control_selection_with_input_event(
             scope,
             runtime_ptr,
