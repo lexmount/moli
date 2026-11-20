@@ -1213,12 +1213,6 @@ impl TargetRuntimeSlot {
             .flatten()
     }
 
-    pub(crate) fn inspector_issues(&self) -> Option<Vec<moli_core::page::InspectorIssueSnapshot>> {
-        self.page_slot
-            .has_loaded_page()
-            .then(|| self.observable_queue.inspector_issues())
-    }
-
     #[cfg(test)]
     pub(crate) fn sync_observable_output_source_from_renderer_snapshot(
         &mut self,

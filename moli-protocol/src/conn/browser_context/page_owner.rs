@@ -169,14 +169,9 @@ impl TargetSessionOwnerMut<'_> {
         true
     }
 
-    fn audits_output_snapshot(&mut self) -> Vec<moli_core::page::InspectorIssueSnapshot> {
-        let runtime_slot = self.runtime_slot_mut();
-        runtime_slot.ingest_owner_page_observable_output_updates();
-        runtime_slot.inspector_issues().unwrap_or_default()
-    }
-
     fn enable_audits(mut self) -> SessionOwnerAuditsEnableResult {
-        let storage = self.sync_audits_storage();
+        // Concrete inspector events can reach the target before the Page report catches up.
+        let storage = self.mutate_target_owner_state(|state| state.audits_storage_state.clone());
         let cursor =
             self.mutate_session_state_ref(|state| state.enable_audits_with_storage(&storage));
         let replay = cursor.and_then(|cursor| {
@@ -187,18 +182,6 @@ impl TargetSessionOwnerMut<'_> {
             Some(crate::domains::audits::TargetAuditsReplaySnapshot { issues })
         });
         SessionOwnerAuditsEnableResult::Handled { replay }
-    }
-
-    fn sync_audits_storage(
-        &mut self,
-    ) -> crate::domains::audits_output_state::TargetAuditsStorageState {
-        let source_issues = self.audits_output_snapshot();
-        self.mutate_target_owner_state(|owner_state| {
-            owner_state
-                .audits_storage_state
-                .ingest_source_issues(&source_issues);
-            owner_state.audits_storage_state.clone()
-        })
     }
 
     fn disable_audits(mut self) -> bool {

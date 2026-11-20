@@ -76,9 +76,14 @@ fn unknown_session_output_plan() -> CommandOutputPlan {
 
 #[cfg(test)]
 mod tests {
+    use moli_core::page::{
+        ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType,
+        InspectorIssueSnapshot,
+    };
     use serde_json::json;
 
-    use crate::conn::BrowserContext;
+    use crate::conn::{BrowserContext, CommandOwnerScope};
+    use crate::domains::observable_output::inspector_issue_prepared_outputs;
     use crate::testing::TestContext;
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
@@ -115,6 +120,48 @@ mod tests {
         assert_eq!(details["frameId"], json!("TID-audits"));
         assert!(details["documentNodeId"].as_u64().is_some_and(|id| id > 0));
         ctx.expect_result(1, json!({}), Some("SID-audits"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn enable_replays_issue_before_page_report_catches_up() {
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<!doctype html><body></body>").await;
+        ctx.with_fixture(|conn| {
+            let owner = CommandOwnerScope::capture(conn, Some("SID-audits"));
+            let document = conn
+                .target_root_document_lifecycle_identity_for_owner(&owner)
+                .expect("loaded document identity");
+            let issue = InspectorIssueSnapshot::ContentSecurityPolicy(
+                ContentSecurityPolicyIssueSnapshot::new(
+                    false,
+                    "script-src-elem".to_owned(),
+                    ContentSecurityPolicyViolationType::Inline,
+                ),
+            );
+            // The renderer can publish this observation before the Page report captures it.
+            let outputs = inspector_issue_prepared_outputs(conn, document, issue, &owner);
+            assert!(
+                outputs.is_empty(),
+                "Audits is disabled until the enable command"
+            );
+        });
+
+        ctx.process_async(json!({
+            "id": 1,
+            "method": "Audits.enable",
+            "sessionId": "SID-audits",
+        }))
+        .await;
+
+        let replay = ctx.take_one();
+        assert_eq!(replay["method"], "Audits.issueAdded");
+        assert_eq!(replay["sessionId"], "SID-audits");
+        assert_eq!(
+            replay["params"]["issue"]["code"],
+            "ContentSecurityPolicyIssue"
+        );
+        ctx.expect_result(1, json!({}), Some("SID-audits"));
+        assert!(ctx.sent.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]
