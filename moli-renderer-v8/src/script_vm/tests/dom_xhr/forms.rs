@@ -6289,3 +6289,27 @@ fn native_form_keywords_resolve_from_owner_for_get_and_post() {
         }
     }
 }
+
+#[cfg(feature = "devtools")]
+#[test]
+fn enter_in_plaintext_editing_host_reports_insert_line_break() {
+    let mut vm = new_parsed_test_vm(
+        "https://plaintext-enter.test/",
+        "<div id='editor' contenteditable='plaintext-only'>Text</div>",
+    );
+    vm.eval(
+        r#"
+        const editor = document.getElementById("editor");
+        globalThis.enterInputType = undefined;
+        editor.addEventListener("beforeinput", event => {
+            enterInputType = event.inputType;
+            event.preventDefault();
+        });
+        editor.focus();
+    "#,
+    )
+    .unwrap();
+    vm.dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
+        .unwrap();
+    assert_eq!(vm.eval("enterInputType").unwrap(), "insertLineBreak");
+}
