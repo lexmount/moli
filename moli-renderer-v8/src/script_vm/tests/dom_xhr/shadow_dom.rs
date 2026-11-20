@@ -5156,14 +5156,6 @@ lose-target:true:true:true:targetDiv,#document-fragment,middleJ,#document-fragme
     );
 
     assert!(
-        vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ElementToggle,
-            &loader,
-        )
-        .await
-        .expect("third queued reference-target toggle task should run")
-    );
-    assert!(
         !vm.run_one_dom_manipulation_task_executor_turn(
             PageDomManipulationTestFamily::ElementToggle,
             &loader,
@@ -5186,8 +5178,8 @@ toggle-target:true:true:true:closed:open:targetDiv,#document-fragment,middleG,#d
               globalThis.__lmReferenceTargetToggleStatesJ.join('|')].join(';')"
         )
         .expect("reference-target toggle state log should evaluate"),
-        "closed->open|open->closed;closed->open",
-        "the three selected production tasks should belong to the command and interest popovers"
+        "closed->open|open->closed;",
+        "an interest target without a popover attribute must not queue toggle events"
     );
 }
 #[test]
