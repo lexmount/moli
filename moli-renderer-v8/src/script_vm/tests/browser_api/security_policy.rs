@@ -1532,3 +1532,5 @@ document.addEventListener("securitypolicyviolation", event => {
         );
     }
 }
+
+mod embedded_content;

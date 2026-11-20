@@ -31,6 +31,7 @@ pub(crate) enum DocumentSubresourceCspKind {
     Image,
     Manifest,
     Media,
+    Object,
 }
 
 impl DocumentSubresourceCspKind {
@@ -39,6 +40,7 @@ impl DocumentSubresourceCspKind {
             Self::Image => ContentSecurityPolicyResourceKind::DocumentImage,
             Self::Manifest => ContentSecurityPolicyResourceKind::DocumentManifest,
             Self::Media => ContentSecurityPolicyResourceKind::DocumentMedia,
+            Self::Object => ContentSecurityPolicyResourceKind::DocumentObject,
         }
     }
 }

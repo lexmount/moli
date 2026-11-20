@@ -739,6 +739,7 @@ impl DocumentRuntime {
         if is_srcdoc {
             runtime.clear_child_browsing_context_cached_snapshot_for_navigation(handle);
         }
+        runtime.invalidate_embedded_content_csp_for_attribute(handle, name);
         runtime.refresh_child_browsing_context_and_queue_ready_work(scope, handle);
         if is_srcdoc {
             runtime.sync_existing_child_browsing_context_window_state(scope, handle);

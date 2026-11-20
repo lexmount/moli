@@ -25,6 +25,7 @@ use url::Url;
 
 mod classic_scripts;
 mod discovery;
+mod embedded_csp;
 mod lookup;
 mod module_scripts;
 mod registry;
@@ -1275,3 +1276,5 @@ fn child_document_url_string_for_bootstrap(
         ChildBrowsingContextBootstrap::Srcdoc { .. } => Some("about:srcdoc".to_owned()),
     }
 }
+
+pub(in crate::native_bridge::context_host) use embedded_csp::EmbeddedContentCspAdmission;

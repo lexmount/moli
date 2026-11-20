@@ -1,3 +1,4 @@
+use super::child_documents::ChildDocumentNavigationInitiator;
 use crate::content_security_policy::ContentSecurityPolicy;
 
 use super::{OwnerDispatchScope, PageScriptHost};
@@ -524,18 +525,28 @@ impl PageScriptHost {
             )
             .into_violations();
         let host_ptr: *mut PageScriptHost = self;
-        if let Some(violation) = report_only_violation {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
+        for violation in report_only_violation
+            .iter()
+            .chain(enforced_violation.iter())
+        {
+            if matches!(kind, DocumentSubresourceCspKind::Object) {
+                // Resource discovery can run while a child Document wrapper is
+                // being materialized. Queue the exact Document target instead
+                // of reentering wrapper discovery to dispatch its event now.
+                let document = snapshot
+                    .document_handle
+                    .unwrap_or_else(|| self.document_handle());
+                unsafe { &mut *self.document_runtime }
+                    .queue_content_security_policy_violation_event_for_element_best_effort(
+                        scope, host_ptr, document, violation,
+                    );
+            } else {
+                self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                    scope, host_ptr, owner, violation,
+                );
+            }
         }
-        let Some(violation) = enforced_violation else {
-            return DocumentCspOutcome::Allowed;
-        };
-        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-            scope, host_ptr, owner, &violation,
-        );
-        DocumentCspOutcome::Blocked(violation)
+        enforced_violation.map_or(DocumentCspOutcome::Allowed, DocumentCspOutcome::Blocked)
     }
 
     pub(crate) fn owner_dispatch_scope_for_node(
@@ -874,13 +885,40 @@ impl PageScriptHost {
         .unwrap_or(true)
     }
 
-    pub(crate) fn frame_navigation_csp_violation(
+    pub(in crate::native_bridge::context_host) fn frame_navigation_csp_violation(
         &self,
         frame_handle: DomHandle,
         request_url: &url::Url,
+        initiator: ChildDocumentNavigationInitiator,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         let owner = self.owner_dispatch_scope_for_node(frame_handle)?;
         let snapshot = self.owner_document_policy_snapshot(owner)?;
+        if self
+            .dom_host()
+            .is_html_element_named(frame_handle, "object")
+            || self.dom_host().is_html_element_named(frame_handle, "embed")
+        {
+            if self.bypass_content_security_policy()
+                || (matches!(
+                    initiator,
+                    ChildDocumentNavigationInitiator::FrameOwnerElement
+                ) && self.embedded_content_request_was_csp_checked(frame_handle, request_url))
+            {
+                return None;
+            }
+            return unsafe { &*self.document_runtime }
+                .document_subresource_csp_check_for_document(
+                    snapshot.document_handle,
+                    &snapshot.document_url,
+                    &snapshot.policy_container,
+                    request_url,
+                    DocumentSubresourceCspKind::Object,
+                )
+                .into_violations()
+                .1
+                .into_iter()
+                .next();
+        }
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
         unsafe { &*self.document_runtime }.document_frame_csp_violation_for_document(
             snapshot.document_handle,
@@ -893,13 +931,40 @@ impl PageScriptHost {
         )
     }
 
-    pub(crate) fn frame_navigation_csp_report_only_violation(
+    pub(in crate::native_bridge::context_host) fn frame_navigation_csp_report_only_violation(
         &self,
         frame_handle: DomHandle,
         request_url: &url::Url,
+        initiator: ChildDocumentNavigationInitiator,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         let owner = self.owner_dispatch_scope_for_node(frame_handle)?;
         let snapshot = self.owner_document_policy_snapshot(owner)?;
+        if self
+            .dom_host()
+            .is_html_element_named(frame_handle, "object")
+            || self.dom_host().is_html_element_named(frame_handle, "embed")
+        {
+            if self.bypass_content_security_policy()
+                || (matches!(
+                    initiator,
+                    ChildDocumentNavigationInitiator::FrameOwnerElement
+                ) && self.embedded_content_request_was_csp_checked(frame_handle, request_url))
+            {
+                return None;
+            }
+            return unsafe { &*self.document_runtime }
+                .document_subresource_csp_check_for_document(
+                    snapshot.document_handle,
+                    &snapshot.document_url,
+                    &snapshot.policy_container,
+                    request_url,
+                    DocumentSubresourceCspKind::Object,
+                )
+                .into_violations()
+                .0
+                .into_iter()
+                .next();
+        }
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
         unsafe { &*self.document_runtime }.document_frame_csp_report_only_violation_for_document(
             &snapshot.document_url,

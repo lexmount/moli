@@ -11,6 +11,7 @@ use percent_encoding::percent_decode_str;
 use url::Url;
 
 const CONNECT_SRC: &str = "connect-src";
+const OBJECT_SRC: &str = "object-src";
 const CHILD_SRC: &str = "child-src";
 const DEFAULT_SRC: &str = "default-src";
 const FRAME_ANCESTORS: &str = "frame-ancestors";
@@ -1359,6 +1360,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => IMG_SRC,
             Self::DocumentManifest => MANIFEST_SRC,
             Self::DocumentMedia => MEDIA_SRC,
+            Self::DocumentObject => OBJECT_SRC,
             Self::DocumentFont => "font-src",
             Self::DocumentScriptElement | Self::WorkerDynamicModuleImport => SCRIPT_SRC_ELEM,
             Self::DocumentStyleElement => STYLE_SRC_ELEM,
@@ -1375,6 +1377,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => &[IMG_SRC, DEFAULT_SRC],
             Self::DocumentManifest => &[MANIFEST_SRC, DEFAULT_SRC],
             Self::DocumentMedia => &[MEDIA_SRC, DEFAULT_SRC],
+            Self::DocumentObject => &[OBJECT_SRC, DEFAULT_SRC],
             Self::DocumentFont => &["font-src", DEFAULT_SRC],
             Self::DocumentScriptElement => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::DocumentStyleElement => &[STYLE_SRC_ELEM, STYLE_SRC, DEFAULT_SRC],
