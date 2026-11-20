@@ -671,6 +671,7 @@ impl CommandDispatchContext {
         let (events, boundary, after) = local.take_renderer_fenced_protocol_events();
         self.append_renderer_fenced_protocol_events(events, boundary, after);
         self.extend_post_response_events(local.take_post_response_events());
+        self.defer_command_events(local.take_deferred_command_events());
         for permit in local.take_runtime_output_projection_permits() {
             self.retain_runtime_output_projection_permit(permit);
         }

@@ -531,6 +531,46 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    async fn projected_deferred_events_survive_the_original_commands_recovery() {
+        let mut connection = CdpConnection::new();
+        let mut actor_context = CommandDispatchContext::default();
+        let mut local = CommandDispatchContext::default();
+        local.defer_command_events(vec![BackgroundProtocolEvent::page_file_chooser_opened(
+            None,
+            "FRAME-projection",
+            "selectSingle",
+            42,
+            Some("NODE-projection".into()),
+        )]);
+        actor_context.append_projection_output(local);
+        let (task, recovery) =
+            CommandWorkflowContext::take_from(&mut actor_context, Some(97), None);
+        drop(task);
+        let completed = recovery
+            .recover(CommandOutputPlan::error(-32000, "cancelled"))
+            .wait()
+            .await;
+        let plan = completed.finish(&mut connection, &mut actor_context);
+        let CdpCommandTaskStep::Complete(outcome) =
+            connection.complete_with_output_plan(&mut actor_context, plan, Some(97), None)
+        else {
+            panic!("completed projection has no pending native work");
+        };
+        let (events, _, _) = outcome.into_protocol_event_parts();
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].clone().into_protocol_message(),
+            json!({"id":97,"error":{"code":-32000,"message":"cancelled"}})
+        );
+        let (event, typed) = events[1].clone().into_parts();
+        assert_eq!(event["method"], "Page.fileChooserOpened");
+        assert!(matches!(
+            typed,
+            Some(crate::automation::AutomationEvent::PageFileChooserOpened(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn accepted_transport_terminal_is_durable_before_first_poll_and_after_ready_loss() {
         for phase in ["before", "waiting", "ready"] {
             let mut connection = CdpConnection::new();
