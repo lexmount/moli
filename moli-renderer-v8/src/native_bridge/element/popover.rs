@@ -35,7 +35,7 @@ fn is_manual_popover(runtime: &PageScriptHost, handle: DomHandle) -> bool {
         .is_some_and(|value| canonical_popover_state(value) == "manual")
 }
 
-fn popover_is_open(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+pub(super) fn popover_is_open(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)

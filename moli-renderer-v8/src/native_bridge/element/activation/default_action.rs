@@ -30,6 +30,7 @@ use crate::{
 };
 
 use super::super::super::PageScriptHost;
+use super::super::details_dialog::run_dialog_button_command;
 use super::super::forms::{
     FormAssociatedResetCallbackTiming, dispatch_form_reset_event, reset_form_default_action,
 };
@@ -1408,10 +1409,13 @@ fn dispatch_button_command_event_if_needed(
     let Some(event) = construct_command_event(scope, &command, source.into()) else {
         return;
     };
-    if dispatch_public_event(scope, runtime_ptr, target, event).allows_default()
-        && command.eq_ignore_ascii_case("toggle-popover")
-    {
+    if !dispatch_public_event(scope, runtime_ptr, target, event).allows_default() {
+        return;
+    }
+    if command.eq_ignore_ascii_case("toggle-popover") {
         dispatch_popover_toggle_events(scope, runtime_ptr, target, handle);
+    } else {
+        run_dialog_button_command(scope, runtime_ptr, target, handle, &command);
     }
 }
 

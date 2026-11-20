@@ -13,7 +13,7 @@ use super::super::{
 };
 use super::toggle_event::queue_element_toggle_event;
 use super::{
-    construct_simple_event, dispatch_public_event, element_has_attribute,
+    construct_simple_event, dispatch_public_event, element_attribute, element_has_attribute,
     html_element_getter_receiver, html_element_setter_receiver, property_dom_string_value,
     set_reflected_boolean_attribute,
 };
@@ -427,6 +427,33 @@ pub(super) fn dialog_show_modal_callback<'s>(
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, true);
+}
+
+pub(super) fn run_dialog_button_command(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    dialog: DomHandle,
+    invoker: DomHandle,
+    command: &str,
+) {
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.dom_host().is_html_element_named(dialog, "dialog")
+        || !runtime.dom_host().is_connected(dialog)
+        || !runtime
+            .dom_host()
+            .owner_document_handle(dialog)
+            .is_some_and(|document| runtime.document_is_fully_active(document))
+        || super::popover::popover_is_open(runtime, dialog)
+    {
+        return;
+    }
+    let open = element_has_attribute(runtime, dialog, "open");
+    if !open && command.eq_ignore_ascii_case("show-modal") {
+        dialog_set_open_state_for_handle(scope, runtime_ptr, dialog, true, true);
+    } else if open && command.eq_ignore_ascii_case("close") {
+        let value = element_attribute(runtime, invoker, "value");
+        close_dialog_element(scope, runtime_ptr, dialog, value.as_deref());
+    }
 }
 
 pub(super) fn dialog_close_callback<'s>(
