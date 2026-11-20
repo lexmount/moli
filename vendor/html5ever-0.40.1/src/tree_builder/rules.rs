@@ -103,7 +103,9 @@ where
                     ProcessResult::SplitWhitespace(text)
                 },
                 Token::Characters(SplitStatus::Whitespace, _) => ProcessResult::Done,
-                Token::Comment(text) => self.append_comment_to_doc(text),
+                Token::CommentOrProcessingInstruction(node) => {
+                    self.append_comment_or_pi_to_doc(node)
+                },
                 token => {
                     if !self.opts.iframe_srcdoc {
                         self.unexpected(&token);
@@ -122,7 +124,9 @@ where
                 };
 
                 match token {
-                    Token::Comment(text) => self.append_comment_to_doc(text),
+                    Token::CommentOrProcessingInstruction(node) => {
+                        self.append_comment_or_pi_to_doc(node)
+                    },
 
                     Token::Characters(SplitStatus::NotSplit, text) => {
                         ProcessResult::SplitWhitespace(text)
@@ -154,7 +158,7 @@ where
                         ProcessResult::SplitWhitespace(text)
                     },
                     Token::Characters(SplitStatus::Whitespace, _) => ProcessResult::Done,
-                    Token::Comment(text) => self.append_comment(text),
+                    Token::CommentOrProcessingInstruction(node) => self.append_comment_or_pi(node),
 
                     Token::Tag(tag!(<html>)) => self.step(InsertionMode::InBody, token),
 
@@ -185,7 +189,7 @@ where
                         ProcessResult::SplitWhitespace(text)
                     },
                     Token::Characters(SplitStatus::Whitespace, text) => self.append_text(text),
-                    Token::Comment(text) => self.append_comment(text),
+                    Token::CommentOrProcessingInstruction(node) => self.append_comment_or_pi(node),
 
                     Token::Tag(tag!(<html>)) => self.step(InsertionMode::InBody, token),
 
@@ -337,7 +341,7 @@ where
                         self.step(InsertionMode::InHead, token)
                     },
 
-                    Token::Comment(_) => self.step(InsertionMode::InHead, token),
+                    Token::CommentOrProcessingInstruction(_) => self.step(InsertionMode::InHead, token),
 
                     Token::Tag(
                         tag!(<basefont> | <bgsound> | <link> | <meta> | <noframes> | <style>),
@@ -364,7 +368,7 @@ where
                         ProcessResult::SplitWhitespace(text)
                     },
                     Token::Characters(SplitStatus::Whitespace, text) => self.append_text(text),
-                    Token::Comment(text) => self.append_comment(text),
+                    Token::CommentOrProcessingInstruction(node) => self.append_comment_or_pi(node),
 
                     Token::Tag(tag!(<html>)) => self.step(InsertionMode::InBody, token),
 
@@ -422,7 +426,7 @@ where
                     self.append_text(text)
                 },
 
-                Token::Comment(text) => self.append_comment(text),
+                Token::CommentOrProcessingInstruction(node) => self.append_comment_or_pi(node),
 
                 Token::Tag(tag @ tag!(<html>)) => {
                     self.unexpected(&tag);
@@ -1037,7 +1041,7 @@ where
             InsertionMode::InTable => match token {
                 Token::NullCharacter | Token::Characters(..) => self.process_chars_in_table(token),
 
-                Token::Comment(text) => self.append_comment(text),
+                Token::CommentOrProcessingInstruction(node) => self.append_comment_or_pi(node),
 
                 Token::Tag(tag @ tag!(<caption>)) => {
                     self.pop_until_current(table_scope);
@@ -1211,7 +1215,7 @@ where
                     ProcessResult::SplitWhitespace(text)
                 },
                 Token::Characters(SplitStatus::Whitespace, text) => self.append_text(text),
-                Token::Comment(text) => self.append_comment(text),
+                Token::CommentOrProcessingInstruction(node) => self.append_comment_or_pi(node),
 
                 Token::Tag(tag!(<html>)) => self.step(InsertionMode::InBody, token),
 
@@ -1402,7 +1406,7 @@ where
             // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-intemplate
             InsertionMode::InTemplate => match token {
                 Token::Characters(_, _) => self.step(InsertionMode::InBody, token),
-                Token::Comment(_) => self.step(InsertionMode::InBody, token),
+                Token::CommentOrProcessingInstruction(_) => self.step(InsertionMode::InBody, token),
 
                 Token::Tag(
                     tag!(<base> | <basefont> | <bgsound> | <link> | <meta> | <noframes> | <script> |
@@ -1470,7 +1474,9 @@ where
                 Token::Characters(SplitStatus::Whitespace, _) => {
                     self.step(InsertionMode::InBody, token)
                 },
-                Token::Comment(text) => self.append_comment_to_html(text),
+                Token::CommentOrProcessingInstruction(node) => {
+                    self.append_comment_or_pi_to_html(node)
+                },
 
                 Token::Tag(tag!(<html>)) => self.step(InsertionMode::InBody, token),
 
@@ -1498,7 +1504,7 @@ where
                     ProcessResult::SplitWhitespace(text)
                 },
                 Token::Characters(SplitStatus::Whitespace, text) => self.append_text(text),
-                Token::Comment(text) => self.append_comment(text),
+                Token::CommentOrProcessingInstruction(node) => self.append_comment_or_pi(node),
 
                 Token::Tag(tag!(<html>)) => self.step(InsertionMode::InBody, token),
 
@@ -1544,7 +1550,7 @@ where
                     ProcessResult::SplitWhitespace(text)
                 },
                 Token::Characters(SplitStatus::Whitespace, text) => self.append_text(text),
-                Token::Comment(text) => self.append_comment(text),
+                Token::CommentOrProcessingInstruction(node) => self.append_comment_or_pi(node),
 
                 Token::Tag(tag!(<html>)) => self.step(InsertionMode::InBody, token),
 
@@ -1569,7 +1575,9 @@ where
                 Token::Characters(SplitStatus::Whitespace, _) => {
                     self.step(InsertionMode::InBody, token)
                 },
-                Token::Comment(text) => self.append_comment_to_doc(text),
+                Token::CommentOrProcessingInstruction(node) => {
+                    self.append_comment_or_pi_to_doc(node)
+                },
 
                 Token::Tag(tag!(<html>)) => self.step(InsertionMode::InBody, token),
 
@@ -1590,7 +1598,9 @@ where
                 Token::Characters(SplitStatus::Whitespace, _) => {
                     self.step(InsertionMode::InBody, token)
                 },
-                Token::Comment(text) => self.append_comment_to_doc(text),
+                Token::CommentOrProcessingInstruction(node) => {
+                    self.append_comment_or_pi_to_doc(node)
+                },
 
                 Token::Tag(tag!(<html>)) => self.step(InsertionMode::InBody, token),
 
@@ -1619,7 +1629,7 @@ where
                 self.append_text(text)
             },
 
-            Token::Comment(text) => self.append_comment(text),
+            Token::CommentOrProcessingInstruction(node) => self.append_comment_or_pi(node),
 
             Token::Tag(
                 tag @

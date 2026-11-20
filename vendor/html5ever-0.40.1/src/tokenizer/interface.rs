@@ -87,6 +87,10 @@ pub enum Token {
     TagToken(Tag),
     /// A comment like `<!-- foo -->`.
     CommentToken(StrTendril),
+    ProcessingInstructionToken {
+        target: StrTendril,
+        data: StrTendril,
+    },
     /// A sequence of characters.
     CharacterTokens(StrTendril),
     /// A `U+0000 NULL` character in the input.

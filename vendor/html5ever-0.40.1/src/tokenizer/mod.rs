@@ -172,6 +172,9 @@ pub struct Tokenizer<Sink> {
     /// Current comment.
     current_comment: RefCell<StrTendril>,
 
+    /// Current processing instruction data. Its target is in the temporary buffer.
+    current_processing_instruction_data: RefCell<StrTendril>,
+
     /// Current doctype token.
     current_doctype: RefCell<Doctype>,
 
@@ -222,6 +225,7 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
             current_attr_name: RefCell::new(StrTendril::new()),
             current_attr_value: RefCell::new(StrTendril::new()),
             current_comment: RefCell::new(StrTendril::new()),
+            current_processing_instruction_data: RefCell::new(StrTendril::new()),
             current_doctype: RefCell::new(Doctype::default()),
             last_start_tag_name: RefCell::new(start_tag_name),
             temp_buf: RefCell::new(StrTendril::new()),
@@ -560,6 +564,20 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
     fn emit_current_comment(&self) {
         let comment = mem::take(&mut *self.current_comment.borrow_mut());
         self.process_token_and_continue(CommentToken(comment));
+    }
+
+    fn processing_instruction_target_as_comment(&self) {
+        let target = mem::take(&mut *self.temp_buf.borrow_mut());
+        let mut comment = self.current_comment.borrow_mut();
+        comment.clear();
+        comment.push_char('?');
+        comment.push_tendril(&target);
+    }
+
+    fn emit_processing_instruction(&self) {
+        let target = mem::take(&mut *self.temp_buf.borrow_mut());
+        let data = mem::take(&mut *self.current_processing_instruction_data.borrow_mut());
+        self.process_token_and_continue(Token::ProcessingInstructionToken { target, data });
     }
 
     fn discard_tag(&self) {
@@ -999,8 +1017,8 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
                     '?' => {
                         // Set the temporary buffer to the empty string.
                         // Switch to the processing instruction open state.
-                        self.bad_char_error();
-                        go!(self: clear_comment; reconsume BogusComment)
+                        self.current_processing_instruction_data.borrow_mut().clear();
+                        go!(self: clear_temp; to State::ProcessingInstructionOpen)
                     },
                     // ↪ Anything else
                     _ => {
@@ -1012,6 +1030,75 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
                         go!(self: reconsume Data)
                     },
                 }
+            },
+
+            // https://html.spec.whatwg.org/#processing-instruction-open-state
+            states::ProcessingInstructionOpen => match get_char!(self, input) {
+                c if c.is_ascii_alphabetic() || c == '_' => {
+                    go!(self: reconsume ProcessingInstructionTarget)
+                },
+                _ => {
+                    self.bad_char_error();
+                    self.processing_instruction_target_as_comment();
+                    go!(self: reconsume BogusComment)
+                },
+            },
+
+            states::ProcessingInstructionTarget => loop {
+                match get_char!(self, input) {
+                    '\t' | '\n' | '\x0C' | ' ' | '?' | '>' => {
+                        let disallowed = {
+                            let target = self.temp_buf.borrow();
+                            target.eq_ignore_ascii_case("xml")
+                                || target.eq_ignore_ascii_case("xml-stylesheet")
+                        };
+                        if disallowed {
+                            self.bad_char_error();
+                            self.processing_instruction_target_as_comment();
+                            go!(self: reconsume BogusComment);
+                        }
+                        go!(self: reconsume AfterProcessingInstructionTarget)
+                    },
+                    c if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') => {
+                        self.temp_buf.borrow_mut().push_char(c);
+                    },
+                    _ => {
+                        self.bad_char_error();
+                        self.processing_instruction_target_as_comment();
+                        go!(self: reconsume BogusComment)
+                    },
+                }
+            },
+
+            states::AfterProcessingInstructionTarget => loop {
+                match get_char!(self, input) {
+                    '\t' | '\n' | '\x0C' | ' ' => (),
+                    _ => go!(self: reconsume ProcessingInstructionData),
+                }
+            },
+
+            states::ProcessingInstructionData => loop {
+                match get_char!(self, input) {
+                    '?' => go!(self: to State::ProcessingInstructionQuestionable),
+                    '>' => {
+                        self.state.set(State::Data);
+                        self.emit_processing_instruction();
+                        return ProcessResult::Continue;
+                    },
+                    c => self.current_processing_instruction_data.borrow_mut().push_char(c),
+                }
+            },
+
+            states::ProcessingInstructionQuestionable => match get_char!(self, input) {
+                '>' => {
+                    self.state.set(State::Data);
+                    self.emit_processing_instruction();
+                    ProcessResult::Continue
+                },
+                _ => {
+                    self.current_processing_instruction_data.borrow_mut().push_char('?');
+                    go!(self: reconsume ProcessingInstructionData)
+                },
             },
 
             // https://html.spec.whatwg.org/#end-tag-open-state
@@ -2826,6 +2913,11 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
             | states::Plaintext => go!(self: eof),
 
             states::TagName
+            | states::ProcessingInstructionOpen
+            | states::ProcessingInstructionTarget
+            | states::AfterProcessingInstructionTarget
+            | states::ProcessingInstructionData
+            | states::ProcessingInstructionQuestionable
             | states::RawData(ScriptDataEscaped(_))
             | states::BeforeAttributeName
             | states::AttributeName

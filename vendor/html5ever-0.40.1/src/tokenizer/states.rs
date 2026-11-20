@@ -83,6 +83,11 @@ pub enum State {
     SelfClosingStartTag,
     /// <https://html.spec.whatwg.org/#bogus-comment-state>
     BogusComment,
+    ProcessingInstructionOpen,
+    ProcessingInstructionTarget,
+    AfterProcessingInstructionTarget,
+    ProcessingInstructionData,
+    ProcessingInstructionQuestionable,
     /// <https://html.spec.whatwg.org/#markup-declaration-open-state>
     MarkupDeclarationOpen,
     /// <https://html.spec.whatwg.org/#comment-start-state>

@@ -2502,6 +2502,41 @@ mod tests {
     }
 
     #[test]
+    fn html_processing_instructions_keep_their_target_data_and_parent() {
+        let document = parse_test_document(concat!(
+            "<!doctype html><?BeforeRoot?><html><head><?Head?>",
+            "<script type='text/plain'><?Raw?></script></head><body>",
+            "<?_Marker  name=\"here\" ???><?xml-stylesheet href=\"style.css\"?>",
+            "<?1invalid><?Unterminated",
+        ));
+        let processing_instruction = |parent, index| {
+            let handle = document.child_ids(parent).nth(index).expect("child node");
+            document
+                .node(handle)
+                .and_then(|node| node.as_processing_instruction())
+                .expect("processing instruction")
+        };
+        let root = document.document_node_id();
+        assert_eq!(processing_instruction(root, 1).target(), "BeforeRoot");
+
+        let head = first_element_by_ns(&document, HTML_NS, "head");
+        assert_eq!(processing_instruction(head, 0).target(), "Head");
+        let script = first_element_by_ns(&document, HTML_NS, "script");
+        assert_eq!(document.inner_html(script).as_deref(), Some("<?Raw?>"));
+
+        let body = first_element_by_ns(&document, HTML_NS, "body");
+        let instruction = processing_instruction(body, 0);
+        assert_eq!(instruction.target(), "_Marker");
+        assert_eq!(instruction.value().as_str(), Some("name=\"here\" ??"));
+        assert_eq!(document.child_ids(body).count(), 3);
+        let markup = document.inner_html(body).expect("body markup");
+        assert!(
+            markup.ends_with("<!--?xml-stylesheet href=\"style.css\"?--><!--?1invalid-->"),
+            "{markup}"
+        );
+    }
+
+    #[test]
     fn mathml_annotation_xml_text_html_is_html_integration_point() {
         let document = parse_test_document(concat!(
             "<!doctype html>",
