@@ -789,6 +789,63 @@ fn exec_command_insert_html_uses_the_native_editing_range() {
 }
 
 #[test]
+fn exec_command_css_styling_is_document_local() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-css-styling.test/",
+        "<!doctype html><body>plain",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const state = (doc = document) => doc.queryCommandState("styleWithCSS");
+  const before = state();
+  let inputEvents = 0;
+  document.addEventListener("beforeinput", () => ++inputEvents);
+  document.addEventListener("input", () => ++inputEvents);
+  const toggles = [];
+  for (const [command, value] of [
+    ["StYlEwItHcSs", true], ["styleWithCSS", "FALSE"], ["styleWithCSS", "false "],
+    ["UseCSS", true], ["useCSS", false],
+  ]) {
+    toggles.push([document.execCommand(command, false, value), state()]);
+  }
+  const queries = [document.queryCommandSupported("useCSS"),
+    document.queryCommandEnabled("styleWithCSS"), document.queryCommandIndeterm("styleWithCSS"),
+    document.queryCommandState("useCSS"), document.queryCommandValue("styleWithCSS")];
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  const child = frame.contentDocument;
+  const newDocument = state(child);
+  child.execCommand("styleWithCSS", false, true);
+  document.execCommand("styleWithCSS", false, false);
+  child.open();
+  child.write("<!doctype html><body>reopened");
+  child.close();
+  const reopened = [state(child), state(), child.body.textContent];
+  const appliedAfterRemoval = child.execCommand("styleWithCSS", false, {
+    toString() {
+      frame.remove();
+      return "true";
+    },
+  });
+  const detached = [child.queryCommandSupported("styleWithCSS"), state(child),
+    child.queryCommandEnabled("useCSS"), appliedAfterRemoval];
+  const windowless = document.implementation.createHTMLDocument("");
+  const appliedWithoutWindow = windowless.execCommand("useCSS", false, false);
+  return JSON.stringify([
+    before, toggles, queries, newDocument, reopened, detached, appliedWithoutWindow, inputEvents,
+  ]);
+})()
+"#,
+        )
+        .expect("CSS styling mode should persist for the same active Document");
+    assert_eq!(
+        result,
+        r#"[false,[[true,true],[true,false],[true,true],[true,false],[true,true]],[true,true,false,false,""],false,[true,false,"reopened"],[false,false,false,false],false,0]"#
+    );
+}
+
+#[test]
 fn exec_command_insert_html_keeps_the_tail_when_a_callback_moves_the_paragraph() {
     let mut vm = new_parsed_test_vm(
         "https://exec-command-insert-html.test/",
