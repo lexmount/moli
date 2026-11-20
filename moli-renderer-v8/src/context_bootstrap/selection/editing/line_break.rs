@@ -1,15 +1,17 @@
 use super::{
-    DomHandle, NodeType, PageScriptHost, XHTML_NS, collapse_editing_selection,
-    fragment_insertion_point, is_text, new_editing_range, node_wrapper_from_handle, range,
-    range_insert_node_at_boundary, replace_text_span, selection_value_for_window,
+    DomHandle, NodeType, PageScriptHost, RangeBoundarySide, XHTML_NS, collapse_editing_selection,
+    expand_rich_replacement_boundary, fragment_insertion_point, is_paragraph_or_heading, is_text,
+    new_editing_range, node_wrapper_from_handle, range, range_insert_node_at_boundary,
+    replace_text_span, selection_value_for_window,
 };
-use crate::context_bootstrap::range_algorithms::range_delete_contents;
 use crate::context_bootstrap::selection::editing_caret::{
     is_collapsible_space, is_replaced_element,
 };
 use crate::dom::native::{ContentEditableState, Element};
 use crate::native_bridge::element::ComputedStyleRead;
 use crate::style_engine::{ComputedDisplayKind, ComputedWhiteSpaceCollapseKind};
+
+mod table;
 
 pub(crate) fn replace_editable_selection_line_break(
     scope: &mut v8::PinScope<'_, '_>,
@@ -21,20 +23,63 @@ pub(crate) fn replace_editable_selection_line_break(
     let runtime = unsafe { &*runtime_ptr };
     let snapshot = runtime.document_editing_selection(document)?;
     let (start, end) = (snapshot.start, snapshot.end);
-    let replacing = start.offset != end.offset;
-    if start.container != end.container || replacing && !is_text(runtime, start.container) {
-        return None;
-    }
-    let (start, end) = if start.offset <= end.offset {
-        (start, end)
-    } else {
+    let order = crate::range_boundary::point_order_in_dom(
+        runtime.dom_host(),
+        start.container,
+        start.offset,
+        end.container,
+        end.offset,
+    )?;
+    let (start, end) = if order.is_gt() {
         (end, start)
+    } else {
+        (start, end)
+    };
+    let [start, mut end] = if order.is_eq() {
+        [start, end]
+    } else {
+        table::selection_boundaries(runtime, [start, end], &insertion_point_is_editable)?
+    };
+    let blocks = if order.is_eq() {
+        None
+    } else {
+        let blocks = enclosing_sibling_blocks(runtime, host, start.container, end.container);
+        end = expand_rich_replacement_boundary(
+            runtime.dom_host(),
+            end,
+            host,
+            RangeBoundarySide::End,
+            false,
+        );
+        blocks
     };
     let window = scope.get_current_context().global(scope);
     let selection = selection_value_for_window(scope, window)?;
-    let insertion_range = new_editing_range(scope, document, start, end)?;
-    if replacing {
-        range_delete_contents(scope, insertion_range)?;
+    let range = new_editing_range(scope, document, start, end)?;
+    // The deletion range can collapse outside the starting element when the
+    // selection spans siblings. A live start point stays in the retained prefix.
+    let insertion_range = if order.is_eq() {
+        range
+    } else {
+        new_editing_range(scope, document, start, start)?
+    };
+    table::delete_contents(
+        scope,
+        runtime_ptr,
+        document,
+        range,
+        [start, end],
+        &insertion_point_is_editable,
+    )?;
+    if let Some((left, right, parent)) = blocks {
+        merge_sibling_blocks(
+            scope,
+            runtime_ptr,
+            left,
+            right,
+            parent,
+            &insertion_point_is_editable,
+        )?;
     }
     let start = range::native_range_boundary_handles(scope, insertion_range)?.start;
 
@@ -51,7 +96,7 @@ pub(crate) fn replace_editable_selection_line_break(
     };
     let element = dom.node(parent)?.as_element()?;
     if !allows_line_break(element) {
-        return Some(replacing);
+        return Some(!order.is_eq());
     }
     if parent == container
         && let Some(previous) = offset
@@ -112,6 +157,77 @@ pub(crate) fn replace_editable_selection_line_break(
     };
     collapse_editing_selection(scope, selection, caret, offset)?;
     Some(true)
+}
+
+fn enclosing_sibling_blocks(
+    runtime: &PageScriptHost,
+    host: DomHandle,
+    start: DomHandle,
+    end: DomHandle,
+) -> Option<(DomHandle, DomHandle, DomHandle)> {
+    let dom = runtime.dom_host();
+    let block = |node| {
+        std::iter::successors(Some(node), |&node| dom.parent_node(node))
+            .take_while(|&node| node != host)
+            .filter(|&node| dom.node(node).is_some_and(|node| node.is_element()))
+            .find(|&node| {
+                ComputedStyleRead::new(runtime, node)
+                    .rendered_style_facts()
+                    .is_some_and(|style| !is_inline_container(style.display))
+            })
+            .filter(|&node| {
+                dom.node(node).is_some_and(|node| {
+                    is_paragraph_or_heading(node)
+                        || node.as_element().is_some_and(|element| {
+                            element.namespace() == XHTML_NS
+                                && matches!(element.local_name(), "div" | "li" | "dt" | "dd")
+                        })
+                })
+            })
+    };
+    let left = block(start)?;
+    let right = block(end)?;
+    let parent = dom.parent_node(left)?;
+    (left != right && dom.parent_node(right) == Some(parent)).then_some((left, right, parent))
+}
+
+fn merge_sibling_blocks(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    left: DomHandle,
+    right: DomHandle,
+    parent: DomHandle,
+    insertion_point_is_editable: &impl Fn(&PageScriptHost, DomHandle) -> bool,
+) -> Option<()> {
+    let adjacent = |runtime: &PageScriptHost| {
+        let dom = runtime.dom_host();
+        dom.parent_node(left) == Some(parent)
+            && dom.next_sibling(left) == Some(right)
+            && insertion_point_is_editable(runtime, left)
+            && insertion_point_is_editable(runtime, right)
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    if !adjacent(runtime) {
+        return Some(());
+    }
+    let tail = runtime.dom_host().child_handles(right).collect::<Vec<_>>();
+    for child in tail {
+        let runtime = unsafe { &mut *runtime_ptr };
+        // A callback can move either block or an as-yet unmoved child.
+        if !adjacent(runtime) || runtime.dom_host().parent_node(child) != Some(right) {
+            return None;
+        }
+        runtime
+            .append_child(scope, runtime_ptr, left, child)
+            .then_some(())?;
+    }
+    let runtime = unsafe { &mut *runtime_ptr };
+    if adjacent(runtime) && runtime.dom_host().first_child(right).is_none() {
+        runtime
+            .remove_child(scope, runtime_ptr, parent, right)
+            .then_some(())?;
+    }
+    Some(())
 }
 
 fn white_space(runtime: &PageScriptHost, element: DomHandle) -> ComputedWhiteSpaceCollapseKind {

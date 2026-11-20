@@ -814,10 +814,25 @@ fn exec_command_insert_line_break_preserves_the_line_and_caret() {
   }
   const text = host => host.firstChild;
   const firstBlockText = host => host.firstChild.firstChild;
+  const lastBlockText = host => host.lastChild.firstChild;
   insert("A B", text, 1);
   insert("<b>AB</b>", firstBlockText, 2);
   insert("<p>AB<br></p>", text, 2);
   insert("<p>AB</p><p>CD</p>", firstBlockText, 2);
+  insert("<b>AX</b><i>YB</i>", firstBlockText, 1, lastBlockText, 1);
+  insert("<h1>AX</h1><p>YB</p>", firstBlockText, 1, lastBlockText, 1);
+  insert(
+    "<table><tbody><tr><td>AX</td><td>middle</td></tr><tr><td>another</td><td>YB</td></tr></tbody></table>",
+    host => host.querySelector("td").firstChild, 1,
+    host => host.querySelectorAll("td")[3].firstChild, 1,
+  );
+  const table = "<table><tbody><tr><td>AX</td><td>YB</td></tr><tr><td>M</td><td>N</td></tr></tbody></table>";
+  const rowGroup = host => host.querySelector("tbody");
+  const firstRow = host => host.querySelector("tr");
+  insert(table, rowGroup, 0, rowGroup, 1);
+  insert(table, firstRow, 1, firstRow, 2);
+  insert(table + "<p>ZZ</p>", host => host.querySelector("td").firstChild, 1, lastBlockText, 1);
+  insert(table, host => host, 0, host => host, 1);
   host.style.whiteSpace = "pre-line";
   insert("AXYB", text, 3, text, 1);
   insert("AB", text, 2);
@@ -839,7 +854,12 @@ fn exec_command_insert_line_break_preserves_the_line_and_caret() {
         concat!(
             r##"[[[true,"A<br>&nbsp;B","#text",0],[true,"<b>AB<br><br></b>","B",2],"##,
             r#"[true,"<p>AB<br><br></p>","P",2],[true,"<p>AB<br><br></p><p>CD</p>","P",2],"#,
-            r##"[true,"A\nB","#text",0],[true,"AB\n<br>","DIV",2]],6,true,"##,
+            r##"[true,"<b>A<br></b><i>B</i>","#text",0],[true,"<h1>A<br>B</h1>","#text",0],"##,
+            r#"[true,"<table><tbody><tr><td>A<br><br></td><td></td></tr><tr><td></td><td>B</td></tr></tbody></table>","TD",2],"#,
+            r#"[true,"<table><tbody><tr><td><br><br></td><td><br></td></tr><tr><td>M</td><td>N</td></tr></tbody></table>","TD",1],"#,
+            r#"[true,"<table><tbody><tr><td>AX</td><td><br><br></td></tr><tr><td>M</td><td>N</td></tr></tbody></table>","TD",1],"#,
+            r##"[false,"<table><tbody><tr><td>AX</td><td>YB</td></tr><tr><td>M</td><td>N</td></tr></tbody></table><p>ZZ</p>","#text",1],"##,
+            r##"[true,"<br><br>","DIV",1],[true,"A\nB","#text",0],[true,"AB\n<br>","DIV",2]],12,true,"##,
             r#"[[true,true,"A\nC",2,2],[true,true,"ABC",1,2]]]"#,
         )
     );
