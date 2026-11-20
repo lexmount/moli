@@ -169,6 +169,32 @@ impl PageScriptHost {
         }
     }
 
+    pub(crate) fn focused_document_and_element(&self) -> (DomHandle, Option<DomHandle>) {
+        let mut element = self.active_element_handle();
+        let mut document = element
+            .and_then(|element| self.dom_host().owner_document_handle(element))
+            .or_else(|| self.focused_viewport_document())
+            .unwrap_or_else(|| self.document_handle());
+        while let Some(child_document) = element
+            .and_then(|element| self.child_browsing_context_document_handle(element))
+            .filter(|document| self.document_is_fully_active(*document))
+        {
+            document = child_document;
+            element = self.document_focused_area(document);
+        }
+        (document, element)
+    }
+
+    pub(crate) fn keyboard_focus_target(&self) -> Option<DomHandle> {
+        let (document, element) = self.focused_document_and_element();
+        element
+            .or_else(|| self.dom_host().document_body_handle_for_document(document))
+            .or_else(|| {
+                self.dom_host()
+                    .document_element_handle_for_document(document)
+            })
+    }
+
     pub(crate) fn focused_viewport_document(&self) -> Option<DomHandle> {
         self.focused_viewport_document.filter(|document| {
             self.active_element_handle().is_none()

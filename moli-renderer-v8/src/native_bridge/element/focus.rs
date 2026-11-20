@@ -1,7 +1,8 @@
 use crate::dom::native::{Element, FocusSupport, Node};
 
 use super::super::{
-    PageScriptHost, PendingWindowMessageEndpoint, document, node::node_runtime_and_handle_from_args,
+    PageScriptHost, PendingWindowMessageEndpoint, SequentialFocusStartingPoint, document,
+    node::node_runtime_and_handle_from_args,
 };
 use super::forms::{
     dispatch_text_control_event, form_control_is_effectively_disabled, is_text_control,
@@ -1101,47 +1102,102 @@ pub(crate) fn perform_tab_focus_default_action_for_dispatched_event(
         return;
     }
     let runtime = unsafe { &*runtime_ptr };
-    let active = runtime.active_element_handle();
-    let starting_point = active
-        .map(crate::native_bridge::SequentialFocusStartingPoint::Element)
-        .or_else(|| runtime.sequential_focus_starting_point(runtime.document_handle()));
-    let order = sequential_focus_order(runtime, active);
-    if order.is_empty() {
-        return;
-    }
     let reverse = event_boolean_property(scope, event, "shiftKey");
-    let next_handle = starting_point
-        .and_then(|point| point.element())
-        .and_then(|active| order.iter().position(|candidate| *candidate == active))
-        .map(|index| {
-            let next_index = if reverse {
-                index.checked_sub(1).unwrap_or(order.len() - 1)
-            } else {
-                (index + 1) % order.len()
-            };
-            order[next_index]
-        })
-        .or_else(|| {
-            starting_point
-                .and_then(|point| point.element())
-                .and_then(|active| negative_shadow_scope_tab_target(runtime, active, reverse))
-        })
-        .or_else(|| {
-            starting_point.and_then(|point| {
-                navigation::sequential_target_in_dom_order(runtime, point, &order, reverse)
-            })
-        })
-        .unwrap_or_else(|| order[if reverse { order.len() - 1 } else { 0 }]);
-    update_focus(scope, runtime_ptr, Some(next_handle));
+    if let Some(target) = sequential_focus_target(runtime, reverse) {
+        update_focus(scope, runtime_ptr, Some(target));
+    }
 }
 
-fn sequential_focus_order(runtime: &PageScriptHost, active: Option<DomHandle>) -> Vec<DomHandle> {
+fn sequential_focus_target(runtime: &PageScriptHost, reverse: bool) -> Option<DomHandle> {
+    let (mut document, mut active) = runtime.focused_document_and_element();
+    let mut starting_point = active
+        .map(SequentialFocusStartingPoint::Element)
+        .or_else(|| runtime.sequential_focus_starting_point(document));
+    loop {
+        let order = sequential_focus_order(runtime, document, active);
+        if let Some(target) =
+            sequential_focus_target_in_document(runtime, document, &order, starting_point, reverse)
+        {
+            return Some(target);
+        }
+        let Some(container) = runtime.child_browsing_context_host_for_document_handle(document)
+        else {
+            // Headless Pages cycle through controls at the traversable boundary.
+            return resolve_sequential_focus_order(runtime, &order, reverse);
+        };
+        // Resume the parent's search from the container's position in its own
+        // scope. Each Document orders its own tabindex values independently.
+        document = runtime.dom_host().owner_document_handle(container)?;
+        active = Some(container);
+        starting_point = Some(SequentialFocusStartingPoint::Element(container));
+    }
+}
+
+fn sequential_focus_target_in_document(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    order: &[DomHandle],
+    starting_point: Option<SequentialFocusStartingPoint>,
+    reverse: bool,
+) -> Option<DomHandle> {
+    let Some(point) = starting_point else {
+        return resolve_sequential_focus_order(runtime, order, reverse);
+    };
+    if let Some(active) = point.element() {
+        if let Some(index) = order.iter().position(|&candidate| candidate == active) {
+            let remaining = if reverse {
+                &order[..index]
+            } else {
+                &order[index + 1..]
+            };
+            return resolve_sequential_focus_order(runtime, remaining, reverse);
+        }
+        if let Some(target) = negative_shadow_scope_tab_target(runtime, active, reverse) {
+            return Some(target);
+        }
+    }
+    navigation::sequential_target_in_dom_order(runtime, document, point, order, reverse, |handle| {
+        resolve_sequential_focus_candidate(runtime, handle, reverse)
+    })
+}
+
+fn resolve_sequential_focus_order(
+    runtime: &PageScriptHost,
+    order: &[DomHandle],
+    reverse: bool,
+) -> Option<DomHandle> {
+    let mut candidates = order.iter().copied();
+    let target = |handle| resolve_sequential_focus_candidate(runtime, handle, reverse);
+    if reverse {
+        candidates.rev().find_map(target)
+    } else {
+        candidates.find_map(target)
+    }
+}
+
+fn resolve_sequential_focus_candidate(
+    runtime: &PageScriptHost,
+    candidate: DomHandle,
+    reverse: bool,
+) -> Option<DomHandle> {
+    let Some(document) = runtime.child_browsing_context_document_handle(candidate) else {
+        return Some(candidate);
+    };
+    if !runtime.document_is_fully_active(document) {
+        return None;
+    }
+    let order = sequential_focus_order(runtime, document, None);
+    resolve_sequential_focus_order(runtime, &order, reverse)
+}
+
+fn sequential_focus_order(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    active: Option<DomHandle>,
+) -> Vec<DomHandle> {
     sequential_focus_order_for_children(
         runtime,
-        runtime
-            .dom_host()
-            .child_handles(runtime.document_handle())
-            .collect(),
+        runtime.dom_host().child_handles(document).collect(),
         active,
     )
 }
@@ -1589,18 +1645,13 @@ fn negative_shadow_scope_tab_target(
     let position = local_order
         .iter()
         .position(|candidate| *candidate == active)?;
-    if reverse {
-        if let Some(previous) = position
-            .checked_sub(1)
-            .and_then(|index| local_order.get(index))
-            .copied()
-        {
-            return Some(previous);
-        }
-    } else if let Some(next) = local_order.get(position + 1).copied() {
-        return Some(next);
-    }
-    focusable_adjacent_to_negative_shadow_host(runtime, host, reverse)
+    let remaining = if reverse {
+        &local_order[..position]
+    } else {
+        &local_order[position + 1..]
+    };
+    resolve_sequential_focus_order(runtime, remaining, reverse)
+        .or_else(|| focusable_adjacent_to_negative_shadow_host(runtime, host, reverse))
 }
 
 fn focusable_adjacent_to_negative_shadow_host(
@@ -1612,21 +1663,15 @@ fn focusable_adjacent_to_negative_shadow_host(
     let siblings = runtime.dom_host().child_handles(parent).collect::<Vec<_>>();
     let position = siblings.iter().position(|candidate| *candidate == host)?;
     if reverse {
-        for sibling in siblings[..position].iter().rev() {
+        return siblings[..position].iter().rev().find_map(|sibling| {
             let order = sequential_focus_order_for_children(runtime, vec![*sibling], None);
-            if let Some(candidate) = order.last().copied() {
-                return Some(candidate);
-            }
-        }
-        return None;
+            resolve_sequential_focus_order(runtime, &order, true)
+        });
     }
-    for sibling in siblings.iter().skip(position + 1) {
+    siblings[position + 1..].iter().find_map(|sibling| {
         let order = sequential_focus_order_for_children(runtime, vec![*sibling], None);
-        if let Some(candidate) = order.first().copied() {
-            return Some(candidate);
-        }
-    }
-    None
+        resolve_sequential_focus_order(runtime, &order, false)
+    })
 }
 
 fn access_key_target(

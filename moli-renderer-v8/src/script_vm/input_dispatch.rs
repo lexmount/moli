@@ -3075,10 +3075,7 @@ impl ScriptVm {
             Rc::clone(&self._context_host),
             CurrentInputEvent::keyboard(key, modifiers),
         );
-        let handle = self
-            .document_runtime
-            .active_element_handle()
-            .or_else(|| self.document_runtime.document_focus_fallback_handle());
+        let handle = self._context_host.borrow().keyboard_focus_target();
         let Some(handle) = handle else {
             return Ok(input_dispatch_outcome(false));
         };
@@ -3146,10 +3143,7 @@ impl ScriptVm {
                 // Like Blink's KeyboardEventManager, resolve focus again after
                 // keydown listeners before targeting the character event.
                 let runtime = unsafe { &*runtime_ptr };
-                let Some(handle) = runtime
-                    .active_element_handle()
-                    .or_else(|| runtime.document_focus_fallback_handle())
-                else {
+                let Some(handle) = runtime.keyboard_focus_target() else {
                     return Ok(input_dispatch_outcome(false));
                 };
                 let Some(keypress) = construct_keyboard_event(
