@@ -1,6 +1,7 @@
 use cssparser::color::clamp_unit_f32;
 use style::color::{AbsoluteColor, ColorFlags, ColorSpace};
-use style_traits::ToCss;
+use style::values::serialize_specified_dimension;
+use style_traits::{CssWriter, ToCss};
 
 #[derive(Clone, Copy)]
 pub(super) enum CanvasColorStyle {
@@ -36,24 +37,23 @@ pub(super) fn serialize_canvas_color(mut color: AbsoluteColor) -> String {
                 ColorSpace::Hsl => "hsl",
                 _ => "hwb",
             };
-            let hue = color
-                .c0()
-                .map_or_else(|| "none".to_owned(), |hue| hue.to_css_string());
-            let percentage = |component: Option<f32>| {
-                component.map_or_else(
-                    || "none".to_owned(),
-                    |value| {
-                        // Stylo stores the components here on a 0–100 scale.
-                        // Remove noise from the conversion back to percentages.
-                        let rounded = (f64::from(value) * 100_000.0).round() / 100_000.0;
-                        format!("{rounded}%")
-                    },
-                )
+            // Stylo clamps the percentages in absolute HSL and HWB. Use
+            // relative syntax to preserve extended components when reparsing.
+            // Every channel is explicit, and the origin's alpha is opaque.
+            let origin = if [color.c1(), color.c2()]
+                .into_iter()
+                .flatten()
+                .any(|value| !value.is_nan() && !(0.0..=100.0).contains(&value))
+            {
+                "from black "
+            } else {
+                ""
             };
             format!(
-                "{name}({hue} {} {})",
-                percentage(color.c1()),
-                percentage(color.c2())
+                "{name}({origin}{} {} {})",
+                serialize_hsl_hwb_component(color.c0(), ""),
+                serialize_hsl_hwb_component(color.c1(), "%"),
+                serialize_hsl_hwb_component(color.c2(), "%")
             )
         } else {
             color.to_css_string()
@@ -71,6 +71,24 @@ pub(super) fn serialize_canvas_color(mut color: AbsoluteColor) -> String {
         css.push(')');
     }
     css
+}
+
+fn serialize_hsl_hwb_component(component: Option<f32>, unit: &str) -> String {
+    let Some(value) = component else {
+        return "none".to_owned();
+    };
+    if !value.is_finite() {
+        let mut css = String::new();
+        serialize_specified_dimension(value, unit, true, &mut CssWriter::new(&mut css))
+            .expect("writing CSS to a String succeeds");
+        return css;
+    }
+    if unit == "%" {
+        // Stylo stores HSL and HWB percentages on a 0–100 scale.
+        let rounded = (f64::from(value) * 100_000.0).round() / 100_000.0;
+        return format!("{rounded}%");
+    }
+    value.to_css_string()
 }
 
 pub(super) fn canvas_srgb_components(color: AbsoluteColor) -> [f32; 4] {
