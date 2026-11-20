@@ -461,10 +461,19 @@ fn register_event_source_request<'s>(
     cancel_handle: Option<FetchCancelHandle>,
     request_started: bool,
 ) -> RegisteredEventSourceRequest {
+    let timing = crate::context_bootstrap::FetchResourceTiming::capture_with_initiator_type(
+        scope,
+        &prepared.resource_loader.fetch_context().request_origin(),
+        "other",
+    );
     let (internal_id, load) = host.record_async_subresource_event_source(
         prepared.execution_context.duplicate(scope),
         &prepared.resource_loader,
-        v8::Global::new(scope, event_source),
+        crate::types::PendingWindowEventSource {
+            event_source: v8::Global::new(scope, event_source),
+            initial_url: prepared.resolved_url.clone(),
+            timing,
+        },
         cancel_handle,
         prepared.credentials_mode,
         prepared.network_partition_key.clone(),

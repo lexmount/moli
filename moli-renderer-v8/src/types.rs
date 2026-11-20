@@ -94,7 +94,7 @@ pub(super) enum PendingSubresourceContinuation {
         #[cfg(any(test, feature = "devtools"))]
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     },
-    EventSource(v8::Global<v8::Object>),
+    EventSource(PendingWindowEventSource),
     Fetch(PendingWindowFetchContinuation),
     Image {
         image_handle: crate::document_runtime::DomHandle,
@@ -122,6 +122,39 @@ pub(super) enum PendingSubresourceContinuation {
     WebSocket(#[cfg(any(test, feature = "devtools"))] PendingWebSocketConnection),
     /// A child frame navigation held before its request leaves the renderer.
     ChildDocument(Box<crate::native_bridge::ChildDocumentFetch>),
+}
+
+pub(super) struct PendingWindowEventSource {
+    pub(super) event_source: v8::Global<v8::Object>,
+    pub(super) initial_url: Url,
+    pub(super) timing: crate::context_bootstrap::FetchResourceTiming,
+}
+
+impl PendingWindowEventSource {
+    pub(super) fn failed_timing(&self) -> crate::context_bootstrap::ResourcePerformanceEntry {
+        self.timing
+            .failed(&self.initial_url)
+            .with_response_end(crate::context_bootstrap::unix_epoch_millis())
+    }
+
+    pub(super) fn completed_timing(
+        &self,
+        pending: &PendingSubresourceFetchState,
+        head: &moli_fetch::ResponseHead,
+        body_size: usize,
+        delivery: Option<&AsyncSubresourceFetchResponseFilter>,
+    ) -> crate::context_bootstrap::ResourcePerformanceEntry {
+        let metadata = crate::network_host::fetch_response_metadata(
+            &pending.request_origin,
+            head,
+            pending.request_mode,
+            delivery,
+            pending.load.request_client().web_security_disabled(),
+        );
+        self.timing
+            .completed(&self.initial_url, head, body_size, &metadata, delivery)
+            .with_response_end(crate::context_bootstrap::unix_epoch_millis())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
