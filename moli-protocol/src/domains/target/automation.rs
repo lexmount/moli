@@ -13,8 +13,9 @@ use super::{TargetCommandTaskStep, TargetCreationCommit, browser_context, closin
 
 /// Creation setup and initial navigation belong to the Target. The command
 /// waits only for setup and owns a claim on its accepted output.
-/// Creation requires Page installation and setup to succeed. On failure the
-/// registered Target remains available for retry, without creation output.
+/// Creation requires Page installation and setup to succeed. On failure no
+/// creation output is committed. The registered Target remains available for
+/// a later Page-initialization attempt.
 pub(crate) struct PreparedAutomationTargetCreation {
     result: DevToolsCreateTargetResult,
     host: ProtocolPageHostScope,

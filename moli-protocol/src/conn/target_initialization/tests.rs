@@ -885,16 +885,23 @@ async fn failed_setup_returns_its_accepted_output_to_the_creation_command_once()
 #[tokio::test]
 async fn installed_receipt_captures_real_install_dependencies_without_later_setup_dependencies() {
     use crate::domains::command_output::CommandOutputPlan;
-    use moli_core::{
-        PageId, RendererOutputCursor, RendererOutputFence, RendererOutputStreamIdentity,
-    };
+    use moli_core::{RendererOutputCursor, RendererOutputFence};
     let ctx = attached_target();
     let owner = CommandOwnerScope::for_session("SID-initialization-A");
-    let stream =
-        RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(9904));
-    let install_cursor = RendererOutputCursor::new_for_test(stream, 1);
-    let setup_cursor = RendererOutputCursor::new_for_test(stream, 2);
     let pending = ctx.with_fixture(|conn| {
+        // This observable bootstrap output requires a concrete Page-stream
+        // publication before the renderer can return its creation diagnostics.
+        conn.browser_context_by_id_mut("BID-initialization")
+            .unwrap()
+            .startup_document_start_scripts
+            .push(DocumentStartScript {
+                registry_key: None,
+                devtools_session: None,
+                source: "console.warn('initial Page fence fixture');".into(),
+                world_name: None,
+                has_bidi_channel_argument: false,
+                bidi_channel_handoffs: Vec::new(),
+            });
         conn.reserve_target_initialization(&owner)
             .unwrap()
             .submit_creation(
@@ -902,10 +909,18 @@ async fn installed_receipt_captures_real_install_dependencies_without_later_setu
                 TargetInitializationStage::SetupFinished,
                 Box::new(move |mut task, driver, context| {
                     Box::pin(async move {
-                        context.context_mut().set_renderer_output_predecessor(
-                            RendererOutputFence::new_for_test(install_cursor),
-                        );
                         let page = task.install(driver, context).await?;
+                        let install_cursor = page
+                            .renderer_output_predecessor
+                            .as_ref()
+                            .expect("initial console output produces a real Page fence")
+                            .cursor();
+                        // Represent later setup work in that same real Page
+                        // stream, without introducing an unrelated owner.
+                        let setup_cursor = RendererOutputCursor::new_for_test(
+                            install_cursor.stream(),
+                            install_cursor.sequence() + 1,
+                        );
                         context.context_mut().set_renderer_output_predecessor(
                             RendererOutputFence::new_for_test(setup_cursor),
                         );
@@ -919,11 +934,23 @@ async fn installed_receipt_captures_real_install_dependencies_without_later_setu
     let observer = pending.claim.initialization.clone();
     let completed = pending.wait().await;
     let installed = observer.clone().wait_page().await.unwrap();
-    assert!(
+    let install_cursor = installed
+        .page
+        .renderer_output_predecessor
+        .as_ref()
+        .expect("the installed receipt retains the real Page fence")
+        .cursor();
+    let setup_cursor =
+        RendererOutputCursor::new_for_test(install_cursor.stream(), install_cursor.sequence() + 1);
+    assert_eq!(installed.output_dependencies.iter().count(), 1);
+    assert_eq!(
         installed
             .output_dependencies
             .iter()
-            .any(|fence| fence.cursor() == install_cursor)
+            .next()
+            .unwrap()
+            .cursor(),
+        install_cursor
     );
     assert!(
         !installed
@@ -931,35 +958,25 @@ async fn installed_receipt_captures_real_install_dependencies_without_later_setu
             .iter()
             .any(|fence| fence.cursor() == setup_cursor)
     );
-    if let Some(predecessor) = &installed.page.renderer_output_predecessor {
-        assert!(
-            installed
-                .output_dependencies
-                .iter()
-                .any(|fence| fence.cursor() == predecessor.cursor())
-        );
-    }
     let mut output = CommandDispatchContext::default();
     let (mut context, _recovery) = CommandWorkflowContext::take_from(&mut output, None, None);
     let setup = completed
         .publish_into(&mut ProtocolWorkflowDriver::new(ctx.handle()), &mut context)
         .unwrap();
-    assert!(
-        setup
-            .output_dependencies
-            .iter()
-            .any(|fence| fence.cursor() == setup_cursor)
+    assert_eq!(setup.output_dependencies.iter().count(), 1);
+    assert_eq!(
+        setup.output_dependencies.iter().next().unwrap().cursor(),
+        setup_cursor
     );
     let completed = context.complete(CommandOutputPlan::default());
     ctx.with_fixture(|conn| {
         completed.finish(conn, &mut output);
     });
     let complete = observer.clone().wait().await.unwrap();
-    assert!(
-        complete
-            .output_dependencies
-            .iter()
-            .any(|fence| fence.cursor() == setup_cursor)
+    assert_eq!(complete.output_dependencies.iter().count(), 1);
+    assert_eq!(
+        complete.output_dependencies.iter().next().unwrap().cursor(),
+        setup_cursor
     );
     ctx.with_fixture(|conn| conn.finish_target_initialization(observer));
 }
