@@ -1337,7 +1337,9 @@ fn storage_bucket_cache_storage_match_callback<'s>(
     };
     let matched = with_storage_bucket_store_entry(scope, |store| {
         let cache_names = match options.cache_name.as_ref() {
-            Some(cache_name) => vec![cache_name.clone()],
+            Some(cache_name) => vec![moli_storage_service::StorageBucketCacheName::from(
+                cache_name,
+            )],
             None => store.cache_names_for_identity(&handle.identity)?,
         };
         for cache_name in cache_names {
@@ -1400,7 +1402,8 @@ fn storage_bucket_cache_storage_has_callback<'s>(
     });
     match names {
         Some(Some(names)) => {
-            let exists = names.iter().any(|name| name == &cache_name);
+            let native_name = moli_storage_service::StorageBucketCacheName::from(&cache_name);
+            let exists = names.contains(&native_name);
             let _ = resolver.resolve(scope, v8::Boolean::new(scope, exists).into());
         }
         Some(None) => reject_storage_bucket_unknown_error(scope, resolver, "caches.has"),
@@ -1431,7 +1434,15 @@ fn storage_bucket_cache_storage_keys_callback<'s>(
     });
     match names {
         Some(Some(names)) => {
-            let array = strings_to_array(scope, &names);
+            let values: Vec<v8::Local<v8::Value>> = names
+                .iter()
+                .map(|name| {
+                    v8::String::new_from_two_byte(scope, name.as_utf16(), v8::NewStringType::Normal)
+                        .expect("cache name string")
+                        .into()
+                })
+                .collect();
+            let array = v8::Array::new_with_elements(scope, &values);
             let _ = resolver.resolve(scope, array.into());
         }
         Some(None) => reject_storage_bucket_unknown_error(scope, resolver, "caches.keys"),
