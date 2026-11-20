@@ -918,7 +918,7 @@ async fn child_browsing_context_attribute_navigation_preserves_local_history() -
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length=\"3\""),
+            .contains("data-child-history-length=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -928,7 +928,7 @@ async fn child_browsing_context_attribute_navigation_preserves_local_history() -
             .unwrap()
             .contains(&format!(
                 "data-child-location-after-back=\"{}\"",
-                server.url("/compat/window-child-browsing-context-target-name-b")
+                server.url("/compat/window-child-browsing-context-target-name-a")
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -939,7 +939,7 @@ async fn child_browsing_context_attribute_navigation_preserves_local_history() -
             .unwrap()
             .contains(&format!(
                 "data-child-document-location-after-back=\"{}\"",
-                server.url("/compat/window-child-browsing-context-target-name-b")
+                server.url("/compat/window-child-browsing-context-target-name-a")
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -950,7 +950,7 @@ async fn child_browsing_context_attribute_navigation_preserves_local_history() -
             .unwrap()
             .contains(&format!(
                 "data-child-current-entry-after-back=\"{}\"",
-                server.url("/compat/window-child-browsing-context-target-name-b")
+                server.url("/compat/window-child-browsing-context-target-name-a")
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -3977,7 +3977,7 @@ async fn child_browsing_context_fragment_navigation_persists_through_attribute_n
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length=\"3\""),
+            .contains("data-child-history-length=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
