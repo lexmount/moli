@@ -139,6 +139,7 @@ pub(crate) use self::opfs::{
     settle_opfs_task_result,
 };
 mod performance_observer_runtime;
+pub(crate) use performance_observer_runtime::notify_performance_observers;
 mod performance_runtime;
 mod range;
 mod range_algorithms;

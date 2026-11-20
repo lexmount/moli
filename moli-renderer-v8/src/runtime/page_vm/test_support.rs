@@ -217,6 +217,18 @@ impl PageVmTaskExecutorTestHarness {
             .await
     }
 
+    pub(crate) async fn run_one_misc_platform_api_task_executor_turn(
+        &mut self,
+        loader: &ResourceRequestClient,
+    ) -> anyhow::Result<bool> {
+        self.selected_task_local_set
+            .run_until(self.page_vm.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MiscPlatformApi,
+                loader,
+            ))
+            .await
+    }
+
     /// Execute one exact main-Document native-module owner notification.
     /// Tests use this after asserting that such a notification is ready so an
     /// older unrelated Page task cannot obscure the modulepreload follow-up.
