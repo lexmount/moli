@@ -1,6 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
     KeyConversionError, indexed_db_transaction_mode, indexed_db_transaction_status,
+    store_request_error,
 };
 
 use moli_indexeddb::TransactionMode;
@@ -44,6 +45,18 @@ pub(super) fn object_store_write_callback<'s>(
     else {
         return;
     };
+    if indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.aborted) {
+        // Admission preceded serialization. A getter may abort the transaction
+        // while cloning; accepted requests still report AbortError before abort.
+        let Some(request) = create_request_object(scope, store.into(), transaction) else {
+            return;
+        };
+        queue_transaction_request(scope, transaction, request);
+        let error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
+        store_request_error(scope, request, error);
+        rv.set(request.into());
+        return;
+    }
     if indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.started)
         && transaction_handle_from_value(scope, transaction.into()).is_none()
     {

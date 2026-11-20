@@ -5287,6 +5287,71 @@ fn indexed_db_abort_converts_pending_request_into_abort_error_and_rolls_back() {
     assert_eq!(result, "AbortError|true|undefined");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn indexed_db_write_aborted_by_a_clone_getter_delivers_request_error_first() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://indexeddb-clone-abort.test/",
+        &loader,
+    );
+    vm.exec(
+        r#"
+        globalThis.__cloneAbortResult = 'pending';
+        (async () => {
+          const requested = request => new Promise((resolve, reject) => {
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          const open = indexedDB.open('clone-abort-order', 1);
+          open.onupgradeneeded = () => open.result.createObjectStore('records');
+          const db = await requested(open);
+          for (const method of ['add', 'put']) {
+            for (const queued of [false, true]) {
+              const label = method + '/' + queued;
+              const blocker = queued ? db.transaction('records', 'readwrite') : null;
+              if (blocker) blocker.objectStore('records').get(1);
+              const transaction = db.transaction('records', 'readwrite');
+              const events = [];
+              const aborted = new Promise(resolve => transaction.onabort = () => {
+                events.push('abort');
+                resolve();
+              });
+              const store = transaction.objectStore('records');
+              const request = store[method]({get value() { transaction.abort(); return 'discarded'; }}, 1);
+              if (!(request instanceof IDBRequest) || request.readyState !== 'pending') {
+                throw Error(label + ': admitted write must return a pending request');
+              }
+              request.onerror = event => {
+                events.push('request:' + request.error.name);
+                event.preventDefault();
+              };
+              await aborted;
+              if (events.join('|') !== 'request:AbortError|abort' || request.readyState !== 'done') {
+                throw Error(label + ': ' + events + '/' + request.readyState);
+              }
+              const reader = db.transaction('records');
+              if (await requested(reader.objectStore('records').get(1)) !== undefined) {
+                throw Error(label + ': aborted value reached storage');
+              }
+            }
+          }
+          db.close();
+        })().then(() => __cloneAbortResult = 'ok', error => __cloneAbortResult = String(error));
+        "#,
+        None,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__cloneAbortResult !== 'pending')",
+        "true",
+        "IndexedDB aborted write and its request error",
+    )
+    .await;
+    assert_eq!(vm.eval("String(__cloneAbortResult)").unwrap(), "ok");
+}
+
 #[test]
 fn indexed_db_aborted_upgrade_request_errors_with_abort_error() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-abort.test/");
