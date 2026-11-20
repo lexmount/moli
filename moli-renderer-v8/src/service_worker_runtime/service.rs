@@ -830,6 +830,11 @@ mod tests {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: service
+                    .inner
+                    .resource_store
+                    .lock()
+                    .allocate_registration_order(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -990,6 +995,7 @@ mod tests {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -1401,6 +1407,7 @@ mod tests {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -1459,6 +1466,7 @@ mod tests {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -1520,6 +1528,7 @@ mod tests {
             .entry(registration_id)
             .or_insert_with(|| ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
