@@ -941,6 +941,10 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
     }))
     .await;
     ctx.expect_result(1038, json!({}), Some(session_id.as_str()));
+    let stopped = ctx.take_one();
+    assert_eq!(stopped["method"], "Page.frameStoppedLoading");
+    assert_eq!(stopped["sessionId"], session_id);
+    assert_eq!(stopped["params"]["frameId"], second_target_id);
 
     crate::testing::wait_until_scheduler_message(
         &mut ctx,

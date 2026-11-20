@@ -4885,87 +4885,177 @@ async fn stop_loading_aborts_a_provisional_navigation() {
             .route(
                 "/slow",
                 get(|| async {
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    axum::response::Html("<p id=slow>slow</p>")
+                    std::future::pending::<axum::response::Html<&'static str>>().await
                 }),
             )
-            .fallback(get(|| async {
-                axum::response::Html("<p id=home>home</p>")
-            })),
+            .route(
+                "/home",
+                get(|| async { axum::response::Html("<p id=home>home</p>") }),
+            ),
         "stop-loading-provisional",
     );
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) = connect_async(
-        discover_browser_websocket_url(addr)
-            .await
-            .expect("discover browser endpoint"),
-    )
-    .await
-    .unwrap();
-    let target_id = create_dynamic_target(&mut browser, 1).await;
-    let mut page = connect_dynamic_page(addr, &target_id).await;
-    send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
-    send_cdp_command(&mut page, 1, "Network.enable", None, json!({})).await;
-    navigate_dynamic_page_and_wait_for_load(&mut page, 2, &format!("http://{fixture_addr}/home"))
-        .await;
-
-    for (id, method, params) in [
-        (
-            3_u64,
-            "Page.navigate",
-            json!({"url": format!("http://{fixture_addr}/slow")}),
-        ),
-        (4_u64, "Page.stopLoading", json!({})),
-    ] {
-        page.send(WsMessage::Text(
-            json!({"id": id, "method": method, "params": params})
-                .to_string()
-                .into(),
-        ))
+    let (mut browser, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
         .await
         .unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
+    let target_id = create_dynamic_target(&mut browser, 1).await;
+    let mut sessions = Vec::new();
+    for id in 2..=4 {
+        let attached = send_cdp_command(
+            &mut browser,
+            id,
+            "Target.attachToTarget",
+            None,
+            json!({"targetId": target_id, "flatten": true}),
+        )
+        .await;
+        sessions.push(
+            response_by_id(&attached, id)["result"]["sessionId"]
+                .as_str()
+                .expect("attached session")
+                .to_owned(),
+        );
     }
-    let (mut navigated, mut stopped, mut stopped_loading, mut failed) =
-        (false, false, false, false);
-    let messages = recv_until_match(&mut page, |message| {
-        navigated |= message["id"] == json!(3);
-        stopped |= message["id"] == json!(4);
-        stopped_loading |= message["method"] == "Page.frameStoppedLoading";
-        failed |= message["method"] == "Network.loadingFailed";
-        navigated && stopped && stopped_loading && failed
+    let [navigator, observer, unsubscribed] = sessions.as_slice() else {
+        unreachable!("three attached sessions")
+    };
+    for (id, session) in [(5, navigator), (6, observer)] {
+        let enabled =
+            send_cdp_command(&mut browser, id, "Page.enable", Some(session), json!({})).await;
+        assert_eq!(response_by_id(&enabled, id)["result"], json!({}));
+    }
+    send_cdp_command(
+        &mut browser,
+        7,
+        "Network.enable",
+        Some(navigator),
+        json!({}),
+    )
+    .await;
+    send_cdp_command_without_wait(
+        &mut browser,
+        8,
+        "Page.navigate",
+        Some(navigator),
+        json!({"url": format!("http://{fixture_addr}/home")}),
+    )
+    .await;
+    let mut home_stops = std::collections::HashSet::new();
+    let mut home_reply = false;
+    let home = recv_until_match(&mut browser, |message| {
+        if message["method"] == "Page.frameStoppedLoading"
+            && message["params"]["frameId"] == target_id
+        {
+            home_stops.insert(message["sessionId"].as_str().unwrap().to_owned());
+        }
+        home_reply |= message["id"] == 8;
+        home_reply && home_stops.contains(navigator) && home_stops.contains(observer)
     })
     .await;
-    let navigate = response_by_id(&messages, 3);
-    assert_eq!(navigate["result"]["errorText"], "net::ERR_ABORTED");
-    let slow_request_id = messages
-        .iter()
-        .find(|message| {
-            message["method"] == "Network.requestWillBeSent"
-                && message["params"]["request"]["url"]
-                    .as_str()
-                    .is_some_and(|url| url.ends_with("/slow"))
+    assert!(response_by_id(&home, 8)["error"].is_null());
+
+    let slow_url = format!("http://{fixture_addr}/slow");
+    for (navigate_id, caller) in [(10, observer), (20, unsubscribed)] {
+        send_cdp_command_without_wait(
+            &mut browser,
+            navigate_id,
+            "Page.navigate",
+            Some(navigator),
+            json!({"url": slow_url}),
+        )
+        .await;
+        let mut starts = std::collections::HashSet::new();
+        let mut request_id = None;
+        recv_until_match(&mut browser, |message| {
+            if message["method"] == "Page.frameStartedLoading"
+                && message["params"]["frameId"] == target_id
+            {
+                starts.insert(message["sessionId"].as_str().unwrap().to_owned());
+            }
+            if message["method"] == "Network.requestWillBeSent"
+                && message["params"]["request"]["url"] == slow_url
+            {
+                request_id = Some(message["params"]["requestId"].clone());
+            }
+            starts.contains(navigator) && starts.contains(observer) && request_id.is_some()
         })
-        .expect("the slow request is announced")["params"]["requestId"]
-        .clone();
-    let failed = messages
-        .iter()
-        .find(|message| message["method"] == "Network.loadingFailed")
-        .unwrap();
-    assert_eq!(failed["params"]["requestId"], slow_request_id, "{failed}");
-    assert_eq!(failed["params"]["type"], "Document");
-    assert_eq!(failed["params"]["errorText"], "net::ERR_ABORTED");
-    assert_eq!(failed["params"]["canceled"], true);
-    assert!(
-        !messages
+        .await;
+        let request_id = request_id.unwrap();
+
+        let stop_id = navigate_id + 1;
+        send_cdp_command_without_wait(
+            &mut browser,
+            stop_id,
+            "Page.stopLoading",
+            Some(caller),
+            json!({}),
+        )
+        .await;
+        let (mut stopped, mut aborted, mut failed) = (false, false, false);
+        let mut stop_count = 0;
+        let mut messages = recv_until_match(&mut browser, |message| {
+            stopped |= message["id"] == stop_id;
+            aborted |= message["id"] == navigate_id;
+            failed |= message["method"] == "Network.loadingFailed"
+                && message["params"]["requestId"] == request_id;
+            if message["method"] == "Page.frameStoppedLoading" {
+                stop_count += 1;
+            }
+            stopped && aborted && failed && stop_count >= 2
+        })
+        .await;
+        assert_eq!(response_by_id(&messages, stop_id)["result"], json!({}));
+        assert_eq!(
+            response_by_id(&messages, navigate_id)["result"]["errorText"],
+            "net::ERR_ABORTED"
+        );
+
+        // Also check the interrupted navigation left the loaded Document in place.
+        let evaluation_id = navigate_id + 2;
+        let evaluation = send_cdp_command(
+            &mut browser,
+            evaluation_id,
+            "Runtime.evaluate",
+            Some(navigator),
+            json!({"expression": "location.pathname", "returnByValue": true}),
+        )
+        .await;
+        assert_eq!(
+            response_by_id(&evaluation, evaluation_id)["result"]["result"]["value"],
+            "/home"
+        );
+        messages.extend(evaluation);
+
+        let mut stop_sessions = Vec::new();
+        for message in &messages {
+            assert_ne!(message["method"], "Page.frameNavigated", "{message}");
+            if message["method"] == "Page.frameStoppedLoading" {
+                assert_eq!(message["params"]["frameId"], target_id, "{message}");
+                stop_sessions.push(message["sessionId"].as_str().unwrap());
+            }
+        }
+        let mut expected = [navigator.as_str(), observer.as_str()];
+        expected.sort_unstable();
+        stop_sessions.sort_unstable();
+        assert_eq!(stop_sessions, expected, "stop called by {caller}");
+
+        let terminals: Vec<_> = messages
             .iter()
-            .any(|message| message["method"] == "Page.frameNavigated"),
-        "the stopped navigation must not commit"
-    );
-    assert_eq!(
-        evaluate_window_name_probe(&mut page, 5, "location.pathname").await,
-        "/home"
-    );
+            .filter(|message| {
+                message["params"]["requestId"] == request_id
+                    && matches!(
+                        message["method"].as_str(),
+                        Some("Network.loadingFailed" | "Network.loadingFinished")
+                    )
+            })
+            .collect();
+        assert_eq!(terminals.len(), 1, "{messages:#?}");
+        let terminal = terminals[0];
+        assert_eq!(terminal["method"], "Network.loadingFailed");
+        assert_eq!(terminal["params"]["type"], "Document");
+        assert_eq!(terminal["params"]["errorText"], "net::ERR_ABORTED");
+        assert_eq!(terminal["params"]["canceled"], true);
+    }
     abort_test_cdp_server(server).await;
 }
 

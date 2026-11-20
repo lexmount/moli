@@ -24,28 +24,7 @@ impl PreparedNavigationFailureCleanup {
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
     ) -> Self {
-        if let Some(invocation) = state.web_mcp_invocation.as_ref() {
-            output.extend_background_events_after_messages(
-                super::super::web_mcp::navigation_failed(
-                    conn,
-                    &state.owner,
-                    invocation.invocation_id,
-                ),
-            );
-        }
-        // The superseded or stopped request ends as aborted, like Chromium.
-        let mut events = Vec::new();
-        let mut progress = network::failed_navigation_progress_gate(
-            conn,
-            &state,
-            moli_fetch::NET_ERR_ABORTED_ERROR_TEXT,
-        );
-        network::MainDocumentProgressBackgroundEventBarrier::drain_until_body_finished_visible(
-            &mut events,
-            &mut progress,
-        );
-        output.extend_background_events_after_messages(events);
-        super::push_superseded_navigation_result(output, &state);
+        push_superseded_navigation_failure(conn, output, &state);
         Self {
             page: None,
             renderer: conn.prepare_renderer_navigation_finish(&state.owner, &token),
@@ -61,6 +40,34 @@ impl PreparedNavigationFailureCleanup {
         }
         self.renderer.wait_using(driver).await
     }
+}
+
+pub(super) fn push_superseded_navigation_failure(
+    conn: &mut CdpConnection,
+    output: &mut CommandOutputBuffer,
+    state: &NavigationDispatchState,
+) {
+    if let Some(invocation) = state.web_mcp_invocation.as_ref() {
+        output.extend_background_events_after_messages(super::super::web_mcp::navigation_failed(
+            conn,
+            &state.owner,
+            invocation.invocation_id,
+        ));
+    }
+    if state.request_announced {
+        let mut events = Vec::new();
+        let mut progress = network::failed_navigation_progress_gate(
+            conn,
+            state,
+            moli_fetch::NET_ERR_ABORTED_ERROR_TEXT,
+        );
+        network::MainDocumentProgressBackgroundEventBarrier::drain_until_body_finished_visible(
+            &mut events,
+            &mut progress,
+        );
+        output.extend_background_events_after_messages(events);
+    }
+    super::push_superseded_navigation_result(output, state);
 }
 
 pub(crate) fn prepare_failed_navigation_cleanup(

@@ -172,7 +172,16 @@ impl PreparedNavigationProtocolCompletion {
             prefix_output: None,
         };
         if !conn.accepts_pending_document_navigation_for_owner(&result.state.owner, &result.token) {
-            super::super::push_superseded_navigation_result(&mut output, &result.state);
+            if navigation.is_err() {
+                super::super::navigation_cleanup::push_superseded_navigation_failure(
+                    conn,
+                    &mut output,
+                    &result.state,
+                );
+            } else {
+                // A completed native commit can already have published its body terminal.
+                super::super::push_superseded_navigation_result(&mut output, &result.state);
+            }
         } else {
             match navigation {
                 Ok(navigation) => {

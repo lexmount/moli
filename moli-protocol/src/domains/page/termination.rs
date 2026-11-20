@@ -148,15 +148,20 @@ pub(super) fn try_start_stop_loading_command_dispatch(
     cmd: &Cmd<'_>,
 ) -> PageCommandTaskStep {
     let owner_scope = crate::conn::CommandOwnerScope::capture(conn, cmd.session_id);
-    stop_loading(conn, &owner_scope);
-    PageCommandTaskStep::Complete(CommandOutputPlan::success())
+    let mut plan = CommandOutputPlan::success();
+    plan.extend_background_events(stop_loading(conn, &owner_scope));
+    PageCommandTaskStep::Complete(plan)
 }
 
 /// Like Chromium's browser-side PageHandler::StopLoading, acknowledge the
 /// finite cancellation without waiting for a paused Renderer to service it.
 /// The existing supervisor retains the exact Native and Fetch cleanup work.
-pub(super) fn stop_loading(conn: &mut CdpConnection, owner: &CommandOwnerScope) {
-    let prepared = PreparedPageStopLoading::prepare(conn, owner);
+pub(super) fn stop_loading(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Vec<BackgroundProtocolEvent> {
+    let mut events = Vec::new();
+    let prepared = PreparedPageStopLoading::prepare(conn, owner, &mut events);
     let target_id = conn
         .target_owner_identity_for_owner(owner)
         .and_then(|(_, target)| target);
@@ -174,6 +179,7 @@ pub(super) fn stop_loading(conn: &mut CdpConnection, owner: &CommandOwnerScope) 
         }
     });
     crate::conn::PendingProtocolSchedulerWork::publish_workflow(conn, workflow, target_id);
+    events
 }
 
 struct PreparedPageStopLoading {
@@ -182,43 +188,44 @@ struct PreparedPageStopLoading {
         Result<moli_core::page::PendingPageCommand>,
     )>,
     cleanup: crate::domains::fetch::PreparedFetchCleanup,
-    /// Frame, loader and session of a provisional navigation cancelled by
-    /// this stop.
-    cancelled_navigation: Option<(String, String, Option<String>)>,
 }
 
 impl PreparedPageStopLoading {
-    fn prepare(conn: &mut CdpConnection, owner: &CommandOwnerScope) -> Self {
+    fn prepare(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        events: &mut Vec<BackgroundProtocolEvent>,
+    ) -> Self {
         let lifecycle = conn
             .target_page_residence_identity_for_owner(owner)
             .and_then(|page_owner| {
                 conn.loaded_page_mut_for_owner(owner)
                     .map(|page| (page_owner, page.start_stop_document_lifecycle()))
             });
-        // Capture the interrupted work now. A navigation admitted while the
-        // original Native stop waits must not become part of this cleanup.
+        // Fetch cleanup can already cancel a paused provisional navigation.
+        // Keep its loader before claiming the pending Fetch work.
+        let loader_id = conn.current_document_loader_id_for_owner(owner);
+        let was_pending = conn.has_pending_document_navigation_for_owner(owner);
         let pending = take_pending_fetch_state_for_owner(conn, owner);
         let cleanup = crate::domains::fetch::prepare_page_stop_loading(conn, owner, pending);
-        // Fetch cleanup has already handled paused navigations. Cancel any
-        // remaining request in this admission turn before a successor can start.
-        let cancelled_navigation =
-            conn.current_document_loader_id_for_owner(owner)
-                .and_then(|loader_id| {
-                    let was_pending = conn.has_pending_document_navigation_for_owner(owner);
-                    conn.clear_pending_document_navigation_for_owner_if_loader_matches(
-                        owner, &loader_id,
+        if let Some(loader_id) = loader_id {
+            conn.clear_pending_document_navigation_for_owner_if_loader_matches(owner, &loader_id);
+            // The wire event carries only frameId. Settle the loading state in
+            // this turn, before a successor can announce its start.
+            if was_pending
+                && let Some(frame_id) = conn.runtime_session_owner_frame_id_for_owner(owner)
+            {
+                for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
+                    super::emit_navigation_frame_stopped_loading_background_events(
+                        events,
+                        session_id.as_deref(),
+                        &frame_id,
+                        &loader_id,
                     );
-                    if !was_pending {
-                        return None;
-                    }
-                    let frame_id = conn.runtime_session_owner_frame_id_for_owner(owner)?;
-                    Some((frame_id, loader_id, owner.session_id().map(str::to_owned)))
-                });
-        Self {
-            lifecycle,
-            cleanup,
-            cancelled_navigation,
+                }
+            }
         }
+        Self { lifecycle, cleanup }
     }
 
     async fn run(
@@ -249,14 +256,6 @@ impl PreparedPageStopLoading {
             .into_disposal_output(&mut events);
         if let Some(error) = result.first_error {
             tracing::debug!(%error, "failed to clear pending Fetch work while stopping navigation");
-        }
-        if let Some((frame_id, loader_id, session_id)) = self.cancelled_navigation {
-            super::emit_navigation_frame_stopped_loading_background_events(
-                &mut events,
-                session_id.as_deref(),
-                &frame_id,
-                &loader_id,
-            );
         }
         let mut plan = CommandOutputPlan::success();
         plan.extend_background_events(events);
