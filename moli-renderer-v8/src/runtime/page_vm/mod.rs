@@ -1941,6 +1941,7 @@ impl PageVm {
         let Some(vm) = self.vm.as_mut() else {
             return;
         };
+        vm.devtools_target().begin_page_teardown();
         vm.detach_default_inspector_context_for_context_teardown();
         vm.close_page_context_resources_for_context_teardown();
     }
