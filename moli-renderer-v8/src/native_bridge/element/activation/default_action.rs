@@ -6,19 +6,21 @@ pub(crate) use devtools::{
     perform_auxiliary_link_default_action, perform_drop_default_action,
 };
 
+#[cfg(any(feature = "devtools", test))]
+use crate::context_bootstrap::selection_value_for_window;
 use crate::context_bootstrap::{
     LocationNavigationKind, navigate_location_object_with_source_element,
-    selection_value_for_window,
 };
 use crate::dom::{
     forms::{ButtonTypeState, InputType},
     native::{Element, Node},
 };
+#[cfg(any(feature = "devtools", test))]
 use crate::util::{
-    call_object_method, node_wrapper_from_handle, object_number_property,
-    object_property_as_object, utf16_len, utf16_replace_units_range_lossy, utf16_units, v8_string,
-    v8str,
+    call_object_method, object_number_property, object_property_as_object, utf16_len,
+    utf16_replace_units_range_lossy, utf16_units,
 };
+use crate::util::{node_wrapper_from_handle, v8_string, v8str};
 use crate::{
     RendererInputDispatchOutcome, RendererPendingDownloadActivation,
     RendererPendingFileChooserActivation, RendererPopupDisposition,
@@ -35,16 +37,18 @@ use super::super::forms::{
 };
 use super::super::url_attributes::parsed_hyperlink_url;
 use super::super::{
-    ClickEventSource, InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
+    ClickEventSource, InputEventCoordinates, NodePublicEventDispatchOutcome,
     closed_details_ancestors_to_reveal, construct_click_event, construct_command_event,
-    construct_input_event, construct_simple_event, contenteditable_editing_host,
-    dispatch_beforeinput, dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
-    element_has_attribute, form_associated_form_owner, is_disabled_form_control, is_focusable,
-    is_valid_submit_button, label_activation_control_handle,
-    perform_popover_invoker_default_action, perform_summary_click_default_action,
-    resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
-    set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
+    construct_simple_event, contenteditable_editing_host, dispatch_popover_toggle_events,
+    dispatch_public_event, element_attribute, element_has_attribute, form_associated_form_owner,
+    is_disabled_form_control, is_focusable, is_valid_submit_button,
+    label_activation_control_handle, perform_popover_invoker_default_action,
+    perform_summary_click_default_action, resolved_reflected_element_attribute_handle,
+    scroll_node_into_view_at_start, set_reflected_boolean_attribute, submit_form_with_submit_event,
+    update_focus,
 };
+#[cfg(any(feature = "devtools", test))]
+use super::super::{TextEditInputType, construct_input_event, dispatch_beforeinput};
 use super::targets::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
     form_navigation_target_document, named_iframe_target_handle_for_navigation,
@@ -52,6 +56,7 @@ use super::targets::{
     navigate_target_browsing_context,
 };
 
+#[cfg(any(feature = "devtools", test))]
 fn call_node_contains(
     scope: &mut v8::PinScope<'_, '_>,
     target: v8::Local<'_, v8::Object>,
@@ -68,11 +73,13 @@ fn call_node_contains(
         .is_some_and(|value| value.boolean_value(scope))
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn window_selection<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
     let global = scope.get_current_context().global(scope);
     selection_value_for_window(scope, global)
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn collapse_selection_to(
     scope: &mut v8::PinScope<'_, '_>,
     selection: v8::Local<'_, v8::Object>,
@@ -89,6 +96,7 @@ fn collapse_selection_to(
     let _ = collapse.call(scope, selection.into(), &[node.into(), offset.into()]);
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn selected_text_node_range<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
@@ -124,6 +132,7 @@ fn selected_text_node_range<'s>(
     Some((node, start, end))
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn replace_text_node_range(
     scope: &mut v8::PinScope<'_, '_>,
     node: v8::Local<'_, v8::Object>,
@@ -149,6 +158,7 @@ fn replace_text_node_range(
         .unwrap_or(false)
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn selected_dom_range<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
@@ -169,6 +179,7 @@ fn selected_dom_range<'s>(
         .and_then(|range| v8::Local::<v8::Object>::try_from(range).ok())
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn create_text_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     text: &str,
@@ -180,10 +191,12 @@ fn create_text_node<'s>(
         .and_then(|node| v8::Local::<v8::Object>::try_from(node).ok())
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn is_text_node(scope: &mut v8::PinScope<'_, '_>, node: v8::Local<'_, v8::Object>) -> bool {
     object_number_property(scope, node, "nodeType") == Some(3.0)
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn text_insertion_target_at_range_start<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: v8::Local<'s, v8::Object>,
@@ -220,6 +233,7 @@ fn text_insertion_target_at_range_start<'s>(
         .then_some((previous, length as u32))
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn insert_text_into_text_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
@@ -233,6 +247,7 @@ fn insert_text_into_text_node<'s>(
     call_object_method(scope, node, "insertData", &[offset.into(), text.into()]).is_some()
 }
 
+#[cfg(any(feature = "devtools", test))]
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum TextRangeInsertionMode {
     Typing,
@@ -240,6 +255,7 @@ enum TextRangeInsertionMode {
     Replacement,
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn replace_selected_dom_range<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
@@ -282,6 +298,7 @@ fn replace_selected_dom_range<'s>(
     true
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn append_text_to_editing_host(
     scope: &mut v8::PinScope<'_, '_>,
     target: v8::Local<'_, v8::Object>,
@@ -300,6 +317,7 @@ fn append_text_to_editing_host(
         .unwrap_or(false)
 }
 
+#[cfg(any(feature = "devtools", test))]
 fn contenteditable_editing_host_in_document(
     runtime: &PageScriptHost,
     handle: DomHandle,
@@ -313,6 +331,7 @@ fn contenteditable_editing_host_in_document(
     contenteditable_editing_host(runtime, handle)
 }
 
+#[cfg(any(feature = "devtools", test))]
 pub(crate) fn replace_contenteditable_selection(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -366,6 +385,7 @@ pub(crate) fn replace_contenteditable_selection(
     )
 }
 
+#[cfg(any(feature = "devtools", test))]
 pub(super) fn replace_contenteditable_selection_after_beforeinput(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
