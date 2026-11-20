@@ -985,6 +985,14 @@ mod tests {
     }
 
     impl crate::ParserDomReadConsumer for TestMutationEffectCollector<'_> {
+        fn plan_html_content_patch(
+            &mut self,
+            scope: NativeNodeId,
+            name: &str,
+        ) -> Option<moli_dom::native::HtmlContentPatchPlan> {
+            unsafe { &*self.host }.plan_html_content_patch(scope, name)
+        }
+
         fn stylesheet_media_matches(&mut self, media: &str) -> bool {
             // SAFETY: this test owns the live DomHost throughout the parser pump.
             moli_stylesheet_blocking::StylesheetBlockingReadView::media_query_matches(

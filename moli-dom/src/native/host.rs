@@ -14,6 +14,7 @@ use super::{Element, LiveDomNodeMetadata, NativeDom, NativeNodeId, Node, NodeTyp
 mod adoption;
 mod clone;
 mod collections;
+mod content_patch;
 mod document;
 mod flat_tree;
 #[cfg(test)]
@@ -30,6 +31,7 @@ mod transfer;
 mod types;
 
 pub use adoption::{DomAdoptionTarget, DomAssociatedTreeEdgeKind};
+pub use content_patch::HtmlContentPatchPlan;
 pub use html_serialization::{
     ShadowRootInclusion, ShadowRootMarkupProfile, ShadowRootRegistryAttributePolicy,
 };

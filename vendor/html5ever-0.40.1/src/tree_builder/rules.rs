@@ -292,7 +292,7 @@ where
                                 self.insert_element_for(tag);
                             }
                         } else {
-                            self.insert_element_for(tag);
+                            self.insert_template_with_optional_patch(tag);
                         }
 
                         ProcessResult::Done
@@ -303,6 +303,7 @@ where
                             self.unexpected(&tag);
                         } else {
                             self.generate_implied_end_tags(thorough_implied_end);
+                            self.finish_content_patch();
                             self.expect_to_close(local_name!("template"));
                             self.clear_active_formatting_to_marker();
                             self.template_modes.borrow_mut().pop();

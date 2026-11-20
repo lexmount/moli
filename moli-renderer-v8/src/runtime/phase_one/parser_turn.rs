@@ -99,6 +99,17 @@ impl ParserMutationEffectConsumer for PhaseOneParserOwner<'_> {
 }
 
 impl ParserDomReadConsumer for PhaseOneParserOwner<'_> {
+    fn plan_html_content_patch(
+        &mut self,
+        scope: NativeNodeId,
+        name: &str,
+    ) -> Option<moli_dom::native::HtmlContentPatchPlan> {
+        self.vm
+            .document_runtime
+            .dom_host()
+            .plan_html_content_patch(scope, name)
+    }
+
     fn stylesheet_media_matches(&mut self, media: &str) -> bool {
         self.vm.document_runtime.stylesheet_media_matches(media)
     }

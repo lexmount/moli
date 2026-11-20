@@ -25,6 +25,6 @@ from the workspace, so run its tests explicitly with
 `cargo test --manifest-path vendor/html5ever-0.40.1/Cargo.toml --all-features`.
 
 The Moli original-position patch was ported onto 0.40.1 during the main rebase.
-The 0.40.1 encoding, buffer queue, SIMD tokenizer and TreeBuilder APIs are
-retained; the local changes are limited to the tokenizer position hook, raw
-input cursor/rewind handling, the initial-BOM fix and their tests.
+The local tree builder also supports an opt-in DOM hook for parser-time
+`<template for>` content patching. The embedding sink supplies marker
+selection and lifecycle operations through the hook.

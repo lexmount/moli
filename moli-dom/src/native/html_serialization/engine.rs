@@ -785,10 +785,8 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             NodeData::ProcessingInstruction(pi) => {
                 self.out.push_str("<?");
                 self.out.push_str(pi.target());
-                if !pi.data().is_empty() {
-                    self.out.push(' ');
-                    self.out.push_dom_string(pi.value());
-                }
+                self.out.push(' ');
+                self.out.push_dom_string(pi.value());
                 self.out.push_str("?>");
             }
         }
