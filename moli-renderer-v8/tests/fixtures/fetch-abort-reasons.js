@@ -40,7 +40,7 @@ globalThis.runFetchAbortReasonContract = async function(base, prefix) {
           if (phase === 'after-abort') pending = response[method]();
           const [result] = await Promise.allSettled([pending]);
           check(`${name}/body rejects with exact signal reason`,result.status === 'rejected' && result.reason === expected);
-          check(`${name}/body is disturbed`,response.bodyUsed);
+          check(`${name}/body disturbance matches read phase`,response.bodyUsed === (phase === 'pending'));
         } finally {
           await fetch(endpoint('/release')).then(response => response.text());
         }
