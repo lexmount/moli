@@ -55,8 +55,12 @@ impl PseudoStyleCache {
     }
 
     #[cfg(test)]
-    pub(super) fn record_primary(&self, key: ComputedElementStyleCacheKey) {
-        debug_assert!(key.pseudo_element.is_none());
+    pub(super) fn record_primary(&self, computed_cache_generation: u64, handle: DomHandle) {
+        let key = ComputedElementStyleCacheKey {
+            computed_cache_generation,
+            handle,
+            pseudo_element: None,
+        };
         if self.primary_entries.borrow_mut().insert(key.clone()) {
             self.index_key(&key);
             self.bump_write_generation();

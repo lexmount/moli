@@ -26,7 +26,14 @@ fn computed_style_is_published_on_canonical_element_data_and_reused() {
     let publication_generation =
         engine.computed_style_publication_generation_for_document_for_test(document);
 
-    let second = computed_style_snapshot_for_test(&engine, &host, &document_url, target, &inputs);
+    // The adapter rejects nested bindings. A cache hit can read the
+    // published styles even while another scope holds the binding.
+    let second = engine.dom_adapter.with_bound_host(&host, |binding| {
+        let style =
+            computed_style_snapshot_for_test(&engine, &host, &document_url, target, &inputs);
+        assert_eq!(binding.bound_node_count(), 0);
+        style
+    });
     let retained_second = retained_primary_style_for_test(&engine, &host, target)
         .expect("a clean read must retain canonical ElementData");
     assert!(ServoArc::ptr_eq(
@@ -160,19 +167,22 @@ fn lazy_subtree_invalidation_avoids_eager_scans_and_memoizes_paths() {
     );
     let visits_before_repeat =
         engine.style_invalidation_path_node_visit_count_for_document_for_test(document);
-    assert!(
-        engine
-            .computed_style_property_value(
-                &host,
-                &document_url,
-                affected_leaf,
-                "display",
-                None,
-                &inputs,
-                None,
-            )
-            .is_some()
-    );
+    engine.dom_adapter.with_bound_host(&host, |binding| {
+        assert!(
+            engine
+                .computed_style_property_value(
+                    &host,
+                    &document_url,
+                    affected_leaf,
+                    "display",
+                    None,
+                    &inputs,
+                    None,
+                )
+                .is_some()
+        );
+        assert_eq!(binding.bound_node_count(), 0);
+    });
     assert_eq!(
         engine.element_style_resolution_count_for_document_for_test(document),
         resolutions_after_first_affected_read,
@@ -180,8 +190,8 @@ fn lazy_subtree_invalidation_avoids_eager_scans_and_memoizes_paths() {
     );
     assert_eq!(
         engine.style_invalidation_path_node_visit_count_for_document_for_test(document),
-        visits_before_repeat + 1,
-        "a fully memoized target requires one O(1) generation check"
+        visits_before_repeat,
+        "a memoized generation requires no validation path"
     );
 
     assert!(
@@ -908,6 +918,29 @@ fn lazy_pseudo_inherited_change_is_evicted_when_owner_is_observed() {
             .computed_style_cache_entry_count_for_handle_for_document_for_test(document, list_item),
         2,
         "the refreshed primary and pseudo must be republished"
+    );
+    let read_marker = || {
+        engine
+            .computed_pseudo_style_snapshot_from_current_observation(
+                &host,
+                &document_url,
+                list_item,
+                "marker",
+                StyleSourceDocumentContext::for_root_document(document),
+                document,
+            )
+            .expect("the refreshed marker should be cached")
+            .computed_values()
+    };
+    let visits_before_repeat =
+        engine.style_invalidation_path_node_visit_count_for_document_for_test(document);
+    engine.dom_adapter.with_bound_host(&host, |binding| {
+        assert!(ServoArc::ptr_eq(&read_marker(), &read_marker()));
+        assert_eq!(binding.bound_node_count(), 0);
+    });
+    assert_eq!(
+        engine.style_invalidation_path_node_visit_count_for_document_for_test(document),
+        visits_before_repeat
     );
 }
 
