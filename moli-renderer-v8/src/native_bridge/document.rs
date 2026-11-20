@@ -39,6 +39,7 @@ mod detached_objects;
 mod detached_surface;
 mod hit_test;
 mod insert_html;
+mod insert_line_break;
 mod insert_text;
 mod lifecycle;
 mod live_collections;

@@ -789,6 +789,63 @@ fn exec_command_insert_html_uses_the_native_editing_range() {
 }
 
 #[test]
+fn exec_command_insert_line_break_preserves_the_line_and_caret() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-line-break.test/",
+        "<!doctype html><div contenteditable></div><textarea>ABC</textarea><input value='ABC'>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.querySelector("div");
+  const selection = document.getSelection();
+  const events = [];
+  for (const type of ["beforeinput", "textInput", "input"]) {
+    host.addEventListener(type, event => events.push([type, event.inputType, event.data, event.isTrusted]));
+  }
+  host.focus();
+  const cases = [];
+  function insert(html, start, startOffset, end = start, endOffset = startOffset) {
+    host.innerHTML = html;
+    selection.setBaseAndExtent(start(host), startOffset, end(host), endOffset);
+    const inserted = document.execCommand("insertLineBreak");
+    cases.push([inserted, host.innerHTML, selection.anchorNode.nodeName, selection.anchorOffset]);
+  }
+  const text = host => host.firstChild;
+  const firstBlockText = host => host.firstChild.firstChild;
+  insert("A B", text, 1);
+  insert("<b>AB</b>", firstBlockText, 2);
+  insert("<p>AB<br></p>", text, 2);
+  insert("<p>AB</p><p>CD</p>", firstBlockText, 2);
+  host.style.whiteSpace = "pre-line";
+  insert("AXYB", text, 3, text, 1);
+  insert("AB", text, 2);
+  const inputEvents = events.every(event => JSON.stringify(event) === '["input","insertLineBreak",null,true]');
+  const controls = Array.from(document.querySelectorAll("textarea, input")).map(control => {
+    control.focus();
+    control.setSelectionRange(1, 2);
+    const enabled = document.queryCommandEnabled("insertLineBreak");
+    const inserted = document.execCommand("insertLineBreak");
+    return [enabled, inserted, control.value, control.selectionStart, control.selectionEnd];
+  });
+  return JSON.stringify([cases, events.length, inputEvents, controls]);
+})()
+"#,
+        )
+        .expect("line breaks should use the document selection and the insertion style");
+    assert_eq!(
+        result,
+        concat!(
+            r##"[[[true,"A<br>&nbsp;B","#text",0],[true,"<b>AB<br><br></b>","B",2],"##,
+            r#"[true,"<p>AB<br><br></p>","P",2],[true,"<p>AB<br><br></p><p>CD</p>","P",2],"#,
+            r##"[true,"A\nB","#text",0],[true,"AB\n<br>","DIV",2]],6,true,"##,
+            r#"[[true,true,"A\nC",2,2],[true,true,"ABC",1,2]]]"#,
+        )
+    );
+}
+
+#[test]
 fn exec_command_css_styling_is_document_local() {
     let mut vm = new_parsed_test_vm(
         "https://exec-command-css-styling.test/",

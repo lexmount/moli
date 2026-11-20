@@ -4,6 +4,7 @@ use super::super::node::{
     remove_child_in_reaction_scope,
 };
 use super::insert_html::{exec_command_insert_html, insert_html_command_target};
+use super::insert_line_break::exec_command_insert_line_break;
 use super::insert_text::{editing_insertion_target, exec_command_insert_text};
 use super::{PageScriptHost, document_has_browsing_context, is_html_document, throw_dom_exception};
 use crate::native_bridge::element::{
@@ -686,6 +687,7 @@ enum EditingCommand {
     Delete,
     ForwardDelete,
     InsertHtml,
+    InsertLineBreak,
     InsertText,
     SelectAll,
     StyleWithCss,
@@ -783,6 +785,11 @@ fn execute_document_editing_command<'s>(
             rv.set(v8::Boolean::new(scope, inserted).into());
             return;
         }
+        EditingCommand::InsertLineBreak => {
+            let inserted = exec_command_insert_line_break(scope, runtime_ptr, document_handle);
+            rv.set(v8::Boolean::new(scope, inserted).into());
+            return;
+        }
         EditingCommand::StyleWithCss | EditingCommand::UseCss => {
             let Some(value) = editing_command_value(scope, args) else {
                 return;
@@ -855,7 +862,7 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
     };
     let runtime = unsafe { &*runtime_ptr };
     let enabled = match command.parse::<EditingCommand>() {
-        Ok(EditingCommand::InsertText) => {
+        Ok(EditingCommand::InsertLineBreak | EditingCommand::InsertText) => {
             editing_insertion_target(runtime, document_handle).is_some()
         }
         Ok(EditingCommand::Delete | EditingCommand::ForwardDelete) => {

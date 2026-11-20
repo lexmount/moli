@@ -126,11 +126,11 @@ fn computed(runtime: &PageScriptHost, node: DomHandle, property: &str) -> String
     style_property_value(runtime, node, StyleMode::Computed, property)
 }
 
-fn is_collapsible_space(unit: u16) -> bool {
+pub(super) fn is_collapsible_space(unit: u16) -> bool {
     matches!(unit, 0x09 | 0x0a | 0x0c | 0x0d | 0x20)
 }
 
-fn is_replaced_element(element: &Element) -> bool {
+pub(super) fn is_replaced_element(element: &Element) -> bool {
     element.namespace() == XHTML_NS
         && matches!(
             element.local_name(),
