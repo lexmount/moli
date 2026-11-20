@@ -1,7 +1,7 @@
 use super::{OwnerDispatchScope, PageScriptHost};
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::{
-    module_runtime::PendingDynamicModuleImport,
+    module_runtime::{ModuleGraphFetchedSource, PendingDynamicModuleImport},
     page_task_queue::RendererResourceCompletionSender,
     renderer_resource_scheduler::RendererResourceScheduler,
     types::{
@@ -630,13 +630,18 @@ impl PageScriptHost {
         }
     }
 
-    pub(crate) fn record_css_module_text_for_url(&mut self, url: &url::Url, css_text: String) {
-        self.css_module_texts_by_url
-            .insert(url.as_str().to_owned(), css_text);
+    pub(crate) fn record_css_module_preload_for_url(
+        &mut self,
+        request_url: &url::Url,
+        source: ModuleGraphFetchedSource,
+    ) {
+        self.css_module_failed_urls.remove(request_url.as_str());
+        self.css_module_preloads_by_url
+            .insert(request_url.clone(), source);
     }
 
     pub(crate) fn record_css_module_failure_for_url(&mut self, url: &url::Url) {
-        if !self.css_module_texts_by_url.contains_key(url.as_str()) {
+        if !self.css_module_preloads_by_url.contains_key(url) {
             self.css_module_failed_urls.insert(url.as_str().to_owned());
         }
     }
@@ -673,8 +678,11 @@ impl PageScriptHost {
         Some((pending.load.clone(), pending.info.clone()))
     }
 
-    pub(crate) fn css_module_text_for_url(&self, url: &url::Url) -> Option<String> {
-        self.css_module_texts_by_url.get(url.as_str()).cloned()
+    pub(crate) fn css_module_preload_for_url(
+        &self,
+        request_url: &url::Url,
+    ) -> Option<&ModuleGraphFetchedSource> {
+        self.css_module_preloads_by_url.get(request_url)
     }
 
     pub(crate) fn css_module_failed_for_url(&self, url: &url::Url) -> bool {

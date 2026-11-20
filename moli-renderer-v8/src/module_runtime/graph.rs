@@ -1752,6 +1752,7 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
             .compile_module_record(
                 local_key.clone(),
                 &source,
+                local_request_key.url(),
                 &source_url,
                 &local_effective_fetch_metadata,
             )
@@ -2664,6 +2665,7 @@ fn module_script_inline_tree_job_for_owner(
     let (record, identity) = match vm.compile_native_module_record(
         key.clone(),
         &source,
+        key.url(),
         &root.base_url,
         &root.fetch_metadata,
     ) {

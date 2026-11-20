@@ -4460,7 +4460,7 @@ fn detached_declarative_shadow_adopted_stylesheets_use_first_import_map_only() {
     assert_eq!(result, "1|span { color: blue; }");
 }
 #[test]
-fn declarative_shadow_adopted_stylesheets_fill_css_module_placeholder_from_cache() {
+fn declarative_shadow_adopted_stylesheets_fill_redirected_css_module_placeholder() {
     let mut vm = new_storage_test_vm("https://shadow-adopted-css-module.test/page.html");
 
     let before = vm
@@ -4493,9 +4493,19 @@ fn declarative_shadow_adopted_stylesheets_fill_css_module_placeholder_from_cache
     assert_eq!(before, "1|0|rgb(0, 0, 0)");
 
     let css_url = url::Url::parse("https://shadow-adopted-css-module.test/module.css").unwrap();
+    let response_url =
+        url::Url::parse("https://shadow-adopted-css-module.test/assets/final.css").unwrap();
     vm._context_host
         .borrow_mut()
-        .record_css_module_text_for_url(&css_url, "span { color: green }".to_owned());
+        .record_css_module_preload_for_url(
+            &css_url,
+            crate::module_runtime::ModuleGraphFetchedSource::new(
+                response_url,
+                crate::module_runtime::ModuleSource::text(
+                    "span { color: green; background-image: url('./image.png'); }",
+                ),
+            ),
+        );
 
     let after = vm
         .eval(
@@ -4507,15 +4517,18 @@ fn declarative_shadow_adopted_stylesheets_fill_css_module_placeholder_from_cache
     sheet === window.placeholderSheet,
     root.adoptedStyleSheets.length,
     sheet.cssRules.length,
-    sheet.cssRules[0].cssText,
-    getComputedStyle(root.getElementById('test_element')).color
+    getComputedStyle(root.getElementById('test_element')).color,
+    getComputedStyle(root.getElementById('test_element')).backgroundImage
   ].join('|');
 })()
 "#,
         )
         .expect("cached CSS module text should fill the existing placeholder");
 
-    assert_eq!(after, "true|1|1|span { color: green; }|rgb(0, 128, 0)");
+    assert_eq!(
+        after,
+        r#"true|1|1|rgb(0, 128, 0)|url("https://shadow-adopted-css-module.test/assets/image.png")"#
+    );
 }
 #[test]
 fn declarative_shadow_adopted_stylesheet_placeholder_survives_later_css_module_failure() {

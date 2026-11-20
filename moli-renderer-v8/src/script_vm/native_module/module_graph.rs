@@ -7,6 +7,7 @@ impl ScriptVm {
         &mut self,
         key: ModuleMapKey,
         source: &ModuleSource,
+        request_url: &Url,
         source_url: &Url,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
@@ -15,6 +16,7 @@ impl ScriptVm {
             context_ptr,
             key,
             source,
+            request_url,
             source_url,
             fetch_metadata,
         )
@@ -24,6 +26,7 @@ impl ScriptVm {
         realm_id: FrameRealmId,
         key: ModuleMapKey,
         source: &ModuleSource,
+        request_url: &Url,
         source_url: &Url,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
@@ -37,6 +40,7 @@ impl ScriptVm {
             context_ptr,
             key,
             source,
+            request_url,
             source_url,
             fetch_metadata,
         )
@@ -56,6 +60,7 @@ impl ScriptVm {
         context_ptr: *const v8::Global<v8::Context>,
         key: ModuleMapKey,
         source: &ModuleSource,
+        request_url: &Url,
         source_url: &Url,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
@@ -90,6 +95,7 @@ impl ScriptVm {
                     context_ptr,
                     key,
                     Arc::clone(source),
+                    request_url,
                     source_url,
                 )
             }
@@ -259,6 +265,7 @@ impl ScriptVm {
         context_ptr: *const v8::Global<v8::Context>,
         key: ModuleMapKey,
         source: Arc<str>,
+        request_url: &Url,
         source_url: &Url,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
         let mut exception_id = None;
@@ -296,7 +303,10 @@ impl ScriptVm {
                 } else if key.kind() == ModuleKind::Text {
                     crate::module_runtime::SyntheticTextModuleValue::Text(source)
                 } else {
-                    crate::module_runtime::SyntheticTextModuleValue::Css(source)
+                    crate::module_runtime::SyntheticTextModuleValue::Css {
+                        request_url: request_url.clone(),
+                        text: source,
+                    }
                 };
                 let module_name = v8_string(&scope, source_url.as_str()).ok_or_else(|| {
                     anyhow::anyhow!("failed to allocate v8 synthetic module name")

@@ -2,8 +2,8 @@ use crate::{
     context_bootstrap::{
         adopted_style_sheet_installations_from_value,
         clear_css_style_sheet_shadow_root_adopted_owner_tracking,
-        initialize_css_module_style_sheet_object, new_css_style_sheet_object,
-        new_style_sheet_list_object, set_style_sheet_list_contents,
+        initialize_css_module_style_sheet_object, load_css_module_style_sheet_rules,
+        new_css_style_sheet_object, new_style_sheet_list_object, set_style_sheet_list_contents,
         sync_constructed_css_style_sheet_rules_from_text,
         sync_css_style_sheet_shadow_root_adopted_owner_tracking,
     },
@@ -449,7 +449,12 @@ fn declarative_css_module_sheet_for_specifier<'s>(
         collect_declarative_css_module_entries_for_document(runtime, owner_document)
     });
     modules.get(specifier).and_then(|module| {
-        css_module_sheet_for_url(scope, &module.cache_key, Some(&module.css_text))
+        css_module_sheet_for_url(
+            scope,
+            &module.cache_key,
+            &module.cache_key,
+            Some(&module.css_text),
+        )
     })
 }
 
@@ -471,15 +476,23 @@ fn css_module_sheet_for_resolved_url<'s>(
     runtime: &crate::native_bridge::PageScriptHost,
     resolved_url: &url::Url,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if let Some(css_text) = decoded_css_data_url_text(resolved_url)
-        .or_else(|| runtime.css_module_text_for_url(resolved_url))
-    {
-        return css_module_sheet_for_url(scope, resolved_url.as_str(), Some(css_text.as_str()));
-    }
-    if runtime.css_module_failed_for_url(resolved_url) {
+    let inline_text = decoded_css_data_url_text(resolved_url);
+    let preload = runtime.css_module_preload_for_url(resolved_url).cloned();
+    let css_text = inline_text
+        .as_deref()
+        .or_else(|| preload.as_ref()?.source().text_source());
+    if css_text.is_none() && runtime.css_module_failed_for_url(resolved_url) {
         return None;
     }
-    css_module_sheet_for_url(scope, resolved_url.as_str(), None)
+    let response_url = preload
+        .as_ref()
+        .map_or(resolved_url, |source| source.final_url());
+    css_module_sheet_for_url(
+        scope,
+        resolved_url.as_str(),
+        response_url.as_str(),
+        css_text,
+    )
 }
 
 fn shadow_root_owner_document(
@@ -581,7 +594,8 @@ fn css_module_specifier_is_url_like(specifier: &str) -> bool {
 
 pub(crate) fn css_module_sheet_for_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    url: &str,
+    request_url: &str,
+    response_url: &str,
     css_text: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let global = scope.get_current_context().global(scope);
@@ -601,20 +615,22 @@ pub(crate) fn css_module_sheet_for_url<'s>(
             );
             cache
         });
-    let url_key = v8_string(scope, url)?;
+    // Each module map entry owns a sheet, even when redirects share a response URL.
+    let url_key = v8_string(scope, request_url)?;
     if let Some(existing) = cache.get(scope, url_key.into())
         && let Ok(sheet) = v8::Local::<v8::Object>::try_from(existing)
+        && let Some(loaded) = get_private_value(scope, sheet, CSS_MODULE_SHEET_LOADED_SLOT)
     {
         if let Some(css_text) = css_text
-            && !css_module_sheet_is_loaded(scope, sheet)
+            && !loaded.is_true()
         {
-            sync_constructed_css_style_sheet_rules_from_text(scope, sheet, css_text);
             set_css_module_sheet_loaded(scope, sheet, true);
+            load_css_module_style_sheet_rules(scope, sheet, response_url, css_text);
         }
         return Some(sheet);
     }
     let sheet = new_css_style_sheet_object(scope);
-    initialize_css_module_style_sheet_object(scope, sheet, url);
+    initialize_css_module_style_sheet_object(scope, sheet, response_url);
     if let Some(css_text) = css_text {
         sync_constructed_css_style_sheet_rules_from_text(scope, sheet, css_text);
         set_css_module_sheet_loaded(scope, sheet, true);
@@ -623,14 +639,6 @@ pub(crate) fn css_module_sheet_for_url<'s>(
     }
     let _ = cache.set(scope, url_key.into(), sheet.into());
     Some(sheet)
-}
-
-fn css_module_sheet_is_loaded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    sheet: v8::Local<'s, v8::Object>,
-) -> bool {
-    get_private_value(scope, sheet, CSS_MODULE_SHEET_LOADED_SLOT)
-        .is_some_and(|value| value.is_true())
 }
 
 fn set_css_module_sheet_loaded<'s>(

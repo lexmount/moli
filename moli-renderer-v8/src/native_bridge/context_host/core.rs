@@ -597,7 +597,7 @@ impl PageScriptHost {
                 runtime.author_styles_disabled(),
             ),
             inline_style_declarations: HashMap::new(),
-            css_module_texts_by_url: HashMap::new(),
+            css_module_preloads_by_url: HashMap::new(),
             css_module_failed_urls: HashSet::new(),
             document_popovers: HashMap::new(),
             popover_focus_restore_targets: HashMap::new(),

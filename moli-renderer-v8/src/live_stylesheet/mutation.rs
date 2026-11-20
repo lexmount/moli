@@ -385,7 +385,7 @@ impl LiveStylesheet {
         }
         let media = crate::style_engine::media_list::parse_media_query_list_with_context(
             media_text,
-            &self.base_url,
+            self.base_url(),
             self.quirks_mode,
         );
         self.ensure_owned_contents_for_mutation();
@@ -414,7 +414,7 @@ impl LiveStylesheet {
         }
         let media = crate::style_engine::media_list::parse_media_query_list_with_context(
             media_text,
-            &self.base_url,
+            self.base_url(),
             self.quirks_mode,
         );
         self.ensure_owned_contents_for_mutation();
@@ -1196,7 +1196,7 @@ impl LiveStylesheet {
         let shared_lock = self.stylesheet.shared_lock.clone();
         let replacement = ServoArc::new(parse_live_stylesheet(
             css_text,
-            &self.base_url,
+            self.base_url(),
             self.stylesheet.media.clone(),
             shared_lock.clone(),
             self.quirks_mode,
