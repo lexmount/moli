@@ -444,11 +444,34 @@ pub enum LayoutFragmentKind {
     },
 }
 
+/// The queries served by one geometry fragment.
+///
+/// Source geometry describes the complete layout, including visually elided
+/// text. Display geometry describes the surfaces participating in paint and
+/// input. An unchanged fragment can serve both without duplicating geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutFragmentRole {
+    SourceOnly,
+    DisplayOnly,
+    SourceAndDisplay,
+}
+
+impl LayoutFragmentRole {
+    pub fn has_source_geometry(self) -> bool {
+        matches!(self, Self::SourceOnly | Self::SourceAndDisplay)
+    }
+
+    pub fn has_display_geometry(self) -> bool {
+        matches!(self, Self::DisplayOnly | Self::SourceAndDisplay)
+    }
+}
+
 /// One box/line/inline/text fragment in an explicit coordinate space.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutFragment {
     pub id: LayoutFragmentId,
     pub kind: LayoutFragmentKind,
+    pub role: LayoutFragmentRole,
     pub rect: LayoutRect,
     pub box_model: Option<LayoutFragmentBoxModel>,
     pub coordinate_space: LayoutCoordinateSpaceId,

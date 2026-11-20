@@ -476,6 +476,7 @@ pub struct ResolvedLayoutStyle {
     white_space_collapse: InlineWhiteSpaceCollapse,
     text_transform: InlineTextTransform,
     text_align: parley::Alignment,
+    text_overflow_ellipsis: bool,
     direction: InlineDirection,
     writing_mode: LayoutWritingMode,
     unicode_bidi: InlineUnicodeBidi,
@@ -585,6 +586,12 @@ impl ResolvedLayoutStyle {
     /// Converts one retained Stylo style while preserving its allocation for
     /// the full lifetime of the pass-local Taffy projection.
     pub fn from_stylo(computed: ServoArc<ComputedValues>) -> Self {
+        let overflow = computed.clone_text_overflow();
+        let text_overflow_ellipsis = overflow.sides_are_logical
+            && matches!(
+                overflow.second,
+                style::values::specified::text::TextOverflowSide::Ellipsis
+            );
         let display = LayoutDisplay::from(&*computed);
         let background_color = stylo_background_color(&computed);
         let border_colors = stylo_border_colors(&computed);
@@ -838,6 +845,7 @@ impl ResolvedLayoutStyle {
             white_space_collapse,
             text_transform,
             text_align,
+            text_overflow_ellipsis,
             direction,
             writing_mode,
             unicode_bidi,
@@ -917,6 +925,7 @@ impl ResolvedLayoutStyle {
             white_space_collapse: InlineWhiteSpaceCollapse::Collapse,
             text_transform: InlineTextTransform::None,
             text_align: parley::Alignment::Start,
+            text_overflow_ellipsis: false,
             direction: InlineDirection::Ltr,
             writing_mode: LayoutWritingMode::HorizontalTb,
             unicode_bidi: InlineUnicodeBidi::Normal,
@@ -965,6 +974,10 @@ impl ResolvedLayoutStyle {
             has_unsupported_items: false,
         };
         self
+    }
+
+    pub(crate) const fn text_overflow_ellipsis(&self) -> bool {
+        self.text_overflow_ellipsis
     }
 
     /// Models the initial `content: normal` value in construction tests.
@@ -1991,6 +2004,7 @@ impl ResolvedLayoutStyle {
             white_space_collapse: parent.white_space_collapse,
             text_transform: parent.text_transform,
             text_align: parent.text_align,
+            text_overflow_ellipsis: false,
             direction: parent.direction,
             writing_mode: parent.writing_mode,
             unicode_bidi: InlineUnicodeBidi::Normal,
@@ -2059,6 +2073,7 @@ impl ResolvedLayoutStyle {
             white_space_collapse: parent.white_space_collapse,
             text_transform: parent.text_transform,
             text_align: parent.text_align,
+            text_overflow_ellipsis: false,
             direction: parent.direction,
             writing_mode: parent.writing_mode,
             unicode_bidi: InlineUnicodeBidi::Normal,
