@@ -206,6 +206,49 @@ fn canvas_style_getters_keep_modern_color_spaces_and_precision() {
 }
 
 #[test]
+fn canvas_styles_round_trip_hsl_and_hwb_with_non_finite_components() {
+    let mut vm = new_storage_test_vm("https://canvas-color-round-trip.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  for (const canvas of [document.createElement('canvas'), new OffscreenCanvas(2, 2)]) {
+    const ctx = canvas.getContext('2d');
+    for (const [input, expected] of [
+      ['hsl(from red none calc(infinity * 1%) 50%)',
+       'hsl(from black none calc(infinity * 1%) 50%)'],
+      ['hwb(from red none calc(infinity * 1%) 20%)',
+       'hwb(from black none calc(infinity * 1%) 20%)'],
+      ['hwb(from red 120 none calc(-infinity * 1%) / 0.5)',
+       'hwb(from black 120 none calc(-infinity * 1%) / 0.5)'],
+      ['hsl(120 none calc(NaN * 1%))', 'hsl(120 none calc(NaN * 1%))'],
+      ['hwb(calc(infinity) 10% none)', 'hwb(calc(NaN) 10% none)'],
+      ['hsl(from red none 125% 30% / none)', 'hsl(from black none 125% 30% / none)'],
+    ]) {
+      for (const property of ['fillStyle', 'strokeStyle']) {
+        ctx[property] = 'white';
+        ctx[property] = input;
+        const serialized = ctx[property];
+        if (serialized !== expected) {
+          throw new Error(property + ' serialized ' + input + ' as ' + serialized);
+        }
+        ctx[property] = 'white';
+        ctx[property] = serialized;
+        if (ctx[property] !== serialized) {
+          throw new Error(property + ' reparsed ' + serialized + ' as ' + ctx[property]);
+        }
+      }
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("Canvas HSL and HWB styles should round-trip through CSS strings");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn webgl_viewport_state_matches_chromium_on_html_and_offscreen_contexts() {
     let mut vm = new_storage_test_vm("https://webgl-viewport.test/");
     let result = vm
