@@ -801,7 +801,7 @@ pub(crate) fn validate_external_script_response_mime(
     .map_err(|error| external_script_mime_error_message(script_url, error))
 }
 
-fn response_has_webassembly_module_mime(
+pub(crate) fn response_has_webassembly_module_mime(
     response: &crate::protocol_types::NavigationResponse,
 ) -> bool {
     is_webassembly_mime(&computed_response_mime_type(
