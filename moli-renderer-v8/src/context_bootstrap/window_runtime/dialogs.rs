@@ -235,23 +235,37 @@ pub(crate) fn window_open_callback<'s>(
         let host = unsafe { &*host_ptr };
         window_open_entered_policy_container(scope, host, entered_window)
     };
-    creator_policy_container.referrer_policy =
-        crate::context_bootstrap::current_document_referrer_policy(scope, entered_window)
-            .or(creator_policy_container.referrer_policy);
     let host = unsafe { &*host_ptr };
-    let initiator_url = host
-        .document_referrer_source_url_for_dispatch_scope(host.entered_owner_dispatch_scope(scope))
+    let entry_scope = entered_window_dispatch_scope(scope, host);
+    let entry_document = match entry_scope {
+        OwnerDispatchScope::Top => Some(host.document_handle()),
+        OwnerDispatchScope::Child(handle) => host.child_browsing_context_document_handle(handle),
+        OwnerDispatchScope::LightweightPopup(popup_id) => {
+            host.lightweight_popup_document_handle(popup_id)
+        }
+    };
+    creator_policy_container.referrer_policy = entry_document
+        .and_then(|document| {
+            super::super::navigation_serialize::document_referrer_policy_for_native_document(
+                host, document,
+            )
+        })
+        .or(creator_policy_container.referrer_policy);
+    let entry_url = entry_document
+        .map(|document| host.document_url_for_handle(document))
         .unwrap_or_else(|| window_open_entered_document_url(scope, host));
+    let initiator_url = host
+        .document_referrer_source_url_for_dispatch_scope(entry_scope)
+        .unwrap_or_else(|| entry_url.clone());
     let initiator_origin = if creator_policy_container.sandbox.forces_opaque_origin {
         moli_url::WebOrigin::Opaque
     } else {
-        let host = unsafe { &*host_ptr };
-        host.document_resource_loader_for_dispatch_scope(host.entered_owner_dispatch_scope(scope))
+        host.document_resource_loader_for_dispatch_scope(entry_scope)
             .map(|loader| loader.fetch_context().request_origin())
             .unwrap_or(moli_url::WebOrigin::Opaque)
     };
     let navigation_initiator = crate::runtime::RendererNavigationInitiator::new(
-        initiator_url.clone(),
+        initiator_url,
         initiator_origin,
         if parsed_features.suppresses_referrer() {
             Some("no-referrer".to_owned())
@@ -259,10 +273,13 @@ pub(crate) fn window_open_callback<'s>(
             creator_policy_container.referrer_policy.clone()
         },
     );
-    creator_policy_container.document_referrer = if suppress_opener {
-        navigation_initiator.document_referrer(&url)
+    creator_policy_container.document_referrer = if parsed_features.suppresses_referrer() {
+        String::new()
+    } else if !suppress_opener && (moli_url::is_about_blank(&url) || url.scheme() == "javascript") {
+        // An initial Document with an opener has no navigation response.
+        entry_url.to_string()
     } else {
-        navigation_initiator.outgoing_referrer()
+        navigation_initiator.document_referrer(&url)
     };
     if url.scheme() == "javascript" {
         let source = crate::javascript_url::csp_source(&url);
