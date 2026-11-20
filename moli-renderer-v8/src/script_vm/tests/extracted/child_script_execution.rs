@@ -815,6 +815,7 @@ globalThis.__childParserModuleEvalValue = 144;"#
             key.clone(),
             &source,
             key.url(),
+            key.url(),
             &metadata,
         )
         .expect("child frame module record should compile");
@@ -1260,6 +1261,7 @@ parent.__childParserModuleTlaEvents.push("module-after");"#
             owner_realm_id,
             key.clone(),
             &source,
+            key.url(),
             key.url(),
             &metadata,
         )

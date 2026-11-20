@@ -230,7 +230,13 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
                         return Ok(record);
                     }
                     module_owner
-                        .compile_module_record(compile_key, source, source_url, fetch_metadata)
+                        .compile_module_record(
+                            compile_key,
+                            source,
+                            request_key.url(),
+                            source_url,
+                            fetch_metadata,
+                        )
                         .map(|(record, identity)| {
                             let parent_key = record.key().clone();
                             let requests = record.requests().to_vec();

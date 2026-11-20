@@ -18,7 +18,10 @@ pub(crate) struct SyntheticTextModuleSource {
 #[derive(Debug)]
 pub(crate) enum SyntheticTextModuleValue {
     Json(v8::Global<v8::Value>),
-    Css(Arc<str>),
+    Css {
+        request_url: url::Url,
+        text: Arc<str>,
+    },
     Text(Arc<str>),
 }
 

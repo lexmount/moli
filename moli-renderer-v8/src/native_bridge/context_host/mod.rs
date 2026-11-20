@@ -1148,7 +1148,7 @@ pub(crate) struct PageScriptHost {
     live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry,
     style_engine: MoliStyleEngine,
     inline_style_declarations: HashMap<DomHandle, CssInlineStyleDeclarationState>,
-    css_module_texts_by_url: HashMap<String, String>,
+    css_module_preloads_by_url: HashMap<Url, crate::module_runtime::ModuleGraphFetchedSource>,
     css_module_failed_urls: HashSet<String>,
     pub(super) document_popovers: HashMap<DomHandle, super::element::DocumentPopovers>,
     popover_focus_restore_targets: HashMap<DomHandle, Option<DomHandle>>,

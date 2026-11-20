@@ -970,6 +970,8 @@ pub(crate) struct LiveStylesheet {
     id: StylesheetId,
     stylesheet: ServoArc<Stylesheet>,
     base_url: url::Url,
+    // An adopted CSS module can expose an empty sheet before a redirect is known.
+    css_module_response_base_url: std::cell::OnceCell<Box<url::Url>>,
     quirks_mode: QuirksMode,
     allow_import_rules: AllowImportRules,
     origin_clean: Cell<bool>,
@@ -1345,6 +1347,7 @@ impl LiveStylesheet {
             id,
             stylesheet,
             base_url,
+            css_module_response_base_url: std::cell::OnceCell::new(),
             quirks_mode,
             allow_import_rules,
             origin_clean: Cell::new(true),
@@ -1385,7 +1388,7 @@ impl LiveStylesheet {
         };
         let shared_contents = StdArc::new(SharedStylesheetContents {
             contents,
-            base_url: self.base_url.clone(),
+            base_url: self.base_url().clone(),
             quirks_mode: self.quirks_mode,
             allow_import_rules: self.allow_import_rules,
             source_declaration_override: self.source_declaration_override.borrow().clone(),
@@ -1406,7 +1409,15 @@ impl LiveStylesheet {
     }
 
     pub(crate) fn base_url(&self) -> &url::Url {
-        &self.base_url
+        self.css_module_response_base_url
+            .get()
+            .map_or(&self.base_url, Box::as_ref)
+    }
+
+    pub(crate) fn set_css_module_response_base_url(&self, base_url: url::Url) {
+        self.css_module_response_base_url
+            .set(Box::new(base_url))
+            .expect("a CSS module sheet is filled only once");
     }
 
     pub(crate) fn media_text(&self) -> String {
@@ -1458,7 +1469,7 @@ impl LiveStylesheet {
     pub(crate) fn set_media_text(&self, media_text: &str) -> LiveStylesheetRuntimeStateChange {
         let media = crate::style_engine::media_list::parse_media_query_list_with_context(
             media_text,
-            &self.base_url,
+            self.base_url(),
             self.quirks_mode,
         );
         let shared_lock = &self.stylesheet.shared_lock;

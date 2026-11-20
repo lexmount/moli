@@ -36,6 +36,7 @@ pub(crate) trait NativeModuleTreeDocumentOwnerAdapter {
         &mut self,
         key: ModuleMapKey,
         source: &ModuleSource,
+        request_url: &Url,
         source_url: &Url,
         fetch_metadata: &ModuleFetchMetadata,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError>;
@@ -132,10 +133,11 @@ impl<T: NativeModuleTreeDocumentOwnerAdapter + ?Sized> NativeModuleTreeDocumentO
         &mut self,
         key: ModuleMapKey,
         source: &ModuleSource,
+        request_url: &Url,
         source_url: &Url,
         fetch_metadata: &ModuleFetchMetadata,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
-        (*self).compile_module_record(key, source, source_url, fetch_metadata)
+        (*self).compile_module_record(key, source, request_url, source_url, fetch_metadata)
     }
 
     fn start_or_join_module_fetch(&mut self, key: ModuleMapKey) -> ModuleMapFetchDisposition {
@@ -327,6 +329,7 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> 
         &mut self,
         key: ModuleMapKey,
         source: &ModuleSource,
+        request_url: &Url,
         source_url: &Url,
         fetch_metadata: &ModuleFetchMetadata,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
@@ -335,12 +338,13 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> 
                 realm_id,
                 key,
                 source,
+                request_url,
                 source_url,
                 fetch_metadata,
             );
         }
         self.vm
-            .compile_native_module_record(key, source, source_url, fetch_metadata)
+            .compile_native_module_record(key, source, request_url, source_url, fetch_metadata)
     }
 
     fn start_or_join_module_fetch(&mut self, key: ModuleMapKey) -> ModuleMapFetchDisposition {
@@ -523,6 +527,7 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeFrameDocumentOwner
         &mut self,
         key: ModuleMapKey,
         source: &ModuleSource,
+        request_url: &Url,
         source_url: &Url,
         fetch_metadata: &ModuleFetchMetadata,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
@@ -530,6 +535,7 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeFrameDocumentOwner
             self.realm_id,
             key,
             source,
+            request_url,
             source_url,
             fetch_metadata,
         )

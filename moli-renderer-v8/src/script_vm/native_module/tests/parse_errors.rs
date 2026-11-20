@@ -10,8 +10,9 @@ fn json_module_parse_errors_keep_the_response_origin_and_original_exception() {
     let response_url = Url::parse("https://json-errors.test/final/bad.json").unwrap();
     let error = vm
         .compile_native_module_record(
-            ModuleMapKey::json_with_attributes(request_url, ModuleAttributesKey::empty()),
+            ModuleMapKey::json_with_attributes(request_url.clone(), ModuleAttributesKey::empty()),
             &ModuleSource::text("{\n\"key\":\n}".to_owned()),
+            &request_url,
             &response_url,
             &ModuleFetchMetadata::default(),
         )
@@ -68,6 +69,7 @@ fn json_module_parse_errors_do_not_override_a_later_javascript_throw_location() 
             ModuleMapKey::json_with_attributes(url.clone(), ModuleAttributesKey::empty()),
             &ModuleSource::text("{".to_owned()),
             &url,
+            &url,
             &ModuleFetchMetadata::default(),
         )
         .unwrap_err();
@@ -106,6 +108,7 @@ fn compile_parse_error(vm: &mut ScriptVm, path: &str) -> ModuleLoadError {
         ModuleMapKey::java_script(url.clone()),
         &ModuleSource::text("export const = ;".to_owned()),
         &url,
+        &url,
         &ModuleFetchMetadata::default(),
     )
     .expect_err("the module must have a syntax error")
@@ -119,6 +122,7 @@ fn module_parse_error_reporting_uses_retained_location_without_author_getters() 
         .compile_native_module_record(
             ModuleMapKey::java_script(url.clone()),
             &ModuleSource::text("\n\nexport const value = ;".to_owned()),
+            &url,
             &url,
             &ModuleFetchMetadata::default(),
         )
@@ -185,6 +189,7 @@ fn module_parse_error_compile_origin_preserves_line_and_first_line_column_offset
                 ModuleMapKey::java_script(base.clone()),
                 &source,
                 &base,
+                &base,
                 &ModuleFetchMetadata::default(),
             )
             .expect_err("inline source must have a syntax error");
@@ -214,7 +219,7 @@ fn install_module(vm: &mut ScriptVm, path: &str, source: &str) {
     let source = ModuleSource::text(source.to_owned());
     let metadata = ModuleFetchMetadata::default();
     let (record, identity) = vm
-        .compile_native_module_record(key.clone(), &source, &url, &metadata)
+        .compile_native_module_record(key.clone(), &source, &url, &url, &metadata)
         .unwrap();
     vm.document_runtime
         .insert_native_module_source(key.clone(), source);
@@ -594,6 +599,7 @@ async fn module_parse_error_compilation_and_resolution_use_the_child_realm() {
             realm_id,
             ModuleMapKey::java_script(url.clone()),
             &ModuleSource::text("export const = ;".to_owned()),
+            &url,
             &url,
             &ModuleFetchMetadata::default(),
         )

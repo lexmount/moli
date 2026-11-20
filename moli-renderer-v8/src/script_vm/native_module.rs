@@ -869,8 +869,14 @@ fn synthetic_text_module_evaluation_steps<'s>(
             let value = v8::Local::new(scope, value);
             set_synthetic_default_export(scope, module, value)
         }
-        crate::module_runtime::SyntheticTextModuleValue::Css(source) => {
-            evaluate_css_synthetic_module(scope, module, record.key().url().as_str(), source)
+        crate::module_runtime::SyntheticTextModuleValue::Css { request_url, text } => {
+            evaluate_css_synthetic_module(
+                scope,
+                module,
+                request_url.as_str(),
+                record.key().url().as_str(),
+                text,
+            )
         }
     }
 }
@@ -896,12 +902,16 @@ fn wasm_synthetic_module_evaluation_steps<'s>(
 fn evaluate_css_synthetic_module<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     module: v8::Local<'s, v8::Module>,
-    url: &str,
+    request_url: &str,
+    response_url: &str,
     source: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let Some(sheet) =
-        crate::native_bridge::element::css_module_sheet_for_url(scope, url, Some(source))
-    else {
+    let Some(sheet) = crate::native_bridge::element::css_module_sheet_for_url(
+        scope,
+        request_url,
+        response_url,
+        Some(source),
+    ) else {
         return throw_synthetic_module_error(scope, "failed to create CSS module sheet");
     };
     set_synthetic_default_export(scope, module, sheet.into())

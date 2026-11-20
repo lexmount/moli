@@ -2169,7 +2169,7 @@ impl DocumentRuntime {
         if host.css_module_failed_for_url(url) {
             return Some(false);
         }
-        host.css_module_text_for_url(url).map(|_| true)
+        host.css_module_preload_for_url(url).map(|_| true)
     }
 
     #[cfg(test)]

@@ -90,6 +90,28 @@ pub(crate) fn initialize_css_module_style_sheet_object<'s>(
     sync_constructed_css_style_sheet_rules_from_text(scope, object, "");
 }
 
+pub(crate) fn load_css_module_style_sheet_rules<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    sheet: v8::Local<'s, v8::Object>,
+    response_url: &str,
+    css_text: &str,
+) {
+    let stylesheet = require_css_style_sheet_live_stylesheet(scope, sheet);
+    if let Ok(base_url) = response_url.parse::<url::Url>()
+        && stylesheet.base_url() != &base_url
+    {
+        set_private_string(
+            scope,
+            sheet,
+            CSS_STYLE_SHEET_BASE_URL_SLOT,
+            base_url.as_str(),
+        );
+        stylesheet.set_css_module_response_base_url(base_url);
+    }
+    sync_constructed_css_style_sheet_rules_from_text(scope, sheet, css_text);
+    sync_css_style_sheet_change(scope, sheet);
+}
+
 pub(crate) fn new_css_style_sheet_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {

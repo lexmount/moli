@@ -646,7 +646,7 @@ impl ScriptVm {
                 let effective_key = preload.effective_key_for_fetched_source(&fetched_source);
                 let effective_fetch_metadata =
                     preload.effective_fetch_metadata_for_fetched_source(&fetched_source);
-                self.record_css_modulepreload_source_for_owner(&effective_key, &fetched_source);
+                self.record_css_modulepreload_source_for_owner(&fetch_key, &fetched_source);
                 self.document_runtime
                     .insert_native_module_source_for_request(
                         fetch_key,

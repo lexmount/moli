@@ -837,13 +837,13 @@ impl ScriptVm {
         if key.kind() != ModuleKind::Css {
             return;
         }
-        let Some(source) = fetched_source.source().text_source() else {
+        if fetched_source.source().text_source().is_none() {
             self.record_css_modulepreload_failure_for_owner(key);
             return;
-        };
+        }
         self._context_host
             .borrow_mut()
-            .record_css_module_text_for_url(key.url(), source.to_owned());
+            .record_css_module_preload_for_url(key.url(), fetched_source.clone());
     }
     pub(super) fn record_css_modulepreload_failure_for_owner(&mut self, key: &ModuleMapKey) {
         if key.kind() != ModuleKind::Css {
