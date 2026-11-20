@@ -971,6 +971,16 @@ class FixtureServer:
                         f"globalThis.__semanticCacheRequest = {count};",
                         max_age=3600,
                     )
+                elif route == "/cached-image-redirect/first.png":
+                    outer._increment_request_count(route)
+                    self.send_response(HTTPStatus.MOVED_PERMANENTLY)
+                    self.send_header("Location", "/cached-image-redirect/final.png")
+                    self.send_header("Cache-Control", "public, max-age=600")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                elif route == "/cached-image-redirect/final.png":
+                    outer._increment_request_count(route)
+                    self._send_png(TRANSPARENT_PNG)
                 elif route == "/semantic-resource-page":
                     self._send_cacheable(
                         "text/html; charset=utf-8",

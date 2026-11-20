@@ -2752,10 +2752,10 @@ impl TargetNetworkOutputQueue {
                         document_loader_id,
                         request,
                     );
-                    // A response-stage or URL-nonmatching load can first reach
-                    // Network here. Projection deduplicates an earlier Fetch
-                    // announcement and records the dispatched body either way.
-                    let output = if first_snapshot && redirects.is_empty() {
+                    // The first transport observation can follow a cached hop.
+                    // Projection announces the initial snapshot and deduplicates
+                    // any start already emitted at a Fetch pause.
+                    let output = if first_snapshot {
                         TargetSubresourcePlanOutput::RequestStarted(output)
                     } else {
                         TargetSubresourcePlanOutput::RequestUpdated(output)
