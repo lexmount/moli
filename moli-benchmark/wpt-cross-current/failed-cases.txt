@@ -2453,16 +2453,9 @@ resource-timing/initiator-type/svg.html
 resource-timing/render-blocking-status-link.html
 resource-timing/resource_connection_reuse_mixed_content.html
 resource-timing/resource_connection_reuse_mixed_content_redirect.html
-resource-timing/tentative/initiator-url/external-script-in-posted-task.html
-resource-timing/tentative/initiator-url/post-task.html
 resource-timing/tentative/initiator-url/static-resource.html
 sanitizer-api/sanitizer-javascript-url.html
 sanitizer-api/sethtml-xml-document.html
-scheduler/post-task-then-detach.html
-scheduler/post-task-with-signal-from-detached-iframe.html
-scheduler/tentative/yield/yield-priority-idle-callbacks.html
-scheduler/tentative/yield/yield-scripted-subframe-propagation.html
-scheduler/tentative/yield/yield-then-detach.html
 screen-wake-lock/wakelock-supported-by-permissions-policy.html
 scroll-to-text-fragment/same-document-test-sync-load.html
 scroll-to-text-fragment/same-document-tests-force-load-at-top.html

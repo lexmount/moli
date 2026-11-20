@@ -9565,12 +9565,14 @@ resource-timing/secure-iframe-in-insecure-context.html
 resource-timing/shared-worker-rt-entry.html
 resource-timing/tentative/initiator-url/event-handler-overwritten.html
 resource-timing/tentative/initiator-url/event-handler.html
+resource-timing/tentative/initiator-url/external-script-in-posted-task.html
 resource-timing/tentative/initiator-url/external-script.html
 resource-timing/tentative/initiator-url/iframe-post-message.html
 resource-timing/tentative/initiator-url/inline-document-write.html
 resource-timing/tentative/initiator-url/inline-script.html
 resource-timing/tentative/initiator-url/post-message-shared-worker.html
 resource-timing/tentative/initiator-url/post-message-worker.html
+resource-timing/tentative/initiator-url/post-task.html
 resource-timing/tentative/initiator-url/promise.html
 resource-timing/tentative/initiator-url/queue-microtask.html
 resource-timing/tentative/initiator-url/request-animation-frame.html
@@ -9580,6 +9582,11 @@ resource-timing/tentative/initiator-url/set-timeout.html
 resource-timing/tentative/initiator-url/xml-http-request.html
 resource-timing/tojson.html
 resource-timing/xhr-resource-timing.html
+scheduler/post-task-then-detach.html
+scheduler/post-task-with-signal-from-detached-iframe.html
+scheduler/tentative/yield/yield-priority-idle-callbacks.html
+scheduler/tentative/yield/yield-scripted-subframe-propagation.html
+scheduler/tentative/yield/yield-then-detach.html
 screen-orientation/lock-bad-argument.html
 secure-contexts/basic-dedicated-worker.html
 secure-contexts/basic-popup-and-iframe-tests.html
