@@ -8,6 +8,7 @@ edition = "2024"
 moli-css-parse = { path = "../moli-css-parse" }
 futures-util = "0.3.31"
 moli-dom = { path = "../moli-dom" }
+moli-encoding = { path = "../moli-encoding" }
 moli-fetch = { path = "../moli-fetch" }
 moli-owner-queue = { path = "../moli-owner-queue" }
 moli-page-types = { path = "../moli-types/moli-page-types" }
