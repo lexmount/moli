@@ -470,3 +470,90 @@ async fn stop_loading_captures_original_navigation_at_admission_before_a_success
         })
         .unwrap();
 }
+
+#[tokio::test]
+async fn stop_loading_reports_provisional_stop_before_successor_start() {
+    let mut fixture = TestContext::new();
+    let mut browser = BrowserContext::new("BID-page-owned".into());
+    browser.set_active_target_id("TID-page-owned");
+    browser.attach_active_session("SID-page-owned");
+    fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+    fixture
+        .install_navigation_fixture_for_session_owner("about:blank", Some("SID-page-owned"))
+        .await;
+    fixture.enable_page_events_for_test(Some("SID-page-owned"));
+    fixture
+        .process_async(json!({"id":2103,"method":"Fetch.enable","sessionId":"SID-page-owned"}))
+        .await;
+    fixture.take_all();
+    let original = fixture.with_fixture(|conn| {
+        let owner = crate::conn::CommandOwnerScope::capture(conn, Some("SID-page-owned"));
+        conn.start_document_navigation_for_owner(&owner, "LOADER-provisional".into())
+            .unwrap()
+    });
+
+    let gate = fixture.hold_fixture_renderer(Some("SID-page-owned")).await;
+    let handle = fixture.handle();
+    let (mut messages, pending) = admit_stop_loading(&handle);
+    let mut wait = Box::pin(pending.wait());
+    assert!(
+        wait.as_mut().now_or_never().is_none(),
+        "Native stop is held"
+    );
+    fixture.with_fixture(|conn| {
+        let owner = crate::conn::CommandOwnerScope::capture(conn, Some("SID-page-owned"));
+        assert!(!conn.accepts_pending_document_navigation_for_owner(&owner, &original));
+    });
+
+    let CdpCommandTaskStep::Complete(successor) = start(
+        &handle,
+        json!({"id":2105,"method":"Page.navigate","sessionId":"SID-page-owned",
+               "params":{"url":"http://example.test/stop-successor"}}),
+        &mut Default::default(),
+    ) else {
+        panic!("successor pauses at Fetch");
+    };
+    let (events, _, _) = successor.into_protocol_event_parts();
+    messages.extend(
+        events
+            .into_iter()
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message),
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["method"] == "Fetch.requestPaused")
+    );
+
+    drop(gate);
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+        .await
+        .unwrap();
+    let (events, scheduler_events) = handle
+        .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+        .unwrap()
+        .into_protocol_event_parts();
+    fixture
+        .route_direct_command_output_for_test(events, scheduler_events)
+        .await;
+    fixture
+        .wait_for_direct_command_work_completion_for_test("original stop cleanup")
+        .await;
+    messages.extend(fixture.take_all());
+    let loading_events: Vec<_> = messages
+        .iter()
+        .filter(|message| message["params"]["frameId"] == "TID-page-owned")
+        .filter_map(|message| message["method"].as_str())
+        .filter(|method| {
+            matches!(
+                *method,
+                "Page.frameStartedLoading" | "Page.frameStoppedLoading"
+            )
+        })
+        .collect();
+    assert_eq!(
+        loading_events,
+        ["Page.frameStoppedLoading", "Page.frameStartedLoading"],
+        "{messages:#?}"
+    );
+}

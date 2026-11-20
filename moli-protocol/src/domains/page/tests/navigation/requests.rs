@@ -196,6 +196,10 @@ async fn stop_loading_aborts_paused_request_stage_navigation() {
     }))
     .await;
     ctx.expect_result(235, json!({}), Some("SID-1"));
+    ctx.expect_event(
+        "Page.frameStoppedLoading",
+        Some(&json!({"frameId":"TID-1"})),
+    );
 
     let failed = ctx.take_one();
     assert_eq!(failed["method"], "Network.loadingFailed");
@@ -321,6 +325,10 @@ async fn stop_loading_aborts_paused_response_stage_navigation() {
     }))
     .await;
     ctx.expect_result(238, json!({}), Some("SID-1"));
+    ctx.expect_event(
+        "Page.frameStoppedLoading",
+        Some(&json!({"frameId":"TID-1"})),
+    );
 
     let failed = ctx.take_one();
     assert_eq!(failed["method"], "Network.loadingFailed");
@@ -454,6 +462,10 @@ async fn stop_loading_aborts_paused_auth_navigation() {
     }))
     .await;
     ctx.expect_result(257, json!({}), Some("SID-1"));
+    ctx.expect_event(
+        "Page.frameStoppedLoading",
+        Some(&json!({"frameId":"TID-1"})),
+    );
 
     let failed = ctx.take_one();
     assert_eq!(failed["method"], "Network.loadingFailed");
