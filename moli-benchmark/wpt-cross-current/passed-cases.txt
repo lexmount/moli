@@ -4845,7 +4845,6 @@ dom/nodes/Element-tagName.html
 dom/nodes/Element-webkitMatchesSelector.html
 dom/nodes/MutationObserver-attributes.html
 dom/nodes/MutationObserver-callback-arguments.html
-dom/nodes/MutationObserver-characterData.html
 dom/nodes/MutationObserver-childList.html
 dom/nodes/MutationObserver-cross-realm-callback-report-exception.html
 dom/nodes/MutationObserver-disconnect.html
@@ -8382,9 +8381,6 @@ html/syntax/parsing/html5lib_entities01.html?run_type=write_single
 html/syntax/parsing/html5lib_entities02.html?run_type=uri
 html/syntax/parsing/html5lib_entities02.html?run_type=write
 html/syntax/parsing/html5lib_entities02.html?run_type=write_single
-html/syntax/parsing/html5lib_html5test-com.html?run_type=uri
-html/syntax/parsing/html5lib_html5test-com.html?run_type=write
-html/syntax/parsing/html5lib_html5test-com.html?run_type=write_single
 html/syntax/parsing/html5lib_inbody01.html?run_type=uri
 html/syntax/parsing/html5lib_inbody01.html?run_type=write
 html/syntax/parsing/html5lib_inbody01.html?run_type=write_single
@@ -8445,9 +8441,6 @@ html/syntax/parsing/html5lib_tables01.html?run_type=write_single
 html/syntax/parsing/html5lib_template.html?run_type=uri
 html/syntax/parsing/html5lib_template.html?run_type=write
 html/syntax/parsing/html5lib_template.html?run_type=write_single
-html/syntax/parsing/html5lib_tests1.html?run_type=uri
-html/syntax/parsing/html5lib_tests1.html?run_type=write
-html/syntax/parsing/html5lib_tests1.html?run_type=write_single
 html/syntax/parsing/html5lib_tests10.html?run_type=uri
 html/syntax/parsing/html5lib_tests10.html?run_type=write
 html/syntax/parsing/html5lib_tests10.html?run_type=write_single
@@ -8567,7 +8560,6 @@ html/syntax/serializing-html-fragments/serializing-lt-gt.html
 html/syntax/serializing-html-fragments/serializing.html
 html/syntax/serializing-html-fragments/template.html
 html/syntax/serializing-xml-fragments/outerHTML.html
-html/syntax/xmldecl/xmldecl-1.html
 html/syntax/xmldecl/xmldecl-2.html
 html/the-xhtml-syntax/parsing-xhtml-documents/xhtml-mathml-dtd-entity-1.htm
 html/the-xhtml-syntax/parsing-xhtml-documents/xhtml-mathml-dtd-entity-10.htm

@@ -2031,6 +2031,7 @@ document-policy/reporting/sync-xhr-reporting.html
 dom/events/scrolling/scroll-event-fired-to-element.html
 dom/events/scrolling/scroll-event-fired-to-iframe.html
 dom/events/scrolling/scrollend-with-snap-on-fractional-offset.html
+dom/nodes/MutationObserver-characterData.html
 dom/nodes/ParentNode-replaceChildren.html
 dom/nodes/moveBefore/child-style-preserve.html
 dom/nodes/moveBefore/moveBefore-from-light-to-shadow.html
@@ -2413,6 +2414,13 @@ html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/selectors/pseudo-classes/autofill.html
 html/semantics/text-level-semantics/historical.html
 html/syntax/parsing/cdata-in-integration-point-fragment.html
+html/syntax/parsing/html5lib_html5test-com.html?run_type=uri
+html/syntax/parsing/html5lib_html5test-com.html?run_type=write
+html/syntax/parsing/html5lib_html5test-com.html?run_type=write_single
+html/syntax/parsing/html5lib_tests1.html?run_type=uri
+html/syntax/parsing/html5lib_tests1.html?run_type=write
+html/syntax/parsing/html5lib_tests1.html?run_type=write_single
+html/syntax/xmldecl/xmldecl-1.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-detached-iframe.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-incumbent.html
