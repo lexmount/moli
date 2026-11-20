@@ -93,14 +93,12 @@ fn eval_stylo_supports_condition(condition: &SupportsCondition, context: &Parser
             condition::css_supports_at_rule_condition(&css)
                 .unwrap_or_else(|| condition.eval(context))
         }
-        SupportsCondition::NamedFeature(_) => condition.eval(context),
-        SupportsCondition::FontFormat(_) | SupportsCondition::FontTech(_) => {
-            let css = condition.to_css_string();
-            condition::css_supports_font_feature_condition(&css).unwrap_or(false)
+        SupportsCondition::NamedFeature(_)
+        | SupportsCondition::FontFormat(_)
+        | SupportsCondition::FontTech(_) => condition.eval(context),
+        SupportsCondition::FutureSyntax(css) => {
+            condition::css_supports_at_rule_condition(css).unwrap_or(false)
         }
-        SupportsCondition::FutureSyntax(css) => condition::css_supports_font_feature_condition(css)
-            .or_else(|| condition::css_supports_at_rule_condition(css))
-            .unwrap_or(false),
     }
 }
 

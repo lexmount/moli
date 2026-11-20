@@ -1709,6 +1709,8 @@ async fn spawn_shutdown_path_response_http_server(
                         || path_without_query.ends_with(".mjs")
                     {
                         "text/javascript"
+                    } else if path_without_query.ends_with(".css") {
+                        "text/css"
                     } else {
                         "text/html"
                     };

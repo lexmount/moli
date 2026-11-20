@@ -2031,6 +2031,125 @@ document.head.append(link);
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn font_support_queries_match_nested_imports_and_supports_rules() {
+    run_page_vm_async_test(async move {
+        let cases = [
+            ("/format.css", "font-format(WOFF2)", true),
+            ("/tech.css", "font-tech(variations)", true),
+            ("/eot.css", "font-format(embedded-opentype)", false),
+            ("/svg-color.css", "font-tech(color-svg)", false),
+            (
+                "/and.css",
+                "(display: block) and font-tech(variations)",
+                true,
+            ),
+            ("/not.css", "not font-format(woff2)", false),
+            (
+                "/or.css",
+                "(not font-tech(color-svg)) or font-format(svg)",
+                true,
+            ),
+        ];
+        let mut features = String::new();
+        let mut responses = vec![(
+            "/root.css",
+            "HTTP/1.1 200 OK",
+            "@import 'features.css';".to_owned(),
+            Duration::ZERO,
+        )];
+        let mut expected_paths = vec!["/root.css", "/features.css"];
+        for (index, (path, condition, supported)) in cases.iter().enumerate() {
+            features.push_str(&format!("@import '{path}' supports({condition});\n"));
+            responses.push((
+                *path,
+                "HTTP/1.1 200 OK",
+                format!(".probe {{ --import-{index}: yes; }}"),
+                Duration::ZERO,
+            ));
+            if *supported {
+                expected_paths.push(path);
+            }
+        }
+        for (index, (_, condition, _)) in cases.iter().enumerate() {
+            features.push_str(&format!(
+                "@supports {condition} {{ .probe {{ --block-{index}: yes; }} }}\n"
+            ));
+        }
+        responses.push(("/features.css", "HTTP/1.1 200 OK", features, Duration::ZERO));
+
+        let (base_url, shutdown, server) =
+            spawn_shutdown_path_response_http_server(responses).await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+const probe = document.createElement('p');
+probe.className = 'probe';
+document.body.append(probe);
+const link = document.createElement('link');
+link.rel = 'stylesheet';
+link.href = '{base_url}/root.css';
+document.head.append(link);
+"queued"
+"#,
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        for _ in 0..2 {
+            wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::StylesheetCompletion,
+                        &loader,
+                    )
+                    .await?
+            );
+        }
+
+        let cases_json = serde_json::to_string(&cases)?;
+        let result = page_vm.vm_mut().eval(&format!(
+            r#"
+(() => {{
+  const style = getComputedStyle(document.querySelector('.probe'));
+  const rules = document.styleSheets[0].cssRules[0].styleSheet.cssRules;
+  return JSON.stringify({cases_json}.map(([, condition], index) => [
+    CSS.supports(condition),
+    style.getPropertyValue('--block-' + index),
+    style.getPropertyValue('--import-' + index),
+    rules[index].styleSheet !== null,
+  ]));
+}})()
+"#,
+        ))?;
+        let actual: Vec<(bool, String, String, bool)> = serde_json::from_str(&result)?;
+        for ((_, condition, supported), (query, block, import, sheet)) in cases.iter().zip(&actual)
+        {
+            let expected = if *supported { "yes" } else { "" };
+            assert_eq!(
+                (*query, block.as_str(), import.as_str(), *sheet),
+                (*supported, expected, expected, *supported),
+                "{condition}"
+            );
+        }
+        assert_eq!(actual.len(), cases.len());
+
+        shutdown.send(()).expect("stop stylesheet fixture server");
+        let mut requests = server.await.expect("stylesheet fixture server");
+        requests.sort();
+        expected_paths.sort();
+        assert_eq!(requests, expected_paths);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("font support queries should agree throughout the import graph");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn cross_origin_import_child_applies_but_denies_cssom_rule_access() {
     run_page_vm_async_test(async move {
         let (child_base_url, child_server) = spawn_path_response_http_server(vec![(
