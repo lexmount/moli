@@ -16,6 +16,7 @@ mod document_location_activity;
 #[cfg(feature = "devtools")]
 mod drag_drop_outcomes;
 mod idb_transaction_gc;
+mod iframe_about_blank_documents;
 mod message_port_transfer;
 #[cfg(feature = "devtools")]
 mod native_drag_payloads;
