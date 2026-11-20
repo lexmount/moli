@@ -720,22 +720,19 @@ fn update_focus_with_selection_behavior(
     {
         return;
     }
-    let next_document = next.and_then(|handle| {
-        unsafe { &*runtime_ptr }
-            .dom_host()
-            .owner_document_handle(handle)
-    });
-    let previous_document = previous.and_then(|handle| {
-        unsafe { &*runtime_ptr }
-            .dom_host()
-            .owner_document_handle(handle)
-    });
-    let window_focus_transition = window_focus_transition_for_handles(
-        unsafe { &*runtime_ptr },
-        previous,
-        next,
-        viewport_document,
-    );
+    let runtime = unsafe { &*runtime_ptr };
+    let next_document = next.and_then(|handle| runtime.dom_host().owner_document_handle(handle));
+    let previous_document =
+        previous.and_then(|handle| runtime.dom_host().owner_document_handle(handle));
+    let previous_viewport = previous_document.or(runtime.focused_viewport_document());
+    // Blurring a focused frame returns focus to the viewport of its owner Document.
+    let destination_viewport = if next.is_none() {
+        viewport_document.or(previous_viewport)
+    } else {
+        viewport_document
+    };
+    let window_focus_transition =
+        window_focus_transition_for_handles(runtime, previous, next, destination_viewport);
     // Related targets do not cross Document boundaries in the focus chains.
     let same_document = previous_document == next_document;
     let next_value = same_document
@@ -744,7 +741,6 @@ fn update_focus_with_selection_behavior(
     let runtime = unsafe { &mut *runtime_ptr };
     // Blur listeners observe the viewport, before the new target gains focus.
     // Keep inactive Documents' focused areas when moving between Documents.
-    let previous_viewport = previous_document.or(runtime.focused_viewport_document());
     let common_ancestor = previous.zip(next).and_then(|(previous, next)| {
         let mut candidate = Some(previous);
         while let Some(handle) = candidate {
@@ -824,11 +820,7 @@ fn update_focus_with_selection_behavior(
         return;
     }
     runtime.set_active_element_handle(next);
-    runtime.set_focused_viewport_document(if next.is_some() {
-        None
-    } else {
-        viewport_document.or(previous_viewport)
-    });
+    runtime.set_focused_viewport_document(destination_viewport.filter(|_| next.is_none()));
     if viewport_document.is_none() || next.is_some() {
         runtime.mark_focus_changed(previous, next);
     }
@@ -902,8 +894,6 @@ fn window_focus_transition_for_handles(
     next: Option<DomHandle>,
     viewport_document: Option<DomHandle>,
 ) -> Option<(PendingWindowMessageEndpoint, PendingWindowMessageEndpoint)> {
-    // Clearing an element's focus keeps its Window until another Document
-    // supplies a new focus target.
     let next_window = next
         .and_then(|handle| focused_window_endpoint(runtime, handle))
         .or_else(|| {
