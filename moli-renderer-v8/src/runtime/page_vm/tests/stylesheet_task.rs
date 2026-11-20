@@ -2036,6 +2036,7 @@ async fn font_support_queries_match_nested_imports_and_supports_rules() {
         let cases = [
             ("/format.css", "font-format(WOFF2)", true),
             ("/tech.css", "font-tech(variations)", true),
+            ("/aat.css", "font-tech(features-aat)", true),
             ("/eot.css", "font-format(embedded-opentype)", false),
             ("/svg-color.css", "font-tech(color-svg)", false),
             (
