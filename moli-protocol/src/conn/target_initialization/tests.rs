@@ -798,3 +798,83 @@ async fn final_owner_completion_preserves_its_failure_and_output_dependencies() 
         });
     }
 }
+
+#[tokio::test]
+async fn failed_setup_returns_its_accepted_output_to_the_creation_command_once() {
+    use crate::domains::command_output::CommandOutputPlan;
+    use moli_core::{
+        PageId, RendererOutputCursor, RendererOutputFence, RendererOutputStreamIdentity,
+    };
+    let ctx = attached_target();
+    let owner = CommandOwnerScope::for_session("SID-initialization-A");
+    let cursor = RendererOutputCursor::new_for_test(
+        RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(9903)),
+        1,
+    );
+    let pending = ctx.with_fixture(|conn| conn.reserve_target_initialization(&owner).unwrap().submit_creation(
+        conn, TargetInitializationStage::SetupFinished,
+        Box::new(move |_, _, context| Box::pin(async move {
+            let mut prefix = CommandOutputPlan::default();
+            prefix.push_background_event(BackgroundProtocolEvent::inspector_message(json!({"method":"Tracing.dataCollected","params":{"value":["accepted before setup failed"]}}), None));
+            prefix.insert_renderer_output_boundary(RendererOutputFence::new_for_test(cursor));
+            context.retain_output(prefix);
+            context.context_mut().set_renderer_output_predecessor(RendererOutputFence::new_for_test(cursor));
+            Err(DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "setup target retired"))
+        })),
+    ).unwrap());
+    let public = ctx.with_fixture(|conn| {
+        conn.take_scheduler_events()
+            .into_iter()
+            .find_map(|event| match event {
+                CdpSchedulerEvent::ProtocolTaskPrepared { pending } => Some(pending),
+                _ => None,
+            })
+            .unwrap()
+    });
+    let completed = pending.wait().await;
+    let mut output = CommandDispatchContext::default();
+    let (mut context, _recovery) = CommandWorkflowContext::take_from(&mut output, None, None);
+    let error = completed
+        .publish_into(&mut ProtocolWorkflowDriver::new(ctx.handle()), &mut context)
+        .err()
+        .unwrap();
+    assert_eq!(error.kind, DevToolsErrorKind::NoSuchTarget);
+    assert_eq!(error.message, "setup target retired");
+    let completed = context.complete(CommandOutputPlan::default());
+    ctx.with_fixture(|conn| {
+        completed.finish(conn, &mut output);
+    });
+    let (events, boundary, after) = output.take_renderer_fenced_protocol_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].clone().into_protocol_message()["params"]["value"],
+        json!(["accepted before setup failed"])
+    );
+    assert_eq!(boundary.unwrap().cursor(), cursor);
+    assert!(after.is_empty());
+    assert_eq!(
+        output
+            .take_renderer_output_dependencies()
+            .into_single_stream()
+            .unwrap()
+            .cursor(),
+        cursor
+    );
+    ctx.with_fixture(|conn| {
+        conn.take_scheduler_events();
+    });
+    let completed = public.wait().await;
+    ctx.with_fixture(|conn| {
+        let (events, scheduler) = conn
+            .complete_owned_protocol_scheduler_work(completed)
+            .into_protocol_event_parts();
+        assert!(events.is_empty());
+        assert!(
+            !scheduler
+                .iter()
+                .any(|event| matches!(event, CdpSchedulerEvent::ProtocolTaskPrepared { .. })),
+            "claimed output must not be republished by the supervisor"
+        );
+        assert!(conn.initial_document_work_mut(&owner).unwrap().is_none());
+    });
+}

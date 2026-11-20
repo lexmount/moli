@@ -148,10 +148,14 @@ pub(crate) struct CompletedTargetCreation {
 
 impl PendingTargetCreation {
     pub(crate) async fn wait(self) -> CompletedTargetCreation {
-        CompletedTargetCreation {
-            result: self.initialization.wait_for(self.stage).await,
-            claim: self.claim,
+        let result = self.initialization.wait_for(self.stage).await;
+        let mut claim = self.claim;
+        if matches!(claim.stage, TargetInitializationStage::SetupFinished)
+            && claim.initialization.receipt.state.borrow().setup.is_none()
+        {
+            claim.stage = TargetInitializationStage::Complete;
         }
+        CompletedTargetCreation { result, claim }
     }
 }
 
