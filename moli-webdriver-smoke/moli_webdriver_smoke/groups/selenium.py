@@ -77,9 +77,7 @@ def _run_selenium_group_sync(
                 record_progress("selenium", name, "done")
         return
 
-    options = create_selenium_options(target, enable_downloads=True)
-    options.enable_bidi = True
-    driver = webdriver.Remote(command_executor=target.endpoint, options=options)
+    driver = _new_selenium_driver(target)
     record(results, "selenium_session_new", {"sessionId": driver.session_id})
     try:
         for name, scenario in _selenium_scenarios():
@@ -128,15 +126,21 @@ def _selenium_scenarios() -> tuple[tuple[str, SeleniumScenario], ...]:
     )
 
 
+def _new_selenium_driver(target: WebDriverTarget) -> webdriver.Remote:
+    options = create_selenium_options(target, enable_downloads=True)
+    options.enable_bidi = True
+    # Keep dialogs open for scenarios that handle them through Classic WebDriver.
+    options.set_capability("unhandledPromptBehavior", "ignore")
+    return webdriver.Remote(command_executor=target.endpoint, options=options)
+
+
 def _run_selenium_isolated_scenario_sync(
     target: WebDriverTarget,
     fixture: str,
     results: list[dict[str, Any]],
     scenario: SeleniumScenario,
 ) -> None:
-    options = create_selenium_options(target, enable_downloads=True)
-    options.enable_bidi = True
-    driver = webdriver.Remote(command_executor=target.endpoint, options=options)
+    driver = _new_selenium_driver(target)
     record(results, "selenium_session_new", {"sessionId": driver.session_id})
     scenario_error: BaseException | None = None
     try:
