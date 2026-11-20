@@ -245,11 +245,12 @@ fn apply_parent_facing_table_inline_constraints<N>(world: &mut LayoutWorld<N>, r
 where
     N: Copy + Debug + Eq + Hash,
 {
+    if !world.boxes[root.index()].style.uses_fixed_table_layout() {
+        return;
+    }
     let mut context = build_table_context(world, root);
     context.collect_authored_fixed_cell_constraints(world);
-    let Some(min_border_box_size) = context.fixed_grid_min_border_box_size() else {
-        return;
-    };
+    let min_border_box_size = context.fixed_grid_min_border_box_size();
 
     let style = &mut world.boxes[root.index()].style.taffy;
     let percentage_basis = None;
@@ -587,9 +588,6 @@ impl TableContext {
     where
         N: Copy + Debug + Eq + Hash,
     {
-        if !self.layout_mode.is_fixed() {
-            return;
-        }
         let mut cell_constraints = vec![None; self.column_count];
         let mut cell_spans = Vec::new();
         let first_row_cells = self
@@ -838,11 +836,7 @@ impl TableContext {
         used.max(inline_insets).max(self.caption_inline_min)
     }
 
-    fn fixed_grid_min_border_box_size(&self) -> Option<f32> {
-        if !self.layout_mode.is_fixed() {
-            return None;
-        }
-
+    fn fixed_grid_min_border_box_size(&self) -> f32 {
         let padding = self
             .style
             .padding
@@ -854,9 +848,7 @@ impl TableContext {
         let inline_insets = padding.left + padding.right + border.left + border.right;
         let internal_spacing =
             self.inline_border_spacing.max(0.0) * self.column_count.saturating_sub(1) as f32;
-        Some(
-            fixed_grid_min_inline_size(&self.column_constraints) + inline_insets + internal_spacing,
-        )
+        fixed_grid_min_inline_size(&self.column_constraints) + inline_insets + internal_spacing
     }
 }
 
