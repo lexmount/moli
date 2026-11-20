@@ -180,6 +180,7 @@ pub(crate) use shadow_dom::{
     element_internals_validation_message_for_target_handle,
     element_internals_validity_for_target_handle, element_internals_will_validate_for_handle,
     ensure_shadow_root_adopted_style_sheets_initialized,
+    initialize_declarative_adopted_style_sheets, mark_css_module_sheet_fetch_failed,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use styles::computed_style_properties_for_inspector_handle;

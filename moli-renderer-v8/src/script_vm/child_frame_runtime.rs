@@ -810,6 +810,20 @@ impl ScriptVm {
         })
     }
 
+    pub(crate) fn initialize_declarative_adopted_style_sheets_in_default_context(
+        &mut self,
+        root: NativeNodeId,
+    ) -> Result<()> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            crate::native_bridge::element::initialize_declarative_adopted_style_sheets(
+                scope,
+                unsafe { &mut *host_ptr },
+                root,
+            );
+            Ok(())
+        })
+    }
+
     pub(crate) fn apply_parser_created_registry_associations_in_default_context(
         &mut self,
         associations: &[ParserCustomElementRegistryAssociation],

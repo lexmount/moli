@@ -428,9 +428,24 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
         template_id: NativeNodeId,
         attrs: Vec<Attribute>,
     ) -> bool {
-        self.vm
+        let attached = self
+            .vm
             .document_runtime
-            .attach_declarative_shadow_for_parser_in_live_dom_host(host_id, template_id, attrs)
+            .attach_declarative_shadow_for_parser_in_live_dom_host(host_id, template_id, attrs);
+        let dom = self.vm.document_runtime.dom_host();
+        if attached
+            && let Some(root) = dom.shadow_root_handle(host_id)
+            && dom
+                .shadow_root_adopted_style_sheets(root)
+                .flatten()
+                .is_some()
+            && dom.is_connected(host_id)
+        {
+            let _ = self
+                .vm
+                .initialize_declarative_adopted_style_sheets_in_default_context(root);
+        }
+        attached
     }
 
     fn associate_parser_form_owner(&mut self, target: NativeNodeId, form: NativeNodeId) -> bool {

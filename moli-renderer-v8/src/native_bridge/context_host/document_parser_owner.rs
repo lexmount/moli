@@ -609,9 +609,19 @@ impl ParserDomMutationConsumer for ContextDocumentParserOwner<'_, '_, '_> {
         template_id: DomHandle,
         attrs: Vec<Attribute>,
     ) -> bool {
-        self.host
+        let attached = self
+            .host
             .dom_host_mut()
-            .attach_declarative_shadow_for_parser(host_id, template_id, &attrs)
+            .attach_declarative_shadow_for_parser(host_id, template_id, &attrs);
+        if attached
+            && self.host.dom_host().is_connected(host_id)
+            && let Some(root) = self.host.dom_host().shadow_root_handle(host_id)
+        {
+            crate::native_bridge::element::initialize_declarative_adopted_style_sheets(
+                self.scope, self.host, root,
+            );
+        }
+        attached
     }
 
     fn associate_parser_form_owner(&mut self, target: DomHandle, form: DomHandle) -> bool {

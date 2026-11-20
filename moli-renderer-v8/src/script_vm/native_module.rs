@@ -899,6 +899,17 @@ fn wasm_synthetic_module_evaluation_steps<'s>(
     })
 }
 
+fn record_css_module_fetch_failure(scope: &mut v8::PinScope<'_, '_>, error: &ModuleLoadError) {
+    if let Some(resource) = error.failed_resource()
+        && resource.kind() == ModuleKind::Css
+    {
+        crate::native_bridge::element::mark_css_module_sheet_fetch_failed(
+            scope,
+            resource.url().as_str(),
+        );
+    }
+}
+
 fn evaluate_css_synthetic_module<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     module: v8::Local<'s, v8::Module>,

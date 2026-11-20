@@ -98,6 +98,7 @@ impl ScriptVm {
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let resolver = v8::Local::new(scope, request.resolver());
                 let exception = module_load_error_value(scope, error)?;
+                record_css_module_fetch_failure(scope, error);
                 let _ = resolver.reject(scope, exception);
                 Ok(())
             })

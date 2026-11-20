@@ -18,6 +18,7 @@ pub(in crate::native_bridge) use root_accessors::element_shadow_root_getter_func
 pub(crate) use root_accessors::{
     clear_shadow_root_adopted_style_sheets, css_module_sheet_for_url,
     ensure_shadow_root_adopted_style_sheets_initialized,
+    initialize_declarative_adopted_style_sheets, mark_css_module_sheet_fetch_failed,
 };
 pub(super) use root_accessors::{
     shadow_root_active_element_getter_function, shadow_root_adopted_style_sheets_getter_function,

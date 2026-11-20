@@ -155,10 +155,20 @@ impl ScriptVm {
                     .connected_style_document_realm(owner);
                 if let Some(realm) = preload_realm {
                     self.with_frame_realm_scope(realm, |scope, host_ptr| {
-                        unsafe { &mut *host_ptr }
-                            .promote_child_parser_preloads_after_realm_materialization(
-                                scope, handle, owner,
-                            );
+                        let host = unsafe { &mut *host_ptr };
+                        host.promote_child_parser_preloads_after_realm_materialization(
+                            scope, handle, owner,
+                        );
+                        if let Some(document) = host.child_browsing_context_document_handle(handle) {
+                            let tree_scopes = host
+                                .dom_host()
+                                .stylesheet_candidate_tree_scope_snapshots_for_document(document);
+                            for (root, _) in tree_scopes.iter() {
+                                crate::native_bridge::element::initialize_declarative_adopted_style_sheets(
+                                    scope, host, root,
+                                );
+                            }
+                        }
                         Ok(())
                     })?;
                 }
