@@ -601,6 +601,43 @@ fn focusing_frame_owner_then_input_dispatches_child_window_focus_and_blur() {
 }
 
 #[test]
+fn blurring_a_focused_frame_returns_focus_to_its_parent_viewport() {
+    let mut vm = new_storage_test_vm("https://focus-frame-blur.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const outer = document.createElement('iframe');
+  body.append(outer);
+  const parent = outer.contentDocument;
+  const frame = parent.createElement('iframe');
+  const input = parent.createElement('input');
+  parent.body.append(frame, input);
+  frame.focus();
+
+  const events = [];
+  window.onfocus = () => events.push('top-focus');
+  parent.defaultView.onfocus = () => events.push(`parent-focus:${parent.activeElement.tagName}`);
+  frame.contentWindow.onblur = () => events.push(`child-blur:${frame.contentDocument.hasFocus()}`);
+
+  frame.blur();
+  frame.blur();
+  input.focus();
+  input.blur();
+  return `${events.join(',')}|${document.activeElement === outer}|${parent.hasFocus()}`;
+})()
+"#,
+        )
+        .expect("nested frame blur should return focus to its owner viewport");
+
+    assert_eq!(result, "child-blur:false,parent-focus:BODY|true|true");
+}
+
+#[test]
 fn focus_transitions_publish_state_before_each_event_phase() {
     let mut vm = new_storage_test_vm("https://focus-state.test/");
     let result = vm.eval(r#"
