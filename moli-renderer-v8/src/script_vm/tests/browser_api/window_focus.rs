@@ -146,6 +146,17 @@ fn window_focus_and_blur_validate_the_receiver_in_the_callee_realm() {
             throw Error('extracted focus must select its child browsing context');
         if (transitions.join(',') !== 'top blur,child focus')
             throw Error('the initial focus transition starts at the top viewport: ' + transitions);
+        const input = other.document.body.appendChild(other.document.createElement('input'));
+        input.focus();
+        other.focus();
+        if (other.document.activeElement !== input)
+            throw Error('focus on the current Window must preserve its focused control');
+        window.focus();
+        if (document.activeElement !== document.body || other.document.activeElement !== input)
+            throw Error('focusing the outer Window must select its own viewport');
+        other.focus();
+        if (document.activeElement !== frame || other.document.activeElement !== input)
+            throw Error('focusing a child Window must restore its local focus');
         if (other.blur.call(null) !== undefined) throw Error('null global receiver');
         frame.remove();
         if (other.focus() !== undefined || other.blur() !== undefined)
@@ -155,5 +166,28 @@ fn window_focus_and_blur_validate_the_receiver_in_the_callee_realm() {
         )
         .unwrap(),
         "true"
+    );
+}
+
+#[test]
+fn window_focus_uses_the_target_documents_permissions_policy() {
+    let mut vm = new_storage_test_vm("https://window-focus-policy.test/");
+    vm.eval(r#"(() => {
+        const root = document.documentElement || document.appendChild(document.createElement('html'));
+        const body = document.body || root.appendChild(document.createElement('body'));
+        body.innerHTML = `<input id=focused><iframe id=child allow="focus-without-user-activation 'none'"></iframe>`;
+        body.querySelector('input').focus();
+    })()"#).unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Window focus permissions policy");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+            const child = document.getElementById('child');
+            child.contentWindow.focus();
+            return document.activeElement.id;
+        })()"#
+        )
+        .unwrap(),
+        "focused"
     );
 }

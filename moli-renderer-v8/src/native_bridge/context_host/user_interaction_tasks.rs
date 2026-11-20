@@ -237,7 +237,7 @@ impl PageScriptHost {
                     .service_worker_window_client_completion_owner(request.target)
                     .is_some()
                 {
-                    super::super::element::focus_window_client_document(
+                    super::super::element::focus_window_document(
                         scope,
                         host_ptr,
                         resolved.document_handle,

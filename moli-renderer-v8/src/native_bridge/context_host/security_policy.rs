@@ -268,6 +268,29 @@ impl PageScriptHost {
         })
     }
 
+    pub(crate) fn document_allows_window_focus(&self, document: DomHandle) -> bool {
+        let Some(endpoint) = self.window_endpoint_for_document(document) else {
+            return false;
+        };
+        let owner = endpoint.dispatch_scope();
+        self.window_has_transient_user_activation(owner)
+            || self
+                .owner_document_policy_snapshot(owner)
+                .is_some_and(|snapshot| {
+                    let policy = &snapshot.policy_container;
+                    snapshot.document_handle == Some(document)
+                        && if policy.sandbox.restricts_navigation {
+                            policy
+                                .permissions_policy
+                                .focus_without_user_activation_enabled()
+                        } else {
+                            policy
+                                .permissions_policy
+                                .window_focus_without_user_activation_enabled()
+                        }
+                })
+    }
+
     pub(crate) fn document_allows_autofocus(&self, document: DomHandle) -> bool {
         let Some(endpoint) = self.window_endpoint_for_document(document) else {
             return false;

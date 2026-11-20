@@ -26,6 +26,7 @@ pub(crate) struct DocumentPermissionsPolicy {
     tools_allowlist: Option<OriginAllowlist>,
     synchronous_xhr: DocumentFeaturePolicy,
     focus_without_user_activation: DocumentFeaturePolicy,
+    focus_default_allowlist_matched: bool,
     sensors: SensorPermissionsPolicy,
     cross_origin_isolation: CrossOriginIsolationPermission,
 }
@@ -44,6 +45,7 @@ impl Default for DocumentPermissionsPolicy {
             tools_allowlist: None,
             synchronous_xhr: DocumentFeaturePolicy::default(),
             focus_without_user_activation: DocumentFeaturePolicy::default(),
+            focus_default_allowlist_matched: true,
             sensors: SensorPermissionsPolicy::default(),
             cross_origin_isolation: CrossOriginIsolationPermission::default(),
         }
@@ -72,6 +74,10 @@ impl DocumentPermissionsPolicy {
     }
 
     pub(crate) fn focus_without_user_activation_enabled(&self) -> bool {
+        self.focus_default_allowlist_matched && self.focus_without_user_activation.enabled()
+    }
+
+    pub(crate) fn window_focus_without_user_activation_enabled(&self) -> bool {
         self.focus_without_user_activation.enabled()
     }
 
@@ -116,6 +122,8 @@ impl DocumentPermissionsPolicy {
             focus_without_user_activation: self
                 .focus_without_user_activation
                 .intersect(&other.focus_without_user_activation),
+            focus_default_allowlist_matched: self.focus_default_allowlist_matched
+                && other.focus_default_allowlist_matched,
             sensors: self.sensors.intersect(&other.sensors),
             cross_origin_isolation: self
                 .cross_origin_isolation
@@ -256,8 +264,7 @@ impl DocumentPermissionsPolicy {
             parent_origin,
             child_origin,
             source_origin,
-        )
-        .unwrap_or(same_origin);
+        );
         Self {
             fullscreen: self
                 .fullscreen
@@ -287,8 +294,12 @@ impl DocumentPermissionsPolicy {
             focus_without_user_activation: self.focus_without_user_activation.delegated_to_child(
                 parent_origin,
                 child_origin,
-                focus_without_user_activation,
+                focus_without_user_activation.unwrap_or(true),
             ),
+            // Navigation focus and autofocus use the HTML default of 'self'.
+            // Window.focus() follows Chromium's default in ordinary frames.
+            focus_default_allowlist_matched: self.focus_default_allowlist_matched
+                && (focus_without_user_activation.is_some() || same_origin),
             sensors: self.sensors.delegated_to_child(
                 parent_origin,
                 child_origin,
@@ -793,6 +804,7 @@ mod tests {
         assert!(denied.gamepad_enabled());
         assert!(denied.synchronous_xhr_enabled());
         assert!(!denied.focus_without_user_activation_enabled());
+        assert!(denied.window_focus_without_user_activation_enabled());
 
         let delegated = policy.delegated_to_child_urls_with_fullscreen(
             &parent,
@@ -888,6 +900,7 @@ mod tests {
         assert!(!denied.gamepad_enabled());
         assert!(!denied.synchronous_xhr_enabled());
         assert!(!denied.focus_without_user_activation_enabled());
+        assert!(!denied.window_focus_without_user_activation_enabled());
 
         let parent_denied = DocumentPermissionsPolicy::from_navigation_response_headers(
             &[(
@@ -908,6 +921,7 @@ mod tests {
         assert!(!delegated.gamepad_enabled());
         assert!(!delegated.synchronous_xhr_enabled());
         assert!(!delegated.focus_without_user_activation_enabled());
+        assert!(!delegated.window_focus_without_user_activation_enabled());
     }
     #[test]
     fn iframe_src_delegates_opaque_documents_without_changing_self_matching() {
