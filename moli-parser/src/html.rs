@@ -1863,6 +1863,63 @@ impl DocumentSink {
     }
 }
 
+impl DocumentSink {
+    pub(super) fn content_patching() -> html5ever::tree_builder::ContentPatching<ParseHandle, Self>
+    {
+        html5ever::tree_builder::ContentPatching {
+            parent_node: |sink, node| sink.target.borrow().current_parent(node.dom_node_id()?),
+            prepare: Self::prepare_content_patch,
+            insertion_location: |sink, template| {
+                sink.target
+                    .borrow_mut()
+                    .content_patch_insertion_location(template.dom_node_id()?)
+            },
+            finish: Self::finish_content_patch,
+        }
+    }
+
+    fn prepare_content_patch(
+        &self,
+        template: &ParseHandle,
+        scope: &ParseHandle,
+        scope_is_open: bool,
+        name: &str,
+    ) -> bool {
+        let (Some(template), Some(scope)) = (template.dom_node_id(), scope.dom_node_id()) else {
+            return false;
+        };
+        self.flush_pending_text();
+        let nodes =
+            self.target
+                .borrow_mut()
+                .prepare_content_patch(template, scope, scope_is_open, name);
+        let Some(nodes) = nodes else {
+            return false;
+        };
+        for node in nodes {
+            self.mutate_target(|target| target.remove_from_parent(node));
+            // A removed iframe can dispatch pagehide and move later siblings.
+            // Deliver each removal before continuing through the captured range.
+            if self.finish_parser_dom_mutations().is_break() {
+                break;
+            }
+        }
+        true
+    }
+
+    fn finish_content_patch(&self, template: &ParseHandle) {
+        let Some(template) = template.dom_node_id() else {
+            return;
+        };
+        let markers = self.target.borrow().content_patch_markers(template);
+        if let Some((start, end)) = markers {
+            for marker in std::iter::once(start).chain(end) {
+                self.mutate_target(|target| target.remove_from_parent(marker));
+            }
+        }
+    }
+}
+
 impl TreeSink for DocumentSink {
     type Handle = ParseHandle;
     type Output = ParserStreamHtmlTreeSinkTarget;

@@ -83,6 +83,14 @@ impl ParserMutationEffectConsumer for DocumentWriteParserMutationOwner<'_, '_, '
 }
 
 impl ParserDomReadConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
+    fn plan_html_content_patch(
+        &mut self,
+        scope: DomHandle,
+        name: &str,
+    ) -> Option<moli_dom::native::HtmlContentPatchPlan> {
+        self.runtime.dom_host().plan_html_content_patch(scope, name)
+    }
+
     fn stylesheet_media_matches(&mut self, media: &str) -> bool {
         self.runtime.stylesheet_media_matches(media)
     }

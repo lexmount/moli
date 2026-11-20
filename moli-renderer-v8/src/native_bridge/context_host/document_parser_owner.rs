@@ -265,6 +265,14 @@ impl ParserMutationEffectConsumer for ContextDocumentParserOwner<'_, '_, '_> {
 }
 
 impl ParserDomReadConsumer for ContextDocumentParserOwner<'_, '_, '_> {
+    fn plan_html_content_patch(
+        &mut self,
+        scope: DomHandle,
+        name: &str,
+    ) -> Option<moli_dom::native::HtmlContentPatchPlan> {
+        self.host.dom_host().plan_html_content_patch(scope, name)
+    }
+
     fn stylesheet_media_matches(&mut self, media: &str) -> bool {
         self.host
             .media_query_matches_for_document(self.document_handle, media)

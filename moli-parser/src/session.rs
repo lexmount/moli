@@ -89,7 +89,8 @@ impl Tracer for OpenFormControlTracer {
 impl EmbedderPausingTreeBuilder {
     fn new(sink: DocumentSink, opts: TreeBuilderOpts) -> Self {
         Self {
-            inner: TreeBuilder::new(sink, opts),
+            inner: TreeBuilder::new(sink, opts)
+                .with_content_patching(DocumentSink::content_patching()),
             fragment_context: None,
             deferred_owner_interruption: Cell::new(false),
         }
@@ -102,7 +103,8 @@ impl EmbedderPausingTreeBuilder {
     ) -> Self {
         let fragment_context = context_handle.dom_node_id();
         Self {
-            inner: TreeBuilder::new_for_fragment(sink, context_handle, None, opts),
+            inner: TreeBuilder::new_for_fragment(sink, context_handle, None, opts)
+                .with_content_patching(DocumentSink::content_patching()),
             fragment_context,
             deferred_owner_interruption: Cell::new(false),
         }

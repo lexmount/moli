@@ -42,8 +42,8 @@ pub use host::{
     StylesheetCandidateTreeScopeSnapshots,
 };
 pub use host::{
-    HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInclusion, ShadowRootInit,
-    ShadowRootMarkupProfile, ShadowRootRegistryAttributePolicy,
+    HostElementSnapshot, HtmlContentPatchPlan, ShadowRootBindingSnapshot, ShadowRootInclusion,
+    ShadowRootInit, ShadowRootMarkupProfile, ShadowRootRegistryAttributePolicy,
 };
 pub use html_serialization::{
     HtmlEmbeddedDocument, HtmlEmbeddedDocumentProvider, HtmlInsertionPoint, HtmlSerializationError,

@@ -38,9 +38,12 @@ use markup5ever::{expanded_name, local_name, namespace_prefix, ns};
 #[macro_use]
 mod tag_sets;
 
+mod content_patching;
 mod data;
 mod rules;
 mod types;
+
+pub use content_patching::ContentPatching;
 
 /// Tree builder options, with an impl for Default.
 #[derive(Copy, Clone)]
@@ -87,6 +90,8 @@ pub struct TreeBuilder<Handle, Sink> {
 
     /// Consumer of tree modifications.
     pub sink: Sink,
+
+    content_patching: Option<ContentPatching<Handle, Sink>>,
 
     /// Insertion mode.
     mode: Cell<InsertionMode>,
@@ -154,6 +159,7 @@ where
         TreeBuilder {
             opts,
             sink,
+            content_patching: None,
             mode: Cell::new(InsertionMode::Initial),
             orig_mode: Cell::new(None),
             template_modes: Default::default(),
@@ -194,6 +200,7 @@ where
         let tb = TreeBuilder {
             opts,
             sink,
+            content_patching: None,
             mode: Cell::new(InsertionMode::Initial),
             orig_mode: Cell::new(None),
             template_modes,
@@ -425,8 +432,7 @@ where
         if !(self.foster_parenting.get() && self.elem_in(&target, foster_target)) {
             if self.html_elem_named(&target, local_name!("template")) {
                 // No foster parenting (inside template).
-                let contents = self.sink.get_template_contents(&target);
-                return InsertionPoint::LastChild(contents);
+                return self.template_insertion_point(&target);
             } else {
                 // No foster parenting (the common case).
                 return InsertionPoint::LastChild(target);
@@ -438,8 +444,7 @@ where
         let mut iter = open_elems.iter().rev().peekable();
         while let Some(elem) = iter.next() {
             if self.html_elem_named(elem, local_name!("template")) {
-                let contents = self.sink.get_template_contents(elem);
-                return InsertionPoint::LastChild(contents);
+                return self.template_insertion_point(elem);
             } else if self.html_elem_named(elem, local_name!("table")) {
                 return InsertionPoint::TableFosterParenting {
                     element: elem.clone(),
@@ -454,8 +459,10 @@ where
     fn insert_at(&self, insertion_point: InsertionPoint<Handle>, child: NodeOrText<Handle>) {
         match insertion_point {
             InsertionPoint::LastChild(parent) => self.sink.append(&parent, child),
-            InsertionPoint::BeforeSibling(sibling) => {
-                self.sink.append_before_sibling(&sibling, child)
+            InsertionPoint::BeforeSibling { parent, sibling } => {
+                if self.sibling_still_under_parent(&sibling, &parent) {
+                    self.sink.append_before_sibling(&sibling, child);
+                }
             },
             InsertionPoint::TableFosterParenting {
                 element,
@@ -1394,7 +1401,8 @@ where
         // Step 7.
         let insertion_point = self.appropriate_place_for_insertion(None);
         let (node1, node2) = match insertion_point {
-            InsertionPoint::LastChild(ref p) | InsertionPoint::BeforeSibling(ref p) => {
+            InsertionPoint::LastChild(ref p)
+            | InsertionPoint::BeforeSibling { parent: ref p, .. } => {
                 (p.clone(), None)
             },
             InsertionPoint::TableFosterParenting {
@@ -1486,7 +1494,8 @@ where
         let adjusted_insertion_location = self.appropriate_place_for_insertion(None);
 
         let (intended_parent, _node2) = match adjusted_insertion_location {
-            InsertionPoint::LastChild(ref p) | InsertionPoint::BeforeSibling(ref p) => {
+            InsertionPoint::LastChild(ref p)
+            | InsertionPoint::BeforeSibling { parent: ref p, .. } => {
                 (p.clone(), None)
             },
             InsertionPoint::TableFosterParenting {

@@ -109,9 +109,8 @@ pub(crate) enum FormatEntry<Handle> {
 pub(crate) enum InsertionPoint<Handle> {
     /// Insert as last child in this parent.
     LastChild(Handle),
-    #[allow(dead_code)] // FIXME
-    /// Insert before this following sibling.
-    BeforeSibling(Handle),
+    /// Insert before the reference child if it is still in this parent.
+    BeforeSibling { parent: Handle, sibling: Handle },
     /// Insertion point is decided based on existence of element's parent node.
     TableFosterParenting {
         element: Handle,

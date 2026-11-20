@@ -12,8 +12,8 @@ use crate::script_planning::{ParserPlanningReadView, ParserScriptRead};
 use moli_dom::{
     NodeId,
     native::{
-        Attribute as NativeAttribute, DomHost, DomMutationEffects, NativeDom, NativeNodeId, Node,
-        ParserAttributes, ParserConstruction,
+        Attribute as NativeAttribute, DomHost, DomMutationEffects, HtmlContentPatchPlan, NativeDom,
+        NativeNodeId, Node, ParserAttributes, ParserConstruction,
     },
 };
 use moli_stylesheet_blocking::{
@@ -114,6 +114,12 @@ pub trait ParserDomReadConsumer {
 
     fn child_handles(&mut self, node_id: NativeNodeId) -> Vec<NativeNodeId>;
 
+    fn plan_html_content_patch(
+        &mut self,
+        scope: NativeNodeId,
+        name: &str,
+    ) -> Option<HtmlContentPatchPlan>;
+
     fn document_order_script_handles(
         &mut self,
         document_handle: NativeNodeId,
@@ -191,6 +197,8 @@ struct ParserDomReadSink {
     previous_sibling: unsafe fn(NonNull<()>, NativeNodeId) -> Option<NativeNodeId>,
     last_child: unsafe fn(NonNull<()>, NativeNodeId) -> Option<NativeNodeId>,
     child_handles: unsafe fn(NonNull<()>, NativeNodeId) -> Vec<NativeNodeId>,
+    plan_html_content_patch:
+        unsafe fn(NonNull<()>, NativeNodeId, &str) -> Option<HtmlContentPatchPlan>,
     document_order_script_handles: unsafe fn(NonNull<()>, NativeNodeId) -> Vec<NativeNodeId>,
     document_order_stylesheet_candidate_handles_before:
         unsafe fn(NonNull<()>, NativeNodeId, Option<NativeNodeId>) -> Vec<NativeNodeId>,
@@ -282,6 +290,14 @@ impl ParserDomReadSink {
             // SAFETY: ParserDomReadSink::from_consumer_unchecked requires the pointed-to
             // consumer to remain live and exclusive for the pump step.
             unsafe { data.cast::<T>().as_mut() }.child_handles(node_id)
+        }
+        unsafe fn plan_html_content_patch_impl<T: ParserDomReadConsumer>(
+            data: NonNull<()>,
+            scope: NativeNodeId,
+            name: &str,
+        ) -> Option<HtmlContentPatchPlan> {
+            // SAFETY: the consumer remains live and exclusive for the pump step.
+            unsafe { data.cast::<T>().as_mut() }.plan_html_content_patch(scope, name)
         }
         unsafe fn document_order_script_handles_impl<T: ParserDomReadConsumer>(
             data: NonNull<()>,
@@ -387,6 +403,7 @@ impl ParserDomReadSink {
             previous_sibling: previous_sibling_impl::<T>,
             last_child: last_child_impl::<T>,
             child_handles: child_handles_impl::<T>,
+            plan_html_content_patch: plan_html_content_patch_impl::<T>,
             document_order_script_handles: document_order_script_handles_impl::<T>,
             document_order_stylesheet_candidate_handles_before:
                 document_order_stylesheet_candidate_handles_before_impl::<T>,
@@ -454,6 +471,15 @@ impl ParserDomReadSink {
         // SAFETY: construction ties the raw pointer and callback to the same
         // consumer remains live for the current runtime-DOM sink step.
         unsafe { (self.child_handles)(self.data, node_id) }
+    }
+
+    fn plan_html_content_patch(
+        self,
+        scope: NativeNodeId,
+        name: &str,
+    ) -> Option<HtmlContentPatchPlan> {
+        // SAFETY: the consumer remains live and exclusive for the pump step.
+        unsafe { (self.plan_html_content_patch)(self.data, scope, name) }
     }
 
     fn document_order_script_handles(self, document_handle: NativeNodeId) -> Vec<NativeNodeId> {
@@ -1391,6 +1417,14 @@ struct TestMutationEffectCollector<'a> {
 
 #[cfg(test)]
 impl ParserDomReadConsumer for TestMutationEffectCollector<'_> {
+    fn plan_html_content_patch(
+        &mut self,
+        scope: NativeNodeId,
+        name: &str,
+    ) -> Option<HtmlContentPatchPlan> {
+        unsafe { &*self.host }.plan_html_content_patch(scope, name)
+    }
+
     fn stylesheet_media_matches(&mut self, media: &str) -> bool {
         // SAFETY: the fixture keeps its DomHost alive throughout this parser step.
         unsafe { &*self.host }.media_query_matches(media)
@@ -1747,6 +1781,14 @@ impl TestReadTrackingCollector<'_> {
 
 #[cfg(test)]
 impl ParserDomReadConsumer for TestReadTrackingCollector<'_> {
+    fn plan_html_content_patch(
+        &mut self,
+        scope: NativeNodeId,
+        name: &str,
+    ) -> Option<HtmlContentPatchPlan> {
+        unsafe { &*self.host }.plan_html_content_patch(scope, name)
+    }
+
     fn stylesheet_media_matches(&mut self, media: &str) -> bool {
         // SAFETY: the fixture keeps its DomHost alive throughout this parser step.
         unsafe { &*self.host }.media_query_matches(media)
@@ -2142,6 +2184,8 @@ pub(super) struct ParserStreamHtmlTreeSinkTarget {
     /// contents. The handle also identifies the inert owner Document to use
     /// when creating the next node.
     next_template_contents_insertion: Option<NativeNodeId>,
+    next_content_patch_insertion_parent: Option<NativeNodeId>,
+    active_content_patches: Vec<(NativeNodeId, ActiveContentPatch)>,
     open_template_element_depth: usize,
     pending_open_parser_element: Option<NativeNodeId>,
     open_parser_elements: Vec<OpenParserElement>,
@@ -2166,6 +2210,13 @@ impl Drop for ParserRuntimeDomTargetStep<'_> {
     fn drop(&mut self) {
         self.target.clear_runtime_dom_sinks_after_parse_step();
     }
+}
+
+#[derive(Clone, Copy)]
+struct ActiveContentPatch {
+    target: NativeNodeId,
+    start_marker: NativeNodeId,
+    end_marker: Option<NativeNodeId>,
 }
 
 impl ParserStreamHtmlTreeSinkTarget {
@@ -2202,6 +2253,8 @@ impl ParserStreamHtmlTreeSinkTarget {
             runtime_dom_sinks: None,
             suspended_runtime_dom_sinks: Vec::new(),
             next_template_contents_insertion: None,
+            next_content_patch_insertion_parent: None,
+            active_content_patches: Vec::new(),
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2223,6 +2276,8 @@ impl ParserStreamHtmlTreeSinkTarget {
             runtime_dom_sinks: None,
             suspended_runtime_dom_sinks: Vec::new(),
             next_template_contents_insertion: None,
+            next_content_patch_insertion_parent: None,
+            active_content_patches: Vec::new(),
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2261,6 +2316,8 @@ impl ParserStreamHtmlTreeSinkTarget {
             runtime_dom_sinks: None,
             suspended_runtime_dom_sinks: Vec::new(),
             next_template_contents_insertion: None,
+            next_content_patch_insertion_parent: None,
+            active_content_patches: Vec::new(),
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2286,6 +2343,8 @@ impl ParserStreamHtmlTreeSinkTarget {
             runtime_dom_sinks: Some(runtime_dom_sinks),
             suspended_runtime_dom_sinks: Vec::new(),
             next_template_contents_insertion: None,
+            next_content_patch_insertion_parent: None,
+            active_content_patches: Vec::new(),
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2491,7 +2550,8 @@ impl ParserStreamHtmlTreeSinkTarget {
     }
 
     fn owner_document_for_next_parser_node(&self) -> NativeNodeId {
-        self.next_template_contents_insertion
+        self.next_content_patch_insertion_parent
+            .or(self.next_template_contents_insertion)
             .and_then(|handle| self.read_owner_document(handle))
             .or_else(|| {
                 self.intended_parent_for_next_parser_element()
@@ -3227,7 +3287,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         &mut self,
         parent: NativeNodeId,
     ) -> ParserTextInsertionPoint {
-        self.clear_template_contents_insertion_hint();
+        self.clear_template_insertion_hints();
         ParserTextInsertionPoint {
             parent,
             reference_child: None,
@@ -3238,7 +3298,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         &mut self,
         sibling: NativeNodeId,
     ) -> Option<ParserTextInsertionPoint> {
-        self.clear_template_contents_insertion_hint();
+        self.clear_template_insertion_hints();
         Some(ParserTextInsertionPoint {
             parent: self.read_parent_node(sibling)?,
             reference_child: Some(sibling),
@@ -3374,7 +3434,10 @@ impl ParserStreamHtmlTreeSinkTarget {
         let template_contents_insertion = self.take_template_contents_insertion_hint();
         let insertion_is_template_contents =
             self.open_template_element_depth > 0 || template_contents_insertion.is_some();
-        let intended_parent = self.intended_parent_for_next_parser_element();
+        let intended_parent = self
+            .next_content_patch_insertion_parent
+            .take()
+            .or_else(|| self.intended_parent_for_next_parser_element());
         let document_handle = template_contents_insertion
             .and_then(|handle| self.read_owner_document(handle))
             .or_else(|| intended_parent.and_then(|handle| self.read_owner_document(handle)))
@@ -3549,7 +3612,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         parent_id: NativeNodeId,
         child: NodeOrText<ParseHandle>,
     ) -> ParserMutationEffectDelivery {
-        self.clear_template_contents_insertion_hint();
+        self.clear_template_insertion_hints();
         match child {
             NodeOrText::AppendNode(handle) => {
                 let child_id = handle.node_id();
@@ -3569,7 +3632,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         sibling_id: NativeNodeId,
         child: NodeOrText<ParseHandle>,
     ) -> ParserMutationEffectDelivery {
-        self.clear_template_contents_insertion_hint();
+        self.clear_template_insertion_hints();
         let Some(parent_id) = self.read_parent_node(sibling_id) else {
             return ParserMutationEffectDelivery::none();
         };
@@ -3597,7 +3660,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         prev_element_id: NativeNodeId,
         child: NodeOrText<ParseHandle>,
     ) -> ParserMutationEffectDelivery {
-        self.clear_template_contents_insertion_hint();
+        self.clear_template_insertion_hints();
         if self.read_parent_node(element_id).is_some() {
             self.append_before_sibling(element_id, child)
         } else {
@@ -3628,6 +3691,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             .map(|handle| ParseHandle::new(handle, None));
         if let Some(handle) = handle.as_ref() {
             self.next_template_contents_insertion = Some(handle.node_id());
+            self.next_content_patch_insertion_parent = None;
         }
         handle
     }
@@ -3644,8 +3708,77 @@ impl ParserStreamHtmlTreeSinkTarget {
         self.next_template_contents_insertion.take()
     }
 
-    fn clear_template_contents_insertion_hint(&mut self) {
+    fn clear_template_insertion_hints(&mut self) {
         self.next_template_contents_insertion = None;
+        self.next_content_patch_insertion_parent = None;
+    }
+
+    pub(super) fn current_parent(&self, node: NativeNodeId) -> Option<ParseHandle> {
+        self.read_parent_node(node)
+            .map(|parent| ParseHandle::new(parent, None))
+    }
+
+    pub(super) fn prepare_content_patch(
+        &mut self,
+        template: NativeNodeId,
+        mut scope: NativeNodeId,
+        scope_is_open: bool,
+        name: &str,
+    ) -> Option<Vec<NativeNodeId>> {
+        // The open body element can address markers in the head. A fragment
+        // parse always starts from its own temporary tree.
+        if scope_is_open && self.read_document_body_handle() == Some(scope) {
+            scope = self.read_parent_node(scope)?;
+        }
+        let plan = if let Some(owner) = &self.runtime_dom_sinks {
+            owner.dom_read_sink().plan_html_content_patch(scope, name)
+        } else {
+            self.dom_host().plan_html_content_patch(scope, name)
+        }?;
+        self.active_content_patches.push((
+            template,
+            ActiveContentPatch {
+                target: plan.target,
+                start_marker: plan.start_marker,
+                end_marker: plan.end_marker,
+            },
+        ));
+        self.open_template_element_depth = self.open_template_element_depth.saturating_sub(1);
+        Some(plan.nodes_to_remove)
+    }
+
+    fn active_content_patch(&self, template: NativeNodeId) -> Option<ActiveContentPatch> {
+        self.active_content_patches
+            .iter()
+            .rev()
+            .find_map(|&(key, patch)| (key == template).then_some(patch))
+    }
+
+    pub(super) fn content_patch_insertion_location(
+        &mut self,
+        template: NativeNodeId,
+    ) -> Option<(ParseHandle, Option<ParseHandle>)> {
+        let patch = self.active_content_patch(template)?;
+        let reference = patch
+            .end_marker
+            .filter(|&end| self.read_parent_node(end) == Some(patch.target));
+        self.next_template_contents_insertion = None;
+        self.next_content_patch_insertion_parent = Some(patch.target);
+        Some((
+            ParseHandle::new(patch.target, None),
+            reference.map(|end| ParseHandle::new(end, None)),
+        ))
+    }
+
+    pub(super) fn content_patch_markers(
+        &self,
+        template: NativeNodeId,
+    ) -> Option<(NativeNodeId, Option<NativeNodeId>)> {
+        let patch = self.active_content_patch(template)?;
+        Some((
+            patch.start_marker,
+            patch.end_marker.filter(|&end| end != patch.start_marker),
+        ))
     }
 
     pub(super) fn attach_declarative_shadow(
@@ -3759,7 +3892,13 @@ impl ParserStreamHtmlTreeSinkTarget {
     }
 
     fn note_node_popped_without_script_handoff(&mut self, node_id: NativeNodeId) {
-        if self.read_is_html_element_named(node_id, "template") {
+        if let Some(index) = self
+            .active_content_patches
+            .iter()
+            .rposition(|&(template, _)| template == node_id)
+        {
+            self.active_content_patches.remove(index);
+        } else if self.read_is_html_element_named(node_id, "template") {
             self.open_template_element_depth = self.open_template_element_depth.saturating_sub(1);
         }
         self.note_parser_element_popped(node_id);
