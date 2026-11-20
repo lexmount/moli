@@ -10,6 +10,9 @@ use crate::native_bridge::document::XHTML_NS;
 use crate::native_bridge::{PageScriptHost, SelectionBoundarySnapshot};
 use crate::util::node_wrapper_from_handle;
 
+mod paragraphs;
+use paragraphs::normalize_fragment_for_fixed_paragraph;
+
 pub(crate) fn replace_editable_selection_text(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -102,28 +105,42 @@ pub(crate) fn replace_editable_selection_fragment(
         snapshot.end.container,
         snapshot.end.offset,
     )?;
-    let last_child = dom.child_handles_reversed(fragment).next();
-    if order.is_eq() && last_child.is_none() {
-        return Some(());
-    }
     let (mut start, mut end) = if order.is_gt() {
         (snapshot.end, snapshot.start)
     } else {
         (snapshot.start, snapshot.end)
     };
-    if let Some(host) = rich_editing_host
-        && !order.is_eq()
-    {
-        let block_content = fragment_has_prohibited_children(dom, fragment);
-        start = expand_rich_replacement_boundary(
-            dom,
-            start,
+    if let Some(host) = rich_editing_host {
+        normalize_fragment_for_fixed_paragraph(
+            unsafe { &mut *runtime_ptr },
+            document,
+            start.container,
             host,
-            RangeBoundarySide::Start,
-            block_content,
-        );
-        end =
-            expand_rich_replacement_boundary(dom, end, host, RangeBoundarySide::End, block_content);
+            fragment,
+        )?;
+        if !order.is_eq() {
+            let dom = unsafe { &*runtime_ptr }.dom_host();
+            let block_content = fragment_has_prohibited_children(dom, fragment);
+            start = expand_rich_replacement_boundary(
+                dom,
+                start,
+                host,
+                RangeBoundarySide::Start,
+                block_content,
+            );
+            end = expand_rich_replacement_boundary(
+                dom,
+                end,
+                host,
+                RangeBoundarySide::End,
+                block_content,
+            );
+        }
+    }
+    let dom = unsafe { &*runtime_ptr }.dom_host();
+    let last_child = dom.child_handles_reversed(fragment).next();
+    if order.is_eq() && last_child.is_none() {
+        return Some(());
     }
     let window = scope.get_current_context().global(scope);
     let selection = selection_value_for_window(scope, window)?;
