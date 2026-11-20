@@ -18,7 +18,6 @@ cookiestore/serviceworker_cookieStore_subscriptions_reset.https.html
 css/css-animations/parsing/keyframe-selectors.html
 css/css-animations/stability/animation-event-destroy-renderer.html?animationiteration
 css/css-animations/stability/animation-event-destroy-renderer.html?animationstart
-css/css-cascade/import-conditions.html
 css/css-cascade/layer-counter-style-override.html
 css/css-cascade/layer-font-face-override.html
 css/css-cascade/layer-keyframes-override.html

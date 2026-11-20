@@ -867,6 +867,7 @@ css/css-cascade/all-prop-revert-noop.html?include=7
 css/css-cascade/at-scope-parsing.html
 css/css-cascade/at-scope-relative-syntax.html
 css/css-cascade/idlharness.html
+css/css-cascade/import-conditions.html
 css/css-cascade/important-vs-inline-001.html
 css/css-cascade/important-vs-inline-002.html
 css/css-cascade/important-vs-inline-003.html
