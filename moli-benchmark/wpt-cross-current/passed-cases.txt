@@ -6539,6 +6539,7 @@ fetch/nosniff/importscripts.html
 fetch/security/dangling-markup/media.html
 fetch/security/dangling-markup/option.html
 fetch/security/dangling-markup/textarea.html
+focus/activeelement-after-focusing-different-site-iframe-contentwindow.html
 focus/activeelement-after-focusing-different-site-iframe-then-immediately-focusing-back.html
 focus/activeelement-after-focusing-same-site-iframe-contentwindow.html
 focus/activeelement-after-immediately-focusing-different-site-iframe-contentwindow.html
@@ -6557,6 +6558,8 @@ focus/focus-element-crash.html
 focus/focus-event-after-focusing-iframes.html
 focus/focus-event-after-iframe-gets-focus.html
 focus/focus-sync-when-blur.html
+focus/iframe-contentwindow-focus-with-different-site-intermediate-frame.html
+focus/iframe-contentwindow-focus-with-same-as-top-intermediate-frame.html
 focus/iframe-focus-with-different-site-intermediate-frame.html
 focus/iframe-focus-with-same-as-top-intermediate-frame.html
 focus/iframe-focuses-parent-different-site.html
