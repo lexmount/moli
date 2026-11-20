@@ -603,11 +603,15 @@ fn window_focus_transition_for_handles(
     let previous_window = previous
         .and_then(|handle| focused_window_endpoint(runtime, handle))
         .unwrap_or(execution_window);
-    // Clearing an element's focus does not blur its Window. A later focus in
-    // another Document supplies the concrete new focused-frame endpoint.
-    let next_window = next
-        .and_then(|handle| focused_window_endpoint(runtime, handle))
-        .unwrap_or(previous_window);
+    let next_window = if let Some(next) = next {
+        focused_window_endpoint(runtime, next)
+    } else {
+        previous
+            .filter(|handle| is_frame_owner_element(runtime, *handle))
+            .and_then(|handle| runtime.dom_host().owner_document_handle(handle))
+            .and_then(|document| focused_document_window_endpoint(runtime, document))
+    }
+    .unwrap_or(previous_window);
     if previous_window == next_window {
         return None;
     }
@@ -630,12 +634,22 @@ fn focused_window_endpoint(
     runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<PendingWindowMessageEndpoint> {
-    if runtime.dom_host().is_html_element_named(handle, "iframe")
-        || runtime.dom_host().is_html_element_named(handle, "frame")
-    {
+    if is_frame_owner_element(runtime, handle) {
         return Some(PendingWindowMessageEndpoint::ChildWindow(handle));
     }
     let document = runtime.dom_host().owner_document_handle(handle)?;
+    focused_document_window_endpoint(runtime, document)
+}
+
+fn is_frame_owner_element(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    runtime.dom_host().is_html_element_named(handle, "iframe")
+        || runtime.dom_host().is_html_element_named(handle, "frame")
+}
+
+fn focused_document_window_endpoint(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+) -> Option<PendingWindowMessageEndpoint> {
     if let Some(child_handle) = runtime.child_browsing_context_host_for_document_handle(document) {
         return Some(PendingWindowMessageEndpoint::ChildWindow(child_handle));
     }
