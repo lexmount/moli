@@ -538,6 +538,13 @@ fn async_subresource_trace_fields_for_event(
             resource_type: Some(record.resource_type()),
             ..AsyncSubresourceTraceFields::default()
         },
+        AsyncSubresourceFetchEvent::RequestExtraInfo { internal_id, .. } => {
+            AsyncSubresourceTraceFields {
+                event_kind: Some("request_extra_info"),
+                internal_id: Some(*internal_id),
+                ..Default::default()
+            }
+        }
         AsyncSubresourceFetchEvent::StreamingStarted(started) => AsyncSubresourceTraceFields {
             event_kind: Some("streaming_started"),
             internal_id: Some(started.internal_id),

@@ -1342,6 +1342,9 @@ fetch('/data')
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn page_fetch_cookie_headers_are_published_in_transport_extra_info() {
+    use axum::extract::State;
+    use tokio::sync::Notify;
+
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -1356,21 +1359,20 @@ fetch('/api')
         )
     }
 
-    async fn api() -> impl IntoResponse {
+    async fn api(State(send_response): State<Arc<Notify>>) -> impl IntoResponse {
+        send_response.notified().await;
         ([(CONTENT_TYPE.as_str(), "text/plain")], "cookie-fetch")
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let send_response = Arc::new(Notify::new());
+    let router = Router::new()
+        .route("/page", get(page))
+        .route("/api", get(api))
+        .with_state(send_response.clone());
     let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            Router::new()
-                .route("/page", get(page))
-                .route("/api", get(api)),
-        )
-        .await
-        .unwrap();
+        axum::serve(listener, router).await.unwrap();
     });
 
     let page_url = format!("http://{addr}/page");
@@ -1413,10 +1415,18 @@ fetch('/api')
     }))
     .await;
 
-    flush_until_subresource_finished(&mut ctx, "Fetch", 1, "page fetch network completion").await;
+    wait_until_scheduler_message(
+        &mut ctx,
+        "fetch ExtraInfo before HTTP response",
+        |message| {
+            message["method"] == "Network.requestWillBeSentExtraInfo"
+                && message["params"]["headers"]["Cookie"] == "sid=1"
+        },
+    )
+    .await;
 
-    let messages = ctx.take_all();
-    let fetch_request = messages
+    let fetch_request = ctx
+        .sent
         .iter()
         .find(|message| {
             message["method"] == json!("Network.requestWillBeSent")
@@ -1438,21 +1448,139 @@ fetch('/api')
         .as_str()
         .expect("fetch request id")
         .to_owned();
-    let extra_info = messages
+    let is_fetch_extra_info = |message: &serde_json::Value| {
+        message["method"] == "Network.requestWillBeSentExtraInfo"
+            && message["params"]["requestId"] == fetch_request_id
+    };
+    let extra_info = ctx
+        .sent
         .iter()
-        .find(|message| {
-            message["method"] == json!("Network.requestWillBeSentExtraInfo")
-                && message["params"]["requestId"] == json!(fetch_request_id)
-        })
+        .find(|message| is_fetch_extra_info(message))
         .expect("fetch request should emit requestWillBeSentExtraInfo");
     assert_eq!(
         extra_info["params"]["headers"]["x-cdp-test"],
         "works-fetch-cookie"
     );
     assert_eq!(extra_info["params"]["headers"]["Cookie"], "sid=1");
+    assert_eq!(extra_info["params"]["headers"]["Host"], addr.to_string());
+    assert_eq!(
+        extra_info["params"]["associatedCookies"][0]["cookie"]["name"],
+        "sid"
+    );
+    assert_eq!(
+        extra_info["params"]["associatedCookies"][0]["blockedReasons"],
+        json!([])
+    );
+
+    send_response.notify_one();
+    flush_until_subresource_finished(&mut ctx, "Fetch", 1, "page fetch network completion").await;
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|message| is_fetch_extra_info(message))
+            .count(),
+        1,
+    );
 
     server.abort();
 }
+#[tokio::test(flavor = "multi_thread")]
+async fn aborted_cookie_xhr_before_response_reports_one_extra_info() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            r#"<!doctype html><script>
+const xhr = new XMLHttpRequest();
+xhr.open('GET', '/slow');
+xhr.send();
+</script>"#,
+        )
+    }
+
+    async fn slow() -> &'static str {
+        std::future::pending().await
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/slow", get(slow)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let slow_url = format!("http://{addr}/slow");
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1");
+    bc.attach_active_session("SID-1");
+    bc.cookie_store_for_test()
+        .lock()
+        .unwrap()
+        .store_response_headers(
+            &Url::parse(&slow_url).unwrap(),
+            &[("set-cookie".to_owned(), b"sid=1; Path=/slow".to_vec())],
+        );
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    ctx.process_async(json!({ "id": 501, "method": "Network.enable", "sessionId": "SID-1" }))
+        .await;
+    ctx.expect_result(501, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 502,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": { "url": format!("http://{addr}/page") }
+    }))
+    .await;
+    wait_until_scheduler_message(&mut ctx, "ExtraInfo for pending XHR", |message| {
+        message["method"] == "Network.requestWillBeSentExtraInfo"
+            && message["params"]["headers"]["Cookie"] == "sid=1"
+    })
+    .await;
+
+    let request_id = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["request"]["url"] == slow_url
+        })
+        .expect("XHR request")["params"]["requestId"]
+        .clone();
+    ctx.process_async(json!({
+        "id": 503,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": { "expression": "xhr.abort()" }
+    }))
+    .await;
+    wait_until_scheduler_message(&mut ctx, "aborted XHR fails", |message| {
+        message["method"] == "Network.loadingFailed" && message["params"]["requestId"] == request_id
+    })
+    .await;
+
+    let extra_infos = ctx
+        .sent
+        .iter()
+        .filter(|message| {
+            message["method"] == "Network.requestWillBeSentExtraInfo"
+                && message["params"]["requestId"] == request_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(extra_infos.len(), 1);
+    assert_eq!(
+        extra_infos[0]["params"]["headers"]["Host"],
+        addr.to_string()
+    );
+    assert_eq!(extra_infos[0]["params"]["headers"]["Cookie"], "sid=1");
+    server.abort();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn page_xhr_applies_extra_http_headers() {
     async fn page() -> impl IntoResponse {
@@ -3561,6 +3689,15 @@ fetch('{target_url}')
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn page_xhr_redirect_emits_second_request_with_redirect_response() {
+    use axum::extract::State;
+    use tokio::sync::Notify;
+
+    #[derive(Clone, Default)]
+    struct ResponseGates {
+        redirect: Arc<Notify>,
+        final_response: Arc<Notify>,
+    }
+
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -3575,11 +3712,16 @@ xhr.send();
         )
     }
 
-    async fn xhr_start() -> impl IntoResponse {
-        axum::response::Redirect::temporary("/xhr-final")
+    async fn xhr_start(State(gates): State<ResponseGates>) -> impl IntoResponse {
+        gates.redirect.notified().await;
+        (
+            [("set-cookie", "sid=second; Path=/xhr-final")],
+            axum::response::Redirect::temporary("/xhr-final"),
+        )
     }
 
-    async fn xhr_final() -> impl IntoResponse {
+    async fn xhr_final(State(gates): State<ResponseGates>) -> impl IntoResponse {
+        gates.final_response.notified().await;
         (
             [(CONTENT_TYPE.as_str(), "text/plain"), ("x-xhr-final", "ok")],
             "xhr redirect body",
@@ -3588,16 +3730,14 @@ xhr.send();
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let gates = ResponseGates::default();
+    let router = Router::new()
+        .route("/page", get(page))
+        .route("/xhr-start", get(xhr_start))
+        .route("/xhr-final", get(xhr_final))
+        .with_state(gates.clone());
     let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            Router::new()
-                .route("/page", get(page))
-                .route("/xhr-start", get(xhr_start))
-                .route("/xhr-final", get(xhr_final)),
-        )
-        .await
-        .unwrap();
+        axum::serve(listener, router).await.unwrap();
     });
 
     let page_url = format!("http://{addr}/page");
@@ -3607,6 +3747,16 @@ xhr.send();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
+    bc.cookie_store_for_test()
+        .lock()
+        .unwrap()
+        .store_response_headers(
+            &Url::parse(&start_url).unwrap(),
+            &[(
+                "set-cookie".to_owned(),
+                b"sid=first; Path=/xhr-start".to_vec(),
+            )],
+        );
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
@@ -3625,6 +3775,21 @@ xhr.send();
     }))
     .await;
 
+    for (cookie, gate) in [
+        ("sid=first", &gates.redirect),
+        ("sid=second", &gates.final_response),
+    ] {
+        wait_until_scheduler_message(
+            &mut ctx,
+            "XHR hop ExtraInfo before HTTP response",
+            |message| {
+                message["method"] == "Network.requestWillBeSentExtraInfo"
+                    && message["params"]["headers"]["Cookie"] == cookie
+            },
+        )
+        .await;
+        gate.notify_one();
+    }
     flush_until_subresource_finished(&mut ctx, "XHR", 2, "page xhr redirect network completion")
         .await;
 
@@ -3645,6 +3810,7 @@ xhr.send();
         .to_owned();
     assert_eq!(xhr_requests[1]["params"]["requestId"], json!(request_id));
     assert_eq!(xhr_requests[1]["params"]["request"]["url"], final_url);
+    assert_eq!(xhr_requests[1]["params"]["redirectHasExtraInfo"], true);
     assert_eq!(
         xhr_requests[1]["params"]["redirectResponse"]["url"],
         start_url
@@ -3654,6 +3820,30 @@ xhr.send();
         xhr_requests[1]["params"]["redirectResponse"]["headers"]["location"],
         "/xhr-final"
     );
+
+    let request_extras = messages
+        .iter()
+        .filter(|message| {
+            message["method"] == "Network.requestWillBeSentExtraInfo"
+                && message["params"]["requestId"] == request_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(request_extras.len(), 2);
+    for (event, value) in request_extras.iter().zip(["first", "second"]) {
+        assert_eq!(event["params"]["headers"]["Host"], addr.to_string());
+        assert_eq!(event["params"]["headers"]["Cookie"], format!("sid={value}"));
+        assert!(
+            event["params"]["associatedCookies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| {
+                    entry["cookie"]["name"] == "sid"
+                        && entry["cookie"]["value"] == value
+                        && entry["blockedReasons"] == json!([])
+                })
+        );
+    }
 
     let xhr_response = messages
         .iter()

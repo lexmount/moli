@@ -1124,6 +1124,7 @@ fn update_active_renderer_subresource_requests(
             }
         }
         ScriptNetworkOutputItem::SubresourceRequestUpdated(_)
+        | ScriptNetworkOutputItem::SubresourceRequestExtraInfo { .. }
         | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
         | ScriptNetworkOutputItem::SubresourceDataReceived(_)
         | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)

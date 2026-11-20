@@ -402,6 +402,16 @@ impl ScriptVm {
                     .record_subresource_network(*record);
                 Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)
             }
+            AsyncSubresourceFetchEvent::RequestExtraInfo {
+                internal_id,
+                hop,
+                info,
+            } => {
+                self._context_host
+                    .borrow_mut()
+                    .record_subresource_request_extra_info(internal_id, hop, info);
+                Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)
+            }
             AsyncSubresourceFetchEvent::StreamingStarted(started) => {
                 self.start_streaming_async_subresource_fetch_body(*started)
             }

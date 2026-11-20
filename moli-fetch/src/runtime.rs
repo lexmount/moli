@@ -3059,7 +3059,7 @@ fn configure_network_observation(
     let recorder = request.network_observation_recorder().cloned();
     let verbose = recorder.is_some() || capture_proxy_connect_response;
     if let Some(recorder) = recorder.as_ref() {
-        recorder.set_current_request_cookie_report(request_cookie_report.cloned());
+        recorder.begin_request(request, request_cookie_report.cloned());
     }
     easy.get_mut()
         .begin_transfer(recorder, capture_proxy_connect_response);

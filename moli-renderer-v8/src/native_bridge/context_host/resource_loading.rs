@@ -183,6 +183,26 @@ impl PageScriptHost {
         self.note_subresource_activity();
     }
 
+    pub(crate) fn record_subresource_request_extra_info(
+        &mut self,
+        internal_id: u64,
+        hop: usize,
+        info: Box<moli_fetch::NetworkRequestExtraInfo>,
+    ) {
+        let Some(mut pending) = self.take_pending_subresource_fetch(internal_id) else {
+            return;
+        };
+        self.record_deferred_pending_subresource_request_started(&mut pending);
+        if let Some(handle) = pending.info.network_request_handle {
+            self.push_network_output_item(ScriptNetworkOutputItem::SubresourceRequestExtraInfo {
+                handle,
+                hop,
+                info,
+            });
+        }
+        self.restore_pending_subresource_fetch(pending);
+    }
+
     pub(crate) fn record_subresource_response_started(
         &mut self,
         response: SubresourceResponseStarted,
@@ -1566,7 +1586,13 @@ impl PageScriptHost {
     }
 
     pub(crate) fn resource_completion_sender(&self) -> RendererResourceCompletionSender {
-        self.resource_completion_tx.clone()
+        self.resource_completion_tx
+            .clone()
+            .with_request_header_observation(
+                self.output_journal
+                    .as_ref()
+                    .is_some_and(|journal| journal.transport_is_bound()),
+            )
     }
 
     pub(crate) fn resource_scheduler(&self) -> RendererResourceScheduler {

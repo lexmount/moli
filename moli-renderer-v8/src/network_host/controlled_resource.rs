@@ -517,9 +517,24 @@ impl ControlledResourceLoad {
                     if self.load.network_offline() {
                         return Err("Network emulation offline".into());
                     }
+                    let mut request = self.request.clone();
+                    if self.interception.is_worker()
+                        && let Some(handle) = self.info.network_request_handle
+                    {
+                        let output = self.interception.clone();
+                        request = request.with_network_request_observer(move |hop, info| {
+                            output.publish_network(
+                                crate::types::ScriptNetworkOutputItem::SubresourceRequestExtraInfo {
+                                    handle,
+                                    hop,
+                                    info: Box::new(info),
+                                },
+                            );
+                        });
+                    }
                     let observed = super::async_fetch::fetch_subresource_hop(
                         &loader,
-                        self.request.clone(),
+                        request,
                         hop_cancel.clone(),
                         self.preflight_headers.clone(),
                         Some(&preflight_observer),

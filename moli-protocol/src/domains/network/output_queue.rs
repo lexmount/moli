@@ -2721,6 +2721,16 @@ impl TargetNetworkOutputQueue {
                 *subresource_index += 1;
                 self.subresource_record_count = *subresource_index;
             }
+            ScriptNetworkOutputItem::SubresourceRequestExtraInfo { handle, hop, info } => {
+                if self.append_subresource_request_extra_info(
+                    *subresource_index,
+                    *handle,
+                    *hop,
+                    info,
+                ) {
+                    *subresource_index += 1;
+                }
+            }
             ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
                 self.append_response_request_extra_info(
                     *subresource_index,

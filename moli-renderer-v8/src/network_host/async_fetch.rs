@@ -586,6 +586,20 @@ pub(crate) fn spawn_async_subresource_fetch(
     request_body: Option<String>,
 ) {
     let request = request.with_body_text(request_body.as_deref().map(std::sync::Arc::from));
+    let request = if completion_tx.observes_request_headers() {
+        let completion_tx = completion_tx.clone();
+        request.with_network_request_observer(move |hop, info| {
+            let _ = completion_tx.send_async_subresource_event(
+                AsyncSubresourceFetchEvent::RequestExtraInfo {
+                    internal_id,
+                    hop,
+                    info: Box::new(info),
+                },
+            );
+        })
+    } else {
+        request
+    };
     let parkable_image_manager = matches!(
         request.browser_request_metadata(),
         Some(BrowserRequestMetadata::Image)

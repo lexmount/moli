@@ -343,6 +343,7 @@ impl RendererOwnerWakeSender {
 #[derive(Debug, Clone)]
 pub(crate) struct RendererResourceCompletionSender {
     page_completion_route: Option<RendererPageResourceCompletionRoute>,
+    observes_request_headers: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -361,6 +362,7 @@ impl RendererResourceCompletionSender {
                 sender: page_completion_sender,
                 root_document,
             }),
+            observes_request_headers: false,
         }
     }
 
@@ -372,6 +374,7 @@ impl RendererResourceCompletionSender {
     pub(crate) fn direct_completion_only() -> Self {
         Self {
             page_completion_route: None,
+            observes_request_headers: false,
         }
     }
 
@@ -386,12 +389,16 @@ impl RendererResourceCompletionSender {
         page_completion_sender: RendererPageResourceCompletionSender,
         root_document: RendererDocumentToken,
     ) -> Self {
-        Self {
-            page_completion_route: Some(RendererPageResourceCompletionRoute {
-                sender: page_completion_sender,
-                root_document,
-            }),
-        }
+        Self::for_page_scheduler(page_completion_sender, root_document)
+    }
+
+    pub(crate) fn with_request_header_observation(mut self, enabled: bool) -> Self {
+        self.observes_request_headers = enabled;
+        self
+    }
+
+    pub(crate) fn observes_request_headers(&self) -> bool {
+        self.observes_request_headers
     }
 
     fn send_page_completion(
