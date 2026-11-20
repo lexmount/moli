@@ -73,10 +73,19 @@ pub(crate) enum SplitStatus {
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum Token {
     Tag(Tag),
-    Comment(StrTendril),
+    CommentOrProcessingInstruction(CommentOrProcessingInstruction),
     Characters(SplitStatus, StrTendril),
     NullCharacter,
     Eof,
+}
+
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub(crate) enum CommentOrProcessingInstruction {
+    Comment(StrTendril),
+    ProcessingInstruction {
+        target: StrTendril,
+        data: StrTendril,
+    },
 }
 
 pub(crate) enum ProcessResult<Handle> {

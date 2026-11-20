@@ -525,7 +525,14 @@ where
             },
 
             tokenizer::TagToken(x) => Token::Tag(x),
-            tokenizer::CommentToken(x) => Token::Comment(x),
+            tokenizer::CommentToken(data) => {
+                Token::CommentOrProcessingInstruction(CommentOrProcessingInstruction::Comment(data))
+            },
+            tokenizer::Token::ProcessingInstructionToken { target, data } => {
+                Token::CommentOrProcessingInstruction(
+                    CommentOrProcessingInstruction::ProcessingInstruction { target, data },
+                )
+            },
             tokenizer::NullCharacterToken => Token::NullCharacter,
             tokenizer::EOFToken => Token::Eof,
 
@@ -1322,23 +1329,38 @@ where
         ProcessResult::Done
     }
 
-    fn append_comment(&self, text: StrTendril) -> ProcessResult<Handle> {
-        let comment = self.sink.create_comment(text);
-        self.insert_appropriately(AppendNode(comment), None);
+    fn create_comment_or_pi(&self, token: CommentOrProcessingInstruction) -> Handle {
+        match token {
+            CommentOrProcessingInstruction::Comment(data) => self.sink.create_comment(data),
+            CommentOrProcessingInstruction::ProcessingInstruction { target, data } => {
+                self.sink.create_pi(target, data)
+            },
+        }
+    }
+
+    fn append_comment_or_pi(&self, token: CommentOrProcessingInstruction) -> ProcessResult<Handle> {
+        let node = self.create_comment_or_pi(token);
+        self.insert_appropriately(AppendNode(node), None);
         ProcessResult::Done
     }
 
-    fn append_comment_to_doc(&self, text: StrTendril) -> ProcessResult<Handle> {
-        let comment = self.sink.create_comment(text);
-        self.sink.append(&self.doc_handle, AppendNode(comment));
+    fn append_comment_or_pi_to_doc(
+        &self,
+        token: CommentOrProcessingInstruction,
+    ) -> ProcessResult<Handle> {
+        let node = self.create_comment_or_pi(token);
+        self.sink.append(&self.doc_handle, AppendNode(node));
         ProcessResult::Done
     }
 
-    fn append_comment_to_html(&self, text: StrTendril) -> ProcessResult<Handle> {
+    fn append_comment_or_pi_to_html(
+        &self,
+        token: CommentOrProcessingInstruction,
+    ) -> ProcessResult<Handle> {
         let open_elems = self.open_elems.borrow();
         let target = html_elem(&open_elems);
-        let comment = self.sink.create_comment(text);
-        self.sink.append(target, AppendNode(comment));
+        let node = self.create_comment_or_pi(token);
+        self.sink.append(target, AppendNode(node));
         ProcessResult::Done
     }
 
