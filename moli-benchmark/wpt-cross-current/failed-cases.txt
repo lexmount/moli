@@ -2406,6 +2406,7 @@ html/semantics/menu/tentative/menulist-popover-attribute.html
 html/semantics/permission-element/usermedia/onstream-attribute.html
 html/semantics/permission-element/usermedia/usermedia-error-attribute.html
 html/semantics/popovers/popover-anchor-multicol-display.html
+html/semantics/popovers/popover-events.html
 html/semantics/popovers/popover-nested-in-button.html
 html/semantics/popovers/popover-overlay.html
 html/semantics/popovers/popover-remove-attribute-during-focusing-steps.html

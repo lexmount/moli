@@ -7866,7 +7866,6 @@ html/semantics/popovers/popover-active-document.html
 html/semantics/popovers/popover-auto-reentrant-crash.html
 html/semantics/popovers/popover-beforetoggle-opening-event.html
 html/semantics/popovers/popover-document-open.html
-html/semantics/popovers/popover-events.html
 html/semantics/popovers/popover-focus-blur-crash.html
 html/semantics/popovers/popover-focus-previous-crash.html
 html/semantics/popovers/popover-hint-crash.html
@@ -8266,6 +8265,7 @@ html/semantics/tabular-data/historical.html
 html/semantics/tabular-data/processing-model-1/col-span-limits.html
 html/semantics/tabular-data/processing-model-1/rowspan-0-quirks.html
 html/semantics/tabular-data/processing-model-1/rowspan-0.html
+html/semantics/tabular-data/processing-model-1/span-limits.html
 html/semantics/tabular-data/the-caption-element/caption_001.html
 html/semantics/tabular-data/the-table-element/caption-methods.html
 html/semantics/tabular-data/the-table-element/createTBody.html
@@ -10431,6 +10431,7 @@ trusted-types/trusted-types-navigation.html?16-20
 trusted-types/trusted-types-navigation.html?21-25
 trusted-types/trusted-types-navigation.html?26-30
 trusted-types/trusted-types-navigation.html?31-35
+trusted-types/trusted-types-navigation.html?36-last
 trusted-types/trusted-types-report-only.html
 trusted-types/trusted-types-reporting-check-report-DedicatedWorker-create-policy.html
 trusted-types/trusted-types-reporting-check-report-DedicatedWorker-sink-mismatch.html

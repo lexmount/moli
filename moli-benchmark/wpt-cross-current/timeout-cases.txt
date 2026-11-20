@@ -83,7 +83,6 @@ html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
 html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
 html/semantics/scripting-1/the-script-element/execution-timing/102.html
-html/semantics/tabular-data/processing-model-1/span-limits.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
 infrastructure/channels/test_call.html
 infrastructure/channels/test_postMessage.html
@@ -110,5 +109,4 @@ service-workers/service-worker/unregister-immediately-during-extendable-events.h
 service-workers/service-worker/windowclient-navigate.https.html
 svg/linking/scripted/href-script-element.html
 trusted-types/DOMParser-parseFromString-regression.html
-trusted-types/trusted-types-navigation.html?36-last
 xhr/open-url-multi-window-4.htm
