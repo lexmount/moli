@@ -730,8 +730,12 @@ fn update_focus_with_selection_behavior(
             .dom_host()
             .owner_document_handle(handle)
     });
-    let window_focus_transition =
-        window_focus_transition_for_handles(scope, runtime_ptr, previous, next, viewport_document);
+    let window_focus_transition = window_focus_transition_for_handles(
+        unsafe { &*runtime_ptr },
+        previous,
+        next,
+        viewport_document,
+    );
     // Related targets do not cross Document boundaries in the focus chains.
     let same_document = previous_document == next_document;
     let next_value = same_document
@@ -893,14 +897,18 @@ fn clear_focus_transition_style(runtime: &mut PageScriptHost) {
 }
 
 fn window_focus_transition_for_handles(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
+    runtime: &PageScriptHost,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
     viewport_document: Option<DomHandle>,
 ) -> Option<(PendingWindowMessageEndpoint, PendingWindowMessageEndpoint)> {
-    let runtime = unsafe { &*runtime_ptr };
-    let execution_window = current_execution_window_endpoint(scope);
+    // Clearing an element's focus keeps its Window until another Document
+    // supplies a new focus target.
+    let next_window = next
+        .and_then(|handle| focused_window_endpoint(runtime, handle))
+        .or_else(|| {
+            viewport_document.and_then(|document| runtime.window_endpoint_for_document(document))
+        })?;
     let previous_window = previous
         .and_then(|handle| focused_window_endpoint(runtime, handle))
         .or_else(|| {
@@ -908,31 +916,16 @@ fn window_focus_transition_for_handles(
                 .focused_viewport_document()
                 .and_then(|document| runtime.window_endpoint_for_document(document))
         })
-        .unwrap_or(execution_window);
-    // Clearing an element's focus does not blur its Window. A later focus in
-    // another Document supplies the concrete new focused-frame endpoint.
-    let next_window = next
-        .and_then(|handle| focused_window_endpoint(runtime, handle))
         .or_else(|| {
-            viewport_document.and_then(|document| runtime.window_endpoint_for_document(document))
-        })
-        .unwrap_or(previous_window);
-    if previous_window == next_window {
-        return None;
-    }
-    Some((previous_window, next_window))
-}
-
-fn current_execution_window_endpoint(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> PendingWindowMessageEndpoint {
-    if let Some(handle) = crate::native_bridge::active_child_window_handle(scope) {
-        return PendingWindowMessageEndpoint::ChildWindow(handle);
-    }
-    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
-        return PendingWindowMessageEndpoint::LightweightPopup(popup_id);
-    }
-    PendingWindowMessageEndpoint::TopWindow
+            // Before the first focus change, the traversable's viewport is
+            // focused. The executing realm may already be a child Window.
+            let document = viewport_document.or_else(|| {
+                next.and_then(|handle| runtime.dom_host().owner_document_handle(handle))
+            })?;
+            let top = runtime.top_level_document_for_document(document)?;
+            runtime.window_endpoint_for_document(top)
+        })?;
+    (previous_window != next_window).then_some((previous_window, next_window))
 }
 
 fn focused_window_endpoint(
@@ -1016,6 +1009,11 @@ fn dispatch_window_focus_event(
     let runtime = unsafe { &mut *runtime_ptr };
     match endpoint {
         PendingWindowMessageEndpoint::TopWindow => {
+            // The generic Window target resolves in the entered realm.
+            let Some(context) = event.get_creation_context(scope) else {
+                return;
+            };
+            let scope = &mut v8::ContextScope::new(scope, context);
             let _ = runtime.dispatch_public_event_best_effort(
                 scope,
                 runtime_ptr,
