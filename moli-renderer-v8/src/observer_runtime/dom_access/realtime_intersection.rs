@@ -1,5 +1,7 @@
 use super::*;
 use crate::native_bridge::WindowDocumentTaskTarget;
+use intersection::RealtimeIntersectionSampling;
+use std::time::Instant;
 
 /// Sample once at the end of rendering. Notification ownership follows the
 /// observer's Window, independently of target-Document geometry batching and
@@ -21,12 +23,17 @@ pub(crate) fn sample_realtime_intersections(
         return Ok(());
     }
     ids.sort_unstable();
-    if let Some(mut batch) = access.store(ObserverStore::take_intersection_check_batch) {
-        batch.retain_observers(&ids);
+    let (now, sample_all) = access.read(PageScriptHost::realtime_intersection_sample);
+    let sample = RealtimeIntersectionSampling {
+        observer_ids: &ids,
+        now,
+        sample_all,
+    };
+    if let Some(batch) = access.store(|store| store.take_intersection_check_batch(Some(sample))) {
         let completed = access.read(|host| {
             intersection::compute_intersection_check_batch(host, host.dom_host(), batch)
         })?;
-        access.store(|store| store.apply_intersection_check_batch(completed));
+        access.store(|store| store.apply_intersection_check_batch(completed, Some(now)));
     }
     let targets = access.read(|host| {
         let store = host.observers(&OBSERVER_STORE_ACCESS);
@@ -46,6 +53,18 @@ pub(crate) fn sample_realtime_intersections(
         access.mutate(|host| host.queue_intersection_observer_notification(target));
     }
     Ok(())
+}
+
+pub(crate) fn next_realtime_intersection_deadline(host: &PageScriptHost) -> Option<Instant> {
+    host.observers(&OBSERVER_STORE_ACCESS)
+        .intersection_observers
+        .values()
+        .filter_map(|state| {
+            let deadline = state.realtime_timing.as_ref()?.next_deadline()?;
+            state.callback.document_target(host)?;
+            Some(deadline)
+        })
+        .min()
 }
 
 pub(crate) fn realtime_intersection_observer_ids(

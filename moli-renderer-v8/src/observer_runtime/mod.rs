@@ -12,8 +12,8 @@ mod mutation_record;
 mod schedule;
 
 pub(crate) use dom_access::{
-    deliver_realtime_intersection_observer, realtime_intersection_observer_ids,
-    sample_realtime_intersections,
+    deliver_realtime_intersection_observer, next_realtime_intersection_deadline,
+    realtime_intersection_observer_ids, sample_realtime_intersections,
 };
 
 pub(crate) use mutation_record::install_template_bindings as install_mutation_record_template_bindings;
@@ -283,6 +283,7 @@ struct IntersectionObserverState {
     queued_entries: Vec<QueuedIntersectionEntry>,
     last_reported_entries: HashMap<NativeNodeId, LastReportedIntersection>,
     options: IntersectionObserverOptions,
+    realtime_timing: Option<Box<intersection::RealtimeIntersectionTiming>>,
 }
 
 #[derive(Clone)]
@@ -577,6 +578,7 @@ impl ObserverStore {
                 queued_entries: Vec::new(),
                 last_reported_entries: HashMap::new(),
                 options,
+                realtime_timing: None,
             },
         );
         set_private_value(
@@ -606,32 +608,44 @@ impl ObserverStore {
         scope: &mut v8::PinScope<'_, '_>,
         observer: v8::Local<'_, v8::Object>,
         target: NativeNodeId,
-    ) {
+    ) -> bool {
         let Some(id) = intersection_observer_id_from_object(scope, observer) else {
-            return;
+            return false;
         };
         let Some(state) = self.intersection_observers.get_mut(&id) else {
-            return;
+            return false;
         };
         state.observed_targets.shift_remove(&target);
         // Removing a registration does not consume records already sampled.
         // They remain available to takeRecords() or the queued notification.
         state.last_reported_entries.remove(&target);
+        let Some(timing) = &mut state.realtime_timing else {
+            return false;
+        };
+        let canceled = timing.remove(target);
+        if timing.is_empty() {
+            state.realtime_timing = None;
+        }
+        canceled
     }
 
     pub(super) fn disconnect_intersection_observer(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         observer: v8::Local<'_, v8::Object>,
-    ) {
+    ) -> bool {
         let Some(id) = intersection_observer_id_from_object(scope, observer) else {
-            return;
+            return false;
         };
         let Some(state) = self.intersection_observers.get_mut(&id) else {
-            return;
+            return false;
         };
         state.observed_targets.clear();
         state.last_reported_entries.clear();
+        state
+            .realtime_timing
+            .take()
+            .is_some_and(|timing| timing.next_deadline().is_some())
     }
 
     fn take_intersection_records(
