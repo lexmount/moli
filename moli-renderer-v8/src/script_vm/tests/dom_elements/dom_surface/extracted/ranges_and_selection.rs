@@ -743,9 +743,34 @@ fn exec_command_insert_html_uses_the_native_editing_range() {
   const replacedPlaceholder = document.execCommand("insertHTML", false, "one");
   const filledLine = editor.innerHTML;
 
+  const paragraph = document.createElement("p");
+  paragraph.contentEditable = "true";
+  paragraph.textContent = "ABC";
+  editor.replaceWith(paragraph);
+  selection.setBaseAndExtent(paragraph.firstChild, 1, paragraph.firstChild, 2);
+  const insertedInHost = document.execCommand(
+    "insertHTML", false, "<p><b>one</b></p><p><br></p><p class='second'><i>two</i></p>"
+  );
+  const preceding = document.createRange();
+  preceding.selectNodeContents(paragraph);
+  preceding.setEnd(selection.anchorNode, selection.anchorOffset);
+  const paragraphHTML = paragraph.innerHTML;
+  const caretText = preceding.toString();
+  paragraph.textContent = "ABC";
+  selection.setBaseAndExtent(paragraph.firstChild, 1, paragraph.firstChild, 2);
+  const insertedBlankLine = document.execCommand("insertHTML", false, "<p><br></p>");
+  const blankLine = paragraph.innerHTML;
+  paragraph.textContent = "ABC";
+  selection.setBaseAndExtent(paragraph.firstChild, 1, paragraph.firstChild, 2);
+  const pastedPre = document.execCommand(
+    "insertHTML", false, "<span class='format'><pre>  one\ntwo </pre></span>"
+  );
+  const preservedWhitespace = paragraph.querySelector(".format span")?.style.whiteSpace === "pre"
+    && paragraph.textContent === "A  one\ntwo C";
   return JSON.stringify({
     inline, pastedParagraphs, validParagraphs, replacedFormatting, withoutEmptyWrapper,
-    replacedPlaceholder, filledLine,
+    replacedPlaceholder, filledLine, insertedInHost, paragraphHTML, caretText,
+    insertedBlankLine, blankLine, pastedPre, preservedWhitespace,
   });
 })()
 "##,
@@ -756,7 +781,9 @@ fn exec_command_insert_html_uses_the_native_editing_range() {
         result,
         concat!(
             r#"{"inline":{"enabled":true,"inserted":true,"html":"A<b>in</b><i>sert</i>C","caret":3,"events":[["input","",null,true]]},"pastedParagraphs":true,"validParagraphs":true,"#,
-            r#""replacedFormatting":true,"withoutEmptyWrapper":"A<i>one</i>C","replacedPlaceholder":true,"filledLine":"<p><span><!--before-->one<!--after--></span></p>"}"#,
+            r#""replacedFormatting":true,"withoutEmptyWrapper":"A<i>one</i>C","replacedPlaceholder":true,"filledLine":"<p><span><!--before-->one<!--after--></span></p>","#,
+            r#""insertedInHost":true,"paragraphHTML":"A<b>one</b><br><br><span class=\"second\"><i>two</i></span>C","caretText":"Aonetwo","#,
+            r#""insertedBlankLine":true,"blankLine":"A<br>C","pastedPre":true,"preservedWhitespace":true}"#,
         )
     );
 }
