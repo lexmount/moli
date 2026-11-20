@@ -446,13 +446,11 @@ fn for_each_resize_observation<'s, 'i>(
     for (document, mut handles) in by_document {
         let mut seen = std::collections::HashSet::new();
         handles.retain(|handle| seen.insert(*handle));
-        let mut queries = vec![moli_layout::LayoutQuery::DocumentMetrics];
-        queries.extend(
-            handles
-                .iter()
-                .copied()
-                .map(|source| moli_layout::LayoutQuery::ResizeObserverMetrics { source }),
-        );
+        let queries = handles
+            .iter()
+            .copied()
+            .map(|source| moli_layout::LayoutQuery::ResizeObserverMetrics { source })
+            .collect();
         let answers = match crate::native_bridge::element::published_geometry_batch(
             runtime,
             document,
@@ -468,40 +466,29 @@ fn for_each_resize_observation<'s, 'i>(
             }
             Err(error) => return Err(error),
         };
-        let mut answers = answers.answers.into_iter();
-        let dpr = match answers.next() {
-            Some(moli_layout::LayoutQueryAnswer::DocumentMetrics(metrics)) => {
-                metrics.viewport.device_pixel_ratio
-            }
-            _ => {
-                return Err(moli_layout::LayoutError::source_contract(
-                    "ResizeObserver geometry",
-                    "provider returned a mismatched document-metrics answer",
-                ));
-            }
-        };
-        for (handle, answer) in handles.into_iter().zip(answers) {
+        for (handle, answer) in handles.into_iter().zip(answers.answers) {
             let moli_layout::LayoutQueryAnswer::ResizeObserverMetrics(metrics) = answer else {
                 return Err(moli_layout::LayoutError::source_contract(
                     "ResizeObserver geometry",
                     "provider returned a mismatched ResizeObserver-metrics answer",
                 ));
             };
-            geometry.insert(handle, (metrics, dpr));
+            if let Some(metrics) = metrics {
+                geometry.insert(handle, metrics);
+            }
         }
     }
 
     for entry in pending {
-        let (metrics, dpr) = entry
+        let metrics = entry
             .handle
             .and_then(|handle| geometry.get(&handle).copied())
-            .and_then(|(metrics, dpr)| metrics.map(|metrics| (metrics, dpr)))
-            .unwrap_or((moli_layout::LayoutResizeObserverMetrics::default(), 1.0));
+            .unwrap_or_default();
         let rect = (
-            0.0,
-            0.0,
-            f64::from(metrics.content_size.width),
-            f64::from(metrics.content_size.height),
+            f64::from(metrics.content_rect.x),
+            f64::from(metrics.content_rect.y),
+            f64::from(metrics.content_rect.width),
+            f64::from(metrics.content_rect.height),
         );
         let content_box_size = (
             f64::from(metrics.content_box_size.inline_size),
@@ -511,12 +498,7 @@ fn for_each_resize_observation<'s, 'i>(
             f64::from(metrics.border_box_size.inline_size),
             f64::from(metrics.border_box_size.block_size),
         );
-        // Preserve the existing device-pixel approximation, now on the same
-        // logical axes. Effective zoom and positional snapping are separate.
-        let device_pixel_content_box_size = (
-            (content_box_size.0 * f64::from(dpr)).round(),
-            (content_box_size.1 * f64::from(dpr)).round(),
-        );
+        let device_pixel_content_box_size = metrics.device_pixel_content_box_size;
         let observed_size = match entry
             .record
             .and_then(|record| observed_record_box(scope, record))

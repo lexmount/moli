@@ -1,5 +1,101 @@
 use super::*;
 
+#[test]
+fn realtime_ro_reports_padding_and_snaps_device_pixels_at_the_layout_position() {
+    run_page_vm_large_stack_async_test("realtime-ro-pixel-position", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.vm_mut()
+            .eval(
+                r#"
+            document.body.style.margin='0';
+            document.body.innerHTML=`<div id=wrapper style="position:absolute;left:.25px;top:0">
+                <div id=target style="position:absolute;left:0;top:0;width:10.25px;height:20.25px;
+                    padding:.25px .75px;border:2px solid black"></div></div>`;
+            window.css=[];window.pixels=[];
+            new ResizeObserver(([e])=>{
+                const {x,y,width,height}=e.contentRect;
+                css.push([x,y,width,height]);
+            }).observe(target);
+            new ResizeObserver(([e])=>{
+                const {inlineSize,blockSize}=e.devicePixelContentBoxSize[0];
+                pixels.push([inlineSize,blockSize]);
+            }).observe(target,{box:'device-pixel-content-box'});
+        "#,
+            )
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify([css,pixels])").unwrap(),
+            "[[[0.75,0.25,10.25,20.25]],[[11,20]]]"
+        );
+
+        page.vm_mut().eval("wrapper.style.left='.75px'").unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        let moved = "[[[0.75,0.25,10.25,20.25]],[[11,20],[10,20]]]";
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify([css,pixels])").unwrap(),
+            moved
+        );
+
+        page.vm_mut()
+            .eval("wrapper.style.transform='translateX(.5px) scale(2)'")
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify([css,pixels])").unwrap(),
+            moved
+        );
+
+        page.vm_mut().eval("target.style.display='none'").unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify([css,pixels])").unwrap(),
+            "[[[0.75,0.25,10.25,20.25],[0,0,0,0]],[[11,20],[10,20],[0,0]]]"
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
+#[test]
+fn realtime_ro_device_pixels_include_effective_zoom_and_sampled_dpr() {
+    run_page_vm_large_stack_async_test("realtime-ro-pixel-scale", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.vm_mut().eval(r#"
+            document.body.style.margin='0';
+            document.body.innerHTML=`<div id=target style="position:absolute;left:.375px;top:100px;
+                width:10.25px;height:20.25px;zoom:2;writing-mode:vertical-lr"></div>`;
+            window.sizes=[];
+            new ResizeObserver(([e])=>{
+                const content=e.contentBoxSize[0], device=e.devicePixelContentBoxSize[0];
+                sizes.push([content.inlineSize,content.blockSize,device.inlineSize,device.blockSize]);
+            }).observe(target,{box:'device-pixel-content-box'});
+        "#).unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+            "[[20.25,10.25,41,20]]"
+        );
+        page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 800,
+            inner_height: 600,
+            device_pixel_ratio: 2.0,
+            ..Default::default()
+        }))
+        .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+            "[[20.25,10.25,41,20],[20.25,10.25,81,41]]"
+        );
+    });
+}
+
 fn observe_axis_boxes(page: &mut PageVm, size: &str) {
     page.vm_mut().eval(&format!(r#"
         document.body.innerHTML='<div id=target style="display:block;{size};padding:0;border:2px solid;box-sizing:content-box;writing-mode:vertical-lr"></div>';

@@ -125,10 +125,14 @@ where
         &self,
         source: N,
     ) -> Option<LayoutResizeObserverMetrics> {
-        self.boxes
+        let layout_box = self
+            .boxes
             .iter()
-            .find(|layout_box| layout_box.principal_source == Some(source))?
-            .resize_observer_metrics()
+            .find(|layout_box| layout_box.principal_source == Some(source))?;
+        layout_box.resize_observer_metrics(
+            f64::from(self.viewport.device_pixel_ratio),
+            layout_box.id == self.root_box,
+        )
     }
 
     /// Physical and logical CSSOM sizes from this snapshot's sizing box,
@@ -595,7 +599,11 @@ where
 }
 
 impl<N> FrozenLayoutBox<N> {
-    fn resize_observer_metrics(&self) -> Option<LayoutResizeObserverMetrics> {
+    fn resize_observer_metrics(
+        &self,
+        device_pixel_ratio: f64,
+        is_root: bool,
+    ) -> Option<LayoutResizeObserverMetrics> {
         let sizing = self.css_sizing?;
         let unzoom = CssomAbsoluteZoom::new(self.effective_zoom);
         let content_size = unzoom.size(LayoutSize::new(
@@ -606,6 +614,19 @@ impl<N> FrozenLayoutBox<N> {
             self.border_box.width,
             self.border_box.height,
         ));
+        // The non-root scrollport starts after leading scrollbar gutters.
+        // At the root it describes the viewport, so use the CSS padding box.
+        let padding_origin = if is_root {
+            self.padding_box
+        } else {
+            self.scroll_extent.scrollport
+        };
+        let content_rect = LayoutRect::new(
+            unzoom.scalar(self.content_box.x - padding_origin.x),
+            unzoom.scalar(self.content_box.y - padding_origin.y),
+            content_size.width,
+            content_size.height,
+        );
         let logical = |size: LayoutSize| {
             let (inline_size, block_size) = if sizing.horizontal {
                 (size.width, size.height)
@@ -617,10 +638,25 @@ impl<N> FrozenLayoutBox<N> {
                 block_size,
             }
         };
+        let device_width = snapped_device_pixel_extent(
+            self.layout_origin_in_document.x,
+            self.content_box.width,
+            device_pixel_ratio,
+        );
+        let device_height = snapped_device_pixel_extent(
+            self.layout_origin_in_document.y,
+            self.content_box.height,
+            device_pixel_ratio,
+        );
         Some(LayoutResizeObserverMetrics {
-            content_size,
+            content_rect,
             content_box_size: logical(content_size),
             border_box_size: logical(border_size),
+            device_pixel_content_box_size: if sizing.horizontal {
+                (device_width, device_height)
+            } else {
+                (device_height, device_width)
+            },
         })
     }
 
@@ -644,6 +680,14 @@ impl<N> FrozenLayoutBox<N> {
             block_size,
         })
     }
+}
+
+fn snapped_device_pixel_extent(origin: f32, size: f32, device_pixel_ratio: f64) -> f64 {
+    // The untransformed layout origin and size already include CSS zoom. Both
+    // edges snap to the same device-pixel grid, including at negative offsets.
+    let start = (f64::from(origin) * device_pixel_ratio).fract();
+    let end = start + f64::from(size) * device_pixel_ratio;
+    (end + 0.5).floor() - (start + 0.5).floor()
 }
 
 /// Converts effective-zoomed layout scalars to the coordinate space exposed
