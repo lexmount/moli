@@ -14,10 +14,6 @@ use crate::automation::{DevToolsError, DevToolsErrorKind};
 
 type InitializationResult = Result<Rc<LoadedPageCreationDiagnosticsParts>, DevToolsError>;
 
-#[derive(Debug, thiserror::Error)]
-#[error("{}", .0.message)]
-struct InitializationProtocolError(DevToolsError);
-
 #[derive(Clone)]
 pub(crate) struct TargetInitialDocumentWaiter {
     completion: Shared<LocalBoxFuture<'static, InitializationResult>>,
@@ -336,10 +332,10 @@ impl CdpConnection {
                     })?;
                     if !current && matches!(&continuation, InitialDocumentContinuation::Creation(_))
                     {
-                        return Err(InitializationProtocolError(DevToolsError::new(
+                        return Err(DevToolsError::new(
                             DevToolsErrorKind::NoSuchTarget,
                             "UnknownTargetId",
-                        ))
+                        )
                         .into());
                     }
                     anyhow::ensure!(current, NoDocumentLoaded);
@@ -354,7 +350,7 @@ impl CdpConnection {
                             .with_state(&mut driver, move |state, context| {
                                 state.prepare_target_creation_outputs(commit, activation, context)
                             })?
-                            .map_err(InitializationProtocolError)?,
+                            .map_err(anyhow::Error::new)?,
                         continuation => {
                             if let InitialDocumentContinuation::Deferred(release) = continuation {
                                 // Cancellation releases the gate too; the
@@ -396,12 +392,13 @@ impl CdpConnection {
                         )
                     });
                 }
-                *task_result.borrow_mut() = Some(run.map(Rc::new).map_err(|error| {
-                    match error.downcast::<InitializationProtocolError>() {
-                        Ok(error) => error.0,
-                        Err(error) => DevToolsError::new(DevToolsErrorKind::Internal, error),
-                    }
-                }));
+                *task_result.borrow_mut() =
+                    Some(run.map(Rc::new).map_err(
+                        |error| match error.downcast::<DevToolsError>() {
+                            Ok(error) => error,
+                            Err(error) => DevToolsError::new(DevToolsErrorKind::Internal, error),
+                        },
+                    ));
                 context.complete(crate::domains::command_output::CommandOutputPlan::default())
             });
             let mut output = CommandDispatchContext::default();

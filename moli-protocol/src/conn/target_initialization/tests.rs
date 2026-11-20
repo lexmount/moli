@@ -6,6 +6,27 @@ use crate::automation::{
 use crate::testing::{TestContext, wait_until_scheduler_message};
 use serde_json::json;
 
+#[tokio::test]
+async fn retired_target_creation_preserves_its_no_such_target_error() {
+    let mut ctx = TestContext::new();
+    let step = ctx.with_fixture(|conn| {
+        let step = conn.start_command_dispatch(
+            r#"{"id":91,"method":"Target.createTarget","params":{"url":"about:blank"}}"#,
+        );
+        assert!(matches!(step, CdpCommandTaskStep::Pending(_)));
+        conn.install_browser_context_fixture_for_test(BrowserContext::new(
+            "BID-replacement".into(),
+        ));
+        step
+    });
+    let (messages, scheduler) = ctx.complete_command_task_step_for_test(step).await;
+    let response = messages.iter().find(|message| message["id"] == 91).unwrap();
+    assert_eq!(response["error"]["code"], -31998, "{response}");
+    assert_eq!(response["error"]["message"], "UnknownTargetId");
+    ctx.route_direct_command_output_for_test(Vec::new(), scheduler)
+        .await;
+}
+
 fn attached_target() -> TestContext {
     let mut context = BrowserContext::new("BID-initialization".into());
     context.set_active_target_id("TID-initialization");
