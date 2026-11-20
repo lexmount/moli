@@ -205,15 +205,6 @@ impl PageScriptHost {
             .set_detached_content_document(scope, handle, document);
     }
 
-    pub(crate) fn cached_detached_iframe_content_window<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        handle: DomHandle,
-    ) -> Option<v8::Local<'s, v8::Object>> {
-        self.child_window_proxy_records
-            .detached_content_window(scope, handle)
-    }
-
     pub(crate) fn set_cached_detached_iframe_content_window(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
