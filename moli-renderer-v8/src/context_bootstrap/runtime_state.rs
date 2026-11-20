@@ -203,6 +203,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
     screen_name: v8::Local<'scope, v8::Value>,
     performance_name: v8::Local<'scope, v8::Value>,
     visual_viewport_name: v8::Local<'scope, v8::Value>,
+    scheduler_name: v8::Local<'scope, v8::Value>,
 
     #[webapi(
         accessor_property,
@@ -258,6 +259,15 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         data = self.performance_slot,
         setter_data = self.performance_name, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     performance: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = crate::scheduling::window_scheduler_getter,
+        setter = window_surface_replaceable_setter,
+        setter_data = self.scheduler_name,
+        access_policy = crate::context_bootstrap::require_same_origin_window_receiver
+    )]
+    scheduler: (),
     #[webapi(
         accessor_property = "visualViewport",
         enumerable,
@@ -965,6 +975,10 @@ fn install_public_window_surface_accessors<'s>(
         screen_name,
         performance_name,
         visual_viewport_name,
+        scheduler_name: callback_data_index_value(
+            scope,
+            window_surface_replaceable_name_index("scheduler").unwrap(),
+        ),
         history: (),
         navigation: (),
         navigator: (),
@@ -973,6 +987,7 @@ fn install_public_window_surface_accessors<'s>(
         custom_elements: (),
         crypto: (),
         performance: (),
+        scheduler: (),
         visual_viewport: (),
         local_storage: (),
         session_storage: (),
@@ -1118,6 +1133,7 @@ const WINDOW_SURFACE_REPLACEABLE_NAMES: &[&str] = &[
     "screenTop",
     "screenX",
     "screenY",
+    "scheduler",
 ];
 
 fn child_context_handle_from_owner<'s>(

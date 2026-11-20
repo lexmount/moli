@@ -79,10 +79,21 @@ pub(crate) fn new_dependent_abort_signal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     signals: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let signal = super::abort_signal::new_signal(scope)?;
+    initialize_dependent_abort_signal(scope, signal, signals)
+}
+
+pub(crate) fn initialize_dependent_abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: v8::Local<'s, v8::Object>,
+    signals: &[v8::Local<'s, v8::Object>],
+) -> Option<v8::Local<'s, v8::Object>> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let host = unsafe { &mut *host_ptr };
-    let signal = create_signal(scope, host, false, None)?;
-    let composite_signal_id = AbortStore::signal_id_from_object(scope, signal)?;
+    let composite_signal_id = host
+        .native_bridge_mut()
+        .abort
+        .init_signal(scope, signal, false, None);
     for source_signal in signals {
         if !AbortStore::signal_aborted_from_object(scope, *source_signal) {
             continue;

@@ -111,6 +111,7 @@ mod resource_ready;
 mod response_links;
 mod runtime;
 mod runtime_binding_data;
+mod scheduling;
 mod script_cleanup;
 mod script_continuation;
 mod script_execution;

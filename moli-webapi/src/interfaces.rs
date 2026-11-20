@@ -115,6 +115,10 @@ interfaces! {
     WebTransportError: DOMException;
     AbortController;
     AbortSignal: EventTarget;
+    Scheduler;
+    TaskController: AbortController;
+    TaskSignal: AbortSignal;
+    TaskPriorityChangeEvent: Event;
     AbstractRange;
     AnalyserNode: AudioNode;
     Animation;

@@ -358,6 +358,30 @@ pub(crate) fn new_worker_abort_signal<'s>(
     create_signal(scope, &mut store.borrow_mut(), false, None)
 }
 
+pub(crate) fn worker_controller_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    controller: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    v8::Local::<v8::Object>::try_from(get_private_value(
+        scope,
+        controller,
+        WORKER_ABORT_CONTROLLER_SIGNAL_SLOT,
+    )?)
+    .ok()
+}
+
+pub(crate) fn initialize_worker_controller_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    controller: v8::Local<'s, v8::Object>,
+    signal: v8::Local<'s, v8::Object>,
+) -> Option<()> {
+    let store = worker_abort_store(scope)?;
+    let mut store = store.borrow_mut();
+    store.init_signal(scope, signal, false, None);
+    store.init_controller(scope, controller, signal);
+    Some(())
+}
+
 pub(crate) fn worker_abort_signal_aborted<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     signal: v8::Local<'s, v8::Object>,
@@ -619,9 +643,17 @@ pub(crate) fn new_worker_dependent_abort_signal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     signals: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let signal = abort_signal::new_signal(scope)?;
+    initialize_worker_dependent_abort_signal(scope, signal, signals)
+}
+
+pub(crate) fn initialize_worker_dependent_abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: v8::Local<'s, v8::Object>,
+    signals: &[v8::Local<'s, v8::Object>],
+) -> Option<v8::Local<'s, v8::Object>> {
     let store = worker_abort_store(scope)?;
-    let signal = create_signal(scope, &mut store.borrow_mut(), false, None)?;
-    let composite_signal_id = WorkerAbortStore::signal_id_from_object(scope, signal)?;
+    let composite_signal_id = store.borrow_mut().init_signal(scope, signal, false, None);
     for source_signal in signals {
         let Some(source_signal_id) = WorkerAbortStore::signal_id_from_object(scope, *source_signal)
         else {

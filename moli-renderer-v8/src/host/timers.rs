@@ -15,6 +15,7 @@ use crate::{
         current_runtime_observable_context_token, lightweight_popup_id_from_window,
     },
     page_task_queue::RendererPageTimerSelection,
+    scheduling::{ScheduledTask, TaskPriority},
     script_provenance::CompiledStringProvenance,
     util::{
         context_host_ptr_from_global_bridge, create_script_origin_with_base_url_and_fetch_metadata,
@@ -64,6 +65,7 @@ enum ScheduledTimerCallback {
     InternalFunction(ScheduledTimerFunction),
     Networking(ScheduledTimerFunction),
     WindowWebIdl(ScheduledWindowWebIdlCallback),
+    PrioritizedTask(Box<ScheduledTask>),
     Source(Box<ScheduledTimerSource>),
     AnimationFrameWake {
         context: v8::Global<v8::Context>,
@@ -85,6 +87,7 @@ impl ScheduledTimerCallback {
             Self::WindowWebIdl(callback) => callback
                 .relevant_context(scope)
                 .expect("a scheduled Window Web IDL callback must retain its relevant context"),
+            Self::PrioritizedTask(task) => task.context(scope),
             Self::Source(source) => v8::Local::new(scope, &source.context),
             Self::ResourceTimingBufferFull { context, .. }
             | Self::AnimationFrameWake { context, .. } => v8::Local::new(scope, context),
@@ -97,6 +100,9 @@ impl ScheduledTimerCallback {
             | Self::InternalFunction(function)
             | Self::Networking(function) => Some(function.realm_token),
             Self::WindowWebIdl(callback) => callback.realm_token(),
+            Self::PrioritizedTask(task) => task
+                .relevant_identity()
+                .map(|identity| identity.realm_token()),
             Self::Source(source) => source.realm_token,
             Self::ResourceTimingBufferFull { .. } | Self::AnimationFrameWake { .. } => None,
         }
@@ -108,9 +114,17 @@ impl ScheduledTimerCallback {
             | Self::InternalFunction(function)
             | Self::Networking(function) => function.relevant_identity,
             Self::WindowWebIdl(callback) => callback.relevant_identity(),
+            Self::PrioritizedTask(task) => task.relevant_identity(),
             Self::Source(_)
             | Self::ResourceTimingBufferFull { .. }
             | Self::AnimationFrameWake { .. } => None,
+        }
+    }
+
+    fn scheduling_rank(&self) -> Option<(TaskPriority, bool)> {
+        match self {
+            Self::PrioritizedTask(task) => Some(task.rank()),
+            _ => None,
         }
     }
 
@@ -135,7 +149,7 @@ impl ScheduledTimerCallback {
             Self::Function(function)
             | Self::InternalFunction(function)
             | Self::Networking(function) => Some(function.relevant_dispatch_scope),
-            Self::WindowWebIdl(_) => {
+            Self::WindowWebIdl(_) | Self::PrioritizedTask(_) => {
                 target_binding.map(WindowExecutionContextBinding::dispatch_scope)
             }
             Self::Source(_) => target_binding.map(WindowExecutionContextBinding::dispatch_scope),
@@ -155,7 +169,7 @@ impl ScheduledTimerCallback {
             Self::Source(source) if source.use_target_context => target_binding
                 .map(|binding| binding.context(scope))
                 .unwrap_or_else(|| self.context(scope)),
-            Self::WindowWebIdl(_) => target_binding
+            Self::WindowWebIdl(_) | Self::PrioritizedTask(_) => target_binding
                 .map(|binding| binding.context(scope))
                 .unwrap_or_else(|| self.context(scope)),
             Self::Source(_) => self.context(scope),
@@ -304,6 +318,37 @@ impl fmt::Debug for HostTimeoutScheduler {
 impl HostTimeoutScheduler {
     pub(crate) const ANIMATION_FRAME_INTERVAL: Duration = Duration::from_millis(16);
     const IDLE_PERIOD_BUDGET: Duration = Duration::from_millis(50);
+
+    pub(crate) fn queue_prioritized_task(
+        &mut self,
+        binding: WindowExecutionContextBinding,
+        task: ScheduledTask,
+        delay_ms: u64,
+    ) -> TimerId {
+        let target = ScheduledWindowTimerTarget::new(
+            binding.owner(),
+            binding.dispatch_scope(),
+            Some(binding),
+        );
+        self.scheduler.schedule_after(
+            ScheduledTimerTask {
+                callback: ScheduledTimerCallback::PrioritizedTask(Box::new(task)),
+                owner: ScheduledTimerOwner::Window(target),
+                is_interval: false,
+                nesting_level: None,
+                extra_args: Vec::new(),
+            },
+            delay_ms,
+            Instant::now(),
+        )
+    }
+
+    pub(crate) fn cancel_prioritized_task(&mut self, id: TimerId) -> bool {
+        self.scheduler
+            .active_payload(id)
+            .is_some_and(|task| matches!(task.callback, ScheduledTimerCallback::PrioritizedTask(_)))
+            && self.scheduler.remove_pending(id)
+    }
 
     fn begin_idle_period(&mut self) -> f64 {
         if let Some(period) = self.idle_period
@@ -900,8 +945,9 @@ impl HostTimeoutScheduler {
         let now_ms = crate::window_host::current_time_ms();
         let Some(timer) = self
             .scheduler
-            .take_next_ready_matching(Instant::now(), |task| {
+            .take_next_ready_ranked(Instant::now(), |task| {
                 task.matches_selection(selection, now_ms)
+                    .then(|| task.callback.scheduling_rank())
             })
         else {
             return HostTimeoutRunResult::Idle;
@@ -914,10 +960,11 @@ impl HostTimeoutScheduler {
         scope: &mut v8::PinScope<'_, '_>,
         ranges: &[TimerScheduleRange],
     ) -> HostTimeoutRunResult {
-        let Some(timer) = self
-            .scheduler
-            .take_next_ready_from_schedule_ranges(ranges, Instant::now())
-        else {
+        let Some(timer) = self.scheduler.take_next_ready_from_schedule_ranges_ranked(
+            ranges,
+            Instant::now(),
+            |task| task.callback.scheduling_rank(),
+        ) else {
             return HostTimeoutRunResult::Idle;
         };
         self.run_timer(scope, timer)
@@ -1051,6 +1098,7 @@ impl HostTimeoutScheduler {
                 timer.payload.callback,
                 ScheduledTimerCallback::InternalFunction(_)
                     | ScheduledTimerCallback::Networking(_)
+                    | ScheduledTimerCallback::PrioritizedTask(_)
                     | ScheduledTimerCallback::AnimationFrameWake { .. }
             ),
             window_owner: target_binding.map(WindowExecutionContextBinding::owner),
@@ -1123,6 +1171,7 @@ impl HostTimeoutScheduler {
                 task.callback,
                 ScheduledTimerCallback::InternalFunction(_)
                     | ScheduledTimerCallback::Networking(_)
+                    | ScheduledTimerCallback::PrioritizedTask(_)
                     | ScheduledTimerCallback::AnimationFrameWake { .. }
             ) && task
                 .owner
@@ -1349,6 +1398,22 @@ fn run_window_timer_callback(
     idle_period_deadline_ms: Option<f64>,
 ) -> std::result::Result<HostTimeoutRunResult, HostTimeoutRunResult> {
     match callback {
+        ScheduledTimerCallback::PrioritizedTask(task) => {
+            let watchdog = V8ExecutionWatchdog::arm(
+                V8ExecutionWatchdogKind::TimerCallback,
+                scope.thread_safe_handle(),
+                TIMER_CALLBACK_WATCHDOG_TIMEOUT,
+            );
+            let host = context_host_ptr_from_global_bridge(scope);
+            task.dispatch(scope, host);
+            if watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut {
+                Err(HostTimeoutRunResult::CallbackError(
+                    "scheduled task was terminated by the callback watchdog".to_owned(),
+                ))
+            } else {
+                Ok(HostTimeoutRunResult::Consumed)
+            }
+        }
         ScheduledTimerCallback::Function(function)
         | ScheduledTimerCallback::InternalFunction(function)
         | ScheduledTimerCallback::Networking(function) => {

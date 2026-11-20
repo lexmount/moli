@@ -256,6 +256,9 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
     WorkerGlobalTimerOperationsDeclaration::default()
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize worker timers: {error}"))?;
+    crate::scheduling::WorkerSchedulerProperty::default()
+        .initialize(scope, global)
+        .map_err(|error| anyhow!("failed to initialize worker scheduler: {error}"))?;
 
     crate::context_bootstrap::exposed_interfaces::capture_eager_intrinsic_interfaces(
         scope, global, realm_kind,

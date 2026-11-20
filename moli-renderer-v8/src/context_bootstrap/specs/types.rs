@@ -110,6 +110,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     OfflineAudioCompletionEvent,
     XmlSerializer,
     AbortController,
+    TaskController,
+    TaskPriorityChangeEvent,
     Observable,
     BroadcastChannel,
     EventSource,
