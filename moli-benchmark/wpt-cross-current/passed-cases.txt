@@ -6555,6 +6555,7 @@ focus/focus-contenteditable-element-in-iframe-scroll-into-view.html
 focus/focus-double-sync-calls.html
 focus/focus-element-crash.html
 focus/focus-event-after-focusing-iframes.html
+focus/focus-event-after-iframe-gets-focus.html
 focus/focus-sync-when-blur.html
 focus/iframe-focus-with-different-site-intermediate-frame.html
 focus/iframe-focus-with-same-as-top-intermediate-frame.html
