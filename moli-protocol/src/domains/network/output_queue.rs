@@ -2746,15 +2746,21 @@ impl TargetNetworkOutputQueue {
                     return;
                 }
                 if let Some(request) = request {
-                    // The Fetch pause projected the start before overrides.
-                    // Keep the dispatched body available under the same ID.
+                    let first_snapshot = !self.staged_subresource_requests.contains_key(handle);
                     let output = self.store_subresource_request_snapshot(
                         *subresource_index,
                         document_loader_id,
                         request,
                     );
-                    self.delivery_outputs
-                        .push_subresource(TargetSubresourcePlanOutput::RequestUpdated(output));
+                    // A response-stage or URL-nonmatching load can first reach
+                    // Network here. Projection deduplicates an earlier Fetch
+                    // announcement and records the dispatched body either way.
+                    let output = if first_snapshot && redirects.is_empty() {
+                        TargetSubresourcePlanOutput::RequestStarted(output)
+                    } else {
+                        TargetSubresourcePlanOutput::RequestUpdated(output)
+                    };
+                    self.delivery_outputs.push_subresource(output);
                 }
                 if self.append_subresource_request_extra_info(
                     *subresource_index,
