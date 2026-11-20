@@ -194,21 +194,32 @@ pub(crate) fn prepare_table_layout_trees<N>(world: &mut LayoutWorld<N>)
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let roots = (0..world.boxes.len())
+    let tables = (0..world.boxes.len())
         .map(LayoutBoxId::from_index)
         .filter(|id| is_table_root(world.boxes[id.index()].kind))
+        .filter_map(|root| {
+            let mut parts = Vec::new();
+            collect_table_parts(world, root, &mut parts);
+            (!parts.is_empty()).then_some((root, parts))
+        })
         .collect::<Vec<_>>();
-    for root in roots {
-        let mut parts = Vec::new();
-        collect_table_parts(world, root, &mut parts);
-        if parts.is_empty() {
-            continue;
-        }
-        for layout_box in &mut world.boxes {
-            layout_box
-                .layout_children
-                .retain(|child| !parts.contains(child));
-        }
+    if tables.is_empty() {
+        return;
+    }
+
+    // Cells and captions terminate the part walk, so nested tables have
+    // disjoint part lists. Remove the old numeric edges before attaching them.
+    let mut is_table_part = vec![false; world.boxes.len()];
+    for part in tables.iter().flat_map(|(_, parts)| parts) {
+        is_table_part[part.index()] = true;
+    }
+    for layout_box in &mut world.boxes {
+        layout_box
+            .layout_children
+            .retain(|child| !is_table_part[child.index()]);
+    }
+
+    for (root, parts) in tables {
         for part in parts.iter().copied() {
             world.boxes[part.index()].layout_parent = Some(root);
             if is_table_structural(world.boxes[part.index()].kind) {
