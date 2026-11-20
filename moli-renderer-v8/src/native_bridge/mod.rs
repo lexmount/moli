@@ -11,7 +11,7 @@ mod current_input;
 pub use context_host::RendererScreencastPaintSession;
 pub(crate) use context_host::{
     ChildDocumentFetch, DecodedImageContent, DocumentDomainState, InputImageRequestId, LayoutPublicationRequest, NavigationImageDocumentCompletion, NavigationImageDocumentLoad, PageScriptHost, PageScriptHostTaskCapabilities,
-    PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
+    PendingScrollObservableEffects, PostParseAutofocusAdmission, SelectionBoundarySnapshot, ServiceWorkerWindowOwner,
     SharedResourceTimingBufferRegistry, WindowAccessOrigin, WindowOriginKey, caller_can_access_window,
 };
 #[cfg(feature = "devtools")]

@@ -288,7 +288,9 @@ pub(crate) use navigation_traversal_execution::{
     apply_authorized_history_traversal_task, reject_canceled_history_traversal_results,
     resume_pending_history_traversals,
 };
-pub(crate) use selection::{focus_element_selection, replace_editable_selection_text};
+pub(crate) use selection::{
+    focus_element_selection, replace_editable_selection_fragment, replace_editable_selection_text,
+};
 #[cfg(feature = "devtools")]
 pub(crate) use selection_surface::window_selection_is_collapsed;
 pub(crate) use selection_surface::{

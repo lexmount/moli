@@ -804,6 +804,50 @@ impl DocumentRuntime {
         )
     }
 
+    pub(crate) fn build_editing_fragment(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        document_handle: DomHandle,
+        context_handle: DomHandle,
+        markup: &str,
+    ) -> Option<DomHandle> {
+        let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
+        let fragment = self.build_html_fragment(
+            scope,
+            host_ptr,
+            document_handle,
+            Some(context_handle),
+            markup,
+            true,
+            HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
+            scripting_enabled,
+            false,
+        )?;
+        // Drop document-level metadata from pasted content before connecting
+        // the fragment to the editing host.
+        let dom = self.dom_host_mut();
+        let mut pending = dom.child_handles(fragment).collect::<Vec<_>>();
+        while let Some(child) = pending.pop() {
+            let Some(element) = dom.node(child).and_then(Node::as_element) else {
+                continue;
+            };
+            if matches!(
+                (element.namespace(), element.local_name()),
+                (
+                    "http://www.w3.org/1999/xhtml",
+                    "base" | "link" | "meta" | "style" | "title"
+                ) | ("http://www.w3.org/2000/svg", "style")
+            ) {
+                let parent = dom.parent_node(child)?;
+                dom.remove_child_without_mutation_effects(parent, child);
+            } else {
+                pending.extend(dom.child_handles(child));
+            }
+        }
+        Some(fragment)
+    }
+
     fn build_fragment_from_markup(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

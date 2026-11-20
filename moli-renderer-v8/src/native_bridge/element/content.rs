@@ -1203,7 +1203,7 @@ fn append_rendered_break_node(
         .append_child_without_mutation_effects(fragment, line_break)
 }
 
-fn rendered_text_fragment(
+pub(in crate::native_bridge) fn rendered_text_fragment(
     runtime: &mut PageScriptHost,
     document: DomHandle,
     value: &str,
