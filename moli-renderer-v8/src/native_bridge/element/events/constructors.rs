@@ -58,7 +58,6 @@ impl ClickEventSource<'_> {
 pub(crate) enum TextEditInputType {
     None,
     InsertText,
-    #[cfg(feature = "devtools")]
     InsertLineBreak,
     #[cfg(feature = "devtools")]
     InsertParagraph,
@@ -79,7 +78,6 @@ impl TextEditInputType {
         match self {
             Self::None => "",
             Self::InsertText => "insertText",
-            #[cfg(feature = "devtools")]
             Self::InsertLineBreak => "insertLineBreak",
             #[cfg(feature = "devtools")]
             Self::InsertParagraph => "insertParagraph",
@@ -105,12 +103,11 @@ impl TextEditInputType {
             Self::InsertFromPaste => (!text.is_empty()).then_some(text),
             #[cfg(feature = "devtools")]
             Self::DeleteByCut => None,
-            Self::None => None,
+            Self::None | Self::InsertLineBreak => None,
             #[cfg(feature = "devtools")]
-            Self::InsertLineBreak
-            | Self::InsertParagraph
-            | Self::DeleteContentBackward
-            | Self::DeleteContentForward => None,
+            Self::InsertParagraph | Self::DeleteContentBackward | Self::DeleteContentForward => {
+                None
+            }
         }
     }
 }
