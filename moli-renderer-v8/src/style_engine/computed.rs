@@ -1,3 +1,4 @@
+mod marker;
 mod resolution_pass;
 
 use std::collections::HashSet;
@@ -31,6 +32,7 @@ use style::{
     },
 };
 
+pub(crate) use marker::{MarkerStyleDecision, marker_style_decision};
 pub(crate) use resolution_pass::StyleResolutionPass;
 use resolution_pass::with_resolution_context;
 pub(super) use resolution_pass::with_style_resolution_pass;

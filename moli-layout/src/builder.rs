@@ -459,9 +459,15 @@ where
         after: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut children = Vec::new();
-        if style.display().is_list_item() {
-            let marker = self.styles.marker_style(source_node)?;
-            children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Marker, marker)?);
+        if style.display().is_list_item()
+            && let Some(marker) = self.styles.marker_style(source_node)?
+        {
+            children.extend(self.build_generated_pseudo(
+                world,
+                source_node,
+                LayoutPseudo::Marker,
+                marker.into_style(),
+            )?);
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?);
         for child in self.checked_flat_children(source_node)? {
@@ -482,10 +488,19 @@ where
             return Ok(Vec::new());
         };
         let style = style.into_style();
-        let is_marker = pseudo == LayoutPseudo::Marker;
-        if style.display() == LayoutDisplay::None || !style.generates_pseudo_box(is_marker) {
+        if style.display() == LayoutDisplay::None || !style.has_explicit_generated_content() {
             return Ok(Vec::new());
         }
+        self.build_generated_pseudo(world, owner, pseudo, style)
+    }
+
+    fn build_generated_pseudo(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        owner: S::NodeId,
+        pseudo: LayoutPseudo,
+        style: ResolvedLayoutStyle,
+    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let generated_child = style
             .generated_text()
             .map(|text| self.allocate_generated_text(world, owner, pseudo, &style, text));

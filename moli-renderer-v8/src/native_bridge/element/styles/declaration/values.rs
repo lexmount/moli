@@ -243,15 +243,6 @@ impl<'a> ComputedStyleRead<'a> {
             .map(StyloComputedStyleSnapshot::computed_values)
     }
 
-    #[cfg(feature = "devtools")]
-    pub(in crate::native_bridge::element::styles) fn computed_style_applies(&self) -> bool {
-        computed_style_applies_with_observation(
-            self.runtime,
-            self.handle,
-            Some(self.observation_inputs.as_ref()),
-        )
-    }
-
     pub(crate) fn accessibility_style(
         &self,
     ) -> Option<moli_dom::accessibility::AccessibilityStyle> {

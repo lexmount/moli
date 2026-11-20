@@ -809,10 +809,21 @@ impl PageVm {
             );
         }
         let include_whitespace = self.document_dom_agent_includes_whitespace(inspector_session_id);
+        let keys: Vec<_> = backend_node_ids
+            .iter()
+            .map(|&id| self.current_renderer_backend_node_key_for_id(id))
+            .collect();
+        let marker_hosts =
+            self.vm()
+                .marker_hosts_for_document_snapshot(keys.iter().flatten().filter_map(|key| {
+                    (key.inspector_identity
+                        == Some(DocumentNodeInspectorIdentity::MarkerPseudoElement))
+                    .then_some(key.handle)
+                }));
         let mut ids = vec![None; backend_node_ids.len()];
         let mut pending = Vec::new();
-        for (index, &backend_node_id) in backend_node_ids.iter().enumerate() {
-            let Some(key) = self.current_renderer_backend_node_key_for_id(backend_node_id) else {
+        for (index, (&backend_node_id, key)) in backend_node_ids.iter().zip(keys).enumerate() {
+            let Some(key) = key else {
                 continue;
             };
             let visible = match key.inspector_identity {
@@ -823,9 +834,9 @@ impl PageVm {
                             key.handle,
                         )
                 }
-                Some(DocumentNodeInspectorIdentity::MarkerPseudoElement) => self
-                    .vm()
-                    .marker_pseudo_element_is_generated_for_document_snapshot(key.handle),
+                Some(DocumentNodeInspectorIdentity::MarkerPseudoElement) => {
+                    marker_hosts.contains(&key.handle)
+                }
                 Some(identity @ DocumentNodeInspectorIdentity::UserAgentShadowTreeNode { .. }) => {
                     live_document_node_snapshot(
                         self.vm().document_runtime.dom_host(),

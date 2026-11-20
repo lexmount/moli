@@ -126,21 +126,24 @@ fn prepare_item_marker<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let marker_type = world.boxes[item.index()].style.list_marker_type().clone();
     let Some(marker) = find_marker(world, item) else {
         return Ok(());
     };
     world.boxes[marker.index()].outside_list_marker =
         world.boxes[item.index()].style.list_marker_position() == LayoutListMarkerPosition::Outside;
 
+    if !world.boxes[marker.index()]
+        .style
+        .has_normal_generated_content()
+    {
+        return Ok(());
+    }
+    let marker_type = world.boxes[item.index()].style.list_marker_type().clone();
     if marker_type == LayoutListMarkerType::Fallback {
         push_diagnostic(
             &mut world.boxes[marker.index()].capability_diagnostics,
             LayoutCapabilityDiagnostic::ListMarkerStyleFallback,
         );
-    }
-    if !world.boxes[marker.index()].children.is_empty() {
-        return Ok(());
     }
     let Some(text) = list_marker_text(&marker_type, counter) else {
         return Ok(());

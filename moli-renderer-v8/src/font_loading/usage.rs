@@ -22,12 +22,14 @@ use style::{
 use crate::{
     document_runtime::DomHandle,
     dom_presentation::{
-        element_child_box_policy, flat_children, layout_element_classification, select_control_data,
+        element_child_box_policy, flat_children, layout_element_classification,
+        select_control_data, suppresses_noscript_box,
     },
     native_bridge::{
         PageScriptHost,
         element::{StyleObservation, text_control_value},
     },
+    style_engine::{MarkerStyleDecision, marker_style_decision},
 };
 
 use super::demand::{FontUse, FontUses};
@@ -125,7 +127,7 @@ pub(crate) fn collect_font_uses(
         let children = element_child_box_policy(element, category, replaced.is_some(), display);
         if display == LayoutDisplay::None
             || (display == LayoutDisplay::Contents && children == ChildBoxPolicy::None)
-            || (scripting && host.dom_host().is_html_element_named(node, "noscript"))
+            || suppresses_noscript_box(host.dom_host(), node, scripting)
         {
             continue;
         }
@@ -193,18 +195,21 @@ pub(crate) fn collect_font_uses(
         let marker_separate = style.clone_list_style_position() == MarkerPosition::Outside;
         // Outside markers have their own text context, so an unrelated font
         // cannot affect either this discovery or the item's inline state.
-        let marker = marker.filter(|marker| !marker_separate || collector.query(marker).is_some());
-        let marker_text = marker.as_ref().and_then(|marker| {
-            (matches!(&marker.get_counters().content, Content::Normal)
-                && !marker.clone_display().is_none()
-                && !marker.clone_display().is_contents())
-            .then(|| {
-                list_marker_text(
-                    &LayoutListMarkerType::from(&*style),
-                    counters.value(host, &mut observation, root, node, scripting),
-                )
-            })
-            .flatten()
+        let marker = marker
+            .filter(|marker| !marker_separate || collector.query(marker).is_some())
+            .and_then(|marker| {
+                let decision = marker_style_decision(&style, &marker);
+                (decision != MarkerStyleDecision::Suppressed).then_some((marker, decision))
+            });
+        let marker_text = marker.as_ref().and_then(|(_, decision)| {
+            (*decision == MarkerStyleDecision::DefaultListStyle)
+                .then(|| {
+                    list_marker_text(
+                        &LayoutListMarkerType::from(&*style),
+                        counters.value(host, &mut observation, root, node, scripting),
+                    )
+                })
+                .flatten()
         });
         let (_, before, after) = read.into_element_computed_values().expect("observed style");
         if let Some(after) = after {
@@ -221,7 +226,7 @@ pub(crate) fn collect_font_uses(
         if let Some(before) = before {
             pending.push(Work::Generated(before, false, None));
         }
-        if let Some(marker) = marker {
+        if let Some((marker, _)) = marker {
             pending.push(Work::Generated(marker, marker_separate, marker_text));
         }
     }
