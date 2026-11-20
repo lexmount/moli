@@ -470,8 +470,8 @@ mod tests {
         };
         let mut rgba = vec![255; region.byte_len()];
         BackdropCache::backend_blur(&mut rgba, region, 4.0);
-        for pixel in rgba.chunks_exact(4) {
-            assert_eq!(pixel, [255; 4]);
+        for pixel in rgba.as_chunks::<4>().0 {
+            assert_eq!(pixel, &[255; 4]);
         }
     }
 }
