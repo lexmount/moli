@@ -73,6 +73,9 @@ if [ ! -f "$moli_package_dir/moli" ]; then
 fi
 
 mkdir -p "$moli_install_dir"
+if [ -d "$moli_install_dir/moli" ]; then
+    moli_fail "install destination is a directory: $moli_install_dir/moli"
+fi
 moli_staged_binary="$moli_install_dir/.moli.install.$$"
 install -m 0755 "$moli_package_dir/moli" "$moli_staged_binary"
 mv -f "$moli_staged_binary" "$moli_install_dir/moli"
