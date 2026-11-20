@@ -109,7 +109,7 @@ impl PreparedPopupTarget {
             predecessor,
             Box::new(move |mut task, driver, context| {
                 Box::pin(async move {
-                    let page = match task.install(driver).await {
+                    let page = match task.install(driver, context).await {
                         Ok(page) => page,
                         Err(error) => {
                             let owner = task.owner;
@@ -123,11 +123,6 @@ impl PreparedPopupTarget {
                             return Err(error);
                         }
                     };
-                    if let Some(predecessor) = page.renderer_output_predecessor.clone() {
-                        context
-                            .context_mut()
-                            .set_renderer_output_predecessor(predecessor);
-                    }
                     task.navigate(driver, context).await?;
                     Ok(page)
                 })

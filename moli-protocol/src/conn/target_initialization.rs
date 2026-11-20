@@ -56,7 +56,7 @@ impl TargetInitializationDiagnostics {
 
 struct InitializationProgress {
     installed: Option<Rc<TargetInitializationDiagnostics>>,
-    setup: Option<TargetInitializationResult>,
+    setup: Option<Rc<TargetInitializationDiagnostics>>,
     setup_output: Option<CommandDispatchContext>,
     completion_output: Option<CommandDispatchContext>,
 }
@@ -64,7 +64,7 @@ struct InitializationProgress {
 struct InitializationReceipt {
     state: RefCell<InitializationProgress>,
     publication_released: tokio::sync::watch::Receiver<bool>,
-    progress: tokio::sync::watch::Receiver<Option<TargetInitializationStage>>,
+    progress: tokio::sync::watch::Receiver<()>,
     target: String,
     host: PageTargetHostIdentity,
     predecessor: Option<moli_core::RendererOutputCursor>,
@@ -99,7 +99,7 @@ impl TargetInitialDocumentWaiter {
         let receipt = self.receipt.state.borrow();
         match stage {
             TargetInitializationStage::PageInstalled => receipt.installed.clone().map(Ok),
-            TargetInitializationStage::SetupFinished => receipt.setup.clone(),
+            TargetInitializationStage::SetupFinished => receipt.setup.clone().map(Ok),
             TargetInitializationStage::Complete => None,
         }
     }
@@ -136,8 +136,6 @@ impl TargetInitialDocumentWaiter {
 }
 
 pub(crate) struct PendingTargetCreation {
-    initialization: TargetInitialDocumentWaiter,
-    stage: TargetInitializationStage,
     claim: TargetInitializationOutputClaim,
 }
 
@@ -148,8 +146,8 @@ pub(crate) struct CompletedTargetCreation {
 
 impl PendingTargetCreation {
     pub(crate) async fn wait(self) -> CompletedTargetCreation {
-        let result = self.initialization.wait_for(self.stage).await;
         let mut claim = self.claim;
+        let result = claim.initialization.clone().wait_for(claim.stage).await;
         if matches!(claim.stage, TargetInitializationStage::SetupFinished)
             && claim.initialization.receipt.state.borrow().setup.is_none()
         {
@@ -225,7 +223,7 @@ pub(crate) struct TargetInitializationTask {
     build: Result<Option<PendingInitialDocumentPageBuild>>,
     receipt: Rc<InitializationReceipt>,
     phase: Rc<Cell<&'static str>>,
-    progress: tokio::sync::watch::Sender<Option<TargetInitializationStage>>,
+    progress: tokio::sync::watch::Sender<()>,
 }
 
 pub(crate) fn initialization_error(error: impl std::fmt::Display) -> DevToolsError {
@@ -240,8 +238,9 @@ impl TargetInitializationTask {
     pub(crate) async fn install(
         &mut self,
         driver: &mut ProtocolWorkflowDriver,
+        context: &mut CommandWorkflowContext,
     ) -> Result<LoadedPageCreationDiagnosticsParts, DevToolsError> {
-        self.install_with_activation(driver, None)
+        self.install_with_activation(driver, context, None)
             .await
             .map(|(page, _)| page)
     }
@@ -249,6 +248,7 @@ impl TargetInitializationTask {
     pub(crate) async fn install_with_activation(
         &mut self,
         driver: &mut ProtocolWorkflowDriver,
+        context: &mut CommandWorkflowContext,
         activation: Option<TargetActivationTransition>,
     ) -> Result<
         (
@@ -300,13 +300,15 @@ impl TargetInitializationTask {
             if !self.is_current(driver)? {
                 return Err(retired_target_error());
             }
-            let diagnostics = TargetInitializationDiagnostics::capture(
-                page.clone(),
-                &CommandDispatchContext::default(),
-            );
+            if let Some(predecessor) = page.renderer_output_predecessor.clone() {
+                context
+                    .context_mut()
+                    .set_renderer_output_predecessor(predecessor);
+            }
+            let diagnostics =
+                TargetInitializationDiagnostics::capture(page.clone(), context.context_mut());
             self.receipt.state.borrow_mut().installed = Some(Rc::new(diagnostics));
-            self.progress
-                .send_replace(Some(TargetInitializationStage::PageInstalled));
+            self.progress.send_replace(());
             self.phase.set("setup");
             Ok((page, activation))
         })
@@ -339,9 +341,8 @@ impl TargetInitializationTask {
         let output = std::mem::replace(context.context_mut(), replacement);
         let mut receipt = self.receipt.state.borrow_mut();
         receipt.setup_output = Some(output);
-        receipt.setup = Some(Ok(Rc::new(diagnostics)));
-        self.progress
-            .send_replace(Some(TargetInitializationStage::SetupFinished));
+        receipt.setup = Some(Rc::new(diagnostics));
+        self.progress.send_replace(());
     }
 
     pub(crate) async fn navigate(
@@ -414,15 +415,11 @@ impl TargetInitializationReservation {
         let build = conn.start_initial_document_page_build_for_owner(&self.owner);
         let (initialization, release) = self.start(conn, build, None, true, body)?;
         let claim = TargetInitializationOutputClaim {
-            initialization: initialization.clone(),
+            initialization,
             stage,
             release,
         };
-        Ok(PendingTargetCreation {
-            initialization,
-            stage,
-            claim,
-        })
+        Ok(PendingTargetCreation { claim })
     }
 
     fn start(
@@ -451,7 +448,7 @@ impl TargetInitializationReservation {
                 _ => None,
             });
         let (release, publication_released) = tokio::sync::watch::channel(!claim_output);
-        let (progress, progress_wait) = tokio::sync::watch::channel(None);
+        let (progress, progress_wait) = tokio::sync::watch::channel(());
         let receipt = Rc::new(InitializationReceipt {
             state: RefCell::new(InitializationProgress {
                 installed: None,
@@ -503,7 +500,7 @@ impl TargetInitializationReservation {
                 None => result,
             }.map(|page| {
                 let mut diagnostics = TargetInitializationDiagnostics::capture(page, &output);
-                if let Some(Ok(setup)) = &task_receipt.state.borrow().setup {
+                if let Some(setup) = &task_receipt.state.borrow().setup {
                     diagnostics.output_dependencies.merge(setup.output_dependencies.clone());
                 }
                 Rc::new(diagnostics)
@@ -532,27 +529,26 @@ impl TargetInitializationReservation {
         let publication_access = access.clone();
         let pending = PendingProtocolSchedulerWork::for_target_initialization(
             async move {
-                let mut released = supervised.receipt.publication_released.clone();
-                let mut progress = supervised.receipt.progress.clone();
-                let mut progress_open = true;
-                let mut release_open = true;
                 let mut driver = ProtocolWorkflowDriver::new(publication_access);
-                loop {
-                    if *released.borrow() {
-                        let initialization = supervised.clone();
-                        let _ = driver.with_state(move |state| state.publish_target_initialization_setup(&initialization));
+                let publish_setup = async {
+                    let mut released = supervised.receipt.publication_released.clone();
+                    while !*released.borrow_and_update() {
+                        if released.changed().await.is_err() {
+                            break;
+                        }
                     }
-                    tokio::select! {
-                        _ = supervised.clone().wait() => break,
-                        changed = progress.changed(), if progress_open => { progress_open = changed.is_ok(); }
-                        changed = released.changed(), if release_open => { release_open = changed.is_ok(); }
-                    }
-                }
-                while !*released.borrow_and_update() {
-                    if released.changed().await.is_err() {
-                        break;
-                    }
-                }
+                    let _ = supervised
+                        .clone()
+                        .wait_for(TargetInitializationStage::SetupFinished)
+                        .await;
+                    let initialization = supervised.clone();
+                    let _ = driver.with_state(move |state| {
+                        state.publish_target_initialization_setup(&initialization)
+                    });
+                };
+                // Neither wait owns another task. Completion keeps advancing
+                // even when CDP retains its output claim until that point.
+                let _ = futures_util::future::join(supervised.clone().wait(), publish_setup).await;
                 let _ = driver.with_state(move |state| {
                     state.finish_target_initialization_publication(supervised)
                 });
@@ -679,12 +675,7 @@ impl CdpConnection {
                 false,
                 Box::new(|mut task, driver, context| {
                     Box::pin(async move {
-                        let page = task.install(driver).await?;
-                        if let Some(predecessor) = page.renderer_output_predecessor.clone() {
-                            context
-                                .context_mut()
-                                .set_renderer_output_predecessor(predecessor);
-                        }
+                        let page = task.install(driver, context).await?;
                         task.navigate(driver, context).await?;
                         Ok(page)
                     })

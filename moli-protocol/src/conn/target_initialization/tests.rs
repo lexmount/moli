@@ -363,7 +363,7 @@ async fn panicking_initialization_preserves_output_and_retires_without_resetting
         );
         let waiter = ctx.with_fixture(|conn| {
             conn.reserve_target_initialization(&owner).unwrap().submit(conn, None, Box::new(move |mut task, driver, context| Box::pin(async move {
-                let page = if after_install { task.install(driver).await? } else { LoadedPageCreationDiagnosticsParts::default() };
+                let page = if after_install { task.install(driver, context).await? } else { LoadedPageCreationDiagnosticsParts::default() };
                 let mut prefix = CommandOutputPlan::default();
                 prefix.push_background_event(BackgroundProtocolEvent::inspector_message(json!({"method":"Tracing.dataCollected","params":{"value":["before panic"]}}), None));
                 prefix.insert_renderer_output_boundary(RendererOutputFence::new_for_test(cursor));
@@ -451,7 +451,9 @@ async fn initialization_reservation_rejects_conflicts_and_releases_an_abandoned_
             .submit(
                 conn,
                 None,
-                Box::new(|mut task, driver, _| Box::pin(async move { task.install(driver).await })),
+                Box::new(|mut task, driver, context| {
+                    Box::pin(async move { task.install(driver, context).await })
+                }),
             )
             .unwrap();
         assert!(conn.reserve_target_initialization(&owner).is_err());
@@ -476,7 +478,9 @@ async fn retired_reservation_cannot_start_a_build_for_a_replacement_host() {
             .submit(
                 conn,
                 None,
-                Box::new(|mut task, driver, _| Box::pin(async move { task.install(driver).await })),
+                Box::new(|mut task, driver, context| {
+                    Box::pin(async move { task.install(driver, context).await })
+                }),
             )
             .err()
             .unwrap();
@@ -493,22 +497,24 @@ async fn retired_reservation_cannot_start_a_build_for_a_replacement_host() {
 #[tokio::test]
 async fn setup_wakes_all_waiters_and_hands_off_only_its_own_output_before_navigation_ends() {
     use crate::domains::command_output::CommandOutputPlan;
-    for claim_after_completion in [false, true] {
+    for (claim_after_completion, navigation_fails) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
         let ctx = attached_target();
         let owner = CommandOwnerScope::for_session("SID-initialization-A");
         let (begin, started) = tokio::sync::oneshot::channel();
         let (release, held) = tokio::sync::oneshot::channel();
         let pending = ctx.with_fixture(|conn| conn.reserve_target_initialization(&owner).unwrap().submit_creation(conn, TargetInitializationStage::SetupFinished, Box::new(move |mut task, driver, context| Box::pin(async move {
             started.await.unwrap();
-            let page = task.install(driver).await?;
+            let page = task.install(driver, context).await?;
             context.context_mut().push_protocol_event(BackgroundProtocolEvent::inspector_message(json!({"method":"Tracing.dataCollected","params":{"value":["setup"]}}), None));
             context.context_mut().defer_command_events(vec![BackgroundProtocolEvent::page_file_chooser_opened(None, "FRAME-setup", "selectSingle", 42, None)]);
             task.setup_finished(context, &page);
             held.await.unwrap();
             context.context_mut().push_protocol_event(BackgroundProtocolEvent::inspector_message(json!({"method":"Tracing.dataCollected","params":{"value":["navigation"]}}), None));
-            Ok(page)
+            if navigation_fails { Err(DevToolsError::new(DevToolsErrorKind::Internal, "injected navigation failure")) } else { Ok(page) }
         }))).unwrap());
-        let observer = pending.initialization.clone();
+        let observer = pending.claim.initialization.clone();
         let mut page_wait = Box::pin(observer.clone().wait_page());
         let mut setup_wait = Box::pin(
             observer
@@ -537,7 +543,7 @@ async fn setup_wakes_all_waiters_and_hands_off_only_its_own_output_before_naviga
         let mut release = Some(release);
         if claim_after_completion {
             release.take().unwrap().send(()).unwrap();
-            assert!(completion.as_mut().await.is_ok());
+            assert_eq!(completion.as_mut().await.is_err(), navigation_fails);
         }
         let mut output = CommandDispatchContext::default();
         let (mut context, _recovery) = CommandWorkflowContext::take_from(&mut output, None, None);
@@ -562,7 +568,7 @@ async fn setup_wakes_all_waiters_and_hands_off_only_its_own_output_before_naviga
         ));
         if let Some(release) = release {
             release.send(()).unwrap();
-            assert!(completion.await.is_ok());
+            assert_eq!(completion.await.is_err(), navigation_fails);
         }
         ctx.with_fixture(|conn| {
             let mut tail = CommandDispatchContext::default();
@@ -589,13 +595,13 @@ async fn abandoned_setup_output_is_published_while_navigation_is_still_held() {
     let owner = CommandOwnerScope::for_session("SID-initialization-A");
     let (release, held) = tokio::sync::oneshot::channel();
     let pending = ctx.with_fixture(|conn| conn.reserve_target_initialization(&owner).unwrap().submit_creation(conn, TargetInitializationStage::SetupFinished, Box::new(move |mut task, driver, context| Box::pin(async move {
-        let page = task.install(driver).await?;
+        let page = task.install(driver, context).await?;
         context.context_mut().push_protocol_event(BackgroundProtocolEvent::inspector_message(json!({"method":"Tracing.dataCollected","params":{"value":["setup"]}}), None));
         task.setup_finished(context, &page);
         held.await.unwrap();
         Ok(page)
     }))).unwrap());
-    let observer = pending.initialization.clone();
+    let observer = pending.claim.initialization.clone();
     let public = ctx.with_fixture(|conn| {
         conn.take_scheduler_events()
             .into_iter()
@@ -730,7 +736,7 @@ async fn final_owner_completion_preserves_its_failure_and_output_dependencies() 
                     None,
                     Box::new(move |mut task, driver, context| {
                         Box::pin(async move {
-                            let page = task.install(driver).await?;
+                            let page = task.install(driver, context).await?;
                             context.defer_owner_turn_completion(move |_, context| {
                                 context.push_protocol_event(
                                     BackgroundProtocolEvent::inspector_message(
@@ -765,14 +771,11 @@ async fn final_owner_completion_preserves_its_failure_and_output_dependencies() 
             );
         } else {
             let diagnostics = result.expect("completed initialization");
-            assert_eq!(
+            assert!(
                 diagnostics
                     .output_dependencies
-                    .clone()
-                    .into_single_stream()
-                    .unwrap()
-                    .cursor(),
-                cursor
+                    .iter()
+                    .any(|dependency| dependency.cursor() == cursor)
             );
         }
         ctx.with_fixture(|conn| {
@@ -877,4 +880,86 @@ async fn failed_setup_returns_its_accepted_output_to_the_creation_command_once()
         );
         assert!(conn.initial_document_work_mut(&owner).unwrap().is_none());
     });
+}
+
+#[tokio::test]
+async fn installed_receipt_captures_real_install_dependencies_without_later_setup_dependencies() {
+    use crate::domains::command_output::CommandOutputPlan;
+    use moli_core::{
+        PageId, RendererOutputCursor, RendererOutputFence, RendererOutputStreamIdentity,
+    };
+    let ctx = attached_target();
+    let owner = CommandOwnerScope::for_session("SID-initialization-A");
+    let stream =
+        RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(9904));
+    let install_cursor = RendererOutputCursor::new_for_test(stream, 1);
+    let setup_cursor = RendererOutputCursor::new_for_test(stream, 2);
+    let pending = ctx.with_fixture(|conn| {
+        conn.reserve_target_initialization(&owner)
+            .unwrap()
+            .submit_creation(
+                conn,
+                TargetInitializationStage::SetupFinished,
+                Box::new(move |mut task, driver, context| {
+                    Box::pin(async move {
+                        context.context_mut().set_renderer_output_predecessor(
+                            RendererOutputFence::new_for_test(install_cursor),
+                        );
+                        let page = task.install(driver, context).await?;
+                        context.context_mut().set_renderer_output_predecessor(
+                            RendererOutputFence::new_for_test(setup_cursor),
+                        );
+                        task.setup_finished(context, &page);
+                        Ok(page)
+                    })
+                }),
+            )
+            .unwrap()
+    });
+    let observer = pending.claim.initialization.clone();
+    let completed = pending.wait().await;
+    let installed = observer.clone().wait_page().await.unwrap();
+    assert!(
+        installed
+            .output_dependencies
+            .iter()
+            .any(|fence| fence.cursor() == install_cursor)
+    );
+    assert!(
+        !installed
+            .output_dependencies
+            .iter()
+            .any(|fence| fence.cursor() == setup_cursor)
+    );
+    if let Some(predecessor) = &installed.page.renderer_output_predecessor {
+        assert!(
+            installed
+                .output_dependencies
+                .iter()
+                .any(|fence| fence.cursor() == predecessor.cursor())
+        );
+    }
+    let mut output = CommandDispatchContext::default();
+    let (mut context, _recovery) = CommandWorkflowContext::take_from(&mut output, None, None);
+    let setup = completed
+        .publish_into(&mut ProtocolWorkflowDriver::new(ctx.handle()), &mut context)
+        .unwrap();
+    assert!(
+        setup
+            .output_dependencies
+            .iter()
+            .any(|fence| fence.cursor() == setup_cursor)
+    );
+    let completed = context.complete(CommandOutputPlan::default());
+    ctx.with_fixture(|conn| {
+        completed.finish(conn, &mut output);
+    });
+    let complete = observer.clone().wait().await.unwrap();
+    assert!(
+        complete
+            .output_dependencies
+            .iter()
+            .any(|fence| fence.cursor() == setup_cursor)
+    );
+    ctx.with_fixture(|conn| conn.finish_target_initialization(observer));
 }

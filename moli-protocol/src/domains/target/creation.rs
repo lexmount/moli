@@ -271,14 +271,10 @@ fn start_devtools_create_target_command_with_result_host(
                             let (page, activation) = task
                                 .install_with_activation(
                                     driver,
+                                    context,
                                     creation_commit.activation().cloned(),
                                 )
                                 .await?;
-                            if let Some(predecessor) = page.renderer_output_predecessor.clone() {
-                                context
-                                    .context_mut()
-                                    .set_renderer_output_predecessor(predecessor);
-                            }
                             let navigation = context
                                 .with_state(driver, move |state, context| {
                                     state.prepare_target_creation_outputs(

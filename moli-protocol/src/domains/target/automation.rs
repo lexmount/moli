@@ -13,6 +13,8 @@ use super::{TargetCommandTaskStep, TargetCreationCommit, browser_context, closin
 
 /// Creation setup and initial navigation belong to the Target. The command
 /// waits only for setup and owns a claim on its accepted output.
+/// Creation requires Page installation and setup to succeed. On failure the
+/// registered Target remains available for retry, without creation output.
 pub(crate) struct PreparedAutomationTargetCreation {
     result: DevToolsCreateTargetResult,
     host: ProtocolPageHostScope,
@@ -25,6 +27,13 @@ impl PreparedAutomationTargetCreation {
         command: DevToolsCreateTargetCommand,
     ) -> Result<Self, DevToolsError> {
         let execution = creation::execute_devtools_create_target_command(conn, command)?;
+        Self::prepare_registered_target(conn, execution)
+    }
+
+    fn prepare_registered_target(
+        conn: &mut CdpConnection,
+        execution: creation::DevToolsCreateTargetExecution,
+    ) -> Result<Self, DevToolsError> {
         let owner = conn
             .target_session_route_for_target_id(execution.result.target_id.as_str())
             .map(CommandOwnerScope::for_route)
@@ -40,12 +49,7 @@ impl PreparedAutomationTargetCreation {
             crate::conn::TargetInitializationStage::SetupFinished,
             Box::new(move |mut task, driver, context| {
                 Box::pin(async move {
-                    let page = task.install(driver).await?;
-                    if let Some(predecessor) = page.renderer_output_predecessor.clone() {
-                        context
-                            .context_mut()
-                            .set_renderer_output_predecessor(predecessor);
-                    }
+                    let page = task.install(driver, context).await?;
                     let realm_ids = page
                         .initial_runtime_realms
                         .iter()
@@ -158,5 +162,120 @@ pub(crate) fn start_automation_lifecycle_command(
             browser_context::start_automation_remove_browser_context(conn, command, id, context)
         }
         _ => unreachable!("only admitted Target lifecycle commands use the protocol workflow"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::automation::{AutomationContext, FrontendProtocol};
+    use crate::domains::command_output::CommandOutputPlan;
+    use crate::testing::TestContext;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn page_build_failure_fails_creation_and_keeps_the_target_recoverable() {
+        let mut ctx = TestContext::new();
+        ctx.process_async(
+            json!({"id":1,"method":"Target.setDiscoverTargets","params":{"discover":true}}),
+        )
+        .await;
+        let (prepared, owner, target, scheduler) = ctx.with_fixture(|conn| {
+            let execution = creation::execute_devtools_create_target_command(
+                conn,
+                DevToolsCreateTargetCommand {
+                    context: AutomationContext {
+                        protocol: FrontendProtocol::WebDriverBidi,
+                        session_id: None,
+                        target_id: None,
+                        browser_context_id: None,
+                    },
+                    url: "about:blank".into(),
+                    browser_context_id: None,
+                    activate: false,
+                },
+            )
+            .unwrap();
+            let target = execution.result.target_id.as_str().to_owned();
+            let owner = CommandOwnerScope::for_route(
+                conn.target_session_route_for_target_id(&target).unwrap(),
+            );
+            let build_owner = conn.initial_document_page_owner_for_owner(&owner).unwrap();
+            // The normal installer joins this build. Its terminal failure is
+            // controlled by the fixture rather than renderer timing.
+            conn.runtime_session_owner_slot_mut_for_owner(&owner)
+                .unwrap()
+                .start_initial_document_page_build();
+            let prepared =
+                PreparedAutomationTargetCreation::prepare_registered_target(conn, execution)
+                    .unwrap();
+            conn.fail_initial_document_page_build_for_owner(
+                &build_owner,
+                "injected initial Page failure".into(),
+            );
+            (prepared, owner, target, conn.take_scheduler_events())
+        });
+        let host = prepared.host().clone();
+        let mut output = CommandDispatchContext::default();
+        let (mut context, _recovery) = CommandWorkflowContext::take_from(&mut output, None, None);
+        let error = prepared
+            .run(&mut ProtocolWorkflowDriver::new(ctx.handle()), &mut context)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.kind, DevToolsErrorKind::Internal);
+        assert!(error.message.contains("injected initial Page failure"));
+        let completed = context.complete(CommandOutputPlan::default());
+        ctx.with_fixture(|conn| {
+            completed.finish(conn, &mut output);
+        });
+        let (events, _, after) = output.take_renderer_fenced_protocol_events();
+        assert!(!events.into_iter().chain(after).any(|event| {
+            let message = event.into_protocol_message();
+            message["method"] == "Target.targetCreated"
+                && message["params"]["targetInfo"]["targetId"] == target
+        }));
+        ctx.route_direct_command_output_for_test(Vec::new(), scheduler)
+            .await;
+        ctx.wait_until_scheduler_state("failed initialization retired", |conn| {
+            let (browser, Some(target)) = conn.target_owner_identity_for_owner(&owner).unwrap()
+            else {
+                panic!("registered target");
+            };
+            conn.browser_context_by_id(&browser)
+                .unwrap()
+                .page_target(&target)
+                .unwrap()
+                .owner_state
+                .initial_document_work
+                .is_none()
+        })
+        .await;
+        let retry = ctx.with_fixture(|conn| {
+            assert!(host.is_current(conn));
+            assert!(
+                !conn
+                    .runtime_session_owner_slot_for_owner(&owner)
+                    .unwrap()
+                    .has_loaded_page()
+            );
+            conn.ensure_target_initialization(&owner).unwrap().unwrap()
+        });
+        assert!(ctx.drive_owned_wait(retry.wait()).await.is_ok());
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.runtime_session_owner_slot_for_owner(&owner)
+                    .unwrap()
+                    .has_loaded_page()
+            )
+        });
+        // Materializing the retained Target does not retroactively turn the
+        // failed creation into a successful creation announcement.
+        assert!(
+            !ctx.sent
+                .iter()
+                .any(|message| message["method"] == "Target.targetCreated"
+                    && message["params"]["targetInfo"]["targetId"] == target)
+        );
     }
 }
