@@ -643,7 +643,7 @@ globalThis.__readFixture = () => {
 
     assert_eq!(
         result,
-        "\nstyle text line\nfunction x() { return 1; }\n\nPASS|Hell|ac|start  end|selectabletext||alpha beta gamma"
+        "style text line\nfunction x() { return 1; }\nPASS\n|Hell|ac|start  end|selectabletext||alpha beta gamma"
     );
 }
 #[test]

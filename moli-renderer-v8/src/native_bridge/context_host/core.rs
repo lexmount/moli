@@ -306,6 +306,63 @@ impl PageScriptHost {
             .flatten()
     }
 
+    pub(crate) fn editing_continuity_epoch(&self) -> u64 {
+        self.editing_continuity_epoch
+    }
+
+    pub(crate) fn break_typing_continuity(&mut self) {
+        self.editing_continuity_epoch = self.editing_continuity_epoch.wrapping_add(1);
+    }
+
+    pub(crate) fn set_selection_range(&mut self, handle: DomHandle, start: u32, end: u32) -> bool {
+        let changed =
+            unsafe { &mut *self.document_runtime }.set_selection_range(handle, start, end);
+        if changed {
+            self.break_typing_continuity();
+        }
+        changed
+    }
+
+    pub(crate) fn set_selection_range_with_direction(
+        &mut self,
+        handle: DomHandle,
+        start: u32,
+        end: u32,
+        direction: &str,
+    ) -> bool {
+        let changed = unsafe { &mut *self.document_runtime }
+            .set_selection_range_with_direction(handle, start, end, direction);
+        if changed {
+            self.break_typing_continuity();
+        }
+        changed
+    }
+
+    pub(crate) fn set_selection_start(&mut self, handle: DomHandle, start: u32) -> bool {
+        let changed = unsafe { &mut *self.document_runtime }.set_selection_start(handle, start);
+        if changed {
+            self.break_typing_continuity();
+        }
+        changed
+    }
+
+    pub(crate) fn set_selection_end(&mut self, handle: DomHandle, end: u32) -> bool {
+        let changed = unsafe { &mut *self.document_runtime }.set_selection_end(handle, end);
+        if changed {
+            self.break_typing_continuity();
+        }
+        changed
+    }
+
+    pub(crate) fn set_selection_direction(&mut self, handle: DomHandle, direction: &str) -> bool {
+        let changed =
+            unsafe { &mut *self.document_runtime }.set_selection_direction(handle, direction);
+        if changed {
+            self.break_typing_continuity();
+        }
+        changed
+    }
+
     pub(crate) fn focus_change_epoch(&self) -> u64 {
         self.focus_change_epoch
     }
@@ -607,6 +664,7 @@ impl PageScriptHost {
             next_javascript_dialog_id: 1,
             pending_network_output: Vec::new(),
             focus_change_epoch: 0,
+            editing_continuity_epoch: 0,
             subresource_activity_epoch: 0,
             subresource_last_activity_at: std::time::Instant::now(),
             page_network_policy,

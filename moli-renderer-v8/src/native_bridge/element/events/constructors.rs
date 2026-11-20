@@ -45,7 +45,7 @@ impl ClickEventSource {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TextEditInputType {
     None,
     InsertText,
@@ -59,6 +59,13 @@ pub(crate) enum TextEditInputType {
     DeleteContentBackward,
     #[cfg(feature = "devtools")]
     DeleteContentForward,
+    #[cfg(feature = "devtools")]
+    HistoryUndo,
+    #[cfg(feature = "devtools")]
+    HistoryRedo,
+    InsertFromPaste,
+    #[cfg(feature = "devtools")]
+    DeleteByCut,
 }
 
 impl TextEditInputType {
@@ -76,12 +83,19 @@ impl TextEditInputType {
             Self::DeleteContentBackward => "deleteContentBackward",
             #[cfg(feature = "devtools")]
             Self::DeleteContentForward => "deleteContentForward",
+            #[cfg(feature = "devtools")]
+            Self::HistoryUndo => "historyUndo",
+            #[cfg(feature = "devtools")]
+            Self::HistoryRedo => "historyRedo",
+            Self::InsertFromPaste => "insertFromPaste",
+            #[cfg(feature = "devtools")]
+            Self::DeleteByCut => "deleteByCut",
         }
     }
 
     pub(crate) fn data(self, text: &str) -> Option<&str> {
         match self {
-            Self::InsertText => Some(text),
+            Self::InsertText | Self::InsertFromPaste => Some(text),
             #[cfg(feature = "devtools")]
             Self::InsertFromDrop => Some(text),
             Self::None => None,
@@ -89,7 +103,10 @@ impl TextEditInputType {
             Self::InsertLineBreak
             | Self::InsertParagraph
             | Self::DeleteContentBackward
-            | Self::DeleteContentForward => None,
+            | Self::DeleteContentForward
+            | Self::HistoryUndo
+            | Self::HistoryRedo
+            | Self::DeleteByCut => None,
         }
     }
 }
@@ -415,7 +432,7 @@ pub(crate) fn construct_text_input_event_for_target<'s>(
     crate::context_bootstrap::construct_original_text_input_event(scope, text)
 }
 
-fn construct_input_event_with_transfer<'s>(
+pub(crate) fn construct_input_event_with_transfer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
     input_type: TextEditInputType,

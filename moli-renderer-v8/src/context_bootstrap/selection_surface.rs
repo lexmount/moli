@@ -1,8 +1,10 @@
 use super::range_algorithms::range_selection_string_contents;
+#[cfg(feature = "devtools")]
+use super::selection::boundary_order;
 use super::selection::{
-    new_selection_runtime_object, selection_anchor_node, selection_bind_owner_document,
-    selection_dispatch_change, selection_focus_node, selection_owner_document, selection_range,
-    selection_store,
+    new_selection_runtime_object, selection_anchor_node, selection_anchor_offset,
+    selection_bind_owner_document, selection_dispatch_change, selection_focus_node,
+    selection_focus_offset, selection_owner_document, selection_range, selection_store,
 };
 use super::selection_callbacks::{
     selection_add_range_callback, selection_attribute_getter_callback, selection_collapse_callback,
@@ -294,4 +296,81 @@ pub(crate) fn sync_selection_owner_document_for_window<'s>(
         return;
     };
     selection_bind_owner_document(scope, selection, document);
+}
+
+/// Native editing reads the shared Document selection without author getters.
+pub(crate) fn native_editing_selection(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<(
+    crate::document_runtime::DomHandle,
+    u32,
+    crate::document_runtime::DomHandle,
+    u32,
+)> {
+    let window = scope.get_current_context().global(scope);
+    let selected = selection_value_for_window(scope, window)?;
+    let anchor = selection_anchor_node(scope, selected)?;
+    let focus = selection_focus_node(scope, selected)?;
+    Some((
+        crate::native_bridge::callback_value_dom_handle(scope, anchor.into())?,
+        selection_anchor_offset(scope, selected),
+        crate::native_bridge::callback_value_dom_handle(scope, focus.into())?,
+        selection_focus_offset(scope, selected),
+    ))
+}
+pub(crate) fn native_editing_history_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let window = scope.get_current_context().global(scope);
+    let selected = selection_value_for_window(scope, window)?;
+    selection_owner_document(scope, selected)
+}
+#[cfg(feature = "devtools")]
+pub(crate) fn native_editing_selected_text(scope: &mut v8::PinScope<'_, '_>) -> String {
+    let window = scope.get_current_context().global(scope);
+    selection_value_for_window(scope, window)
+        .and_then(|selection| selection_range(scope, selection))
+        .and_then(|range| range_selection_string_contents(scope, range))
+        .unwrap_or_default()
+}
+#[cfg(feature = "devtools")]
+pub(crate) fn restore_native_editing_selection(
+    scope: &mut v8::PinScope<'_, '_>,
+    anchor: crate::document_runtime::DomHandle,
+    anchor_offset: u32,
+    focus: crate::document_runtime::DomHandle,
+    focus_offset: u32,
+) {
+    let window = scope.get_current_context().global(scope);
+    let Some(selection) = selection_value_for_window(scope, window) else {
+        return;
+    };
+    let Some(document) = selection_owner_document(scope, selection) else {
+        return;
+    };
+    let Some(range) = super::range::new_range_for_document(scope, document) else {
+        return;
+    };
+    let Some(anchor) = crate::util::node_wrapper_from_handle(scope, anchor) else {
+        return;
+    };
+    let Some(focus) = crate::util::node_wrapper_from_handle(scope, focus) else {
+        return;
+    };
+    let direction = match boundary_order(scope, anchor, anchor_offset, focus, focus_offset) {
+        std::cmp::Ordering::Less => "forward",
+        std::cmp::Ordering::Greater => "backward",
+        std::cmp::Ordering::Equal => "none",
+    };
+    selection_store(
+        scope,
+        selection,
+        range,
+        anchor,
+        anchor_offset,
+        focus,
+        focus_offset,
+        direction,
+    );
+    selection_dispatch_change(scope);
 }
