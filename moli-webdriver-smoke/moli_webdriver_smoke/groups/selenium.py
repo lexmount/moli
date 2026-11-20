@@ -484,12 +484,14 @@ def _run_selenium_bidi_preload_script_smoke(
             '{"first":"first","second":"second","channel":"received","title":"WebDriver Smoke Basic"}',
             "Selenium BiDi preload scripts run on navigation",
         )
+        # The tab subscription also receives preload messages from its child frame.
         channel_message = WebDriverWait(driver, 5, poll_frequency=0.05).until(
             lambda _driver: next(
                 (
                     message
                     for message in messages
                     if message_field(message, "channel") == "selenium-preload-channel"
+                    and message_field(message_field(message, "source"), "context") == context
                 ),
                 False,
             )
