@@ -9,6 +9,7 @@ fn options(strip_css: bool) -> RendererMarkdownOptions {
             css: strip_css,
             ..Default::default()
         },
+        ..Default::default()
     }
 }
 

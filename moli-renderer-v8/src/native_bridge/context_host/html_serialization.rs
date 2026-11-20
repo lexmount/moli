@@ -56,9 +56,17 @@ impl PageScriptHost {
             document,
             &scripting,
             policy,
-            (with_frames && !self.child_browsing_context_document_handles.is_empty())
-                .then_some(self as &dyn HtmlEmbeddedDocumentProvider),
+            self.embedded_documents_for_export(with_frames),
             max_bytes,
         )
+    }
+
+    /// The live child Documents an export may inline, if requested and present.
+    pub(crate) fn embedded_documents_for_export(
+        &self,
+        with_frames: bool,
+    ) -> Option<&dyn HtmlEmbeddedDocumentProvider> {
+        (with_frames && !self.child_browsing_context_document_handles.is_empty())
+            .then_some(self as &dyn HtmlEmbeddedDocumentProvider)
     }
 }
