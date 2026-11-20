@@ -83,6 +83,14 @@ pub(crate) fn flush_parser_custom_element_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
 ) {
+    let has_reactions = unsafe { &*host_ptr }
+        .custom_element_reactions()
+        .current_queue_has_pending_reactions();
+    if has_reactions {
+        // Only an actual reaction introduces a JS entry boundary. An empty
+        // parser scope must leave page microtasks for their normal checkpoint.
+        crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    }
     flush_current_custom_element_reaction_queue(scope, host_ptr);
 }
 
