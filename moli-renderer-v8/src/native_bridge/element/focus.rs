@@ -629,10 +629,9 @@ pub(crate) fn update_focus(
     update_focus_from_previous(scope, runtime_ptr, previous, next);
 }
 
-/// Focus the exact Window Document after its browser has activated the tab.
-/// Preserve a local focused control, while a viewport remains an explicit
-/// Document instead of being confused with another Window's empty focus.
-pub(crate) fn focus_window_client_document(
+/// Focus the Window's active Document, preserving its local focused control.
+/// A viewport focus target still identifies its own Document.
+pub(crate) fn focus_window_document(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     document: DomHandle,

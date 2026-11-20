@@ -20,7 +20,7 @@ pub(super) struct WindowMembers {
     close: (),
     #[webapi(accessor_property, getter = closed_value)]
     closed: (),
-    #[webapi(method, callback = context_bootstrap::window_noop_callback)]
+    #[webapi(method, callback = context_bootstrap::window_focus_callback)]
     focus: (),
     #[webapi(method, callback = context_bootstrap::window_noop_callback)]
     blur: (),
