@@ -343,6 +343,8 @@ impl LayoutFormControlData {
 /// Optional typed HTML metadata retained beside element classification.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct LayoutElementMetadata {
+    /// Editing hosts retain their font strut when their inline content is empty.
+    pub has_line_if_empty: bool,
     pub table: Option<LayoutTableData>,
     pub list: Option<LayoutListData>,
     pub form_control: Option<LayoutFormControlData>,
@@ -385,6 +387,7 @@ impl LayoutElementSemantics {
             category,
             replaced,
             metadata: LayoutElementMetadata {
+                has_line_if_empty: false,
                 table: matches!(category, LayoutElementCategory::Table(_))
                     .then(LayoutTableData::default),
                 list: matches!(category, LayoutElementCategory::List(_))

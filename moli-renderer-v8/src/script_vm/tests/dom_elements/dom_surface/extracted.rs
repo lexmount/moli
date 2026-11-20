@@ -5,6 +5,7 @@ mod document_and_tree_mutations;
 mod dom_interfaces_and_collections;
 mod element_and_document_behavior;
 mod elements_and_mutations;
+mod empty_editable;
 mod events_and_focus;
 mod frame_geometry_and_input;
 mod frame_navigation_and_history;

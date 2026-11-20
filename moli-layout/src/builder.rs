@@ -1199,10 +1199,19 @@ where
         parent: LayoutBoxId,
         children: Vec<LayoutBoxId>,
     ) -> Result<(), LayoutError> {
-        let establishes_inline_context = children
-            .iter()
-            .copied()
-            .any(|child| self.is_meaningful_inline_in_flow(world, child))
+        let parent_box = world
+            .box_by_id(parent)
+            .ok_or(LayoutError::InvalidBoxReference {
+                index: parent.index(),
+            })?;
+        let empty_editing_line = parent_box.has_line_if_empty()
+            && !parent_box.style.display().is_flex_container()
+            && !parent_box.style.display().is_grid_container();
+        let establishes_inline_context = (empty_editing_line
+            || children
+                .iter()
+                .copied()
+                .any(|child| self.is_meaningful_inline_in_flow(world, child)))
             && !children
                 .iter()
                 .copied()

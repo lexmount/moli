@@ -1940,9 +1940,42 @@ where
         &mut self,
         node_id: NodeId,
         inputs: LayoutInput,
-        block_context: Option<&mut BlockContext<'_>>,
+        mut block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        let mut output = self.compute_child_layout_for_box(node_id, inputs, block_context);
+        let mut output =
+            self.compute_child_layout_for_box(node_id, inputs, block_context.as_deref_mut());
+        let id = LayoutBoxId::from_taffy(node_id);
+        if let Some(line_height) = self.boxes[id.index()].empty_line_block_size {
+            let layout_box = &self.boxes[id.index()];
+            let writing_mode = layout_box.style.writing_mode();
+            let context = LeafLayoutContext::new(
+                writing_mode,
+                layout_box.resolved_aspect_ratio(),
+                self.get_scrollbar_insets(node_id),
+            );
+            let empty = compute_leaf_layout_with_context(
+                inputs,
+                &layout_box.style.taffy,
+                context,
+                resolve_stylo_calc_value,
+                |known, _| {
+                    let mut size = writing_mode.to_logical(known);
+                    size.inline_size = Some(size.inline_size.unwrap_or(0.0));
+                    size.block_size = Some(size.block_size.unwrap_or(line_height));
+                    writing_mode.to_physical(size).map(|value| value.unwrap())
+                },
+            );
+            let empty_block = writing_mode.to_logical(empty.size).block_size;
+            if writing_mode.to_logical(output.size).block_size < empty_block {
+                let mut known = writing_mode.to_logical(inputs.known_dimensions);
+                known.block_size = Some(empty_block);
+                let inputs = LayoutInput {
+                    known_dimensions: writing_mode.to_physical(known),
+                    ..inputs
+                };
+                output = self.compute_child_layout_for_box(node_id, inputs, block_context);
+            }
+        }
         if inputs.run_mode == RunMode::PerformLayout {
             taffy::compute_oof_layout(self, node_id, &mut output);
         }
@@ -3149,6 +3182,7 @@ fn empty_inline_context() -> InlineFormattingContext {
         text_units: Vec::new(),
         source_map: Vec::new(),
         selection: None,
+        has_line_if_empty: false,
         objects: Vec::new(),
         font_metrics: Vec::new(),
         parent_strut: None,

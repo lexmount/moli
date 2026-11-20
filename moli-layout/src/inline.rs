@@ -186,6 +186,7 @@ pub(crate) struct InlineFormattingContext {
     pub(crate) text_units: Vec<InlineTextUnit>,
     pub(crate) source_map: Vec<InlineSourceMapEntry>,
     pub(crate) selection: Option<InlineSelection>,
+    pub(crate) has_line_if_empty: bool,
     pub(crate) objects: Vec<InlineObject>,
     /// Primary-font metrics indexed by Parley's style index. Glyph runs may
     /// use fallback fonts, but their CSSOM rectangles and text-edge alignment
@@ -479,6 +480,15 @@ struct InlineBoxBlockPlacement {
 }
 
 impl InlineFormattingContext {
+    pub(crate) fn retains_empty_editing_line(&self) -> bool {
+        self.has_line_if_empty
+            && self.text_units.iter().all(|unit| unit.control)
+            && self
+                .objects
+                .iter()
+                .all(|object| object.role != InlineObjectRole::Atomic)
+    }
+
     pub(crate) fn object(&self, id: u64) -> Option<&InlineObject> {
         usize::try_from(id)
             .ok()
@@ -1199,8 +1209,9 @@ fn resolve_inline_lines(
         for (index, state) in states.iter().enumerate() {
             state_indices.insert(state.box_id.index(), index);
         }
-        let empty_caret = context.text.is_empty()
-            && matches!(context.selection, Some(InlineSelection::Caret { .. }));
+        let empty_caret = (line_index == 0 && context.retains_empty_editing_line())
+            || (context.text.is_empty()
+                && matches!(context.selection, Some(InlineSelection::Caret { .. })));
         let phantom = css_line_is_phantom(
             line.break_reason(),
             geometries.iter().any(|geometry| geometry.creates_line),
@@ -1382,8 +1393,11 @@ fn resolve_inline_lines(
         let bounds = if phantom {
             InlineVerticalBounds::ZERO
         } else if empty_caret {
-            // Empty editors still need their font strut for caret geometry.
-            fallback_root_bounds
+            // Empty inline edges have zero Parley line metrics. Editing hosts
+            // still retain their primary-font strut, including before focus.
+            context
+                .parent_strut
+                .map_or(fallback_root_bounds, InlineVerticalBounds::from_strut)
         } else if context.uses_quirks_line_height {
             root_bounds.unwrap_or(InlineVerticalBounds::ZERO)
         } else {
@@ -2019,11 +2033,31 @@ pub(crate) fn prepare_inline_contexts<N>(
     let mut text_unit_count = 0usize;
     for layout_box in &mut world.boxes {
         layout_box.inline_layout = None;
+        layout_box.empty_line_block_size = None;
         layout_box.inline_context_owner = None;
         layout_box.inline_flattened = false;
         layout_box.inline_static_position = None;
     }
 
+    // Item containers need the empty line's intrinsic block size, not a fake
+    // flex/grid item or a switch to an inline formatting context.
+    for index in 0..world.boxes.len() {
+        let layout_box = &world.boxes[index];
+        if layout_box.has_line_if_empty()
+            && (layout_box.style.display().is_flex_container()
+                || layout_box.style.display().is_grid_container())
+            && layout_box
+                .children
+                .iter()
+                .all(|child| world.boxes[child.index()].style.is_out_of_flow())
+        {
+            let parley = services.parley_mut();
+            let mut style = layout_box.style.parley_text_style();
+            parley.resolve_font_families(&mut style, None);
+            world.boxes[index].empty_line_block_size = measure_inline_strut(parley, style, true)
+                .map(|strut| strut.line_ascent + strut.line_descent);
+        }
+    }
     let owners = (0..world.boxes.len())
         .map(LayoutBoxId::from_index)
         .filter(|id| world.boxes[id.index()].inline_formatting_context)
@@ -2044,6 +2078,7 @@ pub(crate) fn prepare_inline_contexts<N>(
         if input.units.is_empty()
             && input.objects.is_empty()
             && world.boxes[owner.index()].text_selection.is_none()
+            && !world.boxes[owner.index()].has_line_if_empty()
         {
             continue;
         }
@@ -2316,6 +2351,7 @@ impl InlineBuildInput {
             text_units: self.units,
             source_map: self.source_map,
             selection,
+            has_line_if_empty: world.boxes[self.root_style.index()].has_line_if_empty(),
             objects,
             font_metrics,
             parent_strut,
@@ -3529,6 +3565,7 @@ mod tests {
             text_units: Vec::new(),
             source_map: Vec::new(),
             selection: None,
+            has_line_if_empty: false,
             objects: Vec::new(),
             font_metrics: vec![None],
             parent_strut: None,
@@ -3645,6 +3682,7 @@ mod tests {
                     text_units: Vec::new(),
                     source_map,
                     selection: None,
+                    has_line_if_empty: false,
                     objects: Vec::new(),
                     font_metrics: Vec::new(),
                     parent_strut: None,

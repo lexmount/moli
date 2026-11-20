@@ -249,6 +249,8 @@ pub struct LayoutBox<N> {
     pub(crate) text_selection: Option<crate::LayoutTextSelection>,
     /// Shared text/inline layout owned by this formatting-context root.
     pub(crate) inline_layout: Option<InlineFormattingContext>,
+    /// Empty flex/grid editing hosts have a font strut without an anonymous item.
+    pub(crate) empty_line_block_size: Option<f32>,
     /// Outermost IFC that consumes this box as a flattened or atomic item.
     pub(crate) inline_context_owner: Option<LayoutBoxId>,
     /// Text, `<br>`, and non-atomic inline boxes are laid out by their owner IFC
@@ -602,6 +604,16 @@ impl<N> LayoutBox<N> {
 
     pub fn final_layout(&self) -> Layout {
         self.final_layout
+    }
+
+    pub(crate) fn has_line_if_empty(&self) -> bool {
+        !self.is_replaced()
+            && self.pseudo.is_none()
+            && self.style.supports_empty_editing_line()
+            && self
+                .element_semantics
+                .as_ref()
+                .is_some_and(|semantics| semantics.metadata.has_line_if_empty)
     }
 
     pub(crate) fn is_replaced(&self) -> bool {
@@ -1229,6 +1241,7 @@ where
             text,
             text_selection: None,
             inline_layout: None,
+            empty_line_block_size: None,
             inline_context_owner: None,
             inline_flattened: false,
             outside_list_marker: false,
