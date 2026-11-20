@@ -363,12 +363,10 @@ pub(crate) fn fetch_subresource_initial_request_network_events(
     output: &TargetSubresourceFetchPauseNetworkOutput,
 ) -> Vec<BackgroundProtocolEvent> {
     let resource_type = output.resource_type().into();
-    let redirect_with_extra_info = output.redirect().filter(|redirect| {
-        matches!(
-            resource_type,
-            DevToolsNetworkResourceType::Fetch | DevToolsNetworkResourceType::Xhr
-        ) && redirect.redirect_has_extra_info
-    });
+    // Child Document redirects publish their response metadata through navigation.
+    let redirect_with_extra_info = output
+        .redirect()
+        .filter(|redirect| output.child_document().is_none() && redirect.redirect_has_extra_info);
     let event = NetworkRequestEvent {
         target_id: DevToolsTargetId::from(output.frame_id()),
         frame_id: Some(DevToolsFrameId::from(output.frame_id())),
