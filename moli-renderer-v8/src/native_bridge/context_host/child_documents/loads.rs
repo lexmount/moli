@@ -122,6 +122,7 @@ impl PageScriptHost {
         bootstrap: ChildBrowsingContextBootstrap,
         navigation_load: crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
         initiator: ChildDocumentNavigationInitiator,
+        navigation_initiator: Option<crate::runtime::RendererNavigationInitiator>,
     ) -> Option<u64> {
         let target_url = Self::child_browsing_context_bootstrap_url(&bootstrap)?;
         let initiating_owner = navigation_load.owner();
@@ -186,7 +187,7 @@ impl PageScriptHost {
             .and_then(|entry| entry.pending_service_worker_client_id());
         let frame_owner_resource_timing =
             self.pending_frame_owner_resource_timing(handle, &target_url, initiator);
-        let initiator_url = self.document_url_for_child_context(handle);
+        let default_initiator_url = self.document_url_for_child_context(handle);
         let browser_context = self.host_document().cookie_browser_context();
         self.pending_child_document_navigations.insert(
             load_id,
@@ -197,6 +198,7 @@ impl PageScriptHost {
                     .and_then(|entry| entry.navigation_entry_seed().session_history.admitted_entry),
                 target,
                 target_url: target_url.clone(),
+                navigation_initiator: navigation_initiator.clone(),
                 resource_loader: resource_loader.clone(),
                 reserved_service_worker_client_id: service_worker_client_id,
                 document_credentialless,
@@ -234,9 +236,19 @@ impl PageScriptHost {
             redirect: None,
             request: child_document_load_request(bootstrap)
                 .map(|request| {
+                    let request = if let Some(initiator) = &navigation_initiator
+                        && request.request_origin().is_none()
+                    {
+                        request
+                            .with_initiator_url(initiator.url())
+                            .with_request_origin(initiator.origin())
+                            .with_subresource_request_metadata(initiator.request_metadata())
+                    } else {
+                        request
+                    };
                     configure_child_document_navigation_request(
                         request,
-                        &initiator_url,
+                        &default_initiator_url,
                         &browser_context,
                     )
                     .with_page_network_policy()
@@ -647,6 +659,10 @@ impl PageScriptHost {
                         sandbox,
                         &loaded.policy_container.permissions_policy,
                     );
+                let document_referrer = pending
+                    .navigation_initiator
+                    .as_ref()
+                    .map(|initiator| initiator.document_referrer(&final_url));
                 self.clear_child_browsing_context_pending_navigation(handle);
                 let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
                     self.clear_pending_service_worker_child_client_if_matches(
@@ -669,6 +685,7 @@ impl PageScriptHost {
                 entry.set_document_permissions_policy(permissions_policy);
                 entry.commit_pending_child_document_load(
                     &final_url,
+                    document_referrer,
                     &loaded.policy_container,
                     sandbox,
                     document_credentialless,
