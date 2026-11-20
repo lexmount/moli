@@ -50,6 +50,8 @@ mod structure;
 pub(crate) use attributes::install_attr_prototype;
 pub(crate) use attributes::install_named_node_map_template_bindings;
 #[cfg(feature = "devtools")]
+pub(crate) use insert_line_break::insert_line_break_in_editing_host;
+#[cfg(feature = "devtools")]
 pub(crate) use queries::evaluate_live_xpath_search_node_handles;
 
 pub(crate) const DETACHED_STATE_SLOT: &str = "__moliDetachedState";
