@@ -301,3 +301,17 @@ fn svg_filter_set_std_deviation_updates_retained_isolated_world_numbers() {
         "true"
     );
 }
+
+#[test]
+fn svg_filter_number_lists_reflect_live_values_and_validate_receivers() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-number-lists.test/");
+    vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
+        .unwrap();
+    vm.eval(include_str!("svg_filter_number_lists.js")).unwrap();
+    assert_eq!(vm.eval("__uiEventResults.complete").unwrap(), "true");
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+}
