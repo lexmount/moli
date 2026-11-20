@@ -404,12 +404,12 @@ impl ScriptVm {
             }
             AsyncSubresourceFetchEvent::RequestExtraInfo {
                 internal_id,
-                hop,
+                redirects,
                 info,
             } => {
                 self._context_host
                     .borrow_mut()
-                    .record_subresource_request_extra_info(internal_id, hop, info);
+                    .record_subresource_request_extra_info(internal_id, redirects, info);
                 Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)
             }
             AsyncSubresourceFetchEvent::StreamingStarted(started) => {

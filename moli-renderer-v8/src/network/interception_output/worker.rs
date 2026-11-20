@@ -182,6 +182,13 @@ impl ResourceInterceptionContext {
         }
     }
 
+    pub(crate) fn observes_request_headers(&self) -> bool {
+        match self {
+            Self::Document { output, .. } => output.inner.journal.transport_is_bound(),
+            Self::Worker(_) => true,
+        }
+    }
+
     pub(crate) fn publish_network(&self, item: ScriptNetworkOutputItem) -> bool {
         match self {
             Self::Document {

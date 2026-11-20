@@ -1,13 +1,14 @@
 use super::*;
 #[cfg(any(test, feature = "devtools"))]
 use crate::RendererSyntheticResponseBody;
-use moli_fetch::{RedirectInfo, Request, RequestRedirectMode, ResponseHead};
+#[cfg(any(test, feature = "devtools"))]
+use moli_fetch::ResponseHead;
+use moli_fetch::{RedirectInfo, Request, RequestRedirectMode};
 
 pub(super) fn follow_intercepted_redirect(
     mut request: Request,
-    head: &ResponseHead,
+    response: &crate::protocol_types::NavigationResponse,
     document_url: &Url,
-    network_headers: Option<&[(String, String)]>,
     web_security_disabled: bool,
 ) -> Result<Option<(Request, RedirectInfo)>, String> {
     // A manual response does not follow Location, so even an invalid URL must
@@ -15,6 +16,7 @@ pub(super) fn follow_intercepted_redirect(
     if request.redirect_mode() == RequestRedirectMode::Manual {
         return Ok(None);
     }
+    let head = response.head();
     if matches!(head.status, 301 | 302 | 303 | 307 | 308) {
         // A fulfilled network response has the same CORS gate as a real hop.
         // Preserve that failure before rejecting an error-mode redirect.
@@ -61,31 +63,16 @@ pub(super) fn follow_intercepted_redirect(
         target.set_fragment(head.final_url.fragment());
     }
     let cross_origin = !moli_url::same_origin(&head.final_url, &target);
+    let response_extra_info = response.network_response_extra_info().cloned();
+    let mut redirect = head.into_redirect(
+        target,
+        moli_fetch::RedirectSource::Network,
+        response_extra_info.is_some(),
+    );
+    redirect.request_extra_info = response.network_request_extra_info().cloned();
+    redirect.response_extra_info = response_extra_info;
     request
-        .follow_redirect_with_web_security(
-            RedirectInfo {
-                source: moli_fetch::RedirectSource::Network,
-                from_url: head.final_url.clone(),
-                to_url: target,
-                status: head.status,
-                headers: head.headers.clone(),
-                network_extra_info_available: network_headers.is_some(),
-                request_extra_info: network_headers.map(|headers| {
-                    moli_fetch::NetworkRequestExtraInfo {
-                        headers: headers.to_vec(),
-                        cookie_report: head.request_cookie_report.clone().unwrap_or_default(),
-                    }
-                }),
-                dispatched_request: None,
-                response_extra_info: None,
-                redirect_has_extra_info: false,
-                request_cookie_report: head.request_cookie_report.clone(),
-                cookie_set_reports: head.cookie_set_reports.clone(),
-                from_cache: head.from_cache,
-                negotiated_http_version: head.negotiated_http_version,
-            },
-            web_security_disabled,
-        )
+        .follow_redirect_with_web_security(redirect, web_security_disabled)
         .map_err(|error| error.to_string())?;
     if cross_origin {
         request

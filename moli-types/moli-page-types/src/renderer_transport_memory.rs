@@ -69,7 +69,14 @@ impl ScriptNetworkOutputItem {
             Self::SubresourceRequestStarted(request) | Self::SubresourceRequestUpdated(request) => {
                 request_snapshot_charge(request)
             }
-            Self::SubresourceRequestExtraInfo { info, .. } => request_extra_info_charge(info),
+            Self::SubresourceRequestExtraInfo {
+                request,
+                redirects,
+                info,
+                ..
+            } => request_extra_info_charge(info)
+                .saturating_add(request.as_deref().map(request_snapshot_charge).unwrap_or(0))
+                .saturating_add(redirects.iter().map(redirect_charge).sum()),
             Self::SubresourceResponseStarted(response) => response_started_charge(response),
             Self::SubresourceDataReceived(_) => 0,
             Self::SubresourceEventSourceMessageReceived(message) => [
@@ -343,6 +350,31 @@ fn request_extra_info_charge(info: &NetworkRequestExtraInfo) -> usize {
             .saturating_add(info.cookie_report.excluded_cookies.len())
             .saturating_mul(256),
     )
+}
+
+fn redirect_charge(redirect: &NavigationRedirect) -> usize {
+    std::mem::size_of::<NavigationRedirect>()
+        .saturating_add(url_charge(&redirect.from_url))
+        .saturating_add(url_charge(&redirect.to_url))
+        .saturating_add(headers_charge(&redirect.headers))
+        .saturating_add(redirect.dispatched_request.as_ref().map_or(0, |request| {
+            string_charge(&request.method)
+                .saturating_add(headers_charge(&request.headers))
+                .saturating_add(request.body.as_ref().map_or(0, bytes::Bytes::len))
+                .saturating_add(request.body_text.as_deref().map_or(0, string_charge))
+        }))
+        .saturating_add(
+            redirect
+                .request_extra_info
+                .as_ref()
+                .map_or(0, request_extra_info_charge),
+        )
+        .saturating_add(redirect.response_extra_info.as_ref().map_or(0, |response| {
+            headers_charge(&response.headers)
+                .saturating_add(request_extra_info_charge(&response.request_extra_info))
+                .saturating_add(response.cookie_set_reports.len().saturating_mul(256))
+        }))
+        .saturating_add(redirect.cookie_set_reports.len().saturating_mul(256))
 }
 
 fn network_record_charge(record: &SubresourceNetworkRecord) -> usize {
