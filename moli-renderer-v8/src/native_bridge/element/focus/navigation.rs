@@ -8,9 +8,11 @@ use std::collections::HashSet;
 // first positive tabindex.
 pub(super) fn sequential_target_in_dom_order(
     runtime: &PageScriptHost,
+    document: DomHandle,
     point: SequentialFocusStartingPoint,
     candidates: &[DomHandle],
     reverse: bool,
+    mut resolve: impl FnMut(DomHandle) -> Option<DomHandle>,
 ) -> Option<DomHandle> {
     let dom = runtime.dom_host();
     let (anchor, after_subtree, skip_start) = match point {
@@ -26,7 +28,7 @@ pub(super) fn sequential_target_in_dom_order(
     };
     let mut nodes = Vec::new();
     let mut position = None;
-    let mut stack = vec![(runtime.document_handle(), false)];
+    let mut stack = vec![(document, false)];
     while let Some((node, exiting)) = stack.pop() {
         if node == anchor && exiting == after_subtree {
             position = Some(nodes.len());
@@ -47,16 +49,12 @@ pub(super) fn sequential_target_in_dom_order(
     }
     let position = position?;
     let candidates = candidates.iter().copied().collect::<HashSet<_>>();
+    let target = |node: &DomHandle| candidates.contains(node).then(|| resolve(*node)).flatten();
     if reverse {
-        nodes[..position]
-            .iter()
-            .rev()
-            .find(|node| candidates.contains(node))
-            .copied()
+        nodes[..position].iter().rev().find_map(target)
     } else {
         nodes[position + usize::from(skip_start)..]
             .iter()
-            .find(|node| candidates.contains(node))
-            .copied()
+            .find_map(target)
     }
 }

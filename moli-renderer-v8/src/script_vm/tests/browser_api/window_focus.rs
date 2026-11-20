@@ -85,6 +85,56 @@ fn document_has_focus_checks_every_live_ancestor_in_the_native_focus_chain() {
 }
 
 #[test]
+fn tab_navigation_enters_and_leaves_nested_frame_documents() {
+    let mut vm = new_storage_html_test_vm("https://sequential-frame-focus.test/");
+    vm.eval(
+        r#"
+        document.body.innerHTML = '<button id=before tabindex=1>Before</button>'
+            + '<iframe id=outer tabindex=2></iframe><button id=after tabindex=3>After</button>'
+            + '<iframe id=empty></iframe><iframe id=skipped tabindex=-1></iframe>';
+        const child = document.getElementById('outer').contentDocument;
+        child.body.innerHTML = '<iframe id=nested></iframe><button id=child tabindex=4>Child</button>';
+        child.getElementById('nested').contentDocument.body.innerHTML = '<input id=deep>';
+        document.getElementById('skipped').contentDocument.body.innerHTML = '<input id=excluded>';
+        window.focusPath = () => {
+            const path = [];
+            let doc = document;
+            for (let element; element = doc.activeElement;) {
+                path.push(element.id || element.tagName);
+                doc = element.contentDocument;
+                if (!doc) break;
+            }
+            return path.join('/');
+        };
+        window.keyTarget = '';
+        child.addEventListener('keydown', event => {
+            keyTarget = event.target.tagName;
+            event.preventDefault();
+        }, {once: true});
+        document.getElementById('outer').contentWindow.focus();
+        "#,
+    )
+    .unwrap();
+    for (modifiers, expected) in [
+        (0, "outer/BODY"),
+        (0, "outer/child"),
+        (0, "outer/nested/deep"),
+        (0, "after"),
+        (0, "before"),
+        (0, "outer/child"),
+        (8, "before"),
+        (8, "after"),
+        (8, "outer/nested/deep"),
+        (8, "outer/child"),
+    ] {
+        vm.dispatch_key_event("keydown", "Tab", "Tab", "", modifiers, false, false)
+            .unwrap();
+        assert_eq!(vm.eval("focusPath()").unwrap(), expected);
+    }
+    assert_eq!(vm.eval("keyTarget").unwrap(), "BODY");
+}
+
+#[test]
 fn document_has_focus_uses_the_branded_receiver_without_reading_author_properties() {
     let mut vm = new_storage_test_vm("https://document-focus-receiver.test/");
     assert_eq!(vm.eval(r#"(() => {
