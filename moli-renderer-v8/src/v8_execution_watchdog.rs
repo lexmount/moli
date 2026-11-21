@@ -239,16 +239,13 @@ pub(crate) struct V8ExecutionWatchdog {
     timeout: Duration,
 }
 
-type CallbackDispatchWatchdog = Rc<RefCell<Option<Arc<V8ExecutionWatchdogRegistration>>>>;
+type CallbackDispatchWatchdogs = Rc<RefCell<Vec<Arc<V8ExecutionWatchdogRegistration>>>>;
 
-struct RestoreCallbackDispatchWatchdog {
-    slot: CallbackDispatchWatchdog,
-    previous: Option<Arc<V8ExecutionWatchdogRegistration>>,
-}
+struct PopCallbackDispatchWatchdog(CallbackDispatchWatchdogs);
 
-impl Drop for RestoreCallbackDispatchWatchdog {
+impl Drop for PopCallbackDispatchWatchdog {
     fn drop(&mut self) {
-        self.slot.replace(self.previous.take());
+        self.0.borrow_mut().pop();
     }
 }
 
@@ -267,6 +264,36 @@ impl V8ExecutionWatchdog {
             registration: Some(registration),
             timeout,
         }
+    }
+
+    pub(crate) fn arm_lifecycle(scope: &v8::PinScope<'_, '_>) -> Self {
+        Self::arm(
+            V8ExecutionWatchdogKind::LifecycleEvent,
+            scope.thread_safe_handle(),
+            SCRIPT_TURN_WATCHDOG_TIMEOUT,
+        )
+    }
+
+    /// Run one lifecycle operation and settle its budget before the owner
+    /// handles completion, errors, or any subsequent checkpoint.
+    pub(crate) fn with_lifecycle_budget<'s, 'i, T>(
+        scope: &mut v8::PinScope<'s, 'i>,
+        phase: &str,
+        run: impl FnOnce(&mut v8::PinScope<'s, 'i>) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let watchdog = Self::arm_lifecycle(scope);
+        let result = watchdog.with_callback_dispatch_budget(scope, run);
+        watchdog.finish_lifecycle(phase)?;
+        result
+    }
+
+    pub(crate) fn finish_lifecycle(self, phase: &str) -> anyhow::Result<()> {
+        let timeout = self.timeout();
+        anyhow::ensure!(
+            self.disarm() != V8ExecutionWatchdogOutcome::TimedOut,
+            "{phase} exceeded {timeout:?} and was terminated"
+        );
+        Ok(())
     }
 
     #[cfg(test)]
@@ -303,25 +330,26 @@ impl V8ExecutionWatchdog {
         dispatch: impl FnOnce(&mut v8::PinScope<'s, 'i>) -> T,
     ) -> T {
         let slot = scope
-            .get_slot::<CallbackDispatchWatchdog>()
+            .get_slot::<CallbackDispatchWatchdogs>()
             .cloned()
             .unwrap_or_else(|| {
-                let slot = CallbackDispatchWatchdog::default();
+                let slot = CallbackDispatchWatchdogs::default();
                 scope.set_slot(slot.clone());
                 slot
             });
-        let previous = slot.replace(self.registration.clone());
-        let _restore = RestoreCallbackDispatchWatchdog { slot, previous };
+        let registration = self.registration.as_ref().expect("armed callback watchdog");
+        slot.borrow_mut().push(Arc::clone(registration));
+        let _pop = PopCallbackDispatchWatchdog(slot);
         dispatch(scope)
     }
 
     pub(crate) fn callback_dispatch_has_timed_out(scope: &v8::PinScope<'_, '_>) -> bool {
         scope
-            .get_slot::<CallbackDispatchWatchdog>()
+            .get_slot::<CallbackDispatchWatchdogs>()
             .is_some_and(|slot| {
                 slot.borrow()
-                    .as_ref()
-                    .is_some_and(|registration| registration.has_timed_out())
+                    .iter()
+                    .any(|registration| registration.has_timed_out())
             })
     }
 
@@ -421,6 +449,49 @@ mod tests {
         let script = v8::Script::compile(scope, source, None)?;
         let value = crate::script_execution::execute_compiled_script(scope, script)?;
         Some(value.to_string(scope)?.to_rust_string_lossy(scope))
+    }
+
+    #[test]
+    fn nested_callback_budget_cannot_hide_expired_outer_budget() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let source = v8::String::new(scope, "() => 42").unwrap();
+        let script = v8::Script::compile(scope, source, None).unwrap();
+        let callback = v8::Local::<v8::Function>::try_from(
+            crate::script_execution::execute_compiled_script(scope, script).unwrap(),
+        )
+        .unwrap();
+        let receiver = v8::undefined(scope).into();
+
+        let outer = V8ExecutionWatchdog::arm_lifecycle(scope);
+        outer.with_callback_dispatch_budget(scope, |scope| {
+            V8ExecutionWatchdog::with_lifecycle_budget(scope, "inner callback", |scope| {
+                outer.registration.as_ref().unwrap().expire_if_armed();
+                // Native cleanup may clear V8's flag before unwinding the
+                // outer dispatch. The inner scope must still see its expiry.
+                scope.cancel_terminate_execution();
+                assert!(V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope));
+                assert!(
+                    crate::script_execution::call_function(scope, callback, receiver, &[])
+                        .is_none()
+                );
+                Ok(())
+            })
+            .unwrap();
+            assert!(V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope));
+        });
+        assert_eq!(outer.disarm(), V8ExecutionWatchdogOutcome::TimedOut);
+        assert!(!V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope));
+        assert_eq!(
+            crate::script_execution::call_function(scope, callback, receiver, &[])
+                .unwrap()
+                .int32_value(scope),
+            Some(42)
+        );
     }
 
     #[test]

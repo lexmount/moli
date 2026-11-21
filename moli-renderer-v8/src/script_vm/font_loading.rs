@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Result, anyhow};
 
 use super::ScriptVm;
 use crate::{
@@ -7,10 +7,7 @@ use crate::{
         RendererPageFontLoadingTaskKind,
     },
     runtime::{AuthorizedCurrentPageFontLoadingTask, RendererDocumentToken},
-    v8_execution_watchdog::{
-        SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
-        V8ExecutionWatchdogOutcome,
-    },
+    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 
 impl ScriptVm {
@@ -44,19 +41,11 @@ impl ScriptVm {
             // Resolving with the public FontFaceSet can invoke an author-defined
             // `then` getter. Keep Host/layout borrows out of that operation and
             // apply the same JS budget as other lifecycle tasks.
-            let watchdog = V8ExecutionWatchdog::arm(
-                V8ExecutionWatchdogKind::LifecycleEvent,
-                scope.thread_safe_handle(),
-                SCRIPT_TURN_WATCHDOG_TIMEOUT,
-            );
-            let checked = crate::context_bootstrap::check_realtime_document_font_readiness(
-                scope, host_ptr, document,
-            );
-            ensure!(
-                watchdog.disarm() != V8ExecutionWatchdogOutcome::TimedOut,
-                "font readiness exceeded its execution budget"
-            );
-            checked?;
+            V8ExecutionWatchdog::with_lifecycle_budget(scope, "font readiness", |scope| {
+                crate::context_bootstrap::check_realtime_document_font_readiness(
+                    scope, host_ptr, document,
+                )
+            })?;
             Ok(PageFontLoadingTargetEffect::ReadinessCheckedForCurrentOwner)
         });
         let host = self._context_host.borrow();

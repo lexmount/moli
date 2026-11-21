@@ -167,6 +167,29 @@ pub(super) type PendingExactWindowDocumentTask<I, K, P> =
 pub(super) type ExactWindowDocumentTaskLedger<I, K, P> =
     WindowTaskLedger<I, K, P, WindowDocumentTaskTarget>;
 
+impl<I: Copy + Eq, K: Copy + Eq> ExactWindowDocumentTaskLedger<I, K, ()> {
+    /// Admit at most one notification per target and kind. A closed route
+    /// must retire the reservation so a later attempt can enqueue again.
+    pub(super) fn enqueue_notification(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+        kind: K,
+        from_raw: impl FnOnce(u64) -> I,
+        send: impl FnOnce(I) -> bool,
+    ) -> bool {
+        if self.find_slot_index(target, kind, |_| true).is_some() {
+            return true;
+        }
+        let id = self.allocate_task_id(from_raw);
+        self.push(PendingExactWindowDocumentTask::new(id, target, kind, ()));
+        if send(id) {
+            return true;
+        }
+        self.remove(id);
+        false
+    }
+}
+
 /// Realm and Document handle resolved for an already-authorized Window task.
 ///
 /// Resolution may materialize a child or popup default context, but it does not

@@ -8,10 +8,7 @@ use crate::{
         OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget, WindowExecutionContextBinding,
     },
     page_task_queue::{RendererPageRenderingUpdateTaskId, RendererPageRenderingUpdateTaskKind},
-    v8_execution_watchdog::{
-        SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
-        V8ExecutionWatchdogOutcome,
-    },
+    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 
 enum PreAnimationPhase {
@@ -32,19 +29,9 @@ impl ScriptVm {
         {
             return Ok(false);
         }
-        let watchdog = V8ExecutionWatchdog::arm(
-            V8ExecutionWatchdogKind::LifecycleEvent,
-            scope.thread_safe_handle(),
-            SCRIPT_TURN_WATCHDOG_TIMEOUT,
-        );
-        let result =
-            Self::dispatch_realtime_pre_animation_phases(scope, host_ptr, id, root, &watchdog);
-        let timeout = watchdog.timeout();
-        ensure!(
-            watchdog.disarm() != V8ExecutionWatchdogOutcome::TimedOut,
-            "pre-animation lifecycle exceeded {timeout:?} and was terminated"
-        );
-        result
+        V8ExecutionWatchdog::with_lifecycle_budget(scope, "pre-animation lifecycle", |scope| {
+            Self::dispatch_realtime_pre_animation_phases(scope, host_ptr, id, root)
+        })
     }
 
     fn dispatch_realtime_pre_animation_phases(
@@ -52,7 +39,6 @@ impl ScriptVm {
         host_ptr: *mut PageScriptHost,
         id: RendererPageRenderingUpdateTaskId,
         root: WindowDocumentTaskTarget,
-        watchdog: &V8ExecutionWatchdog,
     ) -> Result<bool> {
         let mut invoked = false;
         // Follow the corresponding Blink PageAnimator/HTML phases. This
@@ -96,7 +82,7 @@ impl ScriptVm {
                         };
                         invoked |= unsafe { &mut *host_ptr }
                             .dispatch_realtime_rendering_event(scope, host_ptr, target, event);
-                        if let Err(error) = Self::environment_checkpoint(scope, watchdog) {
+                        if let Err(error) = Self::environment_checkpoint(scope) {
                             if let Some(target) = unsafe { &*host_ptr }.realtime_rendering_document(
                                 id,
                                 root,
@@ -142,7 +128,7 @@ impl ScriptVm {
                                 context_bootstrap::dispatch_realtime_media_query_event(
                                     scope, list, event,
                                 );
-                                Self::environment_checkpoint(scope, watchdog)?;
+                                Self::environment_checkpoint(scope)?;
                                 Ok(true)
                             })
                             .unwrap_or(Ok(false));
@@ -202,7 +188,7 @@ impl ScriptVm {
                                             event,
                                             "realtime window resize",
                                         );
-                                    Self::environment_checkpoint(scope, watchdog)?;
+                                    Self::environment_checkpoint(scope)?;
                                 }
                             }
                             if !environment_target_is_current(host_ptr, target) {
@@ -213,7 +199,7 @@ impl ScriptVm {
                                 context_bootstrap::dispatch_window_visual_viewport_resize(
                                     scope, global,
                                 );
-                                Self::environment_checkpoint(scope, watchdog)?;
+                                Self::environment_checkpoint(scope)?;
                             }
                             Ok(true)
                         })
@@ -228,13 +214,15 @@ impl ScriptVm {
         Ok(invoked)
     }
 
-    fn environment_checkpoint(
-        scope: &mut v8::PinScope<'_, '_>,
-        watchdog: &V8ExecutionWatchdog,
-    ) -> Result<()> {
-        Self::perform_microtask_checkpoints(scope, None)?;
+    fn environment_checkpoint(scope: &mut v8::PinScope<'_, '_>) -> Result<()> {
+        if !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
+            && !scope.is_execution_terminating()
+        {
+            Self::perform_microtask_checkpoints(scope, None)?;
+        }
         ensure!(
-            !watchdog.has_timed_out() && !scope.is_execution_terminating(),
+            !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
+                && !scope.is_execution_terminating(),
             "pre-animation lifecycle was terminated"
         );
         Ok(())

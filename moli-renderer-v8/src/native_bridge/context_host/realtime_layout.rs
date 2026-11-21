@@ -176,15 +176,18 @@ impl PageScriptHost {
                     ));
                 }
                 self.publish_layout_pass_for_document(document, pass);
-                // Attach exactly the inputs captured before this pass. The
-                // low-level publication has retired its previous validity.
-                *state.published.borrow_mut() = Some(inputs);
-                crate::observer_runtime::did_publish_realtime_resize_observer_layout(self);
-                self.did_publish_realtime_font_layout();
+                self.did_publish_screen_layout(state, inputs);
             }
             LayoutPublication::Transient => {}
         }
         Ok(())
+    }
+
+    fn did_publish_screen_layout(&self, state: &RealtimeLayoutState, inputs: ScreenLayoutInputs) {
+        // Attach the verified inputs after the geometry update retires the previous validity.
+        *state.published.borrow_mut() = Some(inputs);
+        crate::observer_runtime::did_publish_realtime_resize_observer_layout(self);
+        self.did_publish_realtime_font_layout();
     }
 
     #[cfg(test)]
@@ -295,9 +298,7 @@ impl PageScriptHost {
             self.document_layout_state
                 .borrow_mut()
                 .clear_latest_layout();
-            *state.published.borrow_mut() = Some(inputs);
-            crate::observer_runtime::did_publish_realtime_resize_observer_layout(self);
-            self.did_publish_realtime_font_layout();
+            self.did_publish_screen_layout(state, inputs);
             return Ok(());
         };
         self.finish_layout_publication(

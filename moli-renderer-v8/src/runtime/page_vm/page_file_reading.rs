@@ -1,8 +1,9 @@
 use crate::page_task_queue::{
     PageFileReadingTargetEffect, PageFileReadingTurnAction, PageFileReadingTurnOutcome,
-    RendererPageFileReadingOwner, RendererPageFileReadingTask, RendererPageFileReadingTaskId,
-    RendererPageFileReadingTaskKind,
+    RendererPageFileReadingTask,
 };
+
+use crate::script_vm::ScriptVm;
 
 use super::{
     AuthorizedCurrentWindowDocumentTask, IntoPageTaskCompletion, PageTaskCompletion, PageVm,
@@ -31,53 +32,16 @@ pub(crate) type AuthorizedCurrentPageFileReadingTask =
     AuthorizedCurrentWindowDocumentTask<RendererPageFileReadingTask>;
 
 impl PageVm {
-    fn current_page_file_reading_owner(
-        &self,
-        task_id: RendererPageFileReadingTaskId,
-    ) -> Option<(
-        RendererPageFileReadingOwner,
-        RendererPageFileReadingTaskKind,
-    )> {
-        self.vm().current_pending_file_reading_owner(
-            task_id,
-            self.document_lifecycle.identity().document,
-        )
-    }
-
     pub(in crate::runtime) fn apply_selected_page_file_reading_turn(
         &mut self,
         task: RendererPageFileReadingTask,
     ) -> anyhow::Result<PageFileReadingTurnOutcome> {
-        let owner = task.owner();
-        let task_id = task.task_id();
-        let kind = task.kind();
-        let current = self.current_page_file_reading_owner(task_id);
-        let target_effect =
-            match self.authorize_current_window_document_task(task, owner, kind, current) {
-                Ok(authorization) => self
-                    .vm_mut()
-                    .apply_current_file_reading_body(authorization)?,
-                Err(stale) => {
-                    if stale.may_discard_local_payload() {
-                        self.vm_mut().discard_stale_file_reading_task(task_id);
-                    }
-                    let current_owner = stale.current_owner();
-                    tracing::debug!(
-                        ?owner,
-                        ?current_owner,
-                        ?task_id,
-                        ?kind,
-                        "discarded stale exact-Document file-reading task"
-                    );
-                    PageFileReadingTargetEffect::DiscardedStaleOwner { current_owner }
-                }
-            };
-        let action = PageFileReadingTurnAction {
-            owner,
-            task_id,
-            kind,
-            target_effect,
-        };
-        Ok(PageFileReadingTurnOutcome::new(action))
+        self.apply_selected_window_document_task(
+            task,
+            ScriptVm::current_pending_file_reading_owner,
+            ScriptVm::apply_current_file_reading_body,
+            ScriptVm::discard_stale_file_reading_task,
+            |current_owner| PageFileReadingTargetEffect::DiscardedStaleOwner { current_owner },
+        )
     }
 }

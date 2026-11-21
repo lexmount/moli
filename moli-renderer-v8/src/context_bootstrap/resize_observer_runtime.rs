@@ -205,34 +205,33 @@ pub(super) fn resize_observer_unobserve_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let next = v8::Array::new(scope, 0);
-    for index in 0..targets.length() {
-        let Some(candidate) = targets.get_index(scope, index) else {
-            continue;
-        };
-        if observed_record_matches_target(scope, candidate, target) {
-            continue;
-        }
-        let _ = next.set_index(scope, next.length(), candidate);
-    }
+    let next = without_target(scope, targets, target);
     set_resize_observer_targets(scope, args.this(), next);
-    let next_pending = v8::Array::new(scope, 0);
-    if let Some(pending_targets) = resize_observer_pending_targets(scope, args.this()) {
-        for index in 0..pending_targets.length() {
-            let Some(candidate) = pending_targets.get_index(scope, index) else {
-                continue;
-            };
-            if observed_record_matches_target(scope, candidate, target) {
-                continue;
-            }
-            let _ = next_pending.set_index(scope, next_pending.length(), candidate);
-        }
-    }
+    let next_pending = match resize_observer_pending_targets(scope, args.this()) {
+        Some(pending) => without_target(scope, pending, target),
+        None => v8::Array::new(scope, 0),
+    };
     set_resize_observer_pending_targets(scope, args.this(), next_pending);
     if next.length() == 0 {
         remove_resize_observer_from_registry(scope, args.this());
     }
     rv.set_undefined();
+}
+
+fn without_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    records: v8::Local<'s, v8::Array>,
+    target: v8::Local<'s, v8::Value>,
+) -> v8::Local<'s, v8::Array> {
+    let next = v8::Array::new(scope, 0);
+    for index in 0..records.length() {
+        if let Some(record) = records.get_index(scope, index)
+            && !observed_record_matches_target(scope, record, target)
+        {
+            let _ = next.set_index(scope, next.length(), record);
+        }
+    }
+    next
 }
 
 pub(super) fn resize_observer_disconnect_callback<'s>(

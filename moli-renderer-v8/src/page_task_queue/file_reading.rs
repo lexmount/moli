@@ -2,7 +2,8 @@ use crate::native_bridge::WindowExecutionContextIdentity;
 use crate::runtime::PageOwnerTurnOutcome;
 
 use super::{
-    RendererPageWindowDocumentTask, RendererPageWindowDocumentTaskOwner,
+    PageWindowDocumentTaskTurnAction, RendererPageWindowDocumentTask,
+    RendererPageWindowDocumentTaskOwner,
     window_document_task_source::{
         RendererPageWindowDocumentTaskRoute, RendererPageWindowDocumentTaskSender,
         RendererPageWindowDocumentTaskSource,
@@ -94,12 +95,11 @@ pub(crate) enum PageFileReadingTargetEffect {
     DiscardedStaleReaderRequest,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PageFileReadingTurnAction {
-    pub(crate) owner: RendererPageFileReadingOwner,
-    pub(crate) task_id: RendererPageFileReadingTaskId,
-    pub(crate) kind: RendererPageFileReadingTaskKind,
-    pub(crate) target_effect: PageFileReadingTargetEffect,
-}
+pub(crate) type PageFileReadingTurnAction = PageWindowDocumentTaskTurnAction<
+    RendererPageFileReadingTaskId,
+    RendererPageFileReadingTaskKind,
+    PageFileReadingTargetEffect,
+    WindowExecutionContextIdentity,
+>;
 
 pub(crate) type PageFileReadingTurnOutcome = PageOwnerTurnOutcome<PageFileReadingTurnAction>;

@@ -6,13 +6,10 @@ use super::declaration::{
     set_style_entries_if_changed_with_inline_base_url, shorthand_longhands, style_base_url,
     style_entries_for_style_object, style_property_count_with_context,
     style_property_index_exists_with_context, style_property_name_at_with_context,
-    style_property_value_for_pseudo_with_context, style_property_value_with_context,
     style_runtime_and_handle_from_object,
 };
-use super::{
-    style_object_computation_context, style_object_forces_empty_computed,
-    style_object_pseudo_element,
-};
+use super::public_layout::read_live_style_property;
+use super::{style_object_computation_context, style_object_forces_empty_computed};
 use crate::{
     css_style::css_style_declaration_property_value,
     util::{throw_type_error, v8_string},
@@ -105,23 +102,7 @@ fn live_style_named_property_value_for_handle<'s>(
         return resolve_known_style_property_name(raw_key).map(|_| String::new());
     }
     let property = resolve_style_property_name(runtime, handle, mode, raw_key)?;
-    if runtime.layout_policy().is_realtime()
-        && !super::public_layout::prepare_live_style_property(
-            scope, runtime, handle, mode, &property,
-        )
-    {
-        return None;
-    }
-    let context = style_object_computation_context(scope, style, runtime, handle, mode);
-    Some(
-        if let Some(pseudo) = style_object_pseudo_element(scope, style, mode) {
-            style_property_value_for_pseudo_with_context(
-                runtime, handle, &pseudo, &property, context,
-            )
-        } else {
-            style_property_value_with_context(runtime, handle, mode, &property, context)
-        },
-    )
+    read_live_style_property(scope, style, runtime, handle, mode, &property)
 }
 
 pub(super) fn style_named_query<'s>(

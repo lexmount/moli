@@ -8,7 +8,8 @@
 use crate::runtime::PageOwnerTurnOutcome;
 
 use super::{
-    RendererPageWindowDocumentTask, RendererPageWindowDocumentTaskOwner,
+    PageWindowDocumentTaskTurnAction, RendererPageWindowDocumentTask,
+    RendererPageWindowDocumentTaskOwner,
     window_document_task_source::{
         RendererPageWindowDocumentTaskRoute, RendererPageWindowDocumentTaskSender,
         RendererPageWindowDocumentTaskSource,
@@ -59,12 +60,10 @@ pub(crate) enum PageFontLoadingTargetEffect {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PageFontLoadingTurnAction {
-    pub(crate) owner: RendererPageFontLoadingOwner,
-    pub(crate) task_id: RendererPageFontLoadingTaskId,
-    pub(crate) kind: RendererPageFontLoadingTaskKind,
-    pub(crate) target_effect: PageFontLoadingTargetEffect,
-}
+pub(crate) type PageFontLoadingTurnAction = PageWindowDocumentTaskTurnAction<
+    RendererPageFontLoadingTaskId,
+    RendererPageFontLoadingTaskKind,
+    PageFontLoadingTargetEffect,
+>;
 
 pub(crate) type PageFontLoadingTurnOutcome = PageOwnerTurnOutcome<PageFontLoadingTurnAction>;
