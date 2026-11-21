@@ -5274,6 +5274,10 @@ editing/plaintext-only/insertHTML.html?white-space=normal
 editing/plaintext-only/insertHTML.html?white-space=pre
 editing/plaintext-only/insertHTML.html?white-space=pre-line
 editing/plaintext-only/insertHTML.html?white-space=pre-wrap
+editing/plaintext-only/insertParagraph.html?white-space=normal
+editing/plaintext-only/insertParagraph.html?white-space=pre
+editing/plaintext-only/insertParagraph.html?white-space=pre-line
+editing/plaintext-only/insertParagraph.html?white-space=pre-wrap
 editing/plaintext-only/styling-commands.html?styleWithCSS=false
 editing/plaintext-only/styling-commands.html?styleWithCSS=true
 editing/whitespaces/inserttext-at-end-of-block-when-br-always-block.html
