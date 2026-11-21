@@ -8130,6 +8130,7 @@ html/semantics/popovers/popover-hint-reentrant-crash.html
 html/semantics/popovers/popover-light-dismiss-on-scroll.html
 html/semantics/popovers/popover-manual-reentrant-crash.html
 html/semantics/popovers/popover-move-documents.html
+html/semantics/popovers/popover-nested-in-button.html
 html/semantics/popovers/popover-open-overflow-display-2.html
 html/semantics/popovers/popover-removal-2.html
 html/semantics/popovers/popover-removal.html
