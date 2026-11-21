@@ -2206,9 +2206,7 @@ editing/run/underline.html?2001-last
 editing/run/undo-redo-after-mutation.html
 editing/run/unlink.html
 encrypted-media/missing-sinf.html
-focus/focus-restoration-in-different-site-iframes-window.html
 focus/focus-restoration-in-different-site-iframes.html
-focus/focus-restoration-in-same-site-iframes-window.html
 focus/iframe-activeelement-after-focusing-out-iframes.html
 font-access/permissions-policy/local-fonts-supported-by-permissions-policy.html
 gyroscope/Gyroscope-supported-by-permissions-policy.html

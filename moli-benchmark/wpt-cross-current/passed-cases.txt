@@ -6560,7 +6560,11 @@ focus/focus-double-sync-calls.html
 focus/focus-element-crash.html
 focus/focus-event-after-focusing-iframes.html
 focus/focus-event-after-iframe-gets-focus.html
+focus/focus-restoration-in-different-site-iframes-window.html
+focus/focus-restoration-in-same-site-iframes-window.html
 focus/focus-sync-when-blur.html
+focus/hasfocus-different-site.html
+focus/hasfocus-same-site.html
 focus/iframe-contentwindow-focus-with-different-site-intermediate-frame.html
 focus/iframe-contentwindow-focus-with-same-as-top-intermediate-frame.html
 focus/iframe-focus-with-different-site-intermediate-frame.html

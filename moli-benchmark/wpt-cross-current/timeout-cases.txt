@@ -42,8 +42,6 @@ editing/crashtests/designMode-caret-change.html
 editing/crashtests/inserthorizontalrule-in-textarea-in-editor-and-undo-on-error-events.html
 editing/crashtests/insertimage-with-replacing-selection-in-picture-element.html
 fetch/api/abort/serviceworker-intercepted.https.html
-focus/hasfocus-different-site.html
-focus/hasfocus-same-site.html
 html/browsers/browsing-the-web/back-forward-cache/storage-events.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-fragment-scrolling-cross-origin.html
 html/browsers/browsing-the-web/navigating-across-documents/009.html
