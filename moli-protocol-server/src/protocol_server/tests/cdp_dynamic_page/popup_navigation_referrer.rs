@@ -206,6 +206,64 @@ async fn popup_navigation_uses_source_referrer_policy_and_window_features() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn popup_device_metrics_clear_restores_staged_window_geometry() {
+    let (fixture_addr, _fixture) =
+        spawn_dedicated_fixture_server(referrer_fixture(), "popup-viewport");
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let parent_id = create_dynamic_target(&mut browser, 1).await;
+    let mut parent = connect_dynamic_page(addr, &parent_id).await;
+    send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut parent, 2, &format!("{base}/parent")).await;
+
+    let url = format!("{base}/child");
+    let (_, mut child) = open_http_popup(
+        addr,
+        &mut parent,
+        "popup-geometry",
+        &url,
+        "innerWidth=417.5, height=239px, screenX=61, top=53",
+    )
+    .await;
+    wait_for_http_document(&mut child, &url).await;
+    let geometry = "[innerWidth,innerHeight,outerWidth,outerHeight,screenX,screenY]";
+    let expected = json!([417, 239, 417, 239, 61, 53]);
+    assert_eq!(
+        evaluate_window_name_probe(&mut child, 1, geometry).await,
+        expected
+    );
+
+    send_cdp_command(
+        &mut child,
+        2,
+        "Emulation.setDeviceMetricsOverride",
+        None,
+        json!({"width":600,"height":350,"deviceScaleFactor":1,"mobile":false}),
+    )
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut child, 3, geometry).await,
+        json!([600, 350, 417, 239, 61, 53])
+    );
+    send_cdp_command(
+        &mut child,
+        4,
+        "Emulation.clearDeviceMetricsOverride",
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut child, 5, geometry).await,
+        expected
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn named_popup_navigation_uses_the_callers_referrer_policy() {
     let (fixture_addr, _fixture) =
         spawn_dedicated_fixture_server(referrer_fixture(), "named-popup-referrer");

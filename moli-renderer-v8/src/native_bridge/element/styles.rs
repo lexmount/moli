@@ -556,12 +556,20 @@ pub(crate) fn style_viewport_for_document(
     host: &PageScriptHost,
     document: DomHandle,
 ) -> StyleViewport {
-    if document == host.document_handle()
-        || host
-            .lightweight_popup_id_for_document_handle(document)
-            .is_some_and(|popup_id| host.lightweight_popup_is_open(popup_id))
-    {
+    if document == host.document_handle() {
         return host.style_viewport();
+    }
+    if let Some(popup_id) = host.lightweight_popup_id_for_document_handle(document)
+        && host.lightweight_popup_is_open(popup_id)
+    {
+        return host
+            .window_viewport_surface(crate::native_bridge::OwnerDispatchScope::LightweightPopup(
+                popup_id,
+            ))
+            .map_or_else(
+                || host.style_viewport(),
+                StyleViewport::from_viewport_surface,
+            );
     }
     host.child_browsing_context_host_for_document_handle(document)
         .and_then(|frame| iframe_handle_viewport(host, frame))

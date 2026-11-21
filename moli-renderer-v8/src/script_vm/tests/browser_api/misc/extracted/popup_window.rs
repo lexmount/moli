@@ -1287,6 +1287,33 @@ fn window_open_popup_uses_native_viewport_without_reading_opener_expandos() {
     );
 }
 
+#[test]
+fn window_open_retains_lightweight_popup_geometry_on_named_reuse() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+    let result = vm
+        .eval(
+            r#"
+        (() => {
+          const p = open("", "geometry", "screenX=51.5,top=73,width=415px,innerHeight=327");
+          const values = () => [p.innerWidth, p.innerHeight, p.outerWidth, p.outerHeight,
+            p.screenLeft, p.screenTop, p.visualViewport.width, p.visualViewport.height,
+            p.matchMedia("(width: 415px) and (height: 327px)").matches];
+          const first = values();
+          const same = open("", "geometry", "width=800,height=600,left=111,top=112") === p;
+          const after = values();
+          const original = [window.screenX, window.screenY];
+          p.close();
+          return JSON.stringify([first, same, after, original]);
+        })()
+        "#,
+        )
+        .expect("popup geometry should be observable in its native Window");
+    assert_eq!(
+        result,
+        "[[415,327,415,327,51,73,415,327,true],true,[415,327,415,327,51,73,415,327,true],[0,0]]"
+    );
+}
+
 #[tokio::test]
 async fn window_open_non_about_returns_lightweight_popup_and_dispatches_load() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

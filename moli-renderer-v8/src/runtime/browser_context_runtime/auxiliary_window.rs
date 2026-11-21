@@ -14,6 +14,7 @@ struct AuxiliaryWindowState {
     close_state: AtomicU8,
     navigation_cancellation_generation: AtomicU64,
     is_popup: AtomicBool,
+    initial_viewport: Option<moli_page_types::ViewportSurface>,
     frame_sandbox: crate::document_runtime::DocumentSandboxPolicy,
 }
 
@@ -62,12 +63,14 @@ impl RendererAuxiliaryWindow {
     pub(super) fn new(
         id: u64,
         frame_sandbox: crate::document_runtime::DocumentSandboxPolicy,
+        initial_viewport: Option<moli_page_types::ViewportSurface>,
     ) -> Self {
         Self(Arc::new(AuxiliaryWindowState {
             id,
             close_state: AtomicU8::new(AuxiliaryWindowCloseState::Open as u8),
             navigation_cancellation_generation: AtomicU64::new(0),
             is_popup: AtomicBool::new(false),
+            initial_viewport,
             frame_sandbox,
         }))
     }
@@ -151,6 +154,11 @@ impl RendererAuxiliaryWindow {
         self.0.is_popup.store(is_popup, Ordering::Release);
     }
 
+    /// The surface staged by window.open before the browser adopts the Page.
+    pub fn initial_viewport(&self) -> Option<moli_page_types::ViewportSurface> {
+        self.0.initial_viewport
+    }
+
     pub(crate) fn frame_sandbox(&self) -> crate::document_runtime::DocumentSandboxPolicy {
         self.0.frame_sandbox
     }
@@ -186,7 +194,7 @@ mod tests {
     use super::*;
 
     fn window() -> RendererAuxiliaryWindow {
-        RendererAuxiliaryWindow::new(1, Default::default())
+        RendererAuxiliaryWindow::new(1, Default::default(), None)
     }
 
     #[test]

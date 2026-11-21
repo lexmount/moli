@@ -1,5 +1,6 @@
 use super::helpers::{
     window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
+    window_viewport_surface,
 };
 use super::*;
 use crate::{native_bridge::lightweight_popup_id_from_window, util::v8str, webidl};
@@ -14,11 +15,11 @@ fn window_inner_surface_dimension<'s>(
     } else {
         DEFAULT_WINDOW_SURFACE_PROFILE.inner_height
     };
-    let Some(host_ptr) = window_host_ptr(scope, receiver) else {
-        return fallback;
-    };
-    let host = unsafe { &*host_ptr };
     if let Some(frame_handle) = window_child_context_handle(scope, receiver) {
+        let Some(host_ptr) = window_host_ptr(scope, receiver) else {
+            return fallback;
+        };
+        let host = unsafe { &*host_ptr };
         if host.layout_policy().is_realtime()
             && !host.child_browsing_context_host_is_active(frame_handle)
         {
@@ -34,7 +35,7 @@ fn window_inner_surface_dimension<'s>(
             })
             .unwrap_or(fallback);
     }
-    host.viewport_surface()
+    window_viewport_surface(scope, receiver)
         .map(|viewport| {
             f64::from(if width {
                 viewport.inner_width
@@ -205,8 +206,7 @@ pub(in crate::context_bootstrap) fn window_outer_width_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    let value = window_host_ptr(scope, receiver)
-        .and_then(|host_ptr| unsafe { &*host_ptr }.viewport_surface())
+    let value = window_viewport_surface(scope, receiver)
         .map_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_width, |v| {
             f64::from(v.outer_width)
         });
@@ -219,8 +219,7 @@ pub(in crate::context_bootstrap) fn window_outer_height_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    let value = window_host_ptr(scope, receiver)
-        .and_then(|host_ptr| unsafe { &*host_ptr }.viewport_surface())
+    let value = window_viewport_surface(scope, receiver)
         .map_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_height, |v| {
             f64::from(v.outer_height)
         });
@@ -233,8 +232,7 @@ pub(in crate::context_bootstrap) fn window_device_pixel_ratio_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    let value = window_host_ptr(scope, receiver)
-        .and_then(|host_ptr| unsafe { &*host_ptr }.viewport_surface())
+    let value = window_viewport_surface(scope, receiver)
         .map_or(DEFAULT_WINDOW_SURFACE_PROFILE.device_pixel_ratio, |v| {
             v.device_pixel_ratio
         });

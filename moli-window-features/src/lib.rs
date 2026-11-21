@@ -33,13 +33,19 @@ impl WindowFeatures {
     }
 }
 
+/// Position and viewport size requested for a newly opened window.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WindowOpenGeometry {
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+}
+
 /// Parsed `window.open()` features consumed by the browser runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowOpenFeatures {
-    x: Option<i32>,
-    y: Option<i32>,
-    width: Option<i32>,
-    height: Option<i32>,
+    geometry: WindowOpenGeometry,
     menu_bar: bool,
     status_bar: bool,
     tool_bar: bool,
@@ -55,10 +61,7 @@ pub struct WindowOpenFeatures {
 impl Default for WindowOpenFeatures {
     fn default() -> Self {
         Self {
-            x: None,
-            y: None,
-            width: None,
-            height: None,
+            geometry: WindowOpenGeometry::default(),
             menu_bar: true,
             status_bar: true,
             tool_bar: true,
@@ -85,7 +88,8 @@ impl WindowOpenFeatures {
         let mut ui_features_were_disabled = false;
         let mut explicit_popup = None;
         for (name, value) in tokenized.iter() {
-            let value = feature_integer_value(value);
+            let numeric = || parse_integer(value.chars()).unwrap_or(0);
+            let enabled = || parse_boolean_feature_value(value);
             if !ui_features_were_disabled
                 && !matches!(name, "noopener" | "noreferrer" | "attributionsrc")
             {
@@ -97,18 +101,18 @@ impl WindowOpenFeatures {
             }
 
             match name {
-                "left" => features.x = Some(value),
-                "top" => features.y = Some(value),
-                "width" => features.width = Some(value),
-                "height" => features.height = Some(value),
-                "popup" => explicit_popup = Some(value != 0),
-                "menubar" => features.menu_bar = value != 0,
-                "toolbar" | "location" => features.tool_bar |= value != 0,
-                "status" => features.status_bar = value != 0,
-                "scrollbars" => features.scrollbars = value != 0,
-                "resizable" => features.resizable = value != 0,
-                "noopener" => features.noopener = value != 0,
-                "noreferrer" => features.noreferrer = value != 0,
+                "left" => features.geometry.x = Some(numeric()),
+                "top" => features.geometry.y = Some(numeric()),
+                "width" => features.geometry.width = Some(numeric()),
+                "height" => features.geometry.height = Some(numeric()),
+                "popup" => explicit_popup = Some(enabled()),
+                "menubar" => features.menu_bar = enabled(),
+                "toolbar" | "location" => features.tool_bar |= enabled(),
+                "status" => features.status_bar = enabled(),
+                "scrollbars" => features.scrollbars = enabled(),
+                "resizable" => features.resizable = enabled(),
+                "noopener" => features.noopener = enabled(),
+                "noreferrer" => features.noreferrer = enabled(),
                 "background" => features.background = true,
                 "persistent" => features.persistent = true,
                 _ => {}
@@ -126,6 +130,11 @@ impl WindowOpenFeatures {
                 || !features.resizable,
         );
         features
+    }
+
+    /// Returns the requested position and viewport size.
+    pub fn geometry(&self) -> WindowOpenGeometry {
+        self.geometry
     }
 
     /// Returns whether these features request a popup browsing context.
@@ -146,16 +155,16 @@ impl WindowOpenFeatures {
     /// Returns the normalized enabled features used by the popup runtime.
     pub fn enabled_feature_strings(&self) -> Vec<String> {
         let mut enabled = Vec::new();
-        if let Some(x) = self.x {
+        if let Some(x) = self.geometry.x {
             enabled.push(format!("left={x}"));
         }
-        if let Some(y) = self.y {
+        if let Some(y) = self.geometry.y {
             enabled.push(format!("top={y}"));
         }
-        if let Some(width) = self.width {
+        if let Some(width) = self.geometry.width {
             enabled.push(format!("width={width}"));
         }
-        if let Some(height) = self.height {
+        if let Some(height) = self.geometry.height {
             enabled.push(format!("height={height}"));
         }
         if !self.is_popup {
