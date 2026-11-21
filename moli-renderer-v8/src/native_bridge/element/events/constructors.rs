@@ -69,9 +69,7 @@ pub(crate) enum TextEditInputType {
     InsertFromPaste,
     #[cfg(feature = "devtools")]
     DeleteByCut,
-    #[cfg(feature = "devtools")]
     DeleteContentBackward,
-    #[cfg(feature = "devtools")]
     DeleteContentForward,
 }
 
@@ -92,9 +90,7 @@ impl TextEditInputType {
             Self::InsertFromPaste => "insertFromPaste",
             #[cfg(feature = "devtools")]
             Self::DeleteByCut => "deleteByCut",
-            #[cfg(feature = "devtools")]
             Self::DeleteContentBackward => "deleteContentBackward",
-            #[cfg(feature = "devtools")]
             Self::DeleteContentForward => "deleteContentForward",
         }
     }
@@ -110,9 +106,11 @@ impl TextEditInputType {
             Self::InsertFromPaste => (!text.is_empty()).then_some(text),
             #[cfg(feature = "devtools")]
             Self::DeleteByCut => None,
-            Self::None | Self::InsertLineBreak | Self::InsertParagraph => None,
-            #[cfg(feature = "devtools")]
-            Self::DeleteContentBackward | Self::DeleteContentForward => None,
+            Self::None
+            | Self::InsertLineBreak
+            | Self::InsertParagraph
+            | Self::DeleteContentBackward
+            | Self::DeleteContentForward => None,
         }
     }
 }

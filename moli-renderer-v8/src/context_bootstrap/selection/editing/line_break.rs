@@ -11,7 +11,7 @@ use crate::dom::native::{ContentEditableState, Element};
 use crate::native_bridge::element::ComputedStyleRead;
 use crate::style_engine::{ComputedDisplayKind, ComputedWhiteSpaceCollapseKind};
 
-mod table;
+pub(super) mod table;
 
 pub(crate) fn replace_editable_selection_line_break(
     scope: &mut v8::PinScope<'_, '_>,
@@ -212,7 +212,7 @@ pub(super) fn insert_line_break_at_range<'s>(
     Some(true)
 }
 
-fn enclosing_sibling_blocks(
+pub(super) fn enclosing_sibling_blocks(
     runtime: &PageScriptHost,
     host: DomHandle,
     start: DomHandle,
@@ -244,7 +244,7 @@ fn enclosing_sibling_blocks(
     (left != right && dom.parent_node(right) == Some(parent)).then_some((left, right, parent))
 }
 
-fn merge_sibling_blocks(
+pub(super) fn merge_sibling_blocks(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     left: DomHandle,
@@ -283,7 +283,10 @@ fn merge_sibling_blocks(
     Some(())
 }
 
-fn white_space(runtime: &PageScriptHost, element: DomHandle) -> ComputedWhiteSpaceCollapseKind {
+pub(super) fn white_space(
+    runtime: &PageScriptHost,
+    element: DomHandle,
+) -> ComputedWhiteSpaceCollapseKind {
     ComputedStyleRead::new(runtime, element)
         .rendered_style_facts()
         .map_or(ComputedWhiteSpaceCollapseKind::Collapse, |style| {

@@ -154,7 +154,11 @@ fn is_inline_container(display: &str) -> bool {
 /// Inspect the neighboring inline stream, including content outside an inline
 /// editor. Stop at formatting-context boundaries; skip comments and display:none
 /// subtrees. Hidden text still participates in whitespace collapsing.
-fn adjacent_inline_content(runtime: &PageScriptHost, mut node: DomHandle, forward: bool) -> bool {
+pub(super) fn adjacent_inline_content(
+    runtime: &PageScriptHost,
+    mut node: DomHandle,
+    forward: bool,
+) -> bool {
     let dom = runtime.dom_host();
     loop {
         let mut adjacent = loop {

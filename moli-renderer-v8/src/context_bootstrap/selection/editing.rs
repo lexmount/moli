@@ -10,9 +10,11 @@ use crate::native_bridge::document::XHTML_NS;
 use crate::native_bridge::{PageScriptHost, SelectionBoundarySnapshot};
 use crate::util::node_wrapper_from_handle;
 
+mod deletion;
 mod line_break;
 mod paragraph_break;
 mod paragraphs;
+pub(crate) use deletion::delete_editable_selection;
 pub(crate) use line_break::replace_editable_selection_line_break;
 pub(crate) use paragraph_break::replace_editable_selection_paragraph;
 use paragraphs::normalize_fragment_for_fixed_paragraph;
@@ -249,6 +251,17 @@ fn placeholder_for_fragment(
 }
 
 fn lone_editor_break(dom: &DomHost, block: DomHandle) -> Option<DomHandle> {
+    lone_editor_break_with(dom, block, |node| {
+        node.as_element()
+            .is_some_and(|element| element.is_html_element("span"))
+    })
+}
+
+fn lone_editor_break_with(
+    dom: &DomHost,
+    block: DomHandle,
+    is_wrapper: impl Fn(&Node) -> bool,
+) -> Option<DomHandle> {
     let mut line_break = None;
     let mut pending = dom.child_handles(block).collect::<Vec<_>>();
     while let Some(child) = pending.pop() {
@@ -263,7 +276,7 @@ fn lone_editor_break(dom: &DomHost, block: DomHandle) -> Option<DomHandle> {
             .filter(|element| element.attributes().is_empty())?;
         if element.is_html_element("br") && line_break.is_none() {
             line_break = Some(child);
-        } else if element.is_html_element("span") {
+        } else if is_wrapper(node) {
             pending.extend(dom.child_handles(child));
         } else {
             return None;
