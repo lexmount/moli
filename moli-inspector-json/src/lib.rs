@@ -109,6 +109,40 @@ impl InspectorJson {
         })))
     }
 
+    /// Decode one envelope field for a scalar consumer without changing opaque wire data.
+    pub fn deserialize_field<T: serde::de::DeserializeOwned>(
+        &self,
+        field: &str,
+    ) -> serde_json::Result<Option<T>> {
+        match self {
+            Self::Parsed(value) => value
+                .get(field)
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose(),
+            Self::Raw(raw) => match field {
+                "id" => raw
+                    .id
+                    .clone()
+                    .map(Value::Number)
+                    .map(serde_json::from_value)
+                    .transpose(),
+                "sessionId" => raw
+                    .session_id
+                    .clone()
+                    .map(Value::String)
+                    .map(serde_json::from_value)
+                    .transpose(),
+                _ => raw
+                    .source
+                    .fields
+                    .get(field)
+                    .map(|value| serde_json::from_str(value.get()))
+                    .transpose(),
+            },
+        }
+    }
+
     pub fn id_i64(&self) -> Option<i64> {
         match self {
             Self::Parsed(value) => value.get("id").and_then(Value::as_i64),
