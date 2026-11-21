@@ -8,7 +8,13 @@ use std::{
 
 use super::ingress::io::RendererInspectorIoIngress;
 #[cfg(feature = "devtools")]
+use super::ingress::lane::RendererDevToolsSessionLaneKey;
+#[cfg(feature = "devtools")]
 use super::ingress::main::RendererInspectorMainIngress;
+#[cfg(feature = "devtools")]
+use super::ingress::session::{
+    RendererInspectorSessionConnect, RendererInspectorSessionConnectionRecord,
+};
 use super::pause::RendererInspectorPauseBridge;
 #[cfg(feature = "devtools")]
 use super::pause::RendererInspectorSessionOutboundRoute;
@@ -148,19 +154,40 @@ impl RendererDevToolsTargetHandle {
     }
 
     #[cfg(feature = "devtools")]
-    pub(crate) fn confirm_session_connection(
+    pub(crate) fn begin_session_connection(
         &self,
         agent: RendererDevToolsAgentToken,
         session: DevToolsSessionKey,
-    ) {
-        if self.io.session_is_detaching(agent, &session) {
-            return;
-        }
+    ) -> Option<RendererInspectorSessionConnect> {
+        let (record, created) = self
+            .io
+            .session_connections()
+            .reserve(RendererDevToolsSessionLaneKey::new(agent, session))?;
+        created.then(|| RendererInspectorSessionConnect::new(self.clone(), record))
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn reserve_frontend_session_connection(
+        &self,
+        agent: RendererDevToolsAgentToken,
+        session: DevToolsSessionKey,
+    ) -> Option<RendererInspectorSessionConnect> {
+        let record =
+            self.io
+                .reserve_frontend_session_connection(RendererDevToolsSessionLaneKey::new(
+                    agent, session,
+                ))?;
+        Some(RendererInspectorSessionConnect::new(self.clone(), record))
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn publish_session_ready(
+        &self,
+        record: &RendererInspectorSessionConnectionRecord,
+    ) -> bool {
         self.io
             .session_connections()
-            .confirm_connected(agent, session);
-        self.main.notify_execution_opportunities();
-        self.io.notify_execution_opportunities();
+            .publish_ready(record, &self.main, &self.io)
     }
 
     #[cfg(feature = "devtools")]

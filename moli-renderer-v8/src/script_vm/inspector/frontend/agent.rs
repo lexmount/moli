@@ -3,7 +3,10 @@ use super::{
     RendererDomDebuggerPauseScheduler, RendererDomDebuggerScheduledPause,
     RendererInspectorIsolateBackend, RendererInspectorObjectWrapper, RuntimeBindingRegistration,
 };
-use crate::script_vm::inspector::frontend::RendererInspectorSessionConnection;
+use crate::{
+    devtools::ingress::session::RendererInspectorSessionConnect,
+    script_vm::inspector::frontend::RendererInspectorSessionConnection,
+};
 use moli_page_types::{DevToolsSessionKey, V8InspectorSessionState};
 use std::rc::Rc;
 
@@ -176,14 +179,15 @@ impl RendererDevToolsAgent {
         &self,
         backend: &mut RendererInspectorIsolateBackend,
         session_key: DevToolsSessionKey,
-    ) {
+        expected: Option<&RendererInspectorSessionConnect>,
+    ) -> bool {
         let mut state = self.state.borrow_mut();
         state.isolate_backend.assert_matches(backend);
         let connection = session_connection(&state);
         state
             .sessions
             .frontend
-            .ensure_frontend(backend, &connection, session_key);
+            .ensure_frontend(backend, &connection, session_key, expected)
     }
 
     pub(in crate::script_vm::inspector) fn set_runtime_bindings(

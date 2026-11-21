@@ -217,7 +217,7 @@ async fn detached_session_binding_is_not_installed_in_a_later_child_realm() {
         page_vm.set_stored_runtime_bindings(&bindings);
         page_vm
             .vm_mut()
-            .ensure_runtime_inspector_session(Some("session-a"));
+            .ensure_runtime_inspector_session(Some("session-a"), None);
 
         assert!(page_vm.detach_runtime_inspector_session(Some("session-a")));
         queue_child_realm_materialization(&mut page_vm, "post-detach-binding-child")?;

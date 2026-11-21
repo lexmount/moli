@@ -396,7 +396,7 @@ impl RendererPageInspectorEndpoint {
         self.target.io_ref().session_connections().contains(
             &crate::devtools::ingress::lane::RendererDevToolsSessionLaneKey::new(
                 self.agent,
-                DevToolsSessionKey::from_wire_session_id(id),
+                DevToolsSessionKey::from_wire_session_id(id.filter(|id| !id.is_empty())),
             ),
         )
     }
@@ -412,11 +412,10 @@ impl RendererPageInspectorEndpoint {
         self.target
             .main_ref()
             .configure_owner_wake(self.runtime.clone());
-        if let Some(connection) = self.target.io_ref().session_connections().begin(
+        let inspector_session_id = inspector_session_id.filter(|id| !id.is_empty());
+        if let Some(connection) = self.target.begin_session_connection(
             self.agent,
             DevToolsSessionKey::from_wire_session_id(inspector_session_id.as_deref()),
-            self.target.main_ref().clone(),
-            self.target.io_ref().clone(),
         ) {
             // Both operations are target-owned. Connect releases IO locally;
             // configuration retains a separate position before later Main work.

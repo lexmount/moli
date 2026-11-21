@@ -43,6 +43,8 @@ pub(in crate::script_vm) use self::v8_backend::finish_page_close_termination;
 pub(crate) use self::v8_backend::{
     RendererInspectorIsolateBackendHandle, dispatch_inspector_io_owner_wake,
 };
+#[cfg(feature = "devtools")]
+use crate::devtools::ingress::session::RendererInspectorSessionConnect;
 use crate::devtools::target::RendererDevToolsTargetHandle;
 #[cfg(all(test, feature = "devtools"))]
 use crate::runtime::RendererRuntimeCommandOutputRecorder;
@@ -214,9 +216,13 @@ impl DocumentInspectorBinding {
         &self,
         backend: &mut RendererInspectorIsolateBackend,
         inspector_session_id: Option<&str>,
-    ) {
-        self.agent
-            .ensure_frontend(backend, inspector_session_key(inspector_session_id));
+        connection: Option<&RendererInspectorSessionConnect>,
+    ) -> bool {
+        self.agent.ensure_frontend(
+            backend,
+            inspector_session_key(inspector_session_id),
+            connection,
+        )
     }
 
     #[cfg(feature = "devtools")]
@@ -373,7 +379,7 @@ impl DocumentInspectorBinding {
         }
         #[cfg(feature = "devtools")]
         self.agent
-            .ensure_frontend(backend, DevToolsSessionKey::Primary);
+            .ensure_frontend(backend, DevToolsSessionKey::Primary, None);
         let mut aux_data = serde_json::Map::new();
         aux_data.insert("isDefault".to_owned(), json!(true));
         aux_data.insert("type".to_owned(), json!("default"));

@@ -14,6 +14,8 @@ use parking_lot::Mutex;
 
 #[cfg(feature = "devtools")]
 use crate::devtools::ingress::lane::RendererDevToolsSessionLaneKey;
+#[cfg(feature = "devtools")]
+use crate::devtools::ingress::session::RendererInspectorSessionConnectionRecord;
 use crate::devtools::pause::RendererInspectorPauseLoopWake;
 use crate::devtools::route::RendererInspectorSessionExecutorRouteId;
 #[cfg(feature = "devtools")]
@@ -554,16 +556,17 @@ impl RendererInspectorIoIngress {
     }
 
     #[cfg(feature = "devtools")]
-    pub(crate) fn session_is_detaching(
+    pub(crate) fn reserve_frontend_session_connection(
         &self,
-        agent: RendererDevToolsAgentToken,
-        session: &DevToolsSessionKey,
-    ) -> bool {
-        self.shared
-            .state
-            .lock()
-            .session_holds
-            .contains_key(&RendererDevToolsSessionLaneKey::new(agent, session.clone()))
+        key: RendererDevToolsSessionLaneKey,
+    ) -> Option<RendererInspectorSessionConnectionRecord> {
+        let state = self.shared.state.lock();
+        // Implicit work can run while cleanup is pending. It cannot supply the
+        // replacement's native session, which must survive that cleanup.
+        if state.closed || state.session_holds.contains_key(&key) {
+            return None;
+        }
+        state.connections.reserve(key).map(|(record, _)| record)
     }
 
     #[cfg(feature = "devtools")]
