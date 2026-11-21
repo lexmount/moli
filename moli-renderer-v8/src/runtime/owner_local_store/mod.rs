@@ -888,6 +888,57 @@ impl RendererOwnerLocalStoreSession<'_> {
         self.store.host_instance_key_for_testing(token)
     }
 
+    #[cfg(test)]
+    pub(super) fn realtime_layout_observation_for_testing(
+        &self,
+        token: RendererPageToken,
+    ) -> Result<super::owner_local::RendererRealtimeLayoutObservation> {
+        #[cfg(debug_assertions)]
+        RendererOwnerLocalStore::ensure_token_thread(&token)?;
+        let entry = self
+            .store
+            .page_hosts
+            .get(&token.local_host_id)
+            .and_then(|host| host.pages.get(&token.page_id))
+            .and_then(|slot| slot.resident_entry())
+            .ok_or_else(|| anyhow!("realtime layout observation Page is not resident"))?;
+        #[cfg(feature = "devtools")]
+        let host = entry
+            .page_vm()
+            .vm()
+            .context_host_weak_for_test()
+            .upgrade()
+            .ok_or_else(|| anyhow!("realtime layout observation Host has retired"))?;
+        #[cfg(feature = "devtools")]
+        let host = host.borrow();
+        #[cfg(feature = "devtools")]
+        let screen = host.layout_snapshot_cache_observability_for_test();
+        #[cfg(feature = "devtools")]
+        let (_, builds, _, metrics) = host.layout_pass_observability_for_test();
+
+        Ok(super::owner_local::RendererRealtimeLayoutObservation {
+            #[cfg(feature = "devtools")]
+            builds,
+            #[cfg(feature = "devtools")]
+            last_pass_paint_operations: metrics.map(|metrics| metrics.paint_operation_count),
+            #[cfg(feature = "devtools")]
+            screen_publishes: screen.publishes,
+            #[cfg(feature = "devtools")]
+            screen_snapshot: screen.cached,
+            #[cfg(feature = "devtools")]
+            frame_idle: host.realtime_frame_is_idle_for_test(),
+            main_parser_source_waiting: entry.pending_phase_one_navigation.as_ref().is_some_and(
+                |pending| {
+                    matches!(
+                        &pending.residence,
+                        super::phase_one::PendingPhaseOneResidence::OpenStreaming(continuation)
+                            if continuation.main_parser_source_waiting_for_test()
+                    )
+                },
+            ),
+        })
+    }
+
     pub(super) fn host_unique_document_isolate_count_for_testing(
         &mut self,
         token: RendererPageToken,

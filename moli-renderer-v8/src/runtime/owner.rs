@@ -300,6 +300,10 @@ pub enum RendererOwnerCommand {
         token: RendererPageToken,
     },
     #[cfg(test)]
+    TestingRealtimeLayoutObservation {
+        token: RendererPageToken,
+    },
+    #[cfg(test)]
     TestingDeferredPageVmDropPendingCount,
 }
 
@@ -329,6 +333,8 @@ pub enum RendererOwnerReply {
     TestingOwnerSlot(RendererPageSlotHandle),
     TestingHostInstanceKey(usize),
     TestingHostUniqueDocumentIsolateCount(usize),
+    #[cfg(test)]
+    TestingRealtimeLayoutObservation(Box<super::owner_local::RendererRealtimeLayoutObservation>),
     #[cfg(test)]
     TestingDeferredPageVmDropPendingCount(usize),
 }

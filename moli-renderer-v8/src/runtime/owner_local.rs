@@ -289,6 +289,26 @@ enum RendererPageCommandPendingDispatch {
     ),
 }
 
+#[cfg(test)]
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct RendererRealtimeLayoutObservation {
+    #[cfg(feature = "devtools")]
+    pub(crate) builds: u64,
+    #[cfg(feature = "devtools")]
+    pub(crate) last_pass_paint_operations: Option<usize>,
+    #[cfg(feature = "devtools")]
+    pub(crate) screen_publishes: u64,
+    #[cfg(feature = "devtools")]
+    pub(crate) screen_snapshot: Option<(
+        crate::document_runtime::DomHandle,
+        moli_layout::LayoutTreeRetentionMetrics,
+    )>,
+    #[cfg(feature = "devtools")]
+    pub(crate) frame_idle: bool,
+    pub(crate) main_parser_source_waiting: bool,
+}
+
 #[derive(Clone)]
 pub struct RendererPageTestingHandle {
     render_runtime: RenderRuntimeHandle,
@@ -1263,6 +1283,23 @@ impl RendererPageTestingHandle {
             RendererOwnerReply::TestingHostUniqueDocumentIsolateCount(count) => Ok(count),
             other => Err(anyhow!(
                 "renderer owner returned non-host-unique-document-isolate-count testing reply: {:?}",
+                std::mem::discriminant(&other)
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn realtime_layout_observation_async(
+        &self,
+    ) -> Result<RendererRealtimeLayoutObservation> {
+        match self
+            .render_runtime
+            .dispatch(RendererOwnerCommand::TestingRealtimeLayoutObservation { token: self.token })
+            .await?
+        {
+            RendererOwnerReply::TestingRealtimeLayoutObservation(observation) => Ok(*observation),
+            other => Err(anyhow!(
+                "renderer owner returned a different testing reply: {:?}",
                 std::mem::discriminant(&other)
             )),
         }
