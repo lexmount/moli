@@ -241,10 +241,11 @@ fn history_scroll_restoration_setter_function<'s>(
     let Some(next_value) = ScrollRestoration::parse(&next_value) else {
         return;
     };
-    if require_fully_active_history_owner(scope, args.this()).is_none() {
+    let Some(owner) = require_fully_active_history_owner(scope, args.this()) else {
         return;
-    }
+    };
     set_history_scroll_restoration(scope, args.this(), next_value.label());
+    super::super::navigation_serialize::sync_navigation_entry_seed_from_owner(scope, owner);
 }
 
 #[cfg(test)]
