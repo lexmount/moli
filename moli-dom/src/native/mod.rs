@@ -23,7 +23,7 @@ use std::sync::Arc;
 use document::DocumentKind;
 pub use document::{
     Document, DocumentBaseUrlPolicyCheck, DocumentFragment, DocumentMetaReferrerPolicySource,
-    DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
+    DocumentReadyState, DocumentTitleSetterTarget, DocumentType, ParagraphSeparator,
 };
 pub use element::{
     Attribute, CustomElementState, Element, SelectedFile, SvgUserTransform,

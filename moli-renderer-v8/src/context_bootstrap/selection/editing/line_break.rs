@@ -20,6 +20,37 @@ pub(crate) fn replace_editable_selection_line_break(
     host: DomHandle,
     insertion_point_is_editable: impl Fn(&PageScriptHost, DomHandle) -> bool,
 ) -> Option<bool> {
+    let insertion = prepare_break(
+        scope,
+        runtime_ptr,
+        document,
+        host,
+        &insertion_point_is_editable,
+    )?;
+    insert_line_break_at_range(
+        scope,
+        runtime_ptr,
+        document,
+        host,
+        insertion,
+        &insertion_point_is_editable,
+        false,
+    )
+}
+
+pub(super) struct BreakInsertion<'s> {
+    pub(super) range: v8::Local<'s, v8::Object>,
+    pub(super) selection: v8::Local<'s, v8::Object>,
+    pub(super) deleted_selection: bool,
+}
+
+pub(super) fn prepare_break<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    document: DomHandle,
+    host: DomHandle,
+    insertion_point_is_editable: &impl Fn(&PageScriptHost, DomHandle) -> bool,
+) -> Option<BreakInsertion<'s>> {
     let runtime = unsafe { &*runtime_ptr };
     let snapshot = runtime.document_editing_selection(document)?;
     let (start, end) = (snapshot.start, snapshot.end);
@@ -38,7 +69,7 @@ pub(crate) fn replace_editable_selection_line_break(
     let [start, mut end] = if order.is_eq() {
         [start, end]
     } else {
-        table::selection_boundaries(runtime, [start, end], &insertion_point_is_editable)?
+        table::selection_boundaries(runtime, [start, end], insertion_point_is_editable)?
     };
     let blocks = if order.is_eq() {
         None
@@ -69,7 +100,7 @@ pub(crate) fn replace_editable_selection_line_break(
         document,
         range,
         [start, end],
-        &insertion_point_is_editable,
+        insertion_point_is_editable,
     )?;
     if let Some((left, right, parent)) = blocks {
         merge_sibling_blocks(
@@ -78,9 +109,30 @@ pub(crate) fn replace_editable_selection_line_break(
             left,
             right,
             parent,
-            &insertion_point_is_editable,
+            insertion_point_is_editable,
         )?;
     }
+    Some(BreakInsertion {
+        range: insertion_range,
+        selection,
+        deleted_selection: !order.is_eq(),
+    })
+}
+
+pub(super) fn insert_line_break_at_range<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    document: DomHandle,
+    host: DomHandle,
+    insertion: BreakInsertion<'s>,
+    insertion_point_is_editable: &impl Fn(&PageScriptHost, DomHandle) -> bool,
+    force_element_break: bool,
+) -> Option<bool> {
+    let BreakInsertion {
+        range: insertion_range,
+        selection,
+        deleted_selection,
+    } = insertion;
     let start = range::native_range_boundary_handles(scope, insertion_range)?.start;
 
     let runtime = unsafe { &*runtime_ptr };
@@ -96,7 +148,7 @@ pub(crate) fn replace_editable_selection_line_break(
     };
     let element = dom.node(parent)?.as_element()?;
     if !allows_line_break(element) {
-        return Some(!order.is_eq());
+        return Some(deleted_selection);
     }
     if parent == container
         && let Some(previous) = offset
@@ -110,12 +162,13 @@ pub(crate) fn replace_editable_selection_line_break(
         // Reuse the existing final break as the caret placeholder.
         offset -= 1;
     }
-    let preserves_newlines = matches!(
-        white_space(runtime, parent),
-        ComputedWhiteSpaceCollapseKind::Preserve
-            | ComputedWhiteSpaceCollapseKind::PreserveBreaks
-            | ComputedWhiteSpaceCollapseKind::BreakSpaces
-    );
+    let preserves_newlines = !force_element_break
+        && matches!(
+            white_space(runtime, parent),
+            ComputedWhiteSpaceCollapseKind::Preserve
+                | ComputedWhiteSpaceCollapseKind::PreserveBreaks
+                | ComputedWhiteSpaceCollapseKind::BreakSpaces
+        );
     let runtime = unsafe { &mut *runtime_ptr };
     let inserted = if preserves_newlines {
         runtime.create_text_node_for_document(document, "\n")
@@ -238,11 +291,30 @@ fn white_space(runtime: &PageScriptHost, element: DomHandle) -> ComputedWhiteSpa
         })
 }
 
-fn collapsed_prefix(runtime: &PageScriptHost, parent: DomHandle, units: &[u16]) -> usize {
+pub(super) fn collapsed_prefix(
+    runtime: &PageScriptHost,
+    parent: DomHandle,
+    units: &[u16],
+) -> usize {
+    collapsible_space_count(runtime, parent, units.iter().copied())
+}
+
+pub(super) fn collapsed_suffix(
+    runtime: &PageScriptHost,
+    parent: DomHandle,
+    units: &[u16],
+) -> usize {
+    collapsible_space_count(runtime, parent, units.iter().rev().copied())
+}
+
+fn collapsible_space_count(
+    runtime: &PageScriptHost,
+    parent: DomHandle,
+    units: impl Iterator<Item = u16>,
+) -> usize {
     let collapses = white_space(runtime, parent);
     units
-        .iter()
-        .take_while(|&&unit| match collapses {
+        .take_while(|&unit| match collapses {
             ComputedWhiteSpaceCollapseKind::Collapse | ComputedWhiteSpaceCollapseKind::Other => {
                 is_collapsible_space(unit)
             }
@@ -312,7 +384,7 @@ fn following_line_content(
     }
 }
 
-fn is_inline_container(display: ComputedDisplayKind) -> bool {
+pub(super) fn is_inline_container(display: ComputedDisplayKind) -> bool {
     matches!(
         display,
         ComputedDisplayKind::Inline
@@ -321,7 +393,7 @@ fn is_inline_container(display: ComputedDisplayKind) -> bool {
     )
 }
 
-fn allows_line_break(element: &Element) -> bool {
+pub(super) fn allows_line_break(element: &Element) -> bool {
     element.namespace() == XHTML_NS
         && !matches!(
             element.local_name(),
@@ -361,7 +433,7 @@ fn allows_line_break(element: &Element) -> bool {
         )
 }
 
-fn create_break(runtime: &mut PageScriptHost, document: DomHandle) -> DomHandle {
+pub(super) fn create_break(runtime: &mut PageScriptHost, document: DomHandle) -> DomHandle {
     runtime
         .dom_host_mut()
         .create_element_without_attributes_for_document(

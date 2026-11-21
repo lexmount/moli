@@ -38,8 +38,8 @@ mod detached_install;
 mod detached_objects;
 mod detached_surface;
 mod hit_test;
+mod insert_break;
 mod insert_html;
-mod insert_line_break;
 mod insert_text;
 mod lifecycle;
 mod live_collections;
@@ -50,7 +50,7 @@ mod structure;
 pub(crate) use attributes::install_attr_prototype;
 pub(crate) use attributes::install_named_node_map_template_bindings;
 #[cfg(feature = "devtools")]
-pub(crate) use insert_line_break::insert_line_break_in_editing_host;
+pub(crate) use insert_break::insert_break_in_editing_host;
 #[cfg(feature = "devtools")]
 pub(crate) use queries::evaluate_live_xpath_search_node_handles;
 

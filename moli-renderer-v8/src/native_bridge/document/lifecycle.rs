@@ -3,20 +3,20 @@ use super::super::node::{
     node_runtime_and_handle_from_args_or_detached, node_runtime_and_handle_from_object_or_detached,
     remove_child_in_reaction_scope,
 };
+use super::insert_break::exec_command_insert_break;
 use super::insert_html::{exec_command_insert_html, insert_html_command_target};
-use super::insert_line_break::exec_command_insert_line_break;
 use super::insert_text::{editing_insertion_target, exec_command_insert_text};
 use super::{PageScriptHost, document_has_browsing_context, is_html_document, throw_dom_exception};
 use crate::native_bridge::element::{
-    contenteditable_editing_host, dispatch_text_control_event, document_copy_command_supported,
-    is_text_control, queue_text_control_document_selection_change_event,
-    restore_focused_text_control_selection, run_document_copy_command,
-    text_control_value_dom_string,
+    TextEditInputType, contenteditable_editing_host, dispatch_text_control_event,
+    document_copy_command_supported, is_text_control,
+    queue_text_control_document_selection_change_event, restore_focused_text_control_selection,
+    run_document_copy_command, text_control_value_dom_string,
 };
 use crate::{
     custom_elements,
     document_runtime::{DomHandle, EventTargetHandle},
-    dom::native::{DocumentReadyState, Node},
+    dom::native::{DocumentReadyState, Node, ParagraphSeparator},
     util::{
         call_object_method, node_wrapper_from_handle, utf16_next_scalar_boundary,
         utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, v8_string, v8str,
@@ -684,10 +684,12 @@ fn normalized_editing_command<'s>(
 #[strum(serialize_all = "lowercase")]
 enum EditingCommand {
     Copy,
+    DefaultParagraphSeparator,
     Delete,
     ForwardDelete,
     InsertHtml,
     InsertLineBreak,
+    InsertParagraph,
     InsertText,
     SelectAll,
     StyleWithCss,
@@ -785,9 +787,40 @@ fn execute_document_editing_command<'s>(
             rv.set(v8::Boolean::new(scope, inserted).into());
             return;
         }
-        EditingCommand::InsertLineBreak => {
-            let inserted = exec_command_insert_line_break(scope, runtime_ptr, document_handle);
+        EditingCommand::InsertLineBreak | EditingCommand::InsertParagraph => {
+            let input_type = if matches!(command, EditingCommand::InsertParagraph) {
+                TextEditInputType::InsertParagraph
+            } else {
+                TextEditInputType::InsertLineBreak
+            };
+            let inserted =
+                exec_command_insert_break(scope, runtime_ptr, document_handle, input_type);
             rv.set(v8::Boolean::new(scope, inserted).into());
+            return;
+        }
+        EditingCommand::DefaultParagraphSeparator => {
+            let Some(value) = editing_command_value(scope, args) else {
+                return;
+            };
+            let separator = if value.eq_ignore_ascii_case("p") {
+                ParagraphSeparator::P
+            } else if value.eq_ignore_ascii_case("div") {
+                ParagraphSeparator::Div
+            } else {
+                rv.set(v8::Boolean::new(scope, false).into());
+                return;
+            };
+            let runtime = unsafe { &mut *runtime_ptr };
+            let applied = runtime.document_is_fully_active(document_handle)
+                && runtime
+                    .dom_host_mut()
+                    .node_mut(document_handle)
+                    .and_then(|node| node.data_mut().as_document_mut())
+                    .is_some_and(|document| {
+                        document.set_paragraph_separator(separator);
+                        true
+                    });
+            rv.set(v8::Boolean::new(scope, applied).into());
             return;
         }
         EditingCommand::StyleWithCss | EditingCommand::UseCss => {
@@ -837,9 +870,11 @@ pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'
     let runtime = unsafe { &*runtime_ptr };
     let supported = match command.parse::<EditingCommand>() {
         Ok(EditingCommand::Copy) => document_copy_command_supported(runtime, document_handle),
-        Ok(EditingCommand::StyleWithCss | EditingCommand::UseCss) => {
-            runtime.document_is_fully_active(document_handle)
-        }
+        Ok(
+            EditingCommand::StyleWithCss
+            | EditingCommand::UseCss
+            | EditingCommand::DefaultParagraphSeparator,
+        ) => runtime.document_is_fully_active(document_handle),
         Ok(_) => true,
         Err(_) => false,
     };
@@ -862,9 +897,11 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
     };
     let runtime = unsafe { &*runtime_ptr };
     let enabled = match command.parse::<EditingCommand>() {
-        Ok(EditingCommand::InsertLineBreak | EditingCommand::InsertText) => {
-            editing_insertion_target(runtime, document_handle).is_some()
-        }
+        Ok(
+            EditingCommand::InsertLineBreak
+            | EditingCommand::InsertParagraph
+            | EditingCommand::InsertText,
+        ) => editing_insertion_target(runtime, document_handle).is_some(),
         Ok(EditingCommand::Delete | EditingCommand::ForwardDelete) => {
             runtime.document_design_mode_enabled(document_handle)
                 || runtime.active_element_handle().is_some_and(|active| {
@@ -881,9 +918,11 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
         Ok(EditingCommand::Copy) => {
             run_document_copy_command(scope, runtime_ptr, document_handle, true)
         }
-        Ok(EditingCommand::StyleWithCss | EditingCommand::UseCss) => {
-            runtime.document_is_fully_active(document_handle)
-        }
+        Ok(
+            EditingCommand::StyleWithCss
+            | EditingCommand::UseCss
+            | EditingCommand::DefaultParagraphSeparator,
+        ) => runtime.document_is_fully_active(document_handle),
         Err(_) => false,
     };
     rv.set(v8::Boolean::new(scope, enabled).into());
@@ -937,17 +976,30 @@ pub(in crate::native_bridge) fn node_document_query_command_value_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let _command = normalized_editing_command(scope, &args);
-    if editing_command_document(
+    let command = normalized_editing_command(scope, &args);
+    let Some((runtime_ptr, document)) = editing_command_document(
         scope,
         &args,
         &mut rv,
         "queryCommandValue is only supported on HTML documents.",
-    )
-    .is_some()
+    ) else {
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let value = if matches!(
+        command.parse(),
+        Ok(EditingCommand::DefaultParagraphSeparator)
+    ) && runtime.document_is_fully_active(document)
     {
-        rv.set(v8str(scope, "").into());
-    }
+        runtime
+            .dom_host()
+            .node(document)
+            .and_then(Node::as_document)
+            .map_or("", |document| document.paragraph_separator().tag_name())
+    } else {
+        ""
+    };
+    rv.set(v8str(scope, value).into());
 }
 
 fn exec_command_select_all<'s>(
