@@ -482,6 +482,7 @@ fn realtime_raf_hidden_child_document_open_preserves_callbacks_without_polling()
     });
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn realtime_raf_isolated_realm_retirement_preserves_default_world_callbacks() {
     run_page_vm_large_stack_async_test("realtime-raf-isolated-retirement", || async move {
@@ -559,6 +560,7 @@ fn realtime_raf_reports_to_callback_realm_instead_of_target_window() {
     });
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn realtime_raf_from_isolated_child_uses_its_window_and_becomes_idle() {
     run_page_vm_large_stack_async_test("realtime-raf-isolated-child", || async move {

@@ -85,7 +85,6 @@ async fn owner_scheduler_runs_realtime_opportunity_without_timer_capture_or_foll
     page.close_async().await.unwrap();
 }
 
-#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_scheduler_runs_nested_realtime_raf_without_capture_or_followup_commands() {
     let runtime = JsRuntime::initialize();
@@ -183,6 +182,7 @@ async fn owner_scheduler_runs_realtime_ro_without_capture_or_followup_commands()
     assert_eq!(value, Some(serde_json::json!("[[100,110,120],2]")));
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_loop_runs_file_reading_callback_without_retry_command() {
     let runtime = JsRuntime::initialize();

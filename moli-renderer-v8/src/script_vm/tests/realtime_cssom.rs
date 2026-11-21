@@ -250,6 +250,7 @@ fn realtime_cssom_duration_shorthands_refresh_before_serializing_longhands() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn realtime_cssom_duration_protocol_batch_refreshes_once_before_style_observation() {
     let mut vm = container_duration_vm(CONTAINER_DEPENDENT_DURATION, CONTAINER_DEPENDENT_DURATION);
@@ -281,10 +282,6 @@ fn realtime_cssom_duration_protocol_batch_refreshes_once_before_style_observatio
 #[test]
 fn realtime_cssom_constant_durations_and_color_do_not_refresh_dirty_container_geometry() {
     let mut vm = container_duration_vm("2s", "3s");
-    let handles = {
-        let host = vm._context_host.borrow();
-        ["target", "second"].map(|id| host.dom_host().element_handle_by_id(id).unwrap())
-    };
     let before = vm.layout_pass_observability_for_test().1;
     let reads = "JSON.stringify([heldDurationStyle.animationDuration,\
         heldDurationStyle.getPropertyValue('animation-duration'),\
@@ -297,17 +294,24 @@ fn realtime_cssom_constant_durations_and_color_do_not_refresh_dirty_container_ge
         r#"["2s","2s","3s","3s","rgb(1, 2, 3)","rgb(1, 2, 3)"]"#
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    let properties = ["animation-duration", "transition-duration", "color"].map(String::from);
-    for _ in 0..2 {
-        assert_eq!(
-            vm.computed_style_property_values_for_document_snapshot(handles, &properties)
-                .unwrap(),
-            vec![
-                vec!["2s", "3s", "rgb(1, 2, 3)"],
-                vec!["2s", "3s", "rgb(1, 2, 3)"]
-            ]
-        );
-        assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    #[cfg(feature = "devtools")]
+    {
+        let handles = {
+            let host = vm._context_host.borrow();
+            ["target", "second"].map(|id| host.dom_host().element_handle_by_id(id).unwrap())
+        };
+        let properties = ["animation-duration", "transition-duration", "color"].map(String::from);
+        for _ in 0..2 {
+            assert_eq!(
+                vm.computed_style_property_values_for_document_snapshot(handles, &properties)
+                    .unwrap(),
+                vec![
+                    vec!["2s", "3s", "rgb(1, 2, 3)"],
+                    vec!["2s", "3s", "rgb(1, 2, 3)"]
+                ]
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, before);
+        }
     }
     assert_eq!(
         vm.eval(reads).unwrap(),
