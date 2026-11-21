@@ -9,7 +9,9 @@ impl PageScriptHost {
         &self,
         scope: &mut v8::PinScope<'_, '_>,
     ) -> bool {
-        !self.websockets.is_empty()
+        // Future realtime frames live in the rendering source, not Window timers.
+        self.current_realtime_rendering_opportunity().is_some()
+            || !self.websockets.is_empty()
             || self.workers.values().any(|worker| match &worker.execution {
                 WorkerExecutionState::Loading { terminated, .. } => !terminated,
                 // The canonical connection stays registered until both relay

@@ -333,9 +333,11 @@ pub(super) fn unobserve_intersection_target(
     if !access.read(|host| node_is_intersection_target(host.dom_host(), target)) {
         return false;
     }
-    access.store(|store| {
-        store.intersection_unobserve_target(scope, observer, target);
-    });
+    let canceled =
+        access.store(|store| store.intersection_unobserve_target(scope, observer, target));
+    if canceled {
+        access.read(PageScriptHost::refresh_realtime_rendering_opportunity);
+    }
     true
 }
 
@@ -344,9 +346,11 @@ pub(super) fn disconnect_intersection_observer(
     host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
 ) {
-    ObserverHostAccess::new(host_ptr).store(|store| {
-        store.disconnect_intersection_observer(scope, observer);
-    });
+    let mut access = ObserverHostAccess::new(host_ptr);
+    let canceled = access.store(|store| store.disconnect_intersection_observer(scope, observer));
+    if canceled {
+        access.read(PageScriptHost::refresh_realtime_rendering_opportunity);
+    }
 }
 
 pub(super) fn take_intersection_records<'s>(
@@ -379,7 +383,7 @@ pub(crate) fn queue_intersection_checks(
         }
         return;
     }
-    let Some(batch) = access.store(ObserverStore::take_intersection_check_batch) else {
+    let Some(batch) = access.store(|store| store.take_intersection_check_batch(None)) else {
         return;
     };
     let Ok(completed) = access.read(|runtime| {
@@ -387,7 +391,7 @@ pub(crate) fn queue_intersection_checks(
     }) else {
         return;
     };
-    let queued_any = access.store(|store| store.apply_intersection_check_batch(completed));
+    let queued_any = access.store(|store| store.apply_intersection_check_batch(completed, None));
     if queued_any {
         request_task_with_access(&mut access, scope, ObserverTask::IntersectionDelivery);
     }
@@ -399,7 +403,7 @@ fn queue_intersection_checks_with_dom(
     dom_host: &DomHost,
 ) {
     let Some(batch): Option<IntersectionCheckBatch> =
-        access.store(ObserverStore::take_intersection_check_batch)
+        access.store(|store| store.take_intersection_check_batch(None))
     else {
         return;
     };
@@ -408,7 +412,7 @@ fn queue_intersection_checks_with_dom(
     else {
         return;
     };
-    let queued_any = access.store(|store| store.apply_intersection_check_batch(completed));
+    let queued_any = access.store(|store| store.apply_intersection_check_batch(completed, None));
     if queued_any {
         request_task_with_access(access, scope, ObserverTask::IntersectionDelivery);
     }

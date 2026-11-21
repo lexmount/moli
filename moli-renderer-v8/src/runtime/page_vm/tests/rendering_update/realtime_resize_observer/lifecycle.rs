@@ -251,3 +251,422 @@ fn realtime_ro_error_handler_mutations_refresh_geometry_without_restarting_depth
         );
     });
 }
+
+#[test]
+fn realtime_ro_error_microtask_is_current_for_io_and_capture_without_restarting_callbacks() {
+    use crate::runtime::{RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest};
+
+    run_page_vm_large_stack_async_test("realtime-ro-error-io-output", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 400,
+            inner_height: 80,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))
+        .unwrap();
+        // Consume initialization before observing the scenario's one batch.
+        run_opportunity(&mut page, &loader).await.unwrap();
+        page.vm_mut()
+            .eval(
+                r#"
+                document.head.innerHTML='<style>html,body{margin:0;background:white}</style>';
+                document.body.innerHTML='<div id=target style="position:absolute;left:0;top:0;width:100px;height:20px;background:red"></div>';
+                window.events=[];window.sizes=[];window.errors=[];window.ioSizes=[];window.ticks=0;
+                window.onerror=message=>{
+                    errors.push(message);events.push('error');
+                    target.style.width='300px';target.style.background='blue';
+                    Promise.resolve().then(()=>{
+                        events.push('error-microtask');
+                        target.style.width='320px';target.style.background='lime';
+                    });
+                    return true;
+                };
+                window.ro=new ResizeObserver(entries=>{
+                    const width=entries[0].contentRect.width;
+                    sizes.push(width);events.push('ro:'+width);
+                    if(sizes.length===1)target.style.width='200px';
+                });
+                window.io=new IntersectionObserver(entries=>{
+                    for(const entry of entries){
+                        ioSizes.push([entry.boundingClientRect.width,entry.intersectionRect.width]);
+                        events.push('io:'+entry.boundingClientRect.width);
+                    }
+                });
+                ro.observe(target);io.observe(target);
+                requestAnimationFrame(()=>{ticks++;events.push('raf')});
+                "#,
+            )
+            .unwrap();
+
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([events,sizes,errors,ioSizes,ticks])")
+                .unwrap(),
+            r#"[["raf","ro:100","error","error-microtask"],[100],["ResizeObserver loop completed with undelivered notifications."],[],1]"#
+        );
+        let frame_builds = page.vm().layout_pass_observability_for_test().1;
+        assert_eq!(
+            page.vm()
+                .layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+
+        // Deliver the frame's owned sample before any screenshot or geometry
+        // getter could repair stale post-error layout. IO delivery cannot build.
+        assert!(
+            page.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::IntersectionObserver,
+                &loader,
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([ioSizes,sizes,errors.length,ticks,events])")
+                .unwrap(),
+            r#"[[[320,320]],[100],1,1,["raf","ro:100","error","error-microtask","io:320"]]"#
+        );
+        assert_eq!(
+            page.vm().layout_pass_observability_for_test().1,
+            frame_builds
+        );
+        let pending = page
+            .current_realtime_rendering_opportunity()
+            .expect("skipped RO remains due in the next batch");
+        let deadline = page.next_rendering_opportunity_deadline_for_test();
+        assert!(deadline.is_some());
+
+        // Use the existing output route. This explicit paint may rebuild, but
+        // cannot restart rAF/RO or consume the next batch's pending ticket.
+        let RendererCaptureScreenshotReply::Captured(capture) = page
+            .capture_screenshot(RendererCaptureScreenshotRequest::viewport_png())
+            .unwrap()
+        else {
+            panic!("current screen capture");
+        };
+        let image = moli_image::decode_png(&capture.bytes).unwrap();
+        assert_eq!((image.width, image.height), (400, 80));
+        let pixel = |x: usize, y: usize| {
+            let offset = (y * image.width as usize + x) * 4;
+            &image.rgba[offset..offset + 4]
+        };
+        assert_eq!(pixel(310, 10), [0, 255, 0, 255]);
+        assert_eq!(pixel(330, 10), [255, 255, 255, 255]);
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([ioSizes,sizes,errors.length,ticks,events])")
+                .unwrap(),
+            r#"[[[320,320]],[100],1,1,["raf","ro:100","error","error-microtask","io:320"]]"#
+        );
+        assert_eq!(page.current_realtime_rendering_opportunity(), Some(pending));
+        assert_eq!(
+            page.next_rendering_opportunity_deadline_for_test(),
+            deadline
+        );
+        let capture_builds = page.vm().layout_pass_observability_for_test().1;
+        assert!(
+            (frame_builds..=frame_builds + 1).contains(&capture_builds),
+            "capture may reuse paint inputs or build one explicit pass"
+        );
+
+        // The next normal opportunity reports the skipped target once, using
+        // current published geometry; it does not replay the finished phases.
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([ioSizes,sizes,errors.length,ticks,events])")
+                .unwrap(),
+            r#"[[[320,320]],[100,320],1,1,["raf","ro:100","error","error-microtask","io:320","ro:320"]]"#
+        );
+        assert_eq!(
+            page.vm().layout_pass_observability_for_test().1,
+            capture_builds
+        );
+        assert!(
+            page.claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::IntersectionObserver,
+            )
+            .is_none()
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
+#[test]
+fn realtime_native_button_value_change_schedules_resize_without_pseudo_state_change() {
+    run_page_vm_large_stack_async_test("realtime-button-value-frame", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.vm_mut().eval(r#"
+            document.body.innerHTML='<input id="target" type="button" value="A" style="font-size:10px;line-height:10px;width:auto;min-width:0;padding:0;border:0;box-sizing:content-box">';
+            // Establish the dirty value flag before testing an identical-value write.
+            target.value='A';
+            window.sizes=[];
+            window.observer=new ResizeObserver(entries=>sizes.push(entries[0].contentRect.width));
+            observer.observe(target);
+        "#).unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([target.value,sizes])")
+                .unwrap(),
+            r#"["A",[40]]"#
+        );
+        assert!(page.current_realtime_rendering_opportunity().is_none());
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert!(page.vm().next_timeout_deadline().is_none());
+        let builds = page.vm().layout_pass_observability_for_test().1;
+        assert!(
+            builds > 0,
+            "the first RO delivery must have published real geometry"
+        );
+
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let target = host
+            .borrow()
+            .dom_host()
+            .element_handle_by_id("target")
+            .unwrap();
+        let old_state = host
+            .borrow()
+            .retained_current_element_state(target)
+            .expect("layout must have established the retained style world");
+        let dom_version = host.borrow().dom_host().dom_version();
+
+        // There is no DOM/style mutation, getter, rAF or capture to create an
+        // unrelated opportunity after the initial RO demand has been consumed.
+        page.vm_mut().eval("target.value='A'").unwrap();
+        assert_eq!(host.borrow().dom_host().dom_version(), dom_version);
+        assert_eq!(
+            host.borrow().retained_current_element_state(target),
+            Some(old_state)
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+        assert_eq!(page.vm_mut().eval("JSON.stringify(sizes)").unwrap(), "[40]");
+
+        assert_eq!(
+            page.vm_mut()
+                .eval("target.value='ABCDEFGHIJKLMNOPQRST';JSON.stringify([target.value,sizes])")
+                .unwrap(),
+            r#"["ABCDEFGHIJKLMNOPQRST",[40]]"#
+        );
+        assert!(host.borrow().dom_host().dom_version() > dom_version);
+        assert_eq!(
+            host.borrow().retained_current_element_state(target),
+            Some(old_state),
+            "the value must change without a checked, validity, direction or placeholder transition"
+        );
+        assert_eq!(
+            page.vm().layout_pass_observability_for_test().1,
+            builds,
+            "the setter must not synchronously lay out or deliver RO"
+        );
+        assert!(
+            page.current_realtime_rendering_opportunity().is_some(),
+            "a changed native button label must request a frame even when pseudo-state bits are unchanged"
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_some()
+        );
+
+        // This helper only admits an already pending opportunity; it cannot
+        // manufacture demand or repair the omission with a geometry getter.
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([target.value,sizes])")
+                .unwrap(),
+            r#"["ABCDEFGHIJKLMNOPQRST",[40,120]]"#
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+        assert_eq!(
+            page.vm()
+                .layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+        assert!(page.current_realtime_rendering_opportunity().is_none());
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert!(page.vm().next_timeout_deadline().is_none());
+
+        let changed_dom_version = host.borrow().dom_host().dom_version();
+        page.vm_mut()
+            .eval("target.value='ABCDEFGHIJKLMNOPQRST'")
+            .unwrap();
+        assert_eq!(host.borrow().dom_host().dom_version(), changed_dom_version);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+            "[40,120]"
+        );
+    });
+}
+
+#[test]
+fn realtime_select_value_change_schedules_has_resize_like_selected_index() {
+    run_page_vm_large_stack_async_test("realtime-select-value-frame", || async move {
+        for (case, change, same_before, same_after) in [
+            (
+                "selectedIndex",
+                "selectCtl.selectedIndex=1",
+                "selectCtl.selectedIndex=0",
+                "selectCtl.selectedIndex=1",
+            ),
+            (
+                "value",
+                "selectCtl.value='b'",
+                "selectCtl.value='a'",
+                "selectCtl.value='b'",
+            ),
+        ] {
+            let loader =
+                crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+            let mut page = realtime_page(&loader);
+            assert_eq!(page.vm_mut().eval(r#"
+                document.body.innerHTML='<style>option{color:rgb(1,2,3)}option:checked{color:rgb(4,5,6)}#target{width:100px;height:20px;padding:0;border:0}body:has(#optionB:checked) #target{width:200px}</style><select id=selectCtl><option id=optionA value=a>Alpha</option><option id=optionB value=b>Beta</option></select><div id=target></div>';
+                selectCtl.selectedIndex=0;
+                // Warm the style world before the initial RO publishes geometry.
+                window.initialColors=[getComputedStyle(optionA).color,getComputedStyle(optionB).color];
+                window.sizes=[];
+                window.observer=new ResizeObserver(entries=>sizes.push(entries[0].contentRect.width));
+                observer.observe(target);
+                JSON.stringify(initialColors)
+            "#).unwrap(), r#"["rgb(4, 5, 6)","rgb(1, 2, 3)"]"#);
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+                "[100]"
+            );
+            assert!(page.current_realtime_rendering_opportunity().is_none());
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert!(page.vm().next_timeout_deadline().is_none());
+            let builds = page.vm().layout_pass_observability_for_test().1;
+            assert!(builds > 0);
+
+            let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+            let a = host
+                .borrow()
+                .dom_host()
+                .element_handle_by_id("optionA")
+                .unwrap();
+            let b = host
+                .borrow()
+                .dom_host()
+                .element_handle_by_id("optionB")
+                .unwrap();
+            let old_a = host
+                .borrow()
+                .retained_current_element_state(a)
+                .expect("warm option A state");
+            let old_b = host
+                .borrow()
+                .retained_current_element_state(b)
+                .expect("warm option B state");
+            let version = host.borrow().dom_host().dom_version();
+            page.vm_mut().eval(same_before).unwrap();
+            assert_eq!(host.borrow().dom_host().dom_version(), version);
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+            assert_eq!(
+                page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+                "[100]"
+            );
+
+            // Do not read style/geometry, mutate attributes, request rAF, or
+            // capture after this native state change. Only its own notification
+            // may create the next opportunity and refresh the observer target.
+            page.vm_mut().eval(change).unwrap();
+            assert_eq!(
+                page.vm_mut()
+                    .eval(
+                        "JSON.stringify([selectCtl.value,optionA.selected,optionB.selected,sizes])"
+                    )
+                    .unwrap(),
+                r#"["b",false,true,[100]]"#,
+                "native peer selection: {case}"
+            );
+            assert!(host.borrow().dom_host().dom_version() > version);
+            assert_ne!(host.borrow().retained_current_element_state(a), Some(old_a));
+            assert_ne!(host.borrow().retained_current_element_state(b), Some(old_b));
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+            assert!(
+                page.current_realtime_rendering_opportunity().is_some(),
+                "the public {case} setter must request its own frame after changing selected peers"
+            );
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_some()
+            );
+
+            // This only admits existing demand; it cannot create or repair it.
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+                "[100,200]",
+                "{case}"
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+            assert_eq!(
+                page.vm()
+                    .layout_pass_observability_for_test()
+                    .3
+                    .unwrap()
+                    .paint_operation_count,
+                0
+            );
+            assert!(page.current_realtime_rendering_opportunity().is_none());
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert!(page.vm().next_timeout_deadline().is_none());
+
+            let changed_version = host.borrow().dom_host().dom_version();
+            page.vm_mut().eval(same_after).unwrap();
+            assert_eq!(host.borrow().dom_host().dom_version(), changed_version);
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+            assert_eq!(
+                page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+                "[100,200]"
+            );
+        }
+    });
+}
