@@ -494,6 +494,37 @@ document.querySelector("iframe").contentWindow.history.go.call(history, -2);
 }
 
 #[tokio::test]
+async fn history_traversal_uses_the_scroll_mode_set_during_popstate() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
+
+    vm.eval(
+        r##"
+        history.replaceState(null, "", "#target");
+        scrollTo(12, 34);
+        history.pushState(null, "", "#source");
+        scrollTo(56, 78);
+        addEventListener("popstate", () => {
+          globalThis.scrollAtPopstate = [scrollX, scrollY];
+          history.scrollRestoration = "manual";
+        }, { once: true });
+        history.back();
+        "##,
+    )
+    .expect("history traversal should queue");
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .expect("history traversal should execute")
+    );
+    let observed = vm
+        .eval("[location.hash, ...scrollAtPopstate, scrollX, scrollY].join('|')")
+        .expect("scroll positions should be observable");
+    assert_eq!(observed, "#target|56|78|56|78");
+}
+
+#[tokio::test]
 async fn traversal_navigate_destination_index_tracks_entry_identity() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =
