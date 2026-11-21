@@ -604,9 +604,10 @@ fn navigate_event_scroll_callback<'s>(
         crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented");
     let already_scrolled =
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SCROLL_CALLED_SLOT, false);
-    let active = crate::context_bootstrap::event_backing(scope, event)
+    let navigation = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "target").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
+    let active = navigation
         .is_some_and(|navigation| navigation_scroll_event_is_active(scope, navigation, event));
     if !intercepted
         || default_prevented
@@ -618,6 +619,17 @@ fn navigate_event_scroll_callback<'s>(
         return;
     }
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SCROLL_CALLED_SLOT, true);
+    if let Some(navigation) = navigation
+        && crate::context_bootstrap::event_attribute(scope, event, "navigationType")
+            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+            .is_some_and(|value| value.to_rust_string_lossy(scope) == "traverse")
+    {
+        let owner = runtime_window_owner(scope, navigation);
+        crate::context_bootstrap::navigation_entry::restore_current_navigation_entry_scroll_position(
+            scope, owner,
+        );
+        return;
+    }
     let Some(target_url) = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "destination").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())

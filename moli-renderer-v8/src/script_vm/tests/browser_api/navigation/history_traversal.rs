@@ -837,3 +837,41 @@ async fn repeated_traverse_to_reuses_pending_navigation_promises() {
             .expect("repeated traverseTo should share one traversal task")
     );
 }
+
+#[tokio::test]
+async fn explicit_traversal_scroll_restores_saved_position_even_in_manual_mode() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
+
+    vm.eval(
+        r##"
+        history.replaceState(null, "", "#target");
+        history.scrollRestoration = "manual";
+        scrollTo(12, 34);
+        history.pushState(null, "", "#source");
+        scrollTo(56, 78);
+        navigation.addEventListener("navigate", event => {
+          event.intercept({
+            scroll: "manual",
+            handler() {
+              globalThis.scrollBeforeExplicitRestore = [scrollX, scrollY];
+              event.scroll();
+              globalThis.scrollAfterExplicitRestore = [scrollX, scrollY];
+            }
+          });
+        }, { once: true });
+        history.back();
+        "##,
+    )
+    .expect("intercepted history traversal should queue");
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .expect("intercepted history traversal should execute")
+    );
+    let observed = vm
+        .eval("[location.hash, ...scrollBeforeExplicitRestore, ...scrollAfterExplicitRestore].join('|')")
+        .expect("explicit scroll positions should be observable");
+    assert_eq!(observed, "#target|56|78|12|34");
+}
