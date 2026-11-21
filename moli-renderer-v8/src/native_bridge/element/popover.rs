@@ -324,7 +324,7 @@ fn popover_flat_tree_parent(runtime: &PageScriptHost, handle: DomHandle) -> Opti
     Some(parent)
 }
 
-fn close_open_auto_popovers(
+pub(super) fn close_open_auto_popovers(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     opening: DomHandle,

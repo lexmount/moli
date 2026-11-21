@@ -394,6 +394,7 @@ pub(super) fn dialog_show_callback<'s>(
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, false);
+    super::popover::close_open_auto_popovers(scope, runtime_ptr, handle, None);
 }
 
 pub(super) fn dialog_show_modal_callback<'s>(
@@ -427,6 +428,7 @@ pub(super) fn dialog_show_modal_callback<'s>(
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, true);
+    super::popover::close_open_auto_popovers(scope, runtime_ptr, handle, None);
 }
 
 pub(super) fn dialog_close_callback<'s>(
