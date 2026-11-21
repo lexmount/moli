@@ -11,7 +11,7 @@ use crate::{
             SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
             navigate_named_iframe_target,
         },
-        entered_child_window_handle,
+        entered_child_window_handle, set_object_slot,
     },
     runtime::{
         RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
@@ -429,6 +429,18 @@ pub(crate) fn window_open_callback<'s>(
         let popup_id = opened_popup.popup_id;
         if opened_popup.created_new_browsing_context {
             host.set_lightweight_popup_is_popup(popup_id, parsed_features.is_popup());
+            let (width, height) = parsed_features.requested_size();
+            let surface = host.viewport_surface().unwrap_or_default();
+            for (property, requested, available) in [
+                ("innerWidth", width, surface.screen_avail_width),
+                ("innerHeight", height, surface.screen_avail_height),
+            ] {
+                if let Some(requested) = requested.filter(|&value| value != 0) {
+                    let dimension = (requested.max(1) as u32).min(available.max(1));
+                    let value = v8::Number::new(scope, f64::from(dimension));
+                    set_object_slot(scope, opened_popup.window, property, value.into());
+                }
+            }
         }
         let session_storage_store = host.lightweight_popup_session_storage_store(popup_id);
         let initial_empty_document_storage_key =
