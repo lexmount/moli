@@ -71,7 +71,11 @@ fn file_input_validity_style_vm(policy: LayoutPolicy) -> StandaloneScriptVmHarne
 
 #[test]
 fn input_files_web_assignment_refreshes_held_validity_style_in_the_same_call() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
         let mut vm = file_input_validity_style_vm(policy);
         let builds = vm.layout_pass_observability_for_test().1;
         assert_eq!(
@@ -125,7 +129,11 @@ fn input_files_web_assignment_refreshes_held_validity_style_in_the_same_call() {
 #[cfg(feature = "devtools")]
 #[test]
 fn input_files_native_commit_refreshes_style_before_input_and_change_callbacks() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
         let mut vm = file_input_validity_style_vm(policy);
         let upload = vm.document_runtime.get_element_by_id("upload").unwrap();
         let chosen = crate::dom::native::SelectedFile {
