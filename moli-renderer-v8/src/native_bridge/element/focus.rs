@@ -673,6 +673,66 @@ fn dispatch_window_focus_event(
     }
 }
 
+pub(crate) fn dispatch_system_focus_change(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    document: DomHandle,
+    window: EventTargetHandle,
+    focused: bool,
+) -> bool {
+    let runtime = unsafe { &*runtime_ptr };
+    let (current_document, element) = runtime.focused_document_and_element();
+    let element = element.filter(|_| current_document == document);
+    let (event_type, bubbling_type) = if focused {
+        ("focus", "focusin")
+    } else {
+        ("blur", "focusout")
+    };
+    let dispatch_window = |scope: &mut v8::PinScope<'_, '_>| {
+        let runtime = unsafe { &mut *runtime_ptr };
+        if !runtime.document_is_fully_active(document) {
+            return false;
+        }
+        let Some(event) = construct_focus_event(scope, event_type, None, false) else {
+            return false;
+        };
+        runtime
+            .dispatch_public_event_best_effort(
+                scope,
+                runtime_ptr,
+                window,
+                event,
+                "system focus event",
+            )
+            .is_ok()
+    };
+
+    // The selected area's DOM focus and selection survive system focus loss.
+    // Notify its Window before the element on gain and after it on loss.
+    let mut dispatched = focused && dispatch_window(scope);
+    if let Some(element) = element {
+        if !focused {
+            dispatch_pending_text_control_change_if_needed(scope, runtime_ptr, element);
+        }
+        for (event_type, bubbles) in [(event_type, false), (bubbling_type, true)] {
+            let runtime = unsafe { &*runtime_ptr };
+            if runtime.focused_document_and_element() != (document, Some(element))
+                || !runtime.document_is_fully_active(document)
+            {
+                break;
+            }
+            if let Some(event) = construct_focus_event(scope, event_type, None, bubbles) {
+                let _ = dispatch_public_event(scope, runtime_ptr, element, event);
+                dispatched = true;
+            }
+        }
+    }
+    if !focused {
+        dispatched |= dispatch_window(scope);
+    }
+    dispatched
+}
+
 fn dispatch_interest_event_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,

@@ -68,3 +68,21 @@ impl PageScriptHost {
         crate::window_host::scroll_window_to(target_scope, self, x, y);
     }
 }
+
+impl PageScriptHost {
+    pub(crate) fn focused_document_and_element(&self) -> (DomHandle, Option<DomHandle>) {
+        if let Some(element) = self.active_element_handle() {
+            if let Some(document) = self.child_browsing_context_document_handle(element)
+                && self.document_is_fully_active(document)
+            {
+                return (document, None);
+            }
+            if let Some(document) = self.dom_host().owner_document_handle(element)
+                && self.document_is_fully_active(document)
+            {
+                return (document, Some(element));
+            }
+        }
+        (self.document_handle(), None)
+    }
+}
