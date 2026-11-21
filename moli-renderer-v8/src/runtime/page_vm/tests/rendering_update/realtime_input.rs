@@ -27,7 +27,7 @@ fn mouse(page: &mut PageVm, event: &str, x: f64, y: f64, delta: f64) {
 }
 
 #[test]
-fn queued_realtime_wheel_uses_layout_at_dispatch() {
+fn realtime_input_wheels_finish_individually_and_honor_canceled_default_actions() {
     run_page_vm_large_stack_async_test("realtime-input-wheel", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
@@ -36,22 +36,44 @@ fn queued_realtime_wheel_uses_layout_at_dispatch() {
         );
         page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
         page.vm_mut().eval(r#"
-            document.body.innerHTML='<div id=scroller style="position:absolute;left:250px;top:0;width:200px;height:100px;overflow:auto"><div style="height:600px"></div></div>';
-            window.wheelTargets=[];
-            window.scroller.addEventListener('wheel',event=>wheelTargets.push(event.deltaY));
-            String(scroller.getBoundingClientRect().left);
+            document.body.innerHTML='<div id=scroller style="position:absolute;left:0;top:0;width:200px;height:100px;overflow:auto"><div style="height:600px"></div></div>';
+            window.events=[];
+            window.mo=new MutationObserver(()=>events.push('mutation'));
+            mo.observe(scroller,{attributes:true});
+            scroller.addEventListener('wheel',event=>{
+                events.push('wheel:'+event.deltaY+':'+scroller.scrollTop);
+                scroller.setAttribute('data-delta',event.deltaY);
+                Promise.resolve().then(()=>events.push('microtask:'+scroller.scrollTop));
+                if(event.deltaY<0)event.preventDefault();
+            },{passive:false});
         "#).unwrap();
-        mouse(&mut page, "wheel", 10.0, 10.0, 30.0);
-        assert!(page.next_action_window_deadline().is_some());
-        assert_eq!(page.vm_mut().eval("wheelTargets.join(',')").unwrap(), "");
-        page.vm_mut().eval("scroller.style.left='0px'").unwrap();
-        page.flush_page_action_window(moli_action_window::ActionBarrier::Explicit)
-            .unwrap();
+        for (index, delta) in [30.0, -20.0, 60.0].into_iter().enumerate() {
+            mouse(&mut page, "wheel", 10.0, 10.0, delta);
+            assert!(
+                page.next_action_window_deadline().is_none(),
+                "Realtime never admits the one-second window"
+            );
+            assert_eq!(
+                page.vm_mut().eval("String(events.length)").unwrap(),
+                ((index + 1) * 3).to_string(),
+                "each command returns after its handler, default action and microtasks"
+            );
+        }
         assert_eq!(
-            page.vm_mut()
-                .eval("JSON.stringify([wheelTargets,scroller.scrollTop])")
-                .unwrap(),
-            "[[30],30]"
+            page.vm_mut().eval("events.join('|')").unwrap(),
+            "wheel:30:0|mutation|microtask:30|wheel:-20:30|mutation|microtask:30|wheel:60:30|mutation|microtask:90"
+        );
+        assert_eq!(
+            page.vm_mut().eval("String(scroller.scrollTop)").unwrap(),
+            "90"
+        );
+        assert_eq!(
+            page.vm()
+                .layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
         );
     });
 }
