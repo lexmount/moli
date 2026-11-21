@@ -284,11 +284,11 @@ pub(super) use content::{
 };
 pub(super) use dataset::{build_dom_string_map_wrapper_template, node_dataset_getter_function};
 use details_dialog::{
-    close_dialog_element, closed_details_ancestors_to_reveal, details_open_getter_function,
-    details_open_setter_function, dialog_close_callback, dialog_open_getter_function,
-    dialog_open_setter_function, dialog_request_close_callback,
-    dialog_return_value_getter_function, dialog_return_value_setter_function, dialog_show_callback,
-    dialog_show_modal_callback, perform_summary_click_default_action,
+    close_dialog_element, details_open_getter_function, details_open_setter_function,
+    dialog_close_callback, dialog_open_getter_function, dialog_open_setter_function,
+    dialog_request_close_callback, dialog_return_value_getter_function,
+    dialog_return_value_setter_function, dialog_show_callback, dialog_show_modal_callback,
+    perform_summary_click_default_action,
 };
 pub(crate) use details_dialog::{
     perform_dialog_escape_default_action_for_dispatched_event,

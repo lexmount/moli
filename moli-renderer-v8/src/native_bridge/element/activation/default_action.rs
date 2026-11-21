@@ -27,7 +27,7 @@ use crate::{
 };
 
 use super::super::super::PageScriptHost;
-use super::super::details_dialog::run_dialog_command_steps;
+use super::super::details_dialog::{closed_details_child_participates, run_dialog_command_steps};
 use super::super::forms::{
     FormAssociatedResetCallbackTiming, dispatch_form_reset_event, normalized_button_command,
     reset_form_default_action,
@@ -35,14 +35,14 @@ use super::super::forms::{
 use super::super::url_attributes::parsed_hyperlink_url;
 use super::super::{
     ClickEventSource, InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
-    closed_details_ancestors_to_reveal, construct_click_event, construct_command_event,
-    construct_input_event, construct_simple_event, contenteditable_editing_host,
-    dispatch_beforeinput, dispatch_popover_hide_events, dispatch_popover_show_events,
-    dispatch_popover_toggle_events, dispatch_public_event, form_associated_form_owner,
-    has_reflected_attribute, is_disabled_form_control, is_focusable, is_valid_submit_button,
+    construct_click_event, construct_command_event, construct_input_event, construct_simple_event,
+    construct_simple_event_for_target, contenteditable_editing_host, dispatch_beforeinput,
+    dispatch_popover_hide_events, dispatch_popover_show_events, dispatch_popover_toggle_events,
+    dispatch_public_event, form_associated_form_owner, has_reflected_attribute,
+    is_disabled_form_control, is_focusable, is_valid_submit_button,
     label_activation_control_handle, label_activation_label_handle, label_control_handle,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
-    reflected_attribute, resolved_reflected_element_attribute_handle,
+    reflected_attribute, remove_reflected_attribute, resolved_reflected_element_attribute_handle,
     scroll_node_into_view_at_start, set_reflected_boolean_attribute, submit_form_with_submit_event,
     update_focus,
 };
@@ -1944,16 +1944,17 @@ fn same_document_fragment_target(current: &url::Url, target: &url::Url) -> bool 
 pub(crate) fn scroll_to_url_fragment_or_top(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
+    document: DomHandle,
     target_url: &str,
 ) -> Result<(), moli_layout::LayoutError> {
     let Ok(target_url) = url::Url::parse(target_url) else {
         return Ok(());
     };
-    if target_url.fragment().is_none() {
-        crate::window_host::scroll_window_to(scope, runtime_ptr, 0.0, 0.0);
-        return Ok(());
-    }
-    if !scroll_to_document_fragment_target(scope, runtime_ptr, &target_url)? {
+    if !scroll_to_document_fragment_target(scope, runtime_ptr, document, &target_url)?
+        && let Some(context) =
+            crate::native_bridge::node::node_target_relevant_context(scope, runtime_ptr, document)
+    {
+        let scope = &mut v8::ContextScope::new(scope, context);
         crate::window_host::scroll_window_to(scope, runtime_ptr, 0.0, 0.0);
     }
     Ok(())
@@ -1962,6 +1963,7 @@ pub(crate) fn scroll_to_url_fragment_or_top(
 pub(crate) fn scroll_to_document_fragment_target(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
+    document: DomHandle,
     target_url: &url::Url,
 ) -> Result<bool, moli_layout::LayoutError> {
     let Some(fragment) = target_url.fragment() else {
@@ -1970,34 +1972,102 @@ pub(crate) fn scroll_to_document_fragment_target(
     let fragment = percent_encoding::percent_decode_str(fragment)
         .decode_utf8_lossy()
         .into_owned();
-    let Some(target) = document_tree_fragment_target(unsafe { &*runtime_ptr }, &fragment) else {
+    let Some(target) = document_tree_fragment_target(unsafe { &*runtime_ptr }, document, &fragment)
+    else {
         return Ok(false);
     };
-    reveal_details_ancestors_for_fragment_target(scope, runtime_ptr, target);
-    let _ = scroll_node_into_view_at_start(scope, runtime_ptr, target)?;
+    reveal_fragment_ancestors(scope, runtime_ptr, target);
+    let dom = unsafe { &*runtime_ptr }.dom_host();
+    if dom.is_connected(target) && dom.owner_document_handle(target) == Some(document) {
+        let _ = scroll_node_into_view_at_start(scope, runtime_ptr, target)?;
+    }
     Ok(true)
 }
 
-fn reveal_details_ancestors_for_fragment_target(
+enum FragmentAncestorRevealKind {
+    HiddenUntilFound,
+    ClosedDetails,
+}
+
+fn is_hidden_until_found(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    runtime
+        .dom_host()
+        .element(handle)
+        .and_then(|element| element.attribute_ns("", "hidden"))
+        .is_some_and(|value| value.eq_ignore_ascii_case("until-found"))
+}
+
+fn fragment_ancestors_to_reveal(
+    runtime: &PageScriptHost,
+    target: DomHandle,
+) -> Vec<(DomHandle, FragmentAncestorRevealKind)> {
+    let mut ancestors = Vec::new();
+    let mut branch = target;
+    while let Some(parent) = runtime.dom_host().flat_tree_parent(branch) {
+        if is_hidden_until_found(runtime, branch) {
+            ancestors.push((branch, FragmentAncestorRevealKind::HiddenUntilFound));
+        }
+        if !closed_details_child_participates(runtime, parent, branch) {
+            ancestors.push((parent, FragmentAncestorRevealKind::ClosedDetails));
+        }
+        branch = parent;
+    }
+    ancestors
+}
+
+fn reveal_fragment_ancestors(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
 ) {
-    let ancestors = closed_details_ancestors_to_reveal(unsafe { &*runtime_ptr }, target);
-    for details in ancestors {
-        let runtime = unsafe { &*runtime_ptr };
-        if !runtime.dom_host().is_connected(details)
-            || has_reflected_attribute(runtime, details, "open")
-        {
+    // Event handlers can change the ancestry. Collect the steps first and
+    // recheck each element before modifying its attributes.
+    for (handle, kind) in fragment_ancestors_to_reveal(unsafe { &*runtime_ptr }, target) {
+        if !unsafe { &*runtime_ptr }.dom_host().is_connected(handle) {
             return;
         }
-        set_reflected_boolean_attribute(scope, runtime_ptr, details, "open", true);
+        match kind {
+            FragmentAncestorRevealKind::HiddenUntilFound => {
+                if !is_hidden_until_found(unsafe { &*runtime_ptr }, handle) {
+                    return;
+                }
+                let Some(event) = construct_simple_event_for_target(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    "beforematch",
+                    true,
+                    false,
+                    false,
+                ) else {
+                    return;
+                };
+                let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+                let runtime = unsafe { &*runtime_ptr };
+                if !runtime.dom_host().is_connected(handle)
+                    || !is_hidden_until_found(runtime, handle)
+                {
+                    return;
+                }
+                remove_reflected_attribute(scope, runtime_ptr, handle, "hidden");
+            }
+            FragmentAncestorRevealKind::ClosedDetails => {
+                if has_reflected_attribute(unsafe { &*runtime_ptr }, handle, "open") {
+                    return;
+                }
+                set_reflected_boolean_attribute(scope, runtime_ptr, handle, "open", true);
+            }
+        }
     }
 }
 
-fn document_tree_fragment_target(runtime: &PageScriptHost, fragment: &str) -> Option<DomHandle> {
+fn document_tree_fragment_target(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    fragment: &str,
+) -> Option<DomHandle> {
     let mut stack = Vec::new();
-    let mut current = Some(runtime.dom_host().document_handle());
+    let mut current = Some(document);
     while let Some(handle) = current {
         if !runtime.dom_host().is_shadow_root(handle)
             && runtime

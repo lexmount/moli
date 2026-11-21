@@ -680,27 +680,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         {
             return;
         }
-        // Preserve synchronous fragment activation only after the navigate event
-        // accepts it. Intercepted navigation owns its scroll timing separately.
-        if hyperlink
-            && runtime_window_is_global(scope, owner)
-            && !navigate_outcome
-                .as_ref()
-                .is_some_and(|outcome| outcome.intercepted)
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-            && let Err(error) = crate::native_bridge::element::scroll_to_document_fragment_target(
-                scope, host_ptr, &resolved,
-            )
-        {
-            if let Some(message) = v8_string(
-                scope,
-                &format!("Layout failed while scrolling to fragment: {error}"),
-            ) {
-                let exception = v8::Exception::error(scope, message);
-                scope.throw_exception(exception);
-            }
-            return;
-        }
         if let Some(navigation) = navigation {
             cancel_pending_same_document_navigation_finishes(scope, navigation);
         }
@@ -809,6 +788,35 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 resolved.as_str(),
             );
         }
+        if !intercepted && location_href_slot(scope, location).as_deref() != Some(resolved.as_str())
+        {
+            return;
+        }
+        let mut fallback_scroll_href = Some(resolved.as_str());
+        if !intercepted
+            && let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner)
+            && let Some(document) =
+                super::window_accessors::window_document_handle(scope, owner, unsafe { &*host_ptr })
+        {
+            // Apply the fragment to the committed Document in this task.
+            // Retry at navigation completion if the target has yet to be parsed.
+            match crate::native_bridge::element::scroll_to_document_fragment_target(
+                scope, host_ptr, document, &resolved,
+            ) {
+                Ok(true) => fallback_scroll_href = None,
+                Ok(false) => {}
+                Err(error) => {
+                    fallback_scroll_href = None;
+                    tracing::warn!(%error, "failed to scroll to the committed fragment");
+                }
+            }
+            if location_href_slot(scope, location).as_deref() != Some(resolved.as_str())
+                || !location_has_relevant_document(scope, location)
+                || !navigation_document_is_live(scope, owner)
+            {
+                return;
+            }
+        }
         if let Some(navigation) = navigation {
             if navigate_outcome
                 .as_ref()
@@ -829,7 +837,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                     scope,
                     navigation,
                     navigate_outcome.as_ref().and_then(|outcome| outcome.signal),
-                    Some(resolved.as_str()),
+                    fallback_scroll_href,
                 );
             }
         }

@@ -209,16 +209,14 @@ pub(super) fn perform_navigation_scroll_if_needed<'s>(
     fallback_href: &str,
     succeeded: bool,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
     let active_event = navigation_active_scroll_event(scope, navigation);
     let target_href = navigation_scroll_target_href(scope, navigation);
     clear_navigation_scroll_state(scope, navigation);
     if !succeeded {
         return;
     }
-    if let Some(event) = active_event {
+    let owner = super::navigation_window::runtime_window_owner(scope, navigation);
+    let href = if let Some(event) = active_event {
         if crate::context_bootstrap::event_private_value(
             scope,
             event,
@@ -237,10 +235,9 @@ pub(super) fn perform_navigation_scroll_if_needed<'s>(
         {
             return;
         }
-        let Some(target_href) = target_href else {
+        let Some(target_href) = target_href.as_deref() else {
             return;
         };
-        let owner = super::navigation_window::runtime_window_owner(scope, navigation);
         if crate::context_bootstrap::event_attribute(scope, event, "navigationType")
             .and_then(|value| value.to_string(scope))
             .map(|value| value.to_rust_string_lossy(scope))
@@ -252,14 +249,22 @@ pub(super) fn perform_navigation_scroll_if_needed<'s>(
         {
             return;
         }
-        if let Err(error) = scroll_to_url_fragment_or_top(scope, host_ptr, &target_href) {
-            tracing::warn!(%error, "failed to resolve navigation fragment geometry");
-        }
+        target_href
+    } else {
+        fallback_href
+    };
+    if href.is_empty() {
         return;
     }
-    if !fallback_href.is_empty()
-        && let Err(error) = scroll_to_url_fragment_or_top(scope, host_ptr, fallback_href)
-    {
+    let Some(host_ptr) = crate::util::context_host_ptr_for_navigation_owner(scope, owner) else {
+        return;
+    };
+    let Some(document) =
+        super::window_accessors::window_document_handle(scope, owner, unsafe { &*host_ptr })
+    else {
+        return;
+    };
+    if let Err(error) = scroll_to_url_fragment_or_top(scope, host_ptr, document, href) {
         tracing::warn!(%error, "failed to resolve navigation fragment geometry");
     }
 }

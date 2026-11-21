@@ -625,14 +625,17 @@ fn navigate_event_scroll_callback<'s>(
         crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented");
     let already_scrolled =
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SCROLL_CALLED_SLOT, false);
-    let active = crate::context_bootstrap::event_backing(scope, event)
+    let Some(navigation) = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "target").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .is_some_and(|navigation| navigation_scroll_event_is_active(scope, navigation, event));
+    else {
+        navigate_event_throw_invalid_state(scope);
+        return;
+    };
     if !intercepted
         || default_prevented
         || already_scrolled
-        || !active
+        || !navigation_scroll_event_is_active(scope, navigation, event)
         || navigate_event_is_dispatching(scope, event)
     {
         navigate_event_throw_invalid_state(scope);
@@ -646,10 +649,18 @@ fn navigate_event_scroll_callback<'s>(
     else {
         return;
     };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let owner = runtime_window_owner(scope, navigation);
+    let Some(host_ptr) = crate::util::context_host_ptr_for_navigation_owner(scope, owner) else {
         return;
     };
-    if let Err(error) = scroll_to_url_fragment_or_top(scope, host_ptr, &target_url)
+    let Some(document) =
+        crate::context_bootstrap::window_accessors::window_document_handle(scope, owner, unsafe {
+            &*host_ptr
+        })
+    else {
+        return;
+    };
+    if let Err(error) = scroll_to_url_fragment_or_top(scope, host_ptr, document, &target_url)
         && let Some(message) = v8_string(
             scope,
             &format!("Layout failed while scrolling navigation: {error}"),
