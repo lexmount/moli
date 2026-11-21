@@ -7,7 +7,7 @@ use crate::LayoutError;
 use super::{
     hit_test::{LayoutCaretPosition, LayoutHit},
     model::{
-        LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad,
+        LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
         LayoutResolvedGridTracks, LayoutSize, LayoutViewport,
     },
     pass_result::LayoutPassMetrics,
@@ -74,16 +74,16 @@ pub struct LayoutResizeObserverSize {
     pub block_size: f32,
 }
 
-/// CSS-box ResizeObserver sizes projected wholly from one frozen principal box.
-/// The physical content size is used for contentRect width/height. The logical
-/// content and border pairs use the writing axes and effective zoom captured
-/// with the geometry, independently of authored box-sizing. This owned answer
-/// does not add state to the frozen tree or provide SVG bounding-box semantics.
+/// ResizeObserver geometry projected from a frozen principal CSS box and its
+/// document viewport. CSS sizes are unzoomed independently of box-sizing.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LayoutResizeObserverMetrics {
-    pub content_size: LayoutSize,
+    /// Physical CSS pixels, with the origin at the left and top padding values.
+    pub content_rect: LayoutRect,
     pub content_box_size: LayoutResizeObserverSize,
     pub border_box_size: LayoutResizeObserverSize,
+    /// Integer device pixels in inline, block order.
+    pub device_pixel_content_box_size: (f64, f64),
 }
 
 /// One scroll container on a target's layout ancestor chain.
