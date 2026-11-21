@@ -10,13 +10,29 @@
 //! Resource identities and balanced scopes shared by paint backends.
 
 use crate::PaintError;
+use crate::geometry::{backdrop_workspace_bytes, device_region};
 use moli_layout::{PaintFragment, PaintSnapshot};
 
-/// Returns the maximum nested filter depth for raster surface byte accounting.
-pub(crate) fn validate_fragment_stream(snapshot: &PaintSnapshot) -> Result<usize, PaintError> {
+/// Stream facts that size raster surfaces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PaintStreamMetrics {
+    /// Maximum nested filter depth for raster surface byte accounting.
+    pub(crate) max_filter_depth: usize,
+    /// `BackdropFilter` fragments with a visible device region.
+    pub(crate) backdrop_count: usize,
+    /// Sum of the straight-alpha RGBA bytes of every backdrop region.
+    pub(crate) backdrop_bytes: usize,
+    /// Largest single backdrop region in bytes.
+    pub(crate) max_backdrop_bytes: usize,
+    pub(crate) max_backdrop_workspace_bytes: usize,
+}
+
+pub(crate) fn validate_fragment_stream(
+    snapshot: &PaintSnapshot,
+) -> Result<PaintStreamMetrics, PaintError> {
     let mut layers = Vec::new();
     let mut filter_depth = 0usize;
-    let mut max_filter_depth = 0;
+    let mut metrics = PaintStreamMetrics::default();
     for (fragment_index, fragment) in snapshot.fragments.iter().enumerate() {
         match fragment {
             PaintFragment::PushLayer { filter, .. } => {
@@ -24,7 +40,7 @@ pub(crate) fn validate_fragment_stream(snapshot: &PaintSnapshot) -> Result<usize
                 layers.push(filtered);
                 if filtered {
                     filter_depth += 1;
-                    max_filter_depth = max_filter_depth.max(filter_depth);
+                    metrics.max_filter_depth = metrics.max_filter_depth.max(filter_depth);
                 }
             }
             PaintFragment::PushClip { .. } => {
@@ -58,6 +74,35 @@ pub(crate) fn validate_fragment_stream(snapshot: &PaintSnapshot) -> Result<usize
                     index: image.image.index(),
                 });
             }
+            PaintFragment::BackdropFilter {
+                shape,
+                transform,
+                filters,
+                ..
+            } => {
+                let region = surface_pixels(snapshot).and_then(|(width, height)| {
+                    device_region(
+                        shape,
+                        *transform,
+                        f64::from(snapshot.surface.device_scale),
+                        width,
+                        height,
+                    )
+                });
+                if let Some(region) = region {
+                    let bytes = region.byte_len();
+                    metrics.backdrop_count += 1;
+                    metrics.backdrop_bytes = metrics.backdrop_bytes.saturating_add(bytes);
+                    metrics.max_backdrop_bytes = metrics.max_backdrop_bytes.max(bytes);
+                    metrics.max_backdrop_workspace_bytes = metrics
+                        .max_backdrop_workspace_bytes
+                        .max(backdrop_workspace_bytes(
+                            region,
+                            filters,
+                            f64::from(snapshot.surface.device_scale),
+                        ));
+                }
+            }
             PaintFragment::Fill { .. }
             | PaintFragment::Stroke(_)
             | PaintFragment::Border { .. }
@@ -66,7 +111,8 @@ pub(crate) fn validate_fragment_stream(snapshot: &PaintSnapshot) -> Result<usize
             | PaintFragment::GlyphRun(_)
             | PaintFragment::TextShadow(_)
             | PaintFragment::Image(_)
-            | PaintFragment::SvgImage(_) => {}
+            | PaintFragment::SvgImage(_)
+            | PaintFragment::BackdropRoot => {}
         }
     }
     if !layers.is_empty() {
@@ -74,7 +120,18 @@ pub(crate) fn validate_fragment_stream(snapshot: &PaintSnapshot) -> Result<usize
             depth: layers.len(),
         });
     }
-    Ok(max_filter_depth)
+    Ok(metrics)
+}
+
+/// Raster surface size in device pixels, when representable.
+fn surface_pixels(snapshot: &PaintSnapshot) -> Option<(u32, u32)> {
+    let surface = snapshot.surface;
+    let scale = f64::from(surface.device_scale);
+    let width = (f64::from(surface.css_width) * scale).ceil();
+    let height = (f64::from(surface.css_height) * scale).ceil();
+    let max = f64::from(u16::MAX);
+    ((0.0..=max).contains(&width) && (0.0..=max).contains(&height))
+        .then_some((width as u32, height as u32))
 }
 
 #[cfg(test)]

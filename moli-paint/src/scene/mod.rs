@@ -103,6 +103,9 @@ pub(crate) fn paint_fragment(
         PaintFragment::GlyphRun(run) => paint_glyph_run(scene, snapshot, run, run.color, scale),
         PaintFragment::Image(image) => paint_image(scene, snapshot, image, scale),
         PaintFragment::SvgImage(image) => paint_svg_image(scene, snapshot, image, scale),
+        // Resolved by the raster pass (needs already-painted pixels); vector
+        // consumers such as PDF export skip it.
+        PaintFragment::BackdropFilter { .. } | PaintFragment::BackdropRoot => {}
     }
 }
 
