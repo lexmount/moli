@@ -50,6 +50,21 @@ impl NativeDomBridge {
         self.identity.cached_wrapper(scope, reflector_id)
     }
 
+    pub(crate) fn cached_handle_wrappers_in_worlds<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+    ) -> Vec<v8::Local<'s, v8::Object>> {
+        let Some(reflector_id) = self
+            .identity
+            .existing_reflector_id(&BridgeHandle::Node(handle))
+        else {
+            return Vec::new();
+        };
+        self.identity
+            .cached_node_wrappers_in_worlds(scope, reflector_id)
+    }
+
     pub(crate) fn retire_default_world_wrappers_for_realm(
         &self,
         realm_token: crate::native_bridge::RuntimeObservableContextToken,

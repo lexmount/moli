@@ -192,31 +192,55 @@ pub(crate) fn settle_document_font_face_set_ready(
         unsafe { &*host_ptr }.queue_realtime_font_readiness(document);
         return;
     }
-    resolve_document_font_face_set_ready(scope, host_ptr, document);
-}
-
-fn resolve_document_font_face_set_ready(
-    scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut crate::native_bridge::PageScriptHost,
-    document: crate::document_runtime::DomHandle,
-) {
-    let host = unsafe { &*host_ptr };
-    if host.document_web_fonts_have_pending_requests(document) {
+    if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests(document) {
         return;
     }
     let Some(document_wrapper) = crate::util::node_wrapper_from_handle(scope, document) else {
         return;
     };
-    let Some(fonts) = document_wrapper
+    if let Some(fonts) = cached_document_font_face_set(scope, document_wrapper) {
+        super::events::finish_font_set_if_idle(scope, fonts);
+    }
+}
+
+fn cached_document_font_face_set<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document_wrapper: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    document_wrapper
         .get(scope, crate::util::v8str(scope, "__moliFonts").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    if host.realtime_document_fonts_ready(document).is_some() {
-        super::events::finish_document_font_readiness(scope, fonts);
-    } else {
-        super::events::finish_font_set_if_idle(scope, fonts);
+}
+
+fn resolve_realtime_document_font_face_sets(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
+    document: crate::document_runtime::DomHandle,
+) {
+    let wrappers = unsafe { &*host_ptr }
+        .native_bridge()
+        .cached_handle_wrappers_in_worlds(scope, document);
+    for wrapper in wrappers {
+        // A then getter may start another load or retire this Document.
+        // document.open() can change the task owner while preserving the
+        // same Document and its FontFaceSets.
+        let host = unsafe { &*host_ptr };
+        if host.realtime_document_fonts_ready(document) != Some(true) {
+            break;
+        }
+        let Some(context) = wrapper.get_creation_context(scope) else {
+            continue;
+        };
+        if !host
+            .window_execution_context_identity_for_access_check(context)
+            .is_some_and(|identity| host.window_execution_context_identity_is_current(identity))
+        {
+            continue;
+        }
+        let scope = &mut v8::ContextScope::new(scope, context);
+        if let Some(fonts) = cached_document_font_face_set(scope, wrapper) {
+            super::events::finish_document_font_readiness(scope, fonts);
+        }
     }
 }
 
@@ -232,10 +256,7 @@ pub(crate) fn sync_realtime_document_font_face_set(
     let Some(wrapper) = crate::util::node_wrapper_from_handle(scope, document) else {
         return;
     };
-    let Some(fonts) = wrapper
-        .get(scope, crate::util::v8str(scope, "__moliFonts").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
+    let Some(fonts) = cached_document_font_face_set(scope, wrapper) else {
         return;
     };
     if host.document_web_fonts_have_pending_requests(document) {
@@ -277,7 +298,7 @@ pub(crate) fn check_realtime_document_font_readiness(
     // Synchronous data fonts can have registered during the second admission.
     unsafe { &*host_ptr }.ensure_realtime_font_layout()?;
     unsafe { &*host_ptr }.mark_realtime_document_fonts_ready(document);
-    resolve_document_font_face_set_ready(scope, host_ptr, document);
+    resolve_realtime_document_font_face_sets(scope, host_ptr, document);
     Ok(())
 }
 
