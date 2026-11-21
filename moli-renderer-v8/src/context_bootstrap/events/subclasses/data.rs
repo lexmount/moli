@@ -642,6 +642,11 @@ fn navigate_event_scroll_callback<'s>(
         return;
     }
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SCROLL_CALLED_SLOT, true);
+    let owner = runtime_window_owner(scope, navigation);
+    if crate::context_bootstrap::navigation_lifecycle::process_traversal_scroll(scope, owner, event)
+    {
+        return;
+    }
     let Some(target_url) = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "destination").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -649,7 +654,6 @@ fn navigate_event_scroll_callback<'s>(
     else {
         return;
     };
-    let owner = runtime_window_owner(scope, navigation);
     let Some(host_ptr) = crate::util::context_host_ptr_for_navigation_owner(scope, owner) else {
         return;
     };

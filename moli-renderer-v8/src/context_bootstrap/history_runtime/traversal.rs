@@ -273,17 +273,6 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
         if !navigation_document_has_opaque_origin(scope, applied.owner)
             && let Some(navigation) = window_navigation_for_holder(scope, applied.owner)
         {
-            let active_scroll = super::super::navigation_events::navigation_has_active_scroll_event(
-                scope, navigation,
-            );
-            if active_scroll
-                || !super::super::navigation_entry::restore_current_navigation_entry_scroll_position(
-                    scope,
-                    applied.owner,
-                )
-            {
-                perform_navigation_scroll_if_needed(scope, navigation, &applied.url, true);
-            }
             dispatch_navigation_success(scope, navigation);
         }
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
@@ -292,13 +281,13 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
         return;
     }
     let Some(_navigation) = window_navigation_for_holder(scope, applied.owner) else {
-        dispatch_history_entry_post_commit_events(scope, applied, true);
+        dispatch_history_entry_post_commit_events(scope, applied, false);
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
         return;
     };
     // Stopping the API method after its commit does not undo the committed
     // history entry or suppress its popstate. Only settlement is canceled.
-    dispatch_history_entry_post_commit_events(scope, applied, true);
+    dispatch_history_entry_post_commit_events(scope, applied, false);
     let Some(data) = settlement else {
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
         return;

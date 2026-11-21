@@ -203,6 +203,20 @@ pub(super) fn settle_navigation_transition_finished_local<'s>(
     }
 }
 
+pub(super) fn process_traversal_scroll<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    let is_traversal = crate::context_bootstrap::event_attribute(scope, event, "navigationType")
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+        .is_some_and(|value| value.to_rust_string_lossy(scope) == "traverse");
+    if is_traversal {
+        super::navigation_entry::restore_current_navigation_entry_scroll_position(scope, owner);
+    }
+    is_traversal
+}
+
 pub(super) fn perform_navigation_scroll_if_needed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
@@ -235,20 +249,12 @@ pub(super) fn perform_navigation_scroll_if_needed<'s>(
         {
             return;
         }
+        if process_traversal_scroll(scope, owner, event) {
+            return;
+        }
         let Some(target_href) = target_href.as_deref() else {
             return;
         };
-        if crate::context_bootstrap::event_attribute(scope, event, "navigationType")
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .as_deref()
-            == Some("traverse")
-            && super::navigation_entry::restore_current_navigation_entry_scroll_position(
-                scope, owner,
-            )
-        {
-            return;
-        }
         target_href
     } else {
         fallback_href
