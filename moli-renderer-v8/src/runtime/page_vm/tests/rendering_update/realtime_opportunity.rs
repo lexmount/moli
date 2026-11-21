@@ -22,6 +22,109 @@ pub(super) async fn run_opportunity(
 }
 
 #[test]
+fn realtime_lazy_image_csp_timeout_settles_frame_and_recovers() {
+    run_page_vm_large_stack_async_test("realtime-lazy-image-csp-budget", || async move {
+        use crate::v8_execution_watchdog::{V8ExecutionWatchdog, V8ExecutionWatchdogKind};
+
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        for report_only_first in [false, true] {
+            let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/realtime-lazy-image-budget").unwrap(),
+            );
+            page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+            page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+                inner_width: 800,
+                inner_height: 600,
+                device_pixel_ratio: 1.0,
+                ..Default::default()
+            }))
+            .unwrap();
+            if report_only_first {
+                page.vm_mut()
+                    .set_response_content_security_report_only_policies(&["img-src 'none'".into()]);
+            }
+            page.vm_mut()
+                .eval(
+                    r#"
+                window.trace = [];
+                const frame = document.createElement('iframe');
+                document.body.append(frame);
+                const child = frame.contentDocument;
+                const policy = child.createElement('meta');
+                policy.httpEquiv = 'Content-Security-Policy';
+                policy.content = "img-src 'none'";
+                child.head.append(policy);
+                child.addEventListener('securitypolicyviolation', event => {
+                    trace.push(event.disposition + ':' + event.effectiveDirective);
+                    const end = performance.now() + 600;
+                    while (performance.now() < end) {}
+                    trace.push('listener finished');
+                });
+                child.addEventListener('securitypolicyviolation', () => trace.push('next listener'));
+            "#,
+                )
+                .unwrap();
+            run_opportunity(&mut page, &loader).await.unwrap();
+
+            page.vm_mut()
+                .eval(
+                    r#"
+                requestAnimationFrame(() => {
+                    const image = child.createElement('img');
+                    image.loading = 'lazy';
+                    image.width = image.height = 32;
+                    image.src = '/fixture.png';
+                    child.body.append(image);
+                    trace.push('rAF finished');
+                });
+            "#,
+                )
+                .unwrap();
+            let budget = V8ExecutionWatchdog::override_timeout_for_test(
+                V8ExecutionWatchdogKind::LifecycleEvent,
+                Duration::from_millis(100),
+            );
+            let error = run_opportunity(&mut page, &loader).await.unwrap_err();
+            drop(budget);
+            assert!(
+                error
+                    .to_string()
+                    .contains("Realtime lazy image admission exceeded 100ms and was terminated"),
+                "{error}"
+            );
+            let disposition = if report_only_first {
+                "report"
+            } else {
+                "enforce"
+            };
+            let interrupted_trace = format!("rAF finished|{disposition}:img-src");
+            assert_eq!(
+                page.vm_mut().eval("trace.join('|')").unwrap(),
+                interrupted_trace
+            );
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+
+            page.vm_mut()
+                .eval("requestAnimationFrame(() => trace.push('recovered'))")
+                .unwrap();
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm_mut().eval("trace.join('|')").unwrap(),
+                format!("{interrupted_trace}|recovered")
+            );
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+        }
+    });
+}
+
+#[test]
 fn realtime_opportunity_keeps_cadence_skips_missed_ticks_and_stops_when_idle() {
     run_page_vm_large_stack_async_test("realtime-opportunity-cadence", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

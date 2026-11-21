@@ -581,7 +581,8 @@ pub(crate) use images::{
     plan_image_attribute_mutation, queue_image_load_event_after_document_adoption,
     queue_image_load_event_for_loading_change, queue_image_load_event_if_needed,
     queue_image_load_event_if_needed_with_initiator, queue_image_load_network_terminal_followup,
-    queue_revealed_lazy_image_loads, reset_image_load_dispatch,
+    queue_revealed_lazy_image_load, queue_revealed_lazy_image_loads, reset_image_load_dispatch,
+    revealed_lazy_image_load_candidates,
 };
 pub(in crate::native_bridge) use images::{
     image_complete_getter_function, image_current_src_getter_function, image_decode_callback,

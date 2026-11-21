@@ -10,7 +10,9 @@
 //! disarm serialize on the registration itself, which guarantees that a
 //! cancellation can never race ahead of a later `terminate_execution()` call.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -79,6 +81,10 @@ struct V8ExecutionWatchdogRegistration {
 }
 
 impl V8ExecutionWatchdogRegistration {
+    fn has_timed_out(&self) -> bool {
+        *self.state.lock() == V8ExecutionWatchdogRegistrationState::TimedOut
+    }
+
     fn expire_if_armed(&self) {
         let mut state = self.state.lock();
         if *state != V8ExecutionWatchdogRegistrationState::Armed {
@@ -233,6 +239,19 @@ pub(crate) struct V8ExecutionWatchdog {
     timeout: Duration,
 }
 
+type CallbackDispatchWatchdog = Rc<RefCell<Option<Arc<V8ExecutionWatchdogRegistration>>>>;
+
+struct RestoreCallbackDispatchWatchdog {
+    slot: CallbackDispatchWatchdog,
+    previous: Option<Arc<V8ExecutionWatchdogRegistration>>,
+}
+
+impl Drop for RestoreCallbackDispatchWatchdog {
+    fn drop(&mut self) {
+        self.slot.replace(self.previous.take());
+    }
+}
+
 impl V8ExecutionWatchdog {
     pub(crate) fn arm(
         kind: V8ExecutionWatchdogKind,
@@ -272,9 +291,38 @@ impl V8ExecutionWatchdog {
     /// A callback's TryCatch may clear V8's termination flag while unwinding.
     /// Multi-callback work must still stop after this registration expires.
     pub(crate) fn has_timed_out(&self) -> bool {
-        self.registration.as_ref().is_some_and(|registration| {
-            *registration.state.lock() == V8ExecutionWatchdogRegistrationState::TimedOut
-        })
+        self.registration
+            .as_ref()
+            .is_some_and(|registration| registration.has_timed_out())
+    }
+
+    /// Expose this budget to a synchronous dispatch, including its nested callbacks.
+    pub(crate) fn with_callback_dispatch_budget<'s, 'i, T>(
+        &self,
+        scope: &mut v8::PinScope<'s, 'i>,
+        dispatch: impl FnOnce(&mut v8::PinScope<'s, 'i>) -> T,
+    ) -> T {
+        let slot = scope
+            .get_slot::<CallbackDispatchWatchdog>()
+            .cloned()
+            .unwrap_or_else(|| {
+                let slot = CallbackDispatchWatchdog::default();
+                scope.set_slot(slot.clone());
+                slot
+            });
+        let previous = slot.replace(self.registration.clone());
+        let _restore = RestoreCallbackDispatchWatchdog { slot, previous };
+        dispatch(scope)
+    }
+
+    pub(crate) fn callback_dispatch_has_timed_out(scope: &v8::PinScope<'_, '_>) -> bool {
+        scope
+            .get_slot::<CallbackDispatchWatchdog>()
+            .is_some_and(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .is_some_and(|registration| registration.has_timed_out())
+            })
     }
 
     pub(crate) fn disarm(mut self) -> V8ExecutionWatchdogOutcome {

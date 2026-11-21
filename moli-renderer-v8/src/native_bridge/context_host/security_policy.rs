@@ -21,6 +21,7 @@ use crate::{
         child_window_handle_from_marker_data, entered_child_window_handle,
     },
     util::get_private_value,
+    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 
 #[derive(Debug)]
@@ -532,9 +533,15 @@ impl PageScriptHost {
         let Some(violation) = enforced_violation else {
             return DocumentCspOutcome::Allowed;
         };
-        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-            scope, host_ptr, owner, &violation,
-        );
+        // A report-only event in a child can run script before this enforced
+        // violation is delivered. Keep the block even if that script was terminated.
+        if !scope.is_execution_terminating()
+            && !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
+        {
+            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                scope, host_ptr, owner, &violation,
+            );
+        }
         DocumentCspOutcome::Blocked(violation)
     }
 

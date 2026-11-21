@@ -7,7 +7,7 @@ use crate::{
     },
     native_bridge::{
         PageScriptHost, WindowDocumentTaskTarget, WindowExecutionContextBinding,
-        element::queue_revealed_lazy_image_loads,
+        element::{queue_revealed_lazy_image_load, revealed_lazy_image_load_candidates},
     },
     page_task_queue::RendererPageRenderingUpdateTaskId,
     v8_execution_watchdog::{
@@ -131,15 +131,12 @@ impl ScriptVm {
             crate::observer_runtime::sample_realtime_intersections(scope, host_ptr)?;
         }
         let host = unsafe { &*host_ptr };
-        if host.realtime_rendering_opportunity_is_current(id, root) {
-            // Use the final screen sample, including children added by rAF or
-            // RO. A callback-only tick with no source changes need not scan
-            // the same images again.
-            if host.realtime_opportunity_has_source_changes() {
-                for document in host.active_layout_document_handles() {
-                    queue_revealed_lazy_image_loads(scope, host_ptr, document);
-                }
-            }
+        if host.realtime_rendering_opportunity_is_current(id, root)
+            && host.realtime_opportunity_has_source_changes()
+        {
+            Self::admit_realtime_lazy_images(scope, host_ptr, id, root)?;
+        }
+        if unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
             // Layout has published the actual child viewports, and rAF/RO may
             // have changed CSS font sources. Admit those resources through the
             // existing owner-checked loader after sampling this frame. A ready
@@ -150,6 +147,65 @@ impl ScriptVm {
             );
         }
         Ok(invoked)
+    }
+
+    fn admit_realtime_lazy_images(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        id: RendererPageRenderingUpdateTaskId,
+        root: WindowDocumentTaskTarget,
+    ) -> Result<()> {
+        // Use the final screen sample, including children added in this frame.
+        let documents = unsafe { &*host_ptr }.active_layout_document_handles();
+        let mut watchdog = None;
+        for document in documents {
+            let host = unsafe { &*host_ptr };
+            if watchdog
+                .as_ref()
+                .is_some_and(V8ExecutionWatchdog::has_timed_out)
+                || !host.realtime_rendering_opportunity_is_current(id, root)
+            {
+                break;
+            }
+            let candidates = revealed_lazy_image_load_candidates(host, document);
+            if candidates.is_empty() {
+                continue;
+            }
+
+            // Admission can synchronously deliver a child Document's CSP
+            // event. Use one budget, starting with the first actual candidate.
+            let watchdog = watchdog.get_or_insert_with(|| {
+                V8ExecutionWatchdog::arm(
+                    V8ExecutionWatchdogKind::LifecycleEvent,
+                    scope.thread_safe_handle(),
+                    SCRIPT_TURN_WATCHDOG_TIMEOUT,
+                )
+            });
+            let finished = watchdog.with_callback_dispatch_budget(scope, |scope| {
+                for handle in candidates {
+                    if watchdog.has_timed_out()
+                        || scope.is_execution_terminating()
+                        || !unsafe { &*host_ptr }
+                            .realtime_rendering_opportunity_is_current(id, root)
+                    {
+                        return false;
+                    }
+                    queue_revealed_lazy_image_load(scope, host_ptr, handle);
+                }
+                true
+            });
+            if !finished {
+                break;
+            }
+        }
+        if let Some(watchdog) = watchdog {
+            let timeout = watchdog.timeout();
+            ensure!(
+                watchdog.disarm() != V8ExecutionWatchdogOutcome::TimedOut,
+                "Realtime lazy image admission exceeded {timeout:?} and was terminated"
+            );
+        }
+        Ok(())
     }
 }
 

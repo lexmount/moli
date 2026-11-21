@@ -9,8 +9,8 @@ use crate::{
     exception_reporting::invoke_event_handler,
     frame_owner_model::{FrameDocumentTaskOwner, LocalWindowId},
     host::{
-        ChildWindowEventTarget, DispatchStatus, create_host_event, event_dispatch_status,
-        invoke_prepared_event_callback,
+        ChildWindowEventTarget, DispatchStatus, create_host_event,
+        csp_event_dispatch_has_timed_out, event_dispatch_status, invoke_prepared_event_callback,
     },
     native_bridge::{
         ACTIVE_CHILD_WINDOW_HANDLE_SLOT, EventCallbackId, PreparedEventCallback,
@@ -429,6 +429,10 @@ impl PageScriptHost {
     ) -> DispatchStatus {
         let mut status = DispatchStatus::Continue;
         for slot in dispatch_slots {
+            if csp_event_dispatch_has_timed_out(scope, event_type) {
+                status = DispatchStatus::StopImmediate;
+                break;
+            }
             let Some(ready) = self.prepare_child_window_event_listener_invocation(
                 scope,
                 target.child_handle(),

@@ -7,6 +7,7 @@ use crate::{
     },
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     util::{get_private_object, get_private_value, serialize_v8_iter_array},
+    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 use moli_webapi::events::subclasses::error::construct_original_error_event;
 use moli_webapi::events::{construct_native_event, init::EventInit};
@@ -134,6 +135,14 @@ pub(crate) enum DispatchStatus {
     StopImmediate,
 }
 
+pub(crate) fn csp_event_dispatch_has_timed_out(
+    scope: &v8::PinScope<'_, '_>,
+    event_type: &str,
+) -> bool {
+    event_type == "securitypolicyviolation"
+        && V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
+}
+
 pub(crate) fn invoke_prepared_event_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
@@ -145,6 +154,9 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
     event: v8::Local<'s, v8::Object>,
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Option<v8::Global<v8::Value>> {
+    if csp_event_dispatch_has_timed_out(scope, event_type) {
+        return None;
+    }
     let receiver = event_target_receiver(scope, host_ptr, target, event);
     let has_event_argument = arguments.len() == 1 && arguments[0].strict_equals(event.into());
     let (receiver, event) = {
@@ -253,14 +265,16 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
     ) {
         CallbackInvocationOutcome::Returned(value) => Some(value),
         CallbackInvocationOutcome::Threw(report) => {
-            report_event_callback_exception(
-                scope,
-                host_ptr,
-                event_type,
-                relevant_identity,
-                None,
-                &report,
-            );
+            if !csp_event_dispatch_has_timed_out(scope, event_type) {
+                report_event_callback_exception(
+                    scope,
+                    host_ptr,
+                    event_type,
+                    relevant_identity,
+                    None,
+                    &report,
+                );
+            }
             None
         }
         CallbackInvocationOutcome::Retired => None,
@@ -493,6 +507,9 @@ fn invoke_event_target_handler_property<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
+    if csp_event_dispatch_has_timed_out(scope, event_type) {
+        return;
+    }
     if matches!(target, EventTargetHandle::ChildWindow(_)) {
         // Child Window event-handler properties share the native listener
         // registry and are invoked in registration order by the listener phase.
@@ -521,6 +538,9 @@ fn call_event_target_listeners_filtered<'s>(
     capture_only: bool,
     at_target: bool,
 ) -> std::result::Result<DispatchStatus, String> {
+    if csp_event_dispatch_has_timed_out(scope, event_type) {
+        return Ok(DispatchStatus::StopImmediate);
+    }
     if let EventTargetHandle::ChildWindow(target) = target {
         return Ok(
             unsafe { &mut *host_ptr }.call_child_window_event_path_listeners(
@@ -1209,6 +1229,9 @@ impl HostEventTargetRegistry {
             ),
         ) in snapshot.into_iter().enumerate()
         {
+            if csp_event_dispatch_has_timed_out(scope, event_type) {
+                return Ok(DispatchStatus::StopImmediate);
+            }
             let still_registered = self
                 .listeners
                 .get(&target)

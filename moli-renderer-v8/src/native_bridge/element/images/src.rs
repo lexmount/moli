@@ -7,6 +7,7 @@ use crate::page_task_queue::{
 };
 use crate::types::{ImageRequestCorsMode, ImageRequestKey, SubresourceRequestInitiatorType};
 use crate::util::v8_string;
+use crate::v8_execution_watchdog::V8ExecutionWatchdog;
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 
 use crate::style_engine::media_list::evaluate_media_query_list;
@@ -71,23 +72,35 @@ pub(crate) fn queue_revealed_lazy_image_loads(
     runtime_ptr: *mut PageScriptHost,
     document: DomHandle,
 ) {
-    let handles = {
-        let runtime = unsafe { &*runtime_ptr };
-        runtime
-            .with_latest_layout_tree_for_document(document, |output| {
-                revealed_lazy_image_handles(runtime, document, output)
-            })
-            .unwrap_or_default()
-    };
+    let handles = revealed_lazy_image_load_candidates(unsafe { &*runtime_ptr }, document);
     for handle in handles {
-        queue_image_load_event(
-            scope,
-            runtime_ptr,
-            handle,
-            ImageLoadQueueTrigger::LazyReveal,
-            SubresourceRequestInitiatorType::Other,
-        );
+        queue_revealed_lazy_image_load(scope, runtime_ptr, handle);
     }
+}
+
+pub(crate) fn revealed_lazy_image_load_candidates(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+) -> Vec<DomHandle> {
+    runtime
+        .with_latest_layout_tree_for_document(document, |output| {
+            revealed_lazy_image_handles(runtime, document, output)
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn queue_revealed_lazy_image_load(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+) {
+    queue_image_load_event(
+        scope,
+        runtime_ptr,
+        handle,
+        ImageLoadQueueTrigger::LazyReveal,
+        SubresourceRequestInitiatorType::Other,
+    );
 }
 
 pub(crate) fn queue_image_load_event_for_loading_change(
@@ -170,8 +183,8 @@ fn queue_image_load_event(
     };
     // Cached pixels must pass the requesting element's current Document policy
     // before they can satisfy its load or decode work.
-    if let Ok(request_url) = &request_url
-        && runtime
+    let blocked_by_csp = request_url.as_ref().is_ok_and(|request_url| {
+        runtime
             .check_element_subresource_csp(
                 scope,
                 handle,
@@ -179,14 +192,19 @@ fn queue_image_load_event(
                 DocumentSubresourceCspKind::Image,
             )
             .blocks_request()
-    {
+    });
+    let terminated = scope.is_execution_terminating()
+        || (allow_deferred_lazy && V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope));
+    if blocked_by_csp || terminated {
         let followup = runtime.complete_pending_image_load_local_resource_if_matches(
             handle,
             pending.id(),
             false,
         );
         queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, pending.id(), followup);
-        let _ = runtime.process_image_decode_requests_for_element(scope, handle);
+        if !terminated {
+            let _ = runtime.process_image_decode_requests_for_element(scope, handle);
+        }
         return;
     }
     // Register the current request before reconsidering decode() promises. An
