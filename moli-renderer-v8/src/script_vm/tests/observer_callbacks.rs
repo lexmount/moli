@@ -998,3 +998,38 @@ fn xml_serializer_ordinary_xmlns_preserves_native_attribute_namespace_identity()
     );
     assert_eq!(vm.eval("__ordinaryXmlnsChecks.length").unwrap(), "324");
 }
+
+#[test]
+fn xml_markup_getters_reject_invalid_character_data() {
+    let mut vm = new_storage_html_test_vm("https://xml-character-data.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const xml = new DOMParser().parseFromString('<root><nested/></root>', 'application/xml');
+  const root = xml.documentElement;
+  const nested = root.firstChild;
+  for (const node of [
+    xml.createComment('two--hyphens'),
+    xml.createComment('trailing-'),
+    xml.createTextNode('bad\u0001'),
+  ]) {
+    nested.append(node);
+    for (const attribute of ['innerHTML', 'outerHTML']) {
+      let error;
+      try { void root[attribute]; } catch (caught) { error = caught.name; }
+      if (error !== 'InvalidStateError') throw Error(attribute + '/' + node.nodeName);
+    }
+    if (typeof new XMLSerializer().serializeToString(root) !== 'string')
+      throw Error('XMLSerializer still serializes this DOM');
+    node.remove();
+  }
+  nested.append(xml.createTextNode('valid \u{1F642}'));
+  return root.innerHTML === '<nested>valid \u{1F642}</nested>';
+})()
+"#
+        )
+        .unwrap(),
+        "true"
+    );
+}

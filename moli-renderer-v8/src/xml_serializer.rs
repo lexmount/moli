@@ -119,15 +119,61 @@ pub(crate) fn serialize_native_handle(dom_host: &DomHost, handle: NativeNodeId) 
     output
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct InvalidXmlCharacterData;
+
+fn validate_xml_character_data(
+    dom_host: &DomHost,
+    roots: impl IntoIterator<Item = NativeNodeId>,
+) -> Result<(), InvalidXmlCharacterData> {
+    let mut pending: Vec<_> = roots.into_iter().collect();
+    while let Some(handle) = pending.pop() {
+        let Some(node) = dom_host.node(handle) else {
+            continue;
+        };
+        let data = node.data_value().unwrap_or_default();
+        let kind = node.node_type();
+        if matches!(kind, NodeType::Text | NodeType::Comment | NodeType::ProcessingInstruction)
+            && !data.chars().all(|character| {
+                matches!(character as u32, 0x9 | 0xa | 0xd | 0x20..=0xd7ff | 0xe000..=0xfffd | 0x10000..=0x10ffff)
+            })
+        {
+            return Err(InvalidXmlCharacterData);
+        }
+        if (kind == NodeType::Comment && (data.contains("--") || data.ends_with('-')))
+            || (kind == NodeType::ProcessingInstruction && data.contains("?>"))
+        {
+            return Err(InvalidXmlCharacterData);
+        }
+        let child_container = node
+            .as_element()
+            .and_then(Element::template_contents)
+            .unwrap_or(handle);
+        pending.extend(dom_host.child_handles(child_container));
+    }
+    Ok(())
+}
+
+pub(crate) fn serialize_native_outer_html(
+    dom_host: &DomHost,
+    handle: NativeNodeId,
+) -> Result<String, InvalidXmlCharacterData> {
+    validate_xml_character_data(dom_host, [handle])?;
+    Ok(serialize_native_handle(dom_host, handle))
+}
+
 pub(crate) fn serialize_native_inner_html(
     dom_host: &DomHost,
     handle: NativeNodeId,
-) -> Option<String> {
-    let child_container = dom_host
-        .node(handle)?
+) -> Result<Option<String>, InvalidXmlCharacterData> {
+    let Some(node) = dom_host.node(handle) else {
+        return Ok(None);
+    };
+    let child_container = node
         .as_element()
         .and_then(Element::template_contents)
         .unwrap_or(handle);
+    validate_xml_character_data(dom_host, dom_host.child_handles(child_container))?;
     let mut output = String::new();
     let mut next_generated_prefix = 1;
     serialize_native_children(
@@ -137,7 +183,7 @@ pub(crate) fn serialize_native_inner_html(
         &mut next_generated_prefix,
         &mut output,
     );
-    Some(output)
+    Ok(Some(output))
 }
 
 fn serialize_native_node(
