@@ -126,6 +126,7 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
     scope: &mut v8::PinScope<'s, '_>,
     applied: &AppliedHistoryEntry<'s>,
     dispatch_popstate: bool,
+    restore_scroll: bool,
 ) {
     if runtime_window_is_global(scope, applied.owner) {
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -139,6 +140,9 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
         if dispatch_popstate {
             dispatch_popstate_event(scope, host_ptr, None, applied.state);
             perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+            if restore_scroll {
+                restore_traversal_scroll(scope, applied);
+            }
             queue_hash_change_for_runtime_owner(
                 scope,
                 applied.owner,
@@ -155,6 +159,9 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
             );
         dispatch_popstate_event(scope, host_ptr, child_handle, applied.state);
         perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+        if restore_scroll {
+            restore_traversal_scroll(scope, applied);
+        }
         queue_hash_change_for_runtime_owner(
             scope,
             applied.owner,
@@ -181,5 +188,35 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
         }
     } else {
         sync_local_document_front_from_window(scope, applied.owner);
+    }
+}
+
+fn restore_traversal_scroll<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    applied: &AppliedHistoryEntry<'s>,
+) {
+    if navigation_document_has_opaque_origin(scope, applied.owner)
+        || !navigation_current_entry(scope, applied.owner)
+            .is_some_and(|entry| entry.strict_equals(applied.entry.into()))
+        || !super::native::entry(scope, applied.entry).is_some_and(|entry| {
+            entry.borrow().scroll_restoration == moli_history::ScrollRestoration::Auto
+        })
+    {
+        return;
+    }
+
+    if let Some(navigation) = window_navigation_for_holder(scope, applied.owner)
+        && (super::super::navigation_events::navigation_has_active_scroll_event(scope, navigation)
+            || !super::super::navigation_entry::restore_current_navigation_entry_scroll_position(
+                scope,
+                applied.owner,
+            ))
+    {
+        super::super::navigation_lifecycle::perform_navigation_scroll_if_needed(
+            scope,
+            navigation,
+            &applied.url,
+            true,
+        );
     }
 }

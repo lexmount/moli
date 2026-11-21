@@ -205,26 +205,15 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
         if !navigation_document_has_opaque_origin(scope, applied.owner)
             && let Some(navigation) = window_navigation_for_holder(scope, applied.owner)
         {
-            let active_scroll = super::super::navigation_events::navigation_has_active_scroll_event(
-                scope, navigation,
-            );
-            if active_scroll
-                || !super::super::navigation_entry::restore_current_navigation_entry_scroll_position(
-                    scope,
-                    applied.owner,
-                )
-            {
-                perform_navigation_scroll_if_needed(scope, navigation, &applied.url, true);
-            }
             dispatch_navigation_success(scope, navigation);
         }
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
         crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-        dispatch_history_entry_post_commit_events(scope, applied, true);
+        dispatch_history_entry_post_commit_events(scope, applied, true, true);
         return;
     }
     let Some(navigation) = window_navigation_for_holder(scope, applied.owner) else {
-        dispatch_history_entry_post_commit_events(scope, applied, true);
+        dispatch_history_entry_post_commit_events(scope, applied, true, false);
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
         return;
     };
@@ -238,7 +227,7 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
         (None, None)
     };
     suppress_intercept_result_unhandled_rejection(scope, result);
-    dispatch_history_entry_post_commit_events(scope, applied, true);
+    dispatch_history_entry_post_commit_events(scope, applied, true, false);
     if let Some(data) = settlement {
         if !traversal_intercept_is_active(scope, data.into()) {
             return;
