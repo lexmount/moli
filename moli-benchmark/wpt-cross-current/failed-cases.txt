@@ -2206,8 +2206,6 @@ editing/run/underline.html?2001-last
 editing/run/undo-redo-after-mutation.html
 editing/run/unlink.html
 encrypted-media/missing-sinf.html
-focus/focus-restoration-in-different-site-iframes.html
-focus/iframe-activeelement-after-focusing-out-iframes.html
 font-access/permissions-policy/local-fonts-supported-by-permissions-policy.html
 gyroscope/Gyroscope-supported-by-permissions-policy.html
 html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html
@@ -2431,9 +2429,6 @@ navigation-timing/navigation-type-post-backforward.html
 navigation-timing/prefetch-transfer-size-iframe.html
 old-tests/submission/Microsoft/foreigncontent/foreign_content_015.html
 old-tests/submission/Microsoft/selection/insertNodeIntoSelection.htm
-permissions-policy/experimental-features/focus-without-user-activation-disabled.html
-permissions-policy/experimental-features/focus-without-user-activation-focused-frame-descendant.html
-permissions-policy/experimental-features/focus-without-user-activation-setter-policy.html
 permissions-policy/picture-in-picture-supported-by-permissions-policy.html
 pointerevents/compat/pointerevent_touch-action-verification.html
 pointerevents/pointerevent_touch-action-verification.html
@@ -2540,7 +2535,6 @@ trusted-types/Document-write.html
 trusted-types/block-string-assignment-to-Document-write.html
 trusted-types/block-string-assignment-to-Element-outerHTML.html
 trusted-types/block-string-assignment-to-Element-setHTMLUnsafe.html
-uievents/order-of-events/focus-events/focus-automated-blink-webkit.html
 viewport/viewport-segments.html
 wasm/core/memory64/table64.wast.js.html
 web-based-payment-handler/can-make-payment-event-constructor.https.serviceworker.html

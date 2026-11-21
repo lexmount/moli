@@ -6561,10 +6561,12 @@ focus/focus-element-crash.html
 focus/focus-event-after-focusing-iframes.html
 focus/focus-event-after-iframe-gets-focus.html
 focus/focus-restoration-in-different-site-iframes-window.html
+focus/focus-restoration-in-different-site-iframes.html
 focus/focus-restoration-in-same-site-iframes-window.html
 focus/focus-sync-when-blur.html
 focus/hasfocus-different-site.html
 focus/hasfocus-same-site.html
+focus/iframe-activeelement-after-focusing-out-iframes.html
 focus/iframe-contentwindow-focus-with-different-site-intermediate-frame.html
 focus/iframe-contentwindow-focus-with-same-as-top-intermediate-frame.html
 focus/iframe-focus-with-different-site-intermediate-frame.html
@@ -9436,6 +9438,9 @@ performance-timeline/po-resource.html
 performance-timeline/supportedEntryTypes-cross-realm-access.html
 performance-timeline/timing-removed-iframe.html
 performance-timeline/worker-with-performance-observer.html
+permissions-policy/experimental-features/focus-without-user-activation-disabled.html
+permissions-policy/experimental-features/focus-without-user-activation-focused-frame-descendant.html
+permissions-policy/experimental-features/focus-without-user-activation-setter-policy.html
 permissions-policy/historical-feature-policy-header.html
 permissions-policy/historical.html
 permissions/all-permissions.html
@@ -10551,6 +10556,7 @@ uievents/legacy-domevents-tests/approved/stopImmediatePropagation.effect.html
 uievents/legacy-domevents-tests/approved/stopPropagation.deferred.effect.html
 uievents/legacy-domevents-tests/submissions/Microsoft/converted/EventListener.dispatch.new.event.html
 uievents/legacy/Event-subclasses-init.html
+uievents/order-of-events/focus-events/focus-automated-blink-webkit.html
 uievents/textInput/api.html
 uievents/ui_event_pseudo_target.html
 url/a-element-origin.html
