@@ -1401,6 +1401,45 @@ fn notification_permission_tracks_permission_overrides_and_request_permission() 
 }
 
 #[test]
+fn dispatched_click_distinguishes_nested_popover_invokers_from_the_event_target() {
+    let mut vm = new_storage_test_vm("https://popover-click-target.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const html = document.appendChild(document.createElement("html"));
+              const body = html.appendChild(document.createElement("body"));
+              const invoker = body.appendChild(document.createElement("button"));
+              const popover = invoker.appendChild(document.createElement("div"));
+              popover.popover = "auto";
+              invoker.popoverTargetElement = popover;
+
+              const host = popover.appendChild(document.createElement("div"));
+              const shadow = host.attachShadow({mode: "closed"});
+              const child = shadow.appendChild(document.createElement("span"));
+              const innerInvoker = popover.appendChild(document.createElement("button"));
+              innerInvoker.popoverTargetElement = popover;
+              const dispatchClick = target => target.dispatchEvent(
+                new MouseEvent("click", {bubbles: true, composed: true})
+              );
+              const isOpen = () => popover.matches(":popover-open");
+
+              dispatchClick(invoker);
+              const opened = isOpen();
+              dispatchClick(child);
+              const stayedOpen = isOpen();
+              dispatchClick(innerInvoker);
+              return [opened, stayedOpen, isOpen()].join("|");
+            })()
+            "#,
+        )
+        .expect("nested popover click probe should evaluate");
+
+    assert_eq!(result, "true|true|false");
+}
+
+#[test]
 fn show_and_hide_popover_are_no_ops_for_redundant_state_changes() {
     let mut vm = new_storage_test_vm("https://popover-redundant-state.test/");
 

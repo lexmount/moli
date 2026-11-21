@@ -16,7 +16,8 @@ use super::focus::{focus_element, is_focusable, update_focus};
 use super::toggle_event::{construct_toggle_event_with_source, queue_element_toggle_event};
 use super::{
     PageScriptHost, dispatch_public_event, has_reflected_attribute, reflected_attribute,
-    remove_reflected_attribute, set_reflected_attribute,
+    remove_reflected_attribute, resolved_reflected_element_attribute_handle,
+    set_reflected_attribute,
 };
 
 fn canonical_popover_state(raw: &str) -> &'static str {
@@ -1020,23 +1021,27 @@ pub(crate) fn perform_popover_invoker_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     invoker: DomHandle,
+    event_target: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    let Some(target_id) = reflected_attribute(runtime, invoker, "popovertarget") else {
-        return false;
-    };
-    let action = reflected_attribute(runtime, invoker, "popovertargetaction")
-        .map(|value| value.to_ascii_lowercase())
-        .unwrap_or_else(|| "toggle".to_owned());
-    if target_id.is_empty() {
-        return false;
-    }
-    let Some(target) = popover_invoker_target_for_id(runtime, invoker, &target_id) else {
+    let Some(target) =
+        resolved_reflected_element_attribute_handle(runtime, invoker, "popovertarget")
+    else {
         return false;
     };
     if !has_reflected_attribute(runtime, target, "popover") {
         return false;
     }
+    let dom = runtime.dom_host();
+    if target != invoker
+        && dom.shadow_including_contains(target, event_target)
+        && dom.shadow_including_contains(invoker, target)
+    {
+        return false;
+    }
+    let action = reflected_attribute(runtime, invoker, "popovertargetaction")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "toggle".to_owned());
     let open = match action.as_str() {
         "show" => true,
         "hide" => false,
@@ -1044,16 +1049,4 @@ pub(crate) fn perform_popover_invoker_default_action(
     };
     let _ = set_popover_open_state(scope, runtime_ptr, target, open, Some(invoker), false);
     true
-}
-
-fn popover_invoker_target_for_id(
-    runtime: &PageScriptHost,
-    invoker: DomHandle,
-    id: &str,
-) -> Option<DomHandle> {
-    let root = runtime.dom_host().root_node_handle(invoker)?;
-    let candidate = runtime
-        .dom_host()
-        .element_handle_by_id_in_subtree(root, id)?;
-    runtime.dom_host().resolve_reference_target_chain(candidate)
 }
