@@ -5,7 +5,10 @@ use crate::{
     context_bootstrap::{
         current_window_performance_time_origin_seed, dispatch_window_error_event_with_details,
     },
-    native_bridge::{PageScriptHost, WindowDocumentTaskTarget, WindowExecutionContextBinding},
+    native_bridge::{
+        PageScriptHost, WindowDocumentTaskTarget, WindowExecutionContextBinding,
+        element::queue_revealed_lazy_image_loads,
+    },
     page_task_queue::RendererPageRenderingUpdateTaskId,
     v8_execution_watchdog::{
         SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
@@ -127,7 +130,16 @@ impl ScriptVm {
         if unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
             crate::observer_runtime::sample_realtime_intersections(scope, host_ptr)?;
         }
-        if unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
+        let host = unsafe { &*host_ptr };
+        if host.realtime_rendering_opportunity_is_current(id, root) {
+            // Use the final screen sample, including children added by rAF or
+            // RO. A callback-only tick with no source changes need not scan
+            // the same images again.
+            if host.realtime_opportunity_has_source_changes() {
+                for document in host.active_layout_document_handles() {
+                    queue_revealed_lazy_image_loads(scope, host_ptr, document);
+                }
+            }
             // Layout has published the actual child viewports, and rAF/RO may
             // have changed CSS font sources. Admit those resources through the
             // existing owner-checked loader after sampling this frame. A ready

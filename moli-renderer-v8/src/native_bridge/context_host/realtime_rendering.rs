@@ -36,6 +36,7 @@ struct RunningRealtimeFrame {
     // replacing Moli's task owner. Navigation never transfers this batch.
     documents: Vec<WindowDocumentTaskTarget>,
     sample_all_intersections: bool,
+    source_changed: bool,
 }
 
 #[derive(Default)]
@@ -170,6 +171,7 @@ impl PageScriptHost {
             let mut frame = state.frame.borrow_mut();
             if let Some(running) = &mut frame.running {
                 running.sample_all_intersections = true;
+                running.source_changed = true;
             }
             std::mem::replace(&mut frame.source_requested, true)
         };
@@ -333,6 +335,7 @@ impl PageScriptHost {
             ticket: (id, target),
             documents,
             sample_all_intersections: scheduled.sample_all_intersections,
+            source_changed: frame.source_requested,
         });
         Ok(true)
     }
@@ -346,6 +349,18 @@ impl PageScriptHost {
             .borrow();
         let running = frame.running.as_ref().expect("running Realtime frame");
         (frame.sampled_now(), running.sample_all_intersections)
+    }
+
+    pub(crate) fn realtime_opportunity_has_source_changes(&self) -> bool {
+        self.realtime_layout_state
+            .as_ref()
+            .expect("Realtime frame state")
+            .frame
+            .borrow()
+            .running
+            .as_ref()
+            .expect("running Realtime frame")
+            .source_changed
     }
 
     pub(crate) fn realtime_rendering_opportunity_is_current(
