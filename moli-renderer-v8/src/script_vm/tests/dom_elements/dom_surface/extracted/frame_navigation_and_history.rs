@@ -2360,7 +2360,17 @@ async fn child_window_load_replacement_stops_old_delivery_before_owner_output() 
           parent.__childLoadPhaseReplacement;
       });
       addEventListener("pagehide", () => parent.__childLoadPhaseEvents.push("old-pagehide"));
-      addEventListener("unload", () => parent.__childLoadPhaseEvents.push("old-unload"));
+      addEventListener("unload", event => {
+        parent.__childLoadPhaseEvents.push("old-unload");
+        const path = event.composedPath();
+        parent.__childUnloadDispatchState = JSON.stringify([
+          event.target === document,
+          event.srcElement === document,
+          event.currentTarget === window,
+          event.eventPhase === Event.AT_TARGET,
+          path.length === 1 && path[0] === window,
+        ]);
+      });
       addEventListener("pageshow", () => parent.__childLoadPhaseEvents.push("old-pageshow"));
     <\/script>
     <body data-version="old">old</body>`;
@@ -2481,6 +2491,12 @@ async fn child_window_load_replacement_stops_old_delivery_before_owner_output() 
             .expect("replacement child load-phase trace should evaluate"),
         "old-window|old-pagehide|old-unload|new-window|frame:new|new-pageshow",
         "started old load must unload once in pagehide-before-unload order before replacement"
+    );
+    assert_eq!(
+        vm.eval("__childUnloadDispatchState")
+            .expect("child unload dispatch state should evaluate"),
+        "[true,true,true,true,true]",
+        "unload exposes the Document while invoking the child Window"
     );
     let snapshots = vm.take_completed_child_frame_navigation_loads();
     assert_eq!(snapshots.len(), 1);
