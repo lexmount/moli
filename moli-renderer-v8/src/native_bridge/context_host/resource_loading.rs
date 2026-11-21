@@ -183,6 +183,38 @@ impl PageScriptHost {
         self.note_subresource_activity();
     }
 
+    pub(crate) fn record_subresource_request_extra_info(
+        &mut self,
+        internal_id: u64,
+        redirects: Vec<crate::types::NavigationRedirect>,
+        info: Box<moli_fetch::NetworkRequestExtraInfo>,
+    ) {
+        let (handle, request) =
+            if let Some(mut pending) = self.take_pending_subresource_fetch(internal_id) {
+                self.record_deferred_pending_subresource_request_started(&mut pending);
+                let handle = pending.info.network_request_handle;
+                self.restore_pending_subresource_fetch(pending);
+                (handle, None)
+            } else if let Some(running) = self.running_subresource_fetches.get(&internal_id) {
+                let pending = &running.pending;
+                let request = pending.info.request_snapshot(
+                    pending.continuation.request_initiator_type(),
+                    pending.load.disposition() == ResourceLoadDisposition::Keepalive,
+                );
+                (pending.info.network_request_handle, request.map(Box::new))
+            } else {
+                return;
+            };
+        if let Some(handle) = handle {
+            self.push_network_output_item(ScriptNetworkOutputItem::SubresourceRequestExtraInfo {
+                handle,
+                request,
+                redirects,
+                info,
+            });
+        }
+    }
+
     pub(crate) fn record_subresource_response_started(
         &mut self,
         response: SubresourceResponseStarted,
@@ -635,25 +667,12 @@ impl PageScriptHost {
         initiator_type: SubresourceRequestInitiatorType,
         disposition: ResourceLoadDisposition,
     ) {
-        let Some(handle) = info.network_request_handle else {
-            return;
-        };
-        self.record_subresource_request_started(
-            SubresourceRequestSnapshot::new(
-                handle,
-                info.frame_id.clone(),
-                info.document_url.clone(),
-                info.url.clone(),
-                info.method.clone(),
-                info.request_headers.clone(),
-                info.request_body.clone(),
-                info.resource_type,
-                initiator_type,
-                info.request_cookie_report.clone(),
-            )
-            .with_request_body_bytes(info.request_body_bytes.clone())
-            .with_keepalive(disposition == ResourceLoadDisposition::Keepalive),
-        );
+        if let Some(request) = info.request_snapshot(
+            initiator_type,
+            disposition == ResourceLoadDisposition::Keepalive,
+        ) {
+            self.record_subresource_request_started(request);
+        }
     }
 
     fn record_subresource_admission(
@@ -1566,7 +1585,13 @@ impl PageScriptHost {
     }
 
     pub(crate) fn resource_completion_sender(&self) -> RendererResourceCompletionSender {
-        self.resource_completion_tx.clone()
+        self.resource_completion_tx
+            .clone()
+            .with_request_header_observation(
+                self.output_journal
+                    .as_ref()
+                    .is_some_and(|journal| journal.transport_is_bound()),
+            )
     }
 
     pub(crate) fn resource_scheduler(&self) -> RendererResourceScheduler {

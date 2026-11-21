@@ -1479,6 +1479,7 @@ pub(crate) struct TargetSubresourceRequestExtraInfoOutput {
     delivery_order_index: usize,
     index: usize,
     request: Arc<TargetSubresourceRequestOutput>,
+    redirects: Vec<NavigationRedirect>,
     request_headers: Vec<(String, String)>,
     request_cookie_report: StoredCookieQueryReport,
 }
@@ -1488,6 +1489,7 @@ impl TargetSubresourceRequestExtraInfoOutput {
         delivery_order_index: usize,
         index: usize,
         request: Arc<TargetSubresourceRequestOutput>,
+        redirects: Vec<NavigationRedirect>,
         request_headers: Vec<(String, String)>,
         request_cookie_report: StoredCookieQueryReport,
     ) -> Self {
@@ -1495,6 +1497,7 @@ impl TargetSubresourceRequestExtraInfoOutput {
             delivery_order_index,
             index,
             request,
+            redirects,
             request_headers,
             request_cookie_report,
         }
@@ -1510,6 +1513,14 @@ impl TargetSubresourceRequestExtraInfoOutput {
 
     pub(crate) fn handle(&self) -> SubresourceNetworkRequestHandle {
         self.request.handle()
+    }
+
+    pub(crate) fn request(&self) -> &TargetSubresourceRequestOutput {
+        &self.request
+    }
+
+    pub(crate) fn redirects(&self) -> &[NavigationRedirect] {
+        &self.redirects
     }
 
     pub(crate) fn request_cookie_report(&self) -> &StoredCookieQueryReport {
@@ -2721,6 +2732,45 @@ impl TargetNetworkOutputQueue {
                 *subresource_index += 1;
                 self.subresource_record_count = *subresource_index;
             }
+            ScriptNetworkOutputItem::SubresourceRequestExtraInfo {
+                handle,
+                request,
+                redirects,
+                info,
+            } => {
+                if self.completed_subresource_handles.contains(handle)
+                    || self
+                        .subresource_request_extra_info_handles
+                        .contains(&(*handle, redirects.len()))
+                {
+                    return;
+                }
+                if let Some(request) = request {
+                    let first_snapshot = !self.staged_subresource_requests.contains_key(handle);
+                    let output = self.store_subresource_request_snapshot(
+                        *subresource_index,
+                        document_loader_id,
+                        request,
+                    );
+                    // The first transport observation can follow a cached hop.
+                    // Projection announces the initial snapshot and deduplicates
+                    // any start already emitted at a Fetch pause.
+                    let output = if first_snapshot {
+                        TargetSubresourcePlanOutput::RequestStarted(output)
+                    } else {
+                        TargetSubresourcePlanOutput::RequestUpdated(output)
+                    };
+                    self.delivery_outputs.push_subresource(output);
+                }
+                if self.append_subresource_request_extra_info(
+                    *subresource_index,
+                    *handle,
+                    redirects,
+                    info,
+                ) {
+                    *subresource_index += 1;
+                }
+            }
             ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
                 self.append_response_request_extra_info(
                     *subresource_index,
@@ -2974,13 +3024,13 @@ impl TargetNetworkOutputQueue {
                 self.append_subresource_request_extra_info(
                     index,
                     handle,
-                    hop,
+                    &redirects[..hop],
                     &response.request_extra_info,
                 );
             }
         }
         if let Some(extra_info) = final_request {
-            self.append_subresource_request_extra_info(index, handle, redirects.len(), extra_info);
+            self.append_subresource_request_extra_info(index, handle, redirects, extra_info);
         }
     }
 
@@ -2988,7 +3038,7 @@ impl TargetNetworkOutputQueue {
         &mut self,
         index: usize,
         handle: SubresourceNetworkRequestHandle,
-        hop: usize,
+        redirects: &[NavigationRedirect],
         extra_info: &moli_fetch::NetworkRequestExtraInfo,
     ) -> bool {
         let Some(request) = self.staged_subresource_requests.get(&handle).cloned() else {
@@ -2996,7 +3046,7 @@ impl TargetNetworkOutputQueue {
         };
         if !self
             .subresource_request_extra_info_handles
-            .insert((handle, hop))
+            .insert((handle, redirects.len()))
         {
             return false;
         }
@@ -3005,6 +3055,7 @@ impl TargetNetworkOutputQueue {
             delivery_order_index,
             index,
             request,
+            redirects.to_vec(),
             extra_info.headers.clone(),
             extra_info.cookie_report.clone(),
         );

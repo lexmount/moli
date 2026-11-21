@@ -435,9 +435,6 @@ impl ControlledResourceLoad {
                 next_request_pause = false;
             }
             if next_request_pause {
-                // ExtraInfo describes the first on-wire request of this hop.
-                // Authentication retries retain it; a redirect starts a new hop.
-                network_request_headers = None;
                 self.sync_info();
                 let rx = if let Some(rx) = self.initial_decision.take() {
                     rx
@@ -517,9 +514,32 @@ impl ControlledResourceLoad {
                     if self.load.network_offline() {
                         return Err("Network emulation offline".into());
                     }
+                    let mut request = self.request.clone();
+                    if self.interception.observes_request_headers()
+                        && let Some(handle) = self.info.network_request_handle
+                    {
+                        let output = self.interception.clone();
+                        let snapshot = (!output.is_worker())
+                            .then(|| self.info.request_snapshot(
+                                self.request_initiator_type,
+                                self.load.disposition() == crate::network::loads::ResourceLoadDisposition::Keepalive,
+                            ))
+                            .flatten()
+                            .map(Box::new);
+                        request = request.with_network_request_observer(move |redirects, info| {
+                            output.publish_network(
+                                crate::types::ScriptNetworkOutputItem::SubresourceRequestExtraInfo {
+                                    handle,
+                                    request: snapshot.clone(),
+                                    redirects: redirects.into_iter().map(Into::into).collect(),
+                                    info: Box::new(info),
+                                },
+                            );
+                        });
+                    }
                     let observed = super::async_fetch::fetch_subresource_hop(
                         &loader,
-                        self.request.clone(),
+                        request,
                         hop_cancel.clone(),
                         self.preflight_headers.clone(),
                         Some(&preflight_observer),
@@ -736,6 +756,9 @@ impl ControlledResourceLoad {
                 return Ok((delivered, network_request_headers));
             }
             self.preflight_headers = self.request.request_headers.to_byte_strings();
+            // ExtraInfo describes the first on-wire request of the current hop.
+            // Authentication retries retain it; a redirect starts a new hop.
+            network_request_headers = None;
             // Retire the previous hop's protocol correlation before installing
             // its next one. The stable native network handle keeps Network ID.
             self.interception.publish_continue(

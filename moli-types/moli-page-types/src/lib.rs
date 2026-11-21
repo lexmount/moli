@@ -332,6 +332,7 @@ pub struct NavigationResponse {
     pub cache_state: moli_fetch::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
+    network_response_extra_info: Option<Box<NetworkResponseExtraInfo>>,
 }
 
 impl Clone for NavigationResponse {
@@ -353,6 +354,7 @@ impl Clone for NavigationResponse {
             cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
             network_request_extra_info: self.network_request_extra_info.clone(),
+            network_response_extra_info: self.network_response_extra_info.clone(),
         }
     }
 }
@@ -458,6 +460,18 @@ impl NavigationResponse {
             .map(|info| info.headers.as_slice())
     }
 
+    pub fn with_network_response_extra_info(
+        mut self,
+        extra_info: Option<NetworkResponseExtraInfo>,
+    ) -> Self {
+        self.network_response_extra_info = extra_info.map(Box::new);
+        self
+    }
+
+    pub fn network_response_extra_info(&self) -> Option<&NetworkResponseExtraInfo> {
+        self.network_response_extra_info.as_deref()
+    }
+
     pub fn from_head_and_materialized_body(head: ResponseHead, body: ResponseBody) -> Self {
         let body = body
             .try_into_materialized_text_body()
@@ -476,6 +490,7 @@ impl NavigationResponse {
             cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
+            network_response_extra_info: None,
         }
     }
 
@@ -520,6 +535,7 @@ impl NavigationResponse {
         head.headers = headers;
         Self::from_head_and_materialized_body(head, source.materialized_body())
             .with_network_request_extra_info(source.network_request_extra_info.clone())
+            .with_network_response_extra_info(source.network_response_extra_info().cloned())
     }
 
     pub fn into_parts(self) -> (ResponseHead, String, Vec<u8>) {
@@ -638,6 +654,12 @@ pub enum ScriptNetworkOutputItem {
     SubresourceNetworkRecord(Box<SubresourceNetworkRecord>),
     SubresourceRequestStarted(Box<SubresourceRequestSnapshot>),
     SubresourceRequestUpdated(Box<SubresourceRequestSnapshot>),
+    SubresourceRequestExtraInfo {
+        handle: SubresourceNetworkRequestHandle,
+        request: Option<Box<SubresourceRequestSnapshot>>,
+        redirects: Vec<NavigationRedirect>,
+        info: Box<NetworkRequestExtraInfo>,
+    },
     SubresourceResponseStarted(Box<SubresourceResponseStarted>),
     SubresourceDataReceived(SubresourceDataReceived),
     SubresourceEventSourceMessageReceived(Box<SubresourceEventSourceMessageReceived>),
@@ -1032,7 +1054,8 @@ impl ScriptExecutionReport {
                 state.bodies.insert(handle, *body);
                 self.try_materialize_staged_subresource_record(handle);
             }
-            ScriptNetworkOutputItem::SubresourceDataReceived(_)
+            ScriptNetworkOutputItem::SubresourceRequestExtraInfo { .. }
+            | ScriptNetworkOutputItem::SubresourceDataReceived(_)
             | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_) => {}
             ScriptNetworkOutputItem::WebSocketNetworkEvent(event) => {
                 self.websocket_network_events.push(event);
@@ -2559,6 +2582,31 @@ pub struct PendingSubresourceFetchInfo {
     pub request_body_bytes: Option<bytes::Bytes>,
     pub resource_type: SubresourceResourceType,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
+}
+
+impl PendingSubresourceFetchInfo {
+    pub fn request_snapshot(
+        &self,
+        initiator_type: SubresourceRequestInitiatorType,
+        keepalive: bool,
+    ) -> Option<SubresourceRequestSnapshot> {
+        Some(
+            SubresourceRequestSnapshot::new(
+                self.network_request_handle?,
+                self.frame_id.clone(),
+                self.document_url.clone(),
+                self.url.clone(),
+                self.method.clone(),
+                self.request_headers.clone(),
+                self.request_body.clone(),
+                self.resource_type,
+                initiator_type,
+                self.request_cookie_report.clone(),
+            )
+            .with_request_body_bytes(self.request_body_bytes.clone())
+            .with_keepalive(keepalive),
+        )
+    }
 }
 
 /// The navigation identity and previous response for one child Document hop.

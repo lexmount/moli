@@ -365,6 +365,72 @@ async fn stylesheet_interception_preserves_parser_import_redirect_and_script_ini
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn intercepted_stylesheet_redirect_reports_extra_info_for_both_hops() {
+    let (base, _, server) = stylesheet_server().await;
+    let mut ctx = TestContext::new();
+    let mut id = 83500;
+    setup(&mut ctx, &base, &mut id, "Request").await;
+
+    let start = format!("{base}/start.css");
+    let destination = format!("{base}/actual.css");
+    append_link(&mut ctx, &mut id, "redirected", &start, false, None).await;
+    let first = pause_for(&mut ctx, &start).await;
+    let request_id = first["params"]["networkId"].as_str().unwrap().to_owned();
+    command(
+        &mut ctx,
+        &mut id,
+        "Fetch.continueRequest",
+        json!({"requestId":first["params"]["requestId"]}),
+    )
+    .await;
+    let second = pause_for(&mut ctx, &destination).await;
+    assert_eq!(second["params"]["networkId"], request_id);
+    command(
+        &mut ctx,
+        &mut id,
+        "Fetch.continueRequest",
+        json!({"requestId":second["params"]["requestId"]}),
+    )
+    .await;
+    wait_until_message(
+        &mut ctx,
+        "SID-1",
+        "stylesheet network completion",
+        |message| {
+            message["method"] == "Network.loadingFinished"
+                && message["params"]["requestId"] == request_id
+        },
+    )
+    .await;
+
+    let mut request_events = Vec::new();
+    let mut request_extra_count = 0;
+    let mut response_extra_statuses = Vec::new();
+    for message in ctx
+        .sent
+        .iter()
+        .filter(|message| message["params"]["requestId"] == request_id)
+    {
+        match message["method"].as_str() {
+            Some("Network.requestWillBeSent") => request_events.push(&message["params"]),
+            Some("Network.requestWillBeSentExtraInfo") => request_extra_count += 1,
+            Some("Network.responseReceivedExtraInfo") => {
+                response_extra_statuses.push(message["params"]["statusCode"].as_u64().unwrap());
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(request_events.len(), 2);
+    assert_eq!(request_events[0]["request"]["url"], start);
+    assert_eq!(request_events[1]["request"]["url"], destination);
+    assert_eq!(request_events[1]["redirectHasExtraInfo"], true);
+    assert_eq!(request_events[1]["redirectResponse"]["url"], start);
+    assert_eq!(request_extra_count, 2);
+    assert_eq!(response_extra_statuses, [307, 200]);
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stylesheet_response_interception_preserves_cors_and_cssom_access() {
     let (base, _, page_server) = stylesheet_server().await;
     let (cross, _, css_server) = stylesheet_server().await;

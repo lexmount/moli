@@ -955,14 +955,6 @@ impl RuntimeOwner {
             Ok(route) => route,
             Err(error) => return Err((job.response_tx, error)),
         };
-        if let Err(error) = configure_network_observation(
-            &mut easy,
-            &job.request,
-            request_cookie_report.as_ref(),
-            proxy_route.is_proxy() && job.current_url.scheme() == "https",
-        ) {
-            return Err((job.response_tx, error));
-        }
         let outgoing_headers = match configure_easy(
             &mut easy,
             &self.config,
@@ -994,6 +986,14 @@ impl RuntimeOwner {
             request_cookie_report.clone(),
             request_extra_info.as_ref(),
         );
+        if let Err(error) = configure_network_observation(
+            &mut easy,
+            &job.request,
+            request_cookie_report.as_ref(),
+            proxy_route.is_proxy() && job.current_url.scheme() == "https",
+        ) {
+            return Err((job.response_tx, error));
+        }
 
         let label = job.current_url.to_string();
         let dns_resolution = match curl_dns_resolution(&self.config, &job.current_url, &proxy_route)
@@ -1168,14 +1168,6 @@ impl RuntimeOwner {
             Ok(route) => route,
             Err(error) => return Err((Box::new(job), Some(easy), error)),
         };
-        if let Err(error) = configure_network_observation(
-            &mut easy,
-            &job.request,
-            request_cookie_report.as_ref(),
-            proxy_route.is_proxy() && job.current_url.scheme() == "https",
-        ) {
-            return Err((Box::new(job), Some(easy), error));
-        }
         let outgoing_headers = match configure_easy(
             &mut easy,
             &self.config,
@@ -1205,6 +1197,14 @@ impl RuntimeOwner {
             request_cookie_report.clone(),
             request_extra_info.as_ref(),
         );
+        if let Err(error) = configure_network_observation(
+            &mut easy,
+            &job.request,
+            request_cookie_report.as_ref(),
+            proxy_route.is_proxy() && job.current_url.scheme() == "https",
+        ) {
+            return Err((Box::new(job), Some(easy), error));
+        }
         let collector = easy
             .get_mut()
             .streaming_mut()
@@ -1406,14 +1406,6 @@ impl RuntimeOwner {
             Ok(route) => route,
             Err(error) => return Err((Box::new(job), Some(easy), error)),
         };
-        if let Err(error) = configure_network_observation(
-            &mut easy,
-            &job.request,
-            request_cookie_report.as_ref(),
-            proxy_route.is_proxy() && job.current_url.scheme() == "https",
-        ) {
-            return Err((Box::new(job), Some(easy), error));
-        }
         let outgoing_headers = match configure_easy(
             &mut easy,
             &self.config,
@@ -1445,6 +1437,14 @@ impl RuntimeOwner {
             request_cookie_report.clone(),
             request_extra_info.as_ref(),
         );
+        if let Err(error) = configure_network_observation(
+            &mut easy,
+            &job.request,
+            request_cookie_report.as_ref(),
+            proxy_route.is_proxy() && job.current_url.scheme() == "https",
+        ) {
+            return Err((Box::new(job), Some(easy), error));
+        }
         let collector = easy
             .get_mut()
             .raw_streaming_mut()
@@ -3059,7 +3059,7 @@ fn configure_network_observation(
     let recorder = request.network_observation_recorder().cloned();
     let verbose = recorder.is_some() || capture_proxy_connect_response;
     if let Some(recorder) = recorder.as_ref() {
-        recorder.set_current_request_cookie_report(request_cookie_report.cloned());
+        recorder.begin_request(request, request_cookie_report.cloned());
     }
     easy.get_mut()
         .begin_transfer(recorder, capture_proxy_connect_response);

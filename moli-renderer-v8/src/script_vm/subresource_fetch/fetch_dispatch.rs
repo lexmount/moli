@@ -477,9 +477,8 @@ impl ScriptVm {
             );
             match super::intercepted_redirects::follow_intercepted_redirect(
                 request,
-                &response.head(),
+                response,
                 &pending.info.document_url,
-                response.network_request_headers(),
                 pending.load.request_client().web_security_disabled(),
             ) {
                 Ok(Some((request, redirect))) => {

@@ -343,6 +343,7 @@ impl RendererOwnerWakeSender {
 #[derive(Debug, Clone)]
 pub(crate) struct RendererResourceCompletionSender {
     page_completion_route: Option<RendererPageResourceCompletionRoute>,
+    observes_request_headers: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -361,6 +362,7 @@ impl RendererResourceCompletionSender {
                 sender: page_completion_sender,
                 root_document,
             }),
+            observes_request_headers: false,
         }
     }
 
@@ -372,6 +374,7 @@ impl RendererResourceCompletionSender {
     pub(crate) fn direct_completion_only() -> Self {
         Self {
             page_completion_route: None,
+            observes_request_headers: false,
         }
     }
 
@@ -386,12 +389,32 @@ impl RendererResourceCompletionSender {
         page_completion_sender: RendererPageResourceCompletionSender,
         root_document: RendererDocumentToken,
     ) -> Self {
-        Self {
-            page_completion_route: Some(RendererPageResourceCompletionRoute {
-                sender: page_completion_sender,
-                root_document,
-            }),
+        Self::for_page_scheduler(page_completion_sender, root_document)
+    }
+
+    pub(crate) fn with_request_header_observation(mut self, enabled: bool) -> Self {
+        self.observes_request_headers = enabled;
+        self
+    }
+
+    pub(crate) fn observe_subresource_request(
+        &self,
+        request: moli_fetch::Request,
+        internal_id: u64,
+    ) -> moli_fetch::Request {
+        if !self.observes_request_headers {
+            return request;
         }
+        let sender = self.clone();
+        request.with_network_request_observer(move |redirects, info| {
+            let _ = sender.send_async_subresource_event(
+                crate::types::AsyncSubresourceFetchEvent::RequestExtraInfo {
+                    internal_id,
+                    redirects: redirects.into_iter().map(Into::into).collect(),
+                    info: Box::new(info),
+                },
+            );
+        })
     }
 
     fn send_page_completion(

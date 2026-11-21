@@ -1358,6 +1358,7 @@ fn split_network_output_items(
             }
             ScriptNetworkOutputItem::SubresourceRequestStarted(_)
             | ScriptNetworkOutputItem::SubresourceRequestUpdated(_)
+            | ScriptNetworkOutputItem::SubresourceRequestExtraInfo { .. }
             | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
             | ScriptNetworkOutputItem::SubresourceDataReceived(_)
             | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)

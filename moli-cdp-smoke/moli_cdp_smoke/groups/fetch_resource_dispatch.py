@@ -254,7 +254,10 @@ async def _resource_case(
                 assert_equal(await page.evaluate("[...document.fonts].find(f => f.family === 'DispatchPaint').status"),
                              "loaded", f"{case} CSS font decoded")
             elif kind == "css-image":
-                request_id = resource_requests()[-1]["requestId"]
+                request = resource_requests()[-1]
+                if is_moli_browser() and not worker and policy is None and admission in ("direct", "unmatched", "response"):
+                    assert_equal(request["initiator"]["type"], "parser", f"{case} CSS image initiator")
+                request_id = request["requestId"]
                 body = await cdp.send("Network.getResponseBody", {"requestId": request_id})
                 data = base64.b64decode(body["body"]) if body.get("base64Encoded") else body["body"].encode()
                 assert_equal(data, expected_body, f"{case} complete image response body")

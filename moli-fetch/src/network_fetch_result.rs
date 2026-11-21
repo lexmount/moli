@@ -8,7 +8,7 @@ use moli_cookie_jar::StoredCookieQueryReport;
 use parking_lot::Mutex;
 use url::Url;
 
-use crate::RedirectInfo;
+use crate::{NetworkRequestExtraInfo, RedirectInfo, Request};
 
 const MAX_OBSERVED_EXCHANGES: usize = 32;
 const MAX_OBSERVED_HEADER_BLOCK_BYTES: usize = 256 * 1024;
@@ -197,6 +197,27 @@ pub(crate) struct NetworkObservationRecorder {
     state: Arc<Mutex<NetworkObservationRecorderState>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct NetworkRequestObserver(
+    Arc<dyn Fn(Vec<RedirectInfo>, NetworkRequestExtraInfo) + Send + Sync>,
+);
+
+impl NetworkRequestObserver {
+    pub(crate) fn new(
+        observer: impl Fn(Vec<RedirectInfo>, NetworkRequestExtraInfo) + Send + Sync + 'static,
+    ) -> Self {
+        Self(Arc::new(observer))
+    }
+}
+
+impl fmt::Debug for NetworkRequestObserver {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NetworkRequestObserver")
+            .finish_non_exhaustive()
+    }
+}
+
 impl fmt::Debug for NetworkObservationRecorder {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.state.lock();
@@ -209,11 +230,19 @@ impl fmt::Debug for NetworkObservationRecorder {
 }
 
 impl NetworkObservationRecorder {
-    pub(crate) fn set_current_request_cookie_report(
+    pub(crate) fn begin_request(
         &self,
+        request: &Request,
         cookie_report: Option<StoredCookieQueryReport>,
     ) {
-        self.state.lock().current_request_cookie_report = cookie_report;
+        let mut state = self.state.lock();
+        state.current_request_cookie_report = cookie_report;
+        state.request_observer = request.network_request_observer().cloned();
+        state.redirect_chain = if state.request_observer.is_some() {
+            request.redirect_chain().to_vec()
+        } else {
+            Vec::new()
+        };
     }
 
     pub(crate) fn record_request_header_block(&self, data: &[u8]) {
@@ -223,13 +252,31 @@ impl NetworkObservationRecorder {
             state.journal.truncated = true;
             return;
         }
-        let cookie_report = state.current_request_cookie_report.clone();
+        let request = NetworkRequestObservation::from_header_block(
+            data,
+            state.current_request_cookie_report.clone(),
+        );
+        let hop = state.redirect_chain.len();
+        let notification = if state.last_reported_hop == Some(hop) {
+            None
+        } else {
+            state.request_observer.take().map(|observer| {
+                state.last_reported_hop = Some(hop);
+                let info = NetworkRequestExtraInfo {
+                    headers: request.headers.clone(),
+                    cookie_report: request.cookie_report.clone().unwrap_or_default(),
+                };
+                (observer, std::mem::take(&mut state.redirect_chain), info)
+            })
+        };
         state
             .journal
             .exchanges
-            .push(NetworkExchangeObservation::request_only(
-                NetworkRequestObservation::from_header_block(data, cookie_report),
-            ));
+            .push(NetworkExchangeObservation::request_only(request));
+        drop(state);
+        if let Some((observer, redirects, info)) = notification {
+            (observer.0)(redirects, info);
+        }
     }
 
     pub(crate) fn record_response_header_line(&self, data: &[u8]) {
@@ -298,6 +345,9 @@ impl NetworkObservationRecorder {
 struct NetworkObservationRecorderState {
     journal: NetworkObservationJournal,
     current_request_cookie_report: Option<StoredCookieQueryReport>,
+    redirect_chain: Vec<RedirectInfo>,
+    last_reported_hop: Option<usize>,
+    request_observer: Option<NetworkRequestObserver>,
     pending_response: Option<PendingResponseObservation>,
 }
 

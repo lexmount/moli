@@ -363,6 +363,10 @@ pub(crate) fn fetch_subresource_initial_request_network_events(
     output: &TargetSubresourceFetchPauseNetworkOutput,
 ) -> Vec<BackgroundProtocolEvent> {
     let resource_type = output.resource_type().into();
+    // Child Document redirects publish their response metadata through navigation.
+    let redirect_with_extra_info = output
+        .redirect()
+        .filter(|redirect| output.child_document().is_none() && redirect.redirect_has_extra_info);
     let event = NetworkRequestEvent {
         target_id: DevToolsTargetId::from(output.frame_id()),
         frame_id: Some(DevToolsFrameId::from(output.frame_id())),
@@ -396,7 +400,7 @@ pub(crate) fn fetch_subresource_initial_request_network_events(
                     .negotiated_http_version
                     .map(|version| version.protocol_name().to_owned()),
             }),
-        redirect_has_extra_info: false,
+        redirect_has_extra_info: redirect_with_extra_info.is_some(),
         request_cookie_report: output.request_cookie_report().cloned(),
         resource_type: Some(resource_type),
         timestamp: Some(output.timestamp()),
@@ -422,6 +426,14 @@ pub(crate) fn fetch_subresource_initial_request_network_events(
     // header and does not synthesize requestWillBeSentExtraInfo from the cookie
     // lookup. The network stack owns the single ExtraInfo event for this hop.
     emit_network_before_request_sent(&mut events, event, session_id, false);
+    if let Some(redirect) = redirect_with_extra_info {
+        emit_redirect_response_received_extra_info(
+            &mut events,
+            session_id,
+            output.network_request_id(),
+            redirect,
+        );
+    }
     events
 }
 

@@ -24,8 +24,9 @@ use super::output_queue::{
     TargetSubresourceCompleteNetworkDeliveryOutput, TargetSubresourceDataNetworkDeliveryOutput,
     TargetSubresourceEventSourceMessageNetworkDeliveryOutput, TargetSubresourceMetadataOutcome,
     TargetSubresourceNetworkDeliveryOutput, TargetSubresourceRequestExtraInfoNetworkDeliveryOutput,
-    TargetSubresourceRequestNetworkDeliveryOutput, TargetSubresourceResponseNetworkDeliveryOutput,
-    TargetWebSocketDeliveryRecord, TargetWebSocketLifecycleDeliveryKind,
+    TargetSubresourceRequestNetworkDeliveryOutput, TargetSubresourceRequestOutput,
+    TargetSubresourceResponseNetworkDeliveryOutput, TargetWebSocketDeliveryRecord,
+    TargetWebSocketLifecycleDeliveryKind,
 };
 
 pub(crate) struct NetworkBacklogProjectionContext<'a> {
@@ -176,9 +177,12 @@ fn emit_subresource_network_delivery_record(
         }
         TargetSubresourceNetworkDeliveryOutput::RequestExtraInfo(output) => {
             emit_staged_subresource_request_extra_info(
+                conn,
                 out,
                 output,
                 event_session_ids,
+                owner,
+                frame_id,
                 base_timestamp,
             )
         }
@@ -533,7 +537,7 @@ fn emit_staged_subresource_request_started(
             );
         }
         if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
-            slot.record_fetch_pause_announced_redirect(request_id);
+            slot.record_subresource_announced_redirects(request_id, 1);
         }
     }
     if conn.owner_has_worker_resource_target(owner)
@@ -545,15 +549,32 @@ fn emit_staged_subresource_request_started(
 }
 
 fn emit_staged_subresource_request_extra_info(
+    conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     delivery_output: &TargetSubresourceRequestExtraInfoNetworkDeliveryOutput,
     event_session_ids: &[Option<String>],
+    owner: &CommandOwnerScope,
+    frame_id: &str,
     base_timestamp: f64,
 ) -> bool {
+    if event_session_ids.is_empty() {
+        return false;
+    }
     let initial_output_len = out.len();
     let request_id = delivery_output.request_id();
     let output = delivery_output.output();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
+    emit_unannounced_staged_subresource_redirects(
+        conn,
+        out,
+        event_session_ids,
+        owner,
+        frame_id,
+        timestamp,
+        request_id,
+        output.request(),
+        output.redirects(),
+    );
     for event_session_id in event_session_ids {
         emit_request_will_be_sent_extra_info(
             out,
@@ -565,6 +586,51 @@ fn emit_staged_subresource_request_extra_info(
         );
     }
     out.len() > initial_output_len
+}
+
+fn emit_unannounced_staged_subresource_redirects(
+    conn: &mut CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    event_session_ids: &[Option<String>],
+    owner: &CommandOwnerScope,
+    frame_id: &str,
+    timestamp: f64,
+    request_id: &str,
+    request: &TargetSubresourceRequestOutput,
+    redirect_chain: &[NavigationRedirect],
+) {
+    let announced = conn
+        .runtime_session_owner_slot_for_owner(owner)
+        .map_or(0, |slot| slot.fetch_pause_announced_redirects(request_id));
+    let redirects = &redirect_chain[announced.min(redirect_chain.len())..];
+    if redirects.is_empty() {
+        return;
+    }
+    emit_subresource_redirect_events(
+        out,
+        event_session_ids,
+        request_id,
+        request.frame_id().unwrap_or(frame_id),
+        request.loader_id(),
+        timestamp,
+        request.document_url(),
+        request.resource_type().into(),
+        request.request_initiator_type(),
+        redirects,
+        false,
+    );
+    if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
+        slot.record_subresource_announced_redirects(request_id, redirects.len());
+    }
+    record_subresource_request_body(
+        conn,
+        owner,
+        request_id,
+        redirects
+            .last()
+            .and_then(|redirect| redirect.dispatched_request.as_ref()?.body.as_ref()),
+        event_session_ids,
+    );
 }
 
 fn emit_staged_subresource_response_started(
@@ -583,25 +649,20 @@ fn emit_staged_subresource_response_started(
     let request_id = delivery_output.request_id();
     let output = delivery_output.output();
     let request = output.request();
-    let announced_redirects = conn
-        .runtime_session_owner_slot_for_owner(owner)
-        .map_or(0, |slot| slot.fetch_pause_announced_redirects(request_id));
     let record_frame_id = request.frame_id().unwrap_or(frame_id);
     let loader_id = request.loader_id();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = request.resource_type().into();
-    emit_subresource_redirect_events(
+    emit_unannounced_staged_subresource_redirects(
+        conn,
         out,
         event_session_ids,
-        request_id,
-        record_frame_id,
-        loader_id,
+        owner,
+        frame_id,
         timestamp,
-        request.document_url(),
-        resource_type,
-        request.request_initiator_type(),
-        &output.redirect_chain()[announced_redirects.min(output.redirect_chain().len())..],
-        false,
+        request_id,
+        request,
+        output.redirect_chain(),
     );
     for event_session_id in event_session_ids {
         let fetch_request_id = conn

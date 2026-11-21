@@ -385,7 +385,8 @@ async fn event_source_network_fallback_preserves_no_store_with_cache_disabled() 
                     | AsyncSubresourceFetchEvent::InterceptedXhrStreamingStarted { .. } => {
                         panic!("EventSource fallback must not create XHR interception tasks");
                     }
-                    AsyncSubresourceFetchEvent::ObservedNetworkRecord(_) => {}
+                    AsyncSubresourceFetchEvent::ObservedNetworkRecord(_)
+                    | AsyncSubresourceFetchEvent::RequestExtraInfo { .. } => {}
                 }
             }
             assert!(queue.wait_for_arrival_without_timeout().await);

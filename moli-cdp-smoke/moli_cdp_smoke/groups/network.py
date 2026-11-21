@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any, Awaitable
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..config import is_moli_browser
+from ..diagnostics import new_cdp_session
 from ..fixture import TRANSPARENT_PNG
 from ..helpers import isolated_network_page, read_io_to_eof, attach_cdp_event_collector, evaluate_xhr
 
@@ -2076,6 +2078,74 @@ async def run_network_body_cache_group(state: SmokeState) -> None:
             "maxResourceBufferSize": 2_000_000,
         },
     )
+    if is_moli_browser():
+        await _verify_cached_image_redirect_with_response_interception(state)
+
+
+async def _verify_cached_image_redirect_with_response_interception(state: SmokeState) -> None:
+    first_path = "/cached-image-redirect/first.png"
+    final_path = "/cached-image-redirect/final.png"
+    first_url, final_url = (state.fixture + path for path in (first_path, final_path))
+    start_image = """url => {
+      const image = new Image();
+      globalThis.cachedRedirectImageLoaded = new Promise(resolve => {
+        image.onload = () => resolve(image.naturalWidth > 0);
+        image.onerror = () => resolve(false);
+      });
+      image.src = url;
+      document.body.append(image);
+    }"""
+    async with isolated_network_page(state) as isolated:
+        await isolated.page.evaluate(start_image, first_url)
+        async with asyncio.timeout(10):
+            assert_equal(await isolated.page.evaluate("cachedRedirectImageLoaded"), True, "prime image redirect cache")
+        await wait_until(
+            lambda: bool(_completed_request_id(isolated.subresource_events, "Image", final_url)),
+            "image redirect cache priming completed",
+        )
+        # A new target uses the same HTTP cache without reusing the decoded image.
+        await isolated.page.close()
+        page = await isolated.context.new_page()
+        await page.goto(f"{state.fixture}/plain", wait_until="load", timeout=10_000)
+        cdp = await new_cdp_session(isolated.context, page)
+        await cdp.send("Network.enable")
+        await cdp.send("Fetch.enable", {"patterns": [{
+            "resourceType": "Image", "urlPattern": "*", "requestStage": "Response",
+        }]})
+        with attach_cdp_event_collector(cdp, [
+            "Fetch.requestPaused", "Network.requestWillBeSent", "Network.requestServedFromCache",
+            "Network.requestWillBeSentExtraInfo", "Network.responseReceivedExtraInfo",
+            "Network.loadingFinished",
+        ]) as events:
+            await page.evaluate(start_image, first_url)
+            await wait_until(lambda: any(e["method"] == "Fetch.requestPaused" for e in events),
+                             "cached redirect final image response pause")
+            pause = next(e["params"] for e in events if e["method"] == "Fetch.requestPaused")
+            assert_equal(pause["responseStatusCode"], 200, "cached redirect final image response status")
+            network_id = pause["networkId"]
+            await cdp.send("Fetch.continueResponse", {"requestId": pause["requestId"]})
+            async with asyncio.timeout(10):
+                assert_equal(await page.evaluate("cachedRedirectImageLoaded"), True, "intercepted cached redirect image loaded")
+            await wait_until(lambda: any(e["method"] == "Network.loadingFinished" and
+                                          e["params"]["requestId"] == network_id for e in events),
+                             "cached redirect image Network completion")
+            requests = [e["params"] for e in events if e["method"] == "Network.requestWillBeSent"
+                        and e["params"]["request"]["url"] in (first_url, final_url)]
+            assert_equal([(p["request"]["url"], p["requestId"]) for p in requests],
+                         [(first_url, network_id), (final_url, network_id)], "cached redirect request URLs and IDs")
+            assert_equal(requests[1]["redirectResponse"]["url"], first_url, "cached redirect preceding response URL")
+            assert_equal(requests[1]["redirectResponse"]["status"], 301, "cached redirect preceding response status")
+            assert_equal(requests[1]["redirectHasExtraInfo"], False, "cached hop has no wire ExtraInfo")
+            methods = [e["method"] for e in events if e["params"].get("requestId") == network_id]
+            assert_equal(methods, ["Network.requestWillBeSent", "Network.requestServedFromCache",
+                                   "Network.requestWillBeSent", "Network.requestWillBeSentExtraInfo",
+                                   "Network.responseReceivedExtraInfo", "Network.loadingFinished"],
+                         "cached redirect Network event order")
+        origin_hits = await page.evaluate("""async ([first, final]) => Promise.all([first, final].map(path =>
+          fetch('/fetch-dispatch/status?path=' + encodeURIComponent(path))
+            .then(response => response.json()).then(result => result.requests)))""", [first_path, final_path])
+        assert_equal(origin_hits, [1, 2], "the cached first hop avoids a second origin dispatch")
+    state.record("network_cached_image_redirect_response_interception")
 
 
 async def _verify_blocked_websocket_events(state: SmokeState) -> None:

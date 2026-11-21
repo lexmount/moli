@@ -513,13 +513,17 @@ impl TargetNetworkAgentState {
             .record_fetch_pause_announced_request_id(request_id);
     }
 
-    pub(crate) fn record_fetch_pause_announced_redirect(&mut self, request_id: &str) {
+    pub(crate) fn record_subresource_announced_redirects(
+        &mut self,
+        request_id: &str,
+        count: usize,
+    ) {
         self.artifacts
             .subresource_network_artifacts
             .fetch_pause_announced_request_ids
             .entry(request_id.to_owned())
             .or_default()
-            .announced_redirects += 1;
+            .announced_redirects += count;
     }
 
     pub(crate) fn fetch_pause_announced_redirects(&self, request_id: &str) -> usize {
@@ -1124,6 +1128,7 @@ fn update_active_renderer_subresource_requests(
             }
         }
         ScriptNetworkOutputItem::SubresourceRequestUpdated(_)
+        | ScriptNetworkOutputItem::SubresourceRequestExtraInfo { .. }
         | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
         | ScriptNetworkOutputItem::SubresourceDataReceived(_)
         | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)

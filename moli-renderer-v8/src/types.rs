@@ -923,6 +923,11 @@ pub(super) enum AsyncSubresourceFetchEvent {
     },
     Completion(Box<AsyncSubresourceFetchCompletion>),
     ObservedNetworkRecord(Box<SubresourceNetworkRecord>),
+    RequestExtraInfo {
+        internal_id: u64,
+        redirects: Vec<NavigationRedirect>,
+        info: Box<moli_fetch::NetworkRequestExtraInfo>,
+    },
     StreamingStarted(Box<AsyncSubresourceStreamingStarted>),
     StreamingChunk(AsyncSubresourceStreamingChunk),
     StreamingFinished(AsyncSubresourceStreamingFinished),
@@ -939,6 +944,11 @@ impl AsyncSubresourceFetchEvent {
             Self::Completion(completion) => AsyncSubresourceFetchEventTarget::Completion {
                 internal_id: completion.internal_id,
             },
+            Self::RequestExtraInfo { internal_id, .. } => {
+                AsyncSubresourceFetchEventTarget::Completion {
+                    internal_id: *internal_id,
+                }
+            }
             Self::InterceptionOutputReady(_) | Self::ObservedNetworkRecord(_) => {
                 AsyncSubresourceFetchEventTarget::ObservedNetworkRecord
             }
