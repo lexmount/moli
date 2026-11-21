@@ -1540,62 +1540,119 @@ async fn prepared_accept_preserves_image_cache_and_partitions_representations() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn image_raw_stream_uses_shared_memory_resource_cache_without_http_cache_dir() -> Result<()> {
+    const BODY: &[u8] = b"cached-image-body";
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        read_http_request_head(&mut stream).await.unwrap();
-        let body = b"cached-image-body";
+        let (mut stream, _) = listener.accept().await?;
+        let request = read_http_request_text(&mut stream).await?;
+        assert!(request.starts_with("GET /cached.png HTTP/"), "{request}");
         let response_head = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nCache-Control: max-age=60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
+            BODY.len()
         );
-        stream.write_all(response_head.as_bytes()).await.unwrap();
-        stream.write_all(body).await.unwrap();
-
-        assert!(
-            timeout(Duration::from_millis(100), listener.accept())
-                .await
-                .is_err(),
-            "second image fetch should be served from the loader memory cache"
-        );
+        stream.write_all(response_head.as_bytes()).await?;
+        stream.write_all(BODY).await?;
+        Ok::<(), std::io::Error>(())
     });
 
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
-    let url = format!("http://{addr}/cached.png");
-    let request = |fragment: &str| {
-        browser_navigation_request(&format!("{url}#{fragment}")).map(|request| {
-            request
+    let target = Url::parse(&format!("http://{addr}/cached.png"))?;
+    let first = loader
+        .fetch_raw_stream_with_cancel(
+            browser_navigation_request(&format!("{target}#first"))?
                 .with_page_network_policy()
-                .with_resource_type(RequestResourceType::Image)
-        })
-    };
-
-    let mut first = loader
-        .fetch_raw_stream_with_cancel(request("first")?, FetchCancelHandle::new())
+                .with_resource_type(RequestResourceType::Image),
+            FetchCancelHandle::new(),
+        )
+        .await?
+        .into_materialized_raw_response()
         .await?;
     assert!(!first.from_cache);
-    let mut first_body = Vec::new();
-    while let Some(chunk) = first.next_chunk().await {
-        first_body.extend_from_slice(&chunk);
-    }
-    first.finish().await?;
+    assert_eq!(first.final_url.fragment(), Some("first"));
+    assert_eq!(first.body_bytes(), BODY);
+    server.await??;
 
-    let mut second = loader
-        .fetch_raw_stream_with_cancel(request("second")?, FetchCancelHandle::new())
+    // The fixture has closed its listening socket. Every remaining request
+    // must use the same in-memory bytes and its own URL.
+    for (fragment, with_network_metadata) in [
+        (Some("second"), false),
+        (Some("third"), true),
+        (Some(""), false),
+        (None, true),
+    ] {
+        let mut url = target.clone();
+        url.set_fragment(fragment);
+        let request = browser_navigation_request(url.as_str())?
+            .with_page_network_policy()
+            .with_resource_type(RequestResourceType::Image);
+        let cancel = FetchCancelHandle::new();
+        let response = if with_network_metadata {
+            loader
+                .fetch_raw_stream_with_cancel_and_network_metadata(request, cancel)
+                .await?
+                .into_response()
+        } else {
+            loader.fetch_raw_stream_with_cancel(request, cancel).await?
+        }
+        .into_materialized_raw_response()
         .await?;
-    assert!(second.from_cache);
-    assert_eq!(second.final_url.fragment(), Some("second"));
-    let mut second_body = Vec::new();
-    while let Some(chunk) = second.next_chunk().await {
-        second_body.extend_from_slice(&chunk);
+        assert!(response.from_cache, "{url}");
+        assert_eq!(response.final_url, url);
+        assert_eq!(response.body_bytes(), BODY);
     }
-    second.finish().await?;
+    Ok(())
+}
 
-    assert_eq!(first_body, b"cached-image-body");
-    assert_eq!(second_body, b"cached-image-body");
+#[tokio::test(flavor = "multi_thread")]
+async fn image_raw_stream_keeps_explicit_redirect_fragment_outside_memory_cache() -> Result<()> {
+    const BODY: &str = "redirect-target";
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let redirect = "HTTP/1.1 302 Found\r\nLocation: /redirected.png#server\r\nCache-Control: max-age=60\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let image = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nCache-Control: max-age=60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{BODY}",
+            BODY.len()
+        );
+        for response in [redirect, &image, redirect, &image] {
+            let (mut stream, _) = listener.accept().await?;
+            let request = read_http_request_text(&mut stream).await?;
+            assert!(
+                request.starts_with("GET /redirected.png HTTP/"),
+                "{request}"
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+        Ok::<(), std::io::Error>(())
+    });
 
-    server.await?;
+    let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    let final_url = Url::parse(&format!("http://{addr}/redirected.png#server"))?;
+    // The first response has the same final URL as its original request.
+    // It must still be excluded from the cache because it followed a redirect.
+    for fragment in ["server", "client"] {
+        let mut url = final_url.clone();
+        url.set_fragment(Some(fragment));
+        let request = browser_navigation_request(url.as_str())?
+            .with_page_network_policy()
+            .with_resource_type(RequestResourceType::Image);
+        let response = loader
+            .fetch_raw_stream_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
+            .await?
+            .into_response()
+            .into_materialized_raw_response()
+            .await?;
+        assert!(!response.from_cache, "{url}");
+        assert!(response.redirected, "{url}");
+        assert_eq!(response.final_url, final_url);
+        assert_eq!(response.redirect_chain.len(), 1);
+        assert_eq!(response.redirect_chain[0].from_url, url);
+        assert_eq!(response.redirect_chain[0].to_url, final_url);
+        assert_eq!(response.body_bytes(), BODY.as_bytes());
+    }
+
+    server.await??;
     Ok(())
 }
 
