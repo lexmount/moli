@@ -339,8 +339,8 @@ use focus::is_focusable;
 #[cfg(feature = "devtools")]
 pub(crate) use focus::perform_mouse_focus_default_action;
 pub(crate) use focus::{
-    apply_document_focus_fixup, contenteditable_editing_host, focus_element,
-    focus_element_preserving_selection, focus_window_document,
+    apply_document_focus_fixup, contenteditable_editing_host, dispatch_system_focus_change,
+    focus_element, focus_element_preserving_selection, focus_window_document,
     perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,

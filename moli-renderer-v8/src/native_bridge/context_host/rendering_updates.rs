@@ -1,7 +1,7 @@
 use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget};
 use crate::{
-    document_runtime::EventTargetHandle,
+    document_runtime::{DomHandle, EventTargetHandle},
     frame_owner_model::FrameDocumentTaskOwner,
     page_task_queue::{RendererPageRenderingUpdateTaskId, RendererPageRenderingUpdateTaskKind},
 };
@@ -25,6 +25,7 @@ pub(super) struct PendingEnvironmentChange {
     pub(super) previous_viewport: crate::style_engine::StyleViewport,
     pub(super) previous_activity: moli_page_types::DocumentActivity,
     pub(super) previous_orientation: moli_page_types::ScreenOrientation,
+    dispatch_focus_events: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -192,6 +193,22 @@ impl PageScriptHost {
     /// Repeated updates keep the first viewport/activity baseline; media lists
     /// already retain their own last reported match.
     pub(crate) fn queue_environment_change(&mut self) {
+        self.queue_environment_change_for_focused_document(None);
+    }
+
+    pub(crate) fn queue_document_activity_change(
+        &mut self,
+        next: moli_page_types::DocumentActivity,
+    ) {
+        let focused_document = (self.document_activity().focused != next.focused)
+            .then(|| self.focused_document_and_element().0);
+        self.queue_environment_change_for_focused_document(focused_document);
+    }
+
+    fn queue_environment_change_for_focused_document(
+        &mut self,
+        focused_document: Option<DomHandle>,
+    ) {
         let scopes = std::iter::once(OwnerDispatchScope::Top).chain(
             self.child_browsing_context_handles_in_document_order()
                 .into_iter()
@@ -209,15 +226,23 @@ impl PageScriptHost {
             else {
                 continue;
             };
-            if self
-                .rendering_updates
-                .find_slot_index(
-                    target,
-                    RendererPageRenderingUpdateTaskKind::EnvironmentChange,
-                    |_| true,
-                )
-                .is_some()
-            {
+            let dispatch_focus_events = focused_document.is_some_and(|document| {
+                self.current_rendering_update_document(target) == Some(document)
+            });
+            if let Some(index) = self.rendering_updates.find_slot_index(
+                target,
+                RendererPageRenderingUpdateTaskKind::EnvironmentChange,
+                |_| true,
+            ) {
+                // Only the selected Document owns system focus events. Update
+                // that recipient if this activity change coalesces with an
+                // environment update already queued for the same Window.
+                if focused_document.is_some()
+                    && let PendingRenderingUpdatePayload::EnvironmentChange(change) =
+                        self.rendering_updates.payload_at_mut(index)
+                {
+                    change.dispatch_focus_events = dispatch_focus_events;
+                }
                 continue;
             }
             let previous_viewport = match dispatch_scope {
@@ -237,6 +262,7 @@ impl PageScriptHost {
                         .viewport_surface()
                         .unwrap_or_default()
                         .screen_orientation,
+                    dispatch_focus_events,
                 }),
             );
         }
@@ -825,38 +851,32 @@ impl PageScriptHost {
                     return dispatched;
                 }
                 self.set_document_activity(activity);
-                let (event_target, event) = if event_type == "visibilitychange" {
-                    let Ok(document) = crate::host::event_target_value(
-                        context_scope,
-                        host_ptr,
-                        EventTargetHandle::Node(resolved.document_handle),
-                    ) else {
-                        continue;
-                    };
-                    (
-                        EventTargetHandle::Node(resolved.document_handle),
-                        crate::host::create_host_event(
+                if event_type != "visibilitychange" {
+                    if change.dispatch_focus_events {
+                        dispatched |= super::super::element::dispatch_system_focus_change(
                             context_scope,
-                            event_type,
-                            document,
-                            document,
-                            true,
-                            false,
-                        )
-                        .ok(),
-                    )
-                } else {
-                    (
-                        window_target,
-                        super::super::element::construct_focus_event(
-                            context_scope,
-                            event_type,
-                            None,
-                            false,
-                        ),
-                    )
+                            host_ptr,
+                            resolved.document_handle,
+                            window_target,
+                            activity.focused,
+                        );
+                    }
+                    continue;
+                }
+                let event_target = EventTargetHandle::Node(resolved.document_handle);
+                let Ok(document) =
+                    crate::host::event_target_value(context_scope, host_ptr, event_target)
+                else {
+                    continue;
                 };
-                if let Some(event) = event {
+                if let Ok(event) = crate::host::create_host_event(
+                    context_scope,
+                    event_type,
+                    document,
+                    document,
+                    true,
+                    false,
+                ) {
                     dispatched |= self
                         .dispatch_public_event_best_effort(
                             context_scope,

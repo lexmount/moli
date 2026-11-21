@@ -715,6 +715,74 @@ async fn environment_media_and_visibility_changes_reach_existing_child_documents
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn system_focus_events_reach_the_selected_child_once_and_preserve_its_selection() {
+    use moli_page_types::DocumentActivity;
+
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://system-focus.test/");
+    vm.eval(
+        r#"
+        const root = document.documentElement || document.appendChild(document.createElement('html'));
+        const body = document.body || root.appendChild(document.createElement('body'));
+        const frame = body.appendChild(document.createElement('iframe'));
+        const child = frame.contentDocument;
+        const childWindow = frame.contentWindow;
+        child.body.innerHTML = '<input value="selection">';
+        const input = child.querySelector('input');
+        input.focus();
+        input.setSelectionRange(1, 4);
+
+        const events = [];
+        const record = event => {
+            const target = event.target === childWindow ? 'child' : event.target.localName;
+            events.push([target, event.type, event.isTrusted, event.relatedTarget === null,
+                         document.hasFocus(), child.hasFocus(), child.activeElement === input].join(':'));
+        };
+        for (const type of ['focus', 'blur']) {
+            window.addEventListener(type, () => events.push('top:' + type));
+            childWindow.addEventListener(type, record);
+        }
+        for (const type of ['focus', 'focusin', 'blur', 'focusout']) input.addEventListener(type, record);
+        child.addEventListener('visibilitychange', () => events.push(child.visibilityState));
+        "#,
+    )
+    .unwrap();
+
+    vm.set_document_activity(DocumentActivity::new(false, true))
+        .unwrap();
+    vm.set_document_activity(DocumentActivity::new(false, false))
+        .unwrap();
+    while vm
+        .run_one_rendering_update_executor_turn(&loader)
+        .await
+        .unwrap()
+    {}
+
+    vm.set_document_activity(DocumentActivity::default())
+        .unwrap();
+    vm.set_document_activity(DocumentActivity::default())
+        .unwrap();
+    while vm
+        .run_one_rendering_update_executor_turn(&loader)
+        .await
+        .unwrap()
+    {}
+
+    assert_eq!(
+        vm.eval("events.concat(input.selectionStart, input.selectionEnd).join('|')")
+            .unwrap(),
+        concat!(
+            "input:blur:true:true:false:false:true|",
+            "input:focusout:true:true:false:false:true|",
+            "child:blur:true:true:false:false:true|hidden|visible|",
+            "child:focus:true:true:true:true:true|",
+            "input:focus:true:true:true:true:true|",
+            "input:focusin:true:true:true:true:true|1|4",
+        )
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn activity_events_observe_each_focus_and_visibility_transition() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_page_task_executor_test_vm("https://activity-events.test/");
