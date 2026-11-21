@@ -367,6 +367,8 @@ enum EditingCommand {
     InsertHtml,
     InsertText,
     SelectAll,
+    StyleWithCss,
+    UseCss,
 }
 
 fn editing_command_document<'s>(
@@ -444,6 +446,29 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
             rv.set(v8::Boolean::new(scope, inserted).into());
             return;
         }
+        EditingCommand::StyleWithCss | EditingCommand::UseCss => {
+            let Some(value) = editing_command_value(scope, &args) else {
+                return;
+            };
+            let value_is_false = value.eq_ignore_ascii_case("false");
+            let enabled = if matches!(command, EditingCommand::UseCss) {
+                value_is_false
+            } else {
+                !value_is_false
+            };
+            let runtime = unsafe { &mut *runtime_ptr };
+            let applied = runtime.document_is_fully_active(document_handle)
+                && runtime
+                    .dom_host_mut()
+                    .node_mut(document_handle)
+                    .and_then(|node| node.data_mut().as_document_mut())
+                    .is_some_and(|document| {
+                        document.set_css_styling_enabled(enabled);
+                        true
+                    });
+            rv.set(v8::Boolean::new(scope, applied).into());
+            return;
+        }
         EditingCommand::Delete | EditingCommand::ForwardDelete => {}
     }
     let command_name: &'static str = command.into();
@@ -486,7 +511,7 @@ pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let command = normalized_editing_command(scope, &args);
-    let Some((_runtime_ptr, _document_handle)) = editing_command_document(
+    let Some((runtime_ptr, document_handle)) = editing_command_document(
         scope,
         &args,
         &mut rv,
@@ -494,7 +519,14 @@ pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'
     ) else {
         return;
     };
-    rv.set(v8::Boolean::new(scope, command.parse::<EditingCommand>().is_ok()).into());
+    let supported = match command.parse::<EditingCommand>() {
+        Ok(EditingCommand::StyleWithCss | EditingCommand::UseCss) => {
+            unsafe { &*runtime_ptr }.document_is_fully_active(document_handle)
+        }
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    rv.set(v8::Boolean::new(scope, supported).into());
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>(
@@ -525,6 +557,9 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
             exec_command_select_all_target(runtime, document_handle).is_some()
         }
         Ok(EditingCommand::Copy) => current_protocol_user_gesture_activation(scope),
+        Ok(EditingCommand::StyleWithCss | EditingCommand::UseCss) => {
+            runtime.document_is_fully_active(document_handle)
+        }
         Err(_) => false,
     };
     rv.set(v8::Boolean::new(scope, enabled).into());
@@ -560,12 +595,24 @@ pub(in crate::native_bridge) fn node_document_query_command_state_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    query_command_constant_boolean(
+    let command = normalized_editing_command(scope, &args);
+    let Some((runtime_ptr, document_handle)) = editing_command_document(
         scope,
         &args,
         &mut rv,
         "queryCommandState is only supported on HTML documents.",
-    );
+    ) else {
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let state = matches!(command.parse(), Ok(EditingCommand::StyleWithCss))
+        && runtime.document_is_fully_active(document_handle)
+        && runtime
+            .dom_host()
+            .node(document_handle)
+            .and_then(moli_dom::native::Node::as_document)
+            .is_some_and(|document| document.css_styling_enabled());
+    rv.set(v8::Boolean::new(scope, state).into());
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_value_callback<'s>(

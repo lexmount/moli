@@ -83,6 +83,7 @@ struct DocumentMetadata {
 // Document identity. Only a whole-arena snapshot may copy them unchanged.
 #[derive(Debug, Clone, Default)]
 struct DocumentArenaState {
+    css_styling_enabled: bool,
     source_response_status: Option<u16>,
     is_inert_template_document: bool,
     associated_inert_template_document: Option<NativeNodeId>,
@@ -258,6 +259,10 @@ impl Document {
         self.metadata.design_mode_enabled
     }
 
+    pub fn css_styling_enabled(&self) -> bool {
+        self.arena_state.css_styling_enabled
+    }
+
     pub fn fallback_base_url(&self) -> &Url {
         self.metadata.base_url_state.fallback_base_url()
     }
@@ -295,6 +300,10 @@ impl Document {
 
     pub fn set_design_mode_enabled(&mut self, design_mode_enabled: bool) {
         self.metadata.design_mode_enabled = design_mode_enabled;
+    }
+
+    pub fn set_css_styling_enabled(&mut self, enabled: bool) {
+        self.arena_state.css_styling_enabled = enabled;
     }
 
     pub fn set_css_target(&mut self, target: Option<NativeNodeId>) -> bool {
