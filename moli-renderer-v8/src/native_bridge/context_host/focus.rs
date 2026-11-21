@@ -148,6 +148,22 @@ impl PageScriptHost {
         if !self.document_activity().focused || !self.document_is_fully_active(document) {
             return false;
         }
+        // Window notifications can select a viewport while activeElement
+        // still exposes the frame whose blur initiated the transition.
+        if let Some(mut viewport) = self.focused_viewport_document() {
+            while viewport != document {
+                let Some(parent) = self.focus_parent_document(viewport) else {
+                    if self.top_level_document_for_document(document) == Some(viewport) {
+                        return false;
+                    }
+                    break;
+                };
+                viewport = parent;
+            }
+            if viewport == document {
+                return true;
+            }
+        }
         let mut document = document;
         loop {
             match self.window_endpoint_for_document(document) {
@@ -167,6 +183,11 @@ impl PageScriptHost {
                 None => return false,
             }
         }
+    }
+
+    fn focus_parent_document(&self, document: DomHandle) -> Option<DomHandle> {
+        let frame = self.child_browsing_context_host_for_document_handle(document)?;
+        self.dom_host().owner_document_handle(frame)
     }
 
     pub(crate) fn focused_document_and_element(&self) -> (DomHandle, Option<DomHandle>) {
@@ -409,14 +430,41 @@ impl PageScriptHost {
             .sequential_starting_point = target.map(SequentialFocusStartingPoint::Element);
     }
 
+    pub(crate) fn clear_local_focus_on_document_exit(&mut self, document: DomHandle) {
+        if let Some(state) = self.document_focus_changes.get_mut(&document) {
+            // Leaving the Document retains its sequential starting point and
+            // the author focus changes tracked by its Navigation API.
+            state.focused_area = None;
+        }
+    }
+
+    pub(crate) fn clear_departed_focus_documents(&mut self, mut from: DomHandle, to: DomHandle) {
+        let destination_chain =
+            std::iter::successors(Some(to), |document| self.focus_parent_document(*document))
+                .collect::<Vec<_>>();
+        while !destination_chain.contains(&from) {
+            self.clear_local_focus_on_document_exit(from);
+            let Some(parent) = self.focus_parent_document(from) else {
+                break;
+            };
+            from = parent;
+        }
+    }
+
+    pub(crate) fn select_focused_document_viewport(&mut self, document: DomHandle) {
+        self.set_focused_viewport_document(Some(document));
+        self.note_document_focused_area(document, None);
+        let frame = self.child_browsing_context_host_for_document_handle(document);
+        self.mark_focus_changed(None, frame);
+    }
+
     pub(crate) fn mark_focus_changed(
         &mut self,
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
     ) {
-        // Only Documents in the new focus chain change their focused area.
-        // Focusing a parent does not change the focused area retained by an
-        // inactive child, or cancel that child's pending navigation focus reset.
+        // Update the selected Document and its ancestors. The transition owns
+        // clearing the previous Document's focus before publishing this chain.
         if let Some(mut next) = next {
             while let Some(document) = self.dom_host().owner_document_handle(next) {
                 self.note_document_focused_area(document, Some(next));

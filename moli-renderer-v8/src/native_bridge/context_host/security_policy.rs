@@ -20,7 +20,7 @@ use crate::{
         active_child_window_handle, active_lightweight_popup_id,
         child_window_handle_from_marker_data, entered_child_window_handle,
     },
-    util::get_private_value,
+    util::{context_host_ptr_from_context_slot, get_private_value},
 };
 use url::Url;
 
@@ -268,27 +268,60 @@ impl PageScriptHost {
         })
     }
 
-    pub(crate) fn document_allows_window_focus(&self, document: DomHandle) -> bool {
-        let Some(endpoint) = self.window_endpoint_for_document(document) else {
+    pub(crate) fn allows_script_focus(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        target_document: DomHandle,
+    ) -> bool {
+        let Some(context) = scope.get_incumbent_context() else {
             return false;
         };
-        let owner = endpoint.dispatch_scope();
-        self.window_has_transient_user_activation(owner)
-            || self
-                .owner_document_policy_snapshot(owner)
-                .is_some_and(|snapshot| {
-                    let policy = &snapshot.policy_container;
-                    snapshot.document_handle == Some(document)
-                        && if policy.sandbox.restricts_navigation {
-                            policy
-                                .permissions_policy
-                                .focus_without_user_activation_enabled()
-                        } else {
-                            policy
-                                .permissions_policy
-                                .window_focus_without_user_activation_enabled()
-                        }
-                })
+        let Some(source_ptr) = context_host_ptr_from_context_slot(context) else {
+            return false;
+        };
+        // The incumbent Window can belong to a different PageScriptHost from
+        // the receiver. A live realm supplies its own activation and policy.
+        let source = unsafe { &*source_ptr };
+        let Some(identity) = source.window_execution_context_identity_for_access_check(context)
+        else {
+            return false;
+        };
+        if !source.window_execution_context_identity_is_current(identity)
+            || !self.document_is_fully_active(target_document)
+        {
+            return false;
+        }
+        let owner = identity.dispatch_scope();
+        let Some(snapshot) = source.owner_document_policy_snapshot(owner) else {
+            return false;
+        };
+        let Some(source_document) = snapshot
+            .document_handle
+            .filter(|document| source.document_is_fully_active(*document))
+        else {
+            return false;
+        };
+        let policy = &snapshot.policy_container;
+        let policy_allows_focus = if policy.sandbox.restricts_navigation {
+            policy
+                .permissions_policy
+                .focus_without_user_activation_enabled()
+        } else {
+            policy
+                .permissions_policy
+                .script_focus_without_user_activation_enabled()
+        };
+        // A frame can move focus within its traversable while it or one of
+        // its descendants already has focus.
+        policy_allows_focus
+            || source.window_has_transient_user_activation(owner)
+            || (std::ptr::eq(self, source)
+                && self
+                    .top_level_document_for_document(target_document)
+                    .is_some_and(|root| {
+                        self.top_level_document_for_document(source_document) == Some(root)
+                    })
+                && self.document_has_focus(source_document))
     }
 
     pub(crate) fn document_allows_autofocus(&self, document: DomHandle) -> bool {
