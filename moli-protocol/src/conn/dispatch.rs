@@ -50,6 +50,8 @@ impl CdpCommandTaskStep {
 }
 
 enum SessionCommandPageWaiter {
+    Target(super::target_initialization::TargetInitialDocumentWaiter),
+    TargetPage(super::target_initialization::TargetInitialDocumentWaiter),
     Initial(InitialDocumentPageBuildWaiter),
     Navigation(crate::conn::CommandWaitLifetime),
 }
@@ -57,6 +59,16 @@ enum SessionCommandPageWaiter {
 impl SessionCommandPageWaiter {
     async fn wait(self) -> Result<()> {
         match self {
+            Self::TargetPage(waiter) => waiter
+                .wait_page()
+                .await
+                .map(|_| ())
+                .map_err(|error| anyhow::Error::msg(error.message)),
+            Self::Target(waiter) => waiter
+                .wait()
+                .await
+                .map(|_| ())
+                .map_err(|error| anyhow::Error::msg(error.message)),
             Self::Initial(waiter) => waiter.wait().await.map_err(anyhow::Error::msg),
             Self::Navigation(waiter) => {
                 waiter.wait_revoked().await;
@@ -784,6 +796,14 @@ impl CdpConnection {
             return None;
         }
         let slot = self.runtime_session_owner_slot_for_owner(owner)?;
+        if let Some(waiter) = self.target_initial_document_waiter(owner) {
+            if command.method() == "Page.createIsolatedWorld" {
+                return Some(SessionCommandPageWaiter::Target(waiter));
+            }
+            if !slot.has_loaded_page() {
+                return Some(SessionCommandPageWaiter::TargetPage(waiter));
+            }
+        }
         if let Some(waiter) = slot.initial_document_page_build_waiter() {
             return Some(SessionCommandPageWaiter::Initial(waiter));
         }

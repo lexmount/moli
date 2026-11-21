@@ -2105,7 +2105,8 @@ pub enum DevToolsErrorKind {
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
 pub struct DevToolsError {
     pub kind: DevToolsErrorKind,
     pub message: String,

@@ -606,9 +606,19 @@ async fn rust_cdp_chromium_target_named_popup_reuse_keeps_browser_context_id() {
         "<main>opener</main>",
     )
     .await;
+    ctx.process_async(json!({
+        "id": 261_056, "method": "Target.attachToTarget",
+        "params": {"targetId": "TID-named-context-opener", "flatten": true}
+    }))
+    .await;
+    let opener = take_response_by_id(&mut ctx, 261_056)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     ctx.process_async(json!({
         "id": 261_054,
+        "sessionId": opener,
         "method": "Runtime.evaluate",
         "params": {
             "expression": "window.open('https://example.com/first', 'report') !== null",
@@ -619,6 +629,7 @@ async fn rust_cdp_chromium_target_named_popup_reuse_keeps_browser_context_id() {
     ctx.sent.clear();
     ctx.process_async(json!({
         "id": 261_055,
+        "sessionId": opener,
         "method": "Runtime.evaluate",
         "params": {
             "expression": "window.open('https://example.com/second', 'report') !== null",
@@ -628,7 +639,13 @@ async fn rust_cdp_chromium_target_named_popup_reuse_keeps_browser_context_id() {
     .await;
     let messages = ctx.take_all();
 
-    let changed = event(&messages, "Target.targetInfoChanged");
+    let changed = messages
+        .iter()
+        .find(|message| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["url"] == "https://example.com/second"
+        })
+        .unwrap_or_else(|| panic!("missing named target reuse: {messages:?}"));
     assert_eq!(
         changed["params"]["targetInfo"]["browserContextId"],
         "BID-named-context"

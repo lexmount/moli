@@ -2993,31 +2993,6 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     }))
 }
 
-pub(super) fn start_initial_document_navigation_for_session_owner(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    result_payload: Value,
-) -> Result<NavigateCommandStart, CommandOutputPlan> {
-    let Some(url) = conn.runtime_session_owner_target_url_for_owner(owner) else {
-        if conn.browser_context.is_none() {
-            return Err(CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"));
-        }
-        return Err(CommandOutputPlan::error(-31998, "TargetNotLoaded"));
-    };
-    Ok(start_navigate_to_url_command_with_background_policy(
-        conn,
-        command_id,
-        owner,
-        url.as_str(),
-        None,
-        NavigationResultProjection::Cdp(result_payload),
-        true,
-        NavigationRequestLoadPolicy::BrowserInitiated,
-        NavigationStartInitiator::Browser,
-    ))
-}
-
 pub(super) fn complete_pending_same_document_navigate_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,

@@ -45,7 +45,7 @@ async fn page_and_tab_ids_are_random_per_instance_and_shared_with_cdp() {
     }
     for _ in 0..3 {
         let (status, body) = fetch_server_response(addr, "PUT", "/json/new?about:blank").await;
-        assert_eq!(status, 200);
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
         let target: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let id = target["id"].as_str().unwrap();
         assert_chromium_target_id(id);

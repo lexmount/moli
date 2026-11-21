@@ -281,33 +281,23 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_active_ta
 
     let initial_document_owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
     let pending = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&initial_document_owner)
+        conn.ensure_target_initialization(&initial_document_owner)
             .expect("target lifecycle ensure should start active initial page")
             .expect("fresh initial target should pend active initial document page build")
     });
     let joined_pending = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&initial_document_owner)
+        conn.ensure_target_initialization(&initial_document_owner)
             .expect("second ensure should join the active initial page build")
             .expect("second ensure should wait for the active initial page build")
     });
-    let completed = pending
+    pending
         .wait()
         .await
         .expect("active initial document page build should complete");
-    (completed)
-        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
-        .await
-        .map(|_| ())
-        .expect("active initial page should install");
-    let joined_completed = joined_pending
+    joined_pending
         .wait()
         .await
         .expect("joined initial document page build should observe completion");
-    (joined_completed)
-        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
-        .await
-        .map(|_| ())
-        .expect("joined initial page completion should be a no-op");
     ctx.with_fixture(|conn| {
         assert!(
             conn.browser_context
@@ -320,7 +310,7 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_active_ta
 
     ctx.with_fixture(|conn| {
         assert!(
-            conn.start_initial_document_page_ensure_for_owner(&initial_document_owner)
+            conn.ensure_target_initialization(&initial_document_owner)
                 .expect("second target lifecycle ensure should succeed")
                 .is_none(),
             "second ensure should be a no-op"
@@ -380,20 +370,15 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_backgroun
     });
     let background_owner = CommandOwnerScope::for_route(background_route);
     let pending = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&background_owner)
+        conn.ensure_target_initialization(&background_owner)
             .expect("target lifecycle ensure should start background initial page")
             .expect("fresh background initial target should pend initial document page build")
     });
 
-    let completed = pending
+    pending
         .wait()
         .await
         .expect("background initial document page build should complete");
-    (completed)
-        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
-        .await
-        .map(|_| ())
-        .expect("background initial page should install on captured owner");
 
     ctx.with_fixture(|conn| {
         let browser_context = conn.browser_context.as_ref().expect("browser context");

@@ -18,14 +18,6 @@ impl ProtocolWorkflowState<'_> {
     ) -> crate::domains::page::PageCommandTaskStep {
         crate::domains::page::complete_finite_page_command(self.connection, completed, context)
     }
-    pub(crate) fn start_page_isolated_world(
-        self,
-        command_id: Option<u64>,
-        owner: CommandOwnerScope,
-        task: crate::domains::page::CreateIsolatedWorldCommandTask,
-    ) -> crate::domains::page::PageCommandTaskStep {
-        crate::domains::page::start_isolated_world_runtime(self.connection, command_id, owner, task)
-    }
 
     pub(crate) fn finish_page_isolated_world(
         self,

@@ -220,23 +220,26 @@ async fn ensure_initial_document_for_session(ctx: &mut TestContext, session_id: 
         })),
         None => ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, None)),
     };
-    let pending = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&owner)
+    let (pending, public_work) = ctx.with_fixture(|conn| {
+        let pending = conn
+            .ensure_target_initialization(&owner)
             .expect("target lifecycle initial document ensure should start")
-            .expect("metadata-only initial target should need an initial document page build")
+            .expect("metadata-only initial target should need an initial document page build");
+        (pending, conn.take_scheduler_events())
     });
-    let completed = pending
-        .wait()
+    ctx.route_direct_command_output_for_test(Vec::new(), public_work)
+        .await;
+    let completed = ctx
+        .drive_owned_wait(pending.wait())
         .await
         .expect("initial document page build should complete");
-    let diagnostics = (completed)
-        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
-        .await
-        .expect("initial document should install on captured owner");
-    if let Some(predecessor) = diagnostics.renderer_output_predecessor {
+    if let Some(predecessor) = completed.page.renderer_output_predecessor.clone() {
         ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
             .await;
     }
+    let public_output = ctx.with_fixture(|conn| conn.take_scheduler_events());
+    ctx.route_direct_command_output_for_test(Vec::new(), public_output)
+        .await;
 }
 async fn child_frame_id_for_single_iframe(ctx: &mut TestContext, id: u64) -> String {
     ctx.process_async(json!({"id": id, "method": "Page.getFrameTree"}))

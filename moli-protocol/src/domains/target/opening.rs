@@ -1,8 +1,8 @@
 use anyhow::Result;
 
 use crate::conn::{
-    CommandWorkflowContext, CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
-    ProtocolWorkflowDriver, TargetAttachSessionCommit,
+    CommandWorkflowContext, CompletedTargetCreation, ProtocolWorkflowDriver,
+    TargetAttachSessionCommit,
 };
 use crate::domains::command_output::CommandOutputPlan;
 
@@ -26,50 +26,16 @@ pub(crate) async fn rollback_attachment(
     driver.with_state(move |state| state.finish_target_attachment_rollback(rollback, identity))?
 }
 
-pub(super) async fn complete_creation(
+pub(super) fn complete_creation(
     driver: &mut ProtocolWorkflowDriver,
     response: CommandOutputPlan,
-    commit: TargetCreationCommit,
-    initial_document: Option<
-        Result<Box<CompletedInitialDocumentPageBuild>, FailedInitialDocumentPageBuild>,
-    >,
+    initial_document: CompletedTargetCreation,
     context: &mut CommandWorkflowContext,
-) -> Result<CommandOutputPlan> {
-    let activation_events = match commit.activation() {
-        Some(activation) => activation.clone().complete_using(driver).await?,
-        None => Vec::new(),
-    };
-    match initial_document {
-        Some(Ok(completed)) => {
-            let diagnostics = match completed.install_using(driver).await {
-                Ok(diagnostics) => diagnostics,
-                Err(error) => return Ok(CommandOutputPlan::error(-32000, error)),
-            };
-            if let Some(predecessor) = diagnostics.renderer_output_predecessor {
-                context
-                    .context_mut()
-                    .set_renderer_output_predecessor(predecessor);
-            }
-        }
-        Some(Err(failed)) => {
-            let error =
-                driver.with_state(move |state| state.reset_failed_initial_document(failed))?;
-            return Ok(CommandOutputPlan::error(-32000, error));
-        }
-        None => {}
+) -> CommandOutputPlan {
+    match initial_document.publish_into(driver, context) {
+        Ok(_) => response,
+        Err(error) => CommandOutputPlan::from_devtools_error(error),
     }
-    let navigation = context.with_state(driver, move |state, context| {
-        state.prepare_target_creation_outputs(commit, activation_events, context)
-    })?;
-    context.materialize_projection_output();
-    match navigation {
-        Ok(Some(navigation)) => {
-            navigation.run(driver, context).await?;
-        }
-        Ok(None) => {}
-        Err(error) => return Ok(CommandOutputPlan::from_devtools_error(error)),
-    }
-    Ok(response)
 }
 
 pub(crate) fn prepare_creation_outputs(

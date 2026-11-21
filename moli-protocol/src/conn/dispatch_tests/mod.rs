@@ -306,7 +306,7 @@ async fn ensure_initial_document_for_target_id_for_test(
     });
     let owner = CommandOwnerScope::for_route(route);
     let pending = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&owner)
+        conn.ensure_target_initialization(&owner)
             .unwrap_or_else(|message| {
                 panic!(
                     "target lifecycle ensure should start for {}: {message}",
@@ -317,14 +317,10 @@ async fn ensure_initial_document_for_target_id_for_test(
     let Some(pending) = pending else {
         return;
     };
-    let completed = pending
+    pending
         .wait()
         .await
         .unwrap_or_else(|message| panic!("initial document build should complete: {message}"));
-    let mut driver = ProtocolWorkflowDriver::new(ctx.handle());
-    ctx.drive_owned_wait(completed.install_using(&mut driver))
-        .await
-        .unwrap_or_else(|message| panic!("initial document should install: {message}"));
 }
 
 async fn evaluate_string_for_test(

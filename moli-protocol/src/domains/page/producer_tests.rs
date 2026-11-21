@@ -2807,7 +2807,7 @@ async fn child_frame_activity_drain_requires_prepared_output() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn popup_activation_creates_target_and_schedules_navigation_without_page_readback() {
+async fn popup_activation_transfers_initial_document_and_navigation_to_target_work() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
     let mut bc = BrowserContext::new("BID-1".into());
@@ -2906,17 +2906,13 @@ async fn popup_activation_creates_target_and_schedules_navigation_without_page_r
                 .background_targets()
                 .next()
                 .and_then(|target| target.loaded_page())
-                .is_some_and(|page| moli_url::is_about_blank(page.final_url())),
-            "target creation should install only the initial empty Document"
+                .is_some_and(|page| page.final_url().as_str()
+                    == "data:text/html,%3Cmain%3Eprepared-popup%3C/main%3E"),
+            "the Target initialization owns both installation and the requested navigation"
         )
     });
     let publications = ctx.with_fixture(|conn| conn.take_published_protocol_work());
-    assert!(matches!(
-        publications.as_slice(),
-        [work]
-            if work.kind()
-                == crate::domains::activity::ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
-    ));
+    assert!(publications.iter().all(|work| work.kind() != crate::domains::activity::ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction), "initialization must not schedule a second initial navigation");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3315,7 +3311,7 @@ async fn initial_document_navigation_waits_for_adoption_and_honors_cancellation(
 async fn initial_document_navigation_resumes_after_successful_adoption() {
     let (mut ctx, owner) = initial_document_navigation_context_for_test();
     let pending = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&owner)
+        conn.start_initial_document_page_build_for_test(&owner)
             .unwrap()
             .unwrap()
     });
@@ -3462,7 +3458,7 @@ async fn initial_document_navigation_noop_history_preserves_accepted_location() 
     for delta in [i64::MIN, -999, 0, 999, i64::MAX] {
         let (mut ctx, owner) = initial_document_navigation_context_for_test();
         let pending = ctx.with_fixture(|conn| {
-            conn.start_initial_document_page_ensure_for_owner(&owner)
+            conn.start_initial_document_page_build_for_test(&owner)
                 .unwrap()
                 .unwrap()
         });
@@ -3585,7 +3581,7 @@ async fn initial_document_navigation_latest_request_wins_in_either_resume_order(
     for newer_first in [false, true] {
         let (mut ctx, owner) = initial_document_navigation_context_for_test();
         let pending = ctx.with_fixture(|conn| {
-            conn.start_initial_document_page_ensure_for_owner(&owner)
+            conn.start_initial_document_page_build_for_test(&owner)
                 .unwrap()
                 .unwrap()
         });
@@ -3649,7 +3645,7 @@ async fn initial_document_navigation_survives_newer_fragment_navigation() {
     for via_protocol in [false, true] {
         let (mut ctx, owner) = initial_document_navigation_context_for_test();
         let pending = ctx.with_fixture(|conn| {
-            conn.start_initial_document_page_ensure_for_owner(&owner)
+            conn.start_initial_document_page_build_for_test(&owner)
                 .unwrap()
                 .unwrap()
         });
@@ -3861,7 +3857,7 @@ async fn initial_document_navigation_only_committed_root_traversal_supersedes() 
 async fn initial_document_navigation_survives_rejected_navigation_commands() {
     let (mut ctx, owner) = initial_document_navigation_context_for_test();
     let pending = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&owner)
+        conn.start_initial_document_page_build_for_test(&owner)
             .unwrap()
             .unwrap()
     });

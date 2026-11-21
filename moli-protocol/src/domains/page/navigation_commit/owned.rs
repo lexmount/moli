@@ -73,7 +73,6 @@ impl NavigationProtocolCleanup {
 pub(crate) enum NavigationCommandOutput {
     Background,
     Command,
-    Composite,
 }
 
 impl NavigationCommandOutput {
@@ -87,8 +86,6 @@ impl NavigationCommandOutput {
                 plan.into_background_event_plan(state.navigate_id, state.owner.session_id())
             }
             Self::Command => plan,
-            Self::Composite if plan.command_status().is_some_and(|status| status.is_err()) => plan,
-            Self::Composite => plan.into_composite_command_prefix(),
         }
     }
 

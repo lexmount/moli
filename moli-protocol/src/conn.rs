@@ -110,8 +110,13 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+mod target_initialization;
 pub(crate) use state::InitialDocumentPageBuildWaiter;
 pub(crate) use state::LoadPublicationState;
+pub(crate) use target_initialization::{
+    CompletedTargetCreation, PendingTargetCreation, TargetInitializationReservation,
+    TargetInitializationStage, initialization_error,
+};
 mod state_access;
 pub(crate) use state::PendingPopupNavigation;
 pub(crate) use state_access::PreparedProtocolCommand;
@@ -665,6 +670,17 @@ impl CommandDispatchContext {
             .into_single_stream()
     }
 
+    pub(crate) fn append_projection_output(&mut self, mut local: CommandDispatchContext) {
+        let (events, boundary, after) = local.take_renderer_fenced_protocol_events();
+        self.append_renderer_fenced_protocol_events(events, boundary, after);
+        self.extend_post_response_events(local.take_post_response_events());
+        self.defer_command_events(local.take_deferred_command_events());
+        for permit in local.take_runtime_output_projection_permits() {
+            self.retain_runtime_output_projection_permit(permit);
+        }
+        self.extend_renderer_output_dependencies(local.take_renderer_output_dependencies());
+    }
+
     pub(crate) fn extend_renderer_output_dependencies(
         &mut self,
         dependencies: RendererOutputDependencies,
@@ -728,10 +744,10 @@ pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,
     BackgroundNavigationLoadJob, CapturedPageReplacement, CommittedNavigationPage,
-    CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
-    InitialDocumentPageInstallResult, InitialDocumentPageOwner, PendingInitialDocumentPageBuild,
-    PreparedCapturedNavigationResponse, PreparedNavigationLoadError,
-    PreparedStreamingNavigationResponse, ResponseCommitReady, StablePageNavigationCommitTarget,
+    FailedInitialDocumentPageBuild, InitialDocumentPageInstallResult, InitialDocumentPageOwner,
+    PendingInitialDocumentPageBuild, PreparedCapturedNavigationResponse,
+    PreparedNavigationLoadError, PreparedStreamingNavigationResponse, ResponseCommitReady,
+    StablePageNavigationCommitTarget,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;

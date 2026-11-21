@@ -605,7 +605,7 @@ async fn document_open_exits_initial_empty_document_record() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
+async fn page_enable_subscribes_before_target_owned_initial_navigation() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<h1>initial</h1>";
     load_bc_with_session(
@@ -616,44 +616,42 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
         page_url,
     );
 
-    let raw = json!({
-        "id": 122,
-        "method": "Page.enable",
-        "sessionId": "SID-PAGE-ENABLE-DATA"
-    })
-    .to_string();
-    let pending = ctx.with_fixture(|conn| {
-        conn.try_start_pending_command_dispatch(&raw)
-            .expect("non-about:blank Page.enable should start initial URL navigation")
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .begin_active_target_initial_empty_document("about:blank".into())
     });
-    let (messages, scheduler_events) =
-        complete_pending_command_task_for_test(&mut ctx, pending).await;
-    let response = messages
-        .iter()
-        .find(|message| message["id"] == json!(122))
-        .expect("Page.enable response");
-    assert_eq!(response["sessionId"], json!("SID-PAGE-ENABLE-DATA"));
-    assert_eq!(response["result"], json!({}));
-    assert!(
-        messages.iter().any(|message| {
-            message["method"] == json!("Page.frameNavigated")
-                && message["sessionId"] == json!("SID-PAGE-ENABLE-DATA")
-                && message["params"]["frame"]["url"] == json!(page_url)
-        }),
-        "Page.enable should emit navigation events for the initial URL: {messages:?}"
-    );
+    ctx.process_async(json!({
+        "id": 122, "method": "Page.enable", "sessionId": "SID-PAGE-ENABLE-DATA"
+    }))
+    .await;
+    ctx.expect_result(122, json!({}), Some("SID-PAGE-ENABLE-DATA"));
+    ctx.with_fixture(|conn| {
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-PAGE-ENABLE-DATA");
+        assert!(
+            !conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap()
+                .has_loaded_page()
+        );
+        assert!(!conn.has_pending_document_navigation_for_owner(&owner));
+    });
+    ensure_initial_document_for_session(&mut ctx, Some("SID-PAGE-ENABLE-DATA")).await;
+    ctx.wait_for_scheduler_message("Target-owned initial navigation", |message| {
+        message["method"] == "Page.frameNavigated"
+            && message["sessionId"] == "SID-PAGE-ENABLE-DATA"
+            && message["params"]["frame"]["url"] == page_url
+    })
+    .await;
     ctx.with_fixture(|conn| {
         assert!(
             conn.browser_context
                 .as_ref()
-                .and_then(|bc| bc.active_page_target().runtime_slot.loaded_page())
-                .is_some_and(|page| page.final_url().as_str() == page_url),
-            "Page.enable pending path should install the initial non-blank document"
-        )
+                .and_then(|bc| bc.loaded_page())
+                .is_some_and(|page| page.final_url().as_str() == page_url)
+        );
     });
-    ctx.sent.extend(messages);
-    ctx.route_direct_command_output_for_test(Vec::new(), scheduler_events)
-        .await;
     let load = ctx
         .wait_for_scheduler_message("initial navigation load", |message| {
             message["method"] == "Page.loadEventFired"
