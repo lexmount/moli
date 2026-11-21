@@ -1,10 +1,12 @@
-use super::events::{clear_event_dispatch_fields, set_event_dispatch_fields};
 use super::{
     EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
     clear_event_composed_path, event_initialized, event_internal_bool_flag, event_is_dispatching,
     new_dom_exception_value, set_event_composed_path, set_event_internal_flag, set_event_trusted,
 };
 use crate::util::{throw_type_error, v8str};
+use moli_webapi::events::state::{
+    clear_event_dispatch_fields, set_event_dispatch_fields_for_targets,
+};
 
 pub(crate) fn prepare_script_dispatch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -47,8 +49,17 @@ pub(crate) fn begin_dispatch<'s>(
         .get_creation_context(scope)
         .map(|context| super::shared_event_targets::target_in_realm(scope, target, context))
         .unwrap_or(target);
-    set_event_dispatch_fields(scope, target, event);
-    let path = v8::Array::new_with_elements(scope, &[target.into()]);
+    begin_at_target_dispatch(scope, target, target, event)
+}
+
+pub(crate) fn begin_at_target_dispatch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    current_target: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    set_event_dispatch_fields_for_targets(scope, target, current_target, event);
+    let path = v8::Array::new_with_elements(scope, &[current_target.into()]);
     set_event_composed_path(scope, event, path);
     !event_internal_bool_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT)
 }

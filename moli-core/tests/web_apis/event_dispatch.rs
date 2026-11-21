@@ -63,14 +63,18 @@ async fn native_message_events_keep_dispatch_state_and_clear_propagation_flags()
     let source = r#"
       const log = [];
       addEventListener('message', event => {
+        const path = event.composedPath();
         log.push(['during', event.currentTarget === self, event.eventPhase === 2,
-          typeof document === 'undefined' || window.event === event]);
+          typeof document === 'undefined' || window.event === event,
+          event.target === self, event.srcElement === self,
+          path.length === 1 && path[0] === self]);
         event.initEvent('mutated', true, true);
         log.push(event.type);
         event.stopImmediatePropagation();
         setTimeout(() => {
           log.push(['after', event.currentTarget === null, event.eventPhase === 0,
-            typeof document === 'undefined' || window.event === undefined]);
+            typeof document === 'undefined' || window.event === undefined,
+            event.composedPath().length === 0, event.cancelBubble === false]);
           dispatchEvent(event);
           finish(log);
         }, 0);
@@ -83,9 +87,9 @@ async fn native_message_events_keep_dispatch_state_and_clear_propagation_flags()
         assert_eq!(
             observed,
             serde_json::json!([
-                ["during", true, true, true],
+                ["during", true, true, true, true, true, true],
                 "message",
-                ["after", true, true, true],
+                ["after", true, true, true, true, true],
                 "second"
             ]),
             "target={target}"

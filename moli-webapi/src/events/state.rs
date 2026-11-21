@@ -135,10 +135,25 @@ pub fn set_event_dispatch_fields<'s>(
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
 ) {
+    set_event_dispatch_fields_for_targets(scope, target, target, event);
+}
+
+/// Starts an at-target dispatch with a separate target override, such as the
+/// Document exposed by a legacy Window event.
+pub fn set_event_dispatch_fields_for_targets<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    current_target: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+) {
     let event = event_backing(scope, event);
     let _ = event.set(scope, v8str(scope, "target").into(), target.into());
     let _ = event.set(scope, v8str(scope, "srcElement").into(), target.into());
-    let _ = event.set(scope, v8str(scope, "currentTarget").into(), target.into());
+    let _ = event.set(
+        scope,
+        v8str(scope, "currentTarget").into(),
+        current_target.into(),
+    );
     let _ = event.set(
         scope,
         v8str(scope, "eventPhase").into(),

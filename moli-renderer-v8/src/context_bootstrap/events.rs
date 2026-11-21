@@ -223,12 +223,11 @@ pub(super) fn mouse_event_related_target_getter_function<'s>(
 }
 
 pub(super) use base::{
-    clear_event_dispatch_fields, event_bubbles_getter_function, event_cancelable_getter_function,
+    event_bubbles_getter_function, event_cancelable_getter_function,
     event_composed_getter_function, event_constructor_callback,
     event_current_target_getter_function, event_default_prevented_getter_function,
     event_event_phase_getter_function, event_src_element_getter_function,
-    event_target_getter_function, event_type_getter_function, set_event_dispatch_fields,
-    set_event_initialized,
+    event_target_getter_function, event_type_getter_function, set_event_initialized,
 };
 pub(in crate::context_bootstrap) use init::{EventInit, parse_event_dictionary};
 pub(super) use kind::EventSubclassKind;

@@ -2,7 +2,8 @@ use super::*;
 use crate::{
     context_bootstrap::{
         CHILD_BROWSING_CONTEXT_HANDLE_SLOT, clear_event_composed_path,
-        error_event_handler_arguments, mark_event_trusted, set_event_composed_path,
+        error_event_handler_arguments, event_target_dispatch::finish_dispatch, mark_event_trusted,
+        set_event_composed_path,
     },
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     util::{get_private_object, get_private_value, serialize_v8_iter_array},
@@ -1790,18 +1791,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
             );
         }
     }
-    set_event_phase(scope, event, 0);
-    set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, false);
-    set_event_internal_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT, false);
-    set_event_internal_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT, false);
-    set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
-    let current_target_key = v8str(scope, "currentTarget");
-    let _ = crate::context_bootstrap::event_backing(scope, event).set(
-        scope,
-        current_target_key.into(),
-        v8::null(scope).into(),
-    );
-    clear_event_composed_path(scope, event);
+    finish_dispatch(scope, event);
     Ok(PublicEventDispatchResult {
         default_prevented: event_default_prevented(scope, event),
         canceled_before_dispatch: false,
