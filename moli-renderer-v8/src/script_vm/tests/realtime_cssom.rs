@@ -26,6 +26,92 @@ fn realtime_cssom_retained_declaration_reads_current_used_sizes() {
 }
 
 #[test]
+fn realtime_cssom_shared_adopted_sheet_refreshes_all_shadow_clients_in_same_turn() {
+    for first_read in ["color", "width", "offsetWidth"] {
+        let mut vm =
+            realtime_vm("<!doctype html><section id=left></section><section id=right></section>");
+        vm.eval(&format!("globalThis.firstSharedRead={first_read:?}"))
+            .unwrap();
+        let initial = vm
+            .eval(
+                r#"(() => {
+          const roots = ['left', 'right'].map(id =>
+            document.getElementById(id).attachShadow({mode: 'open'}));
+          const targets = roots.map(root => {
+            const target = root.appendChild(document.createElement('div'));
+            target.className = 'shared-target';
+            return target;
+          });
+          const sheet = new CSSStyleSheet();
+          sheet.replaceSync('.shared-target {display:block;width:100px;color:rgb(1,2,3)}');
+          roots.forEach(root => { root.adoptedStyleSheets = [sheet]; });
+          const held = targets.map(target => getComputedStyle(target));
+          globalThis.sharedSheet = sheet;
+          globalThis.readShared = () => {
+            const first = firstSharedRead === 'color' ? held.map(style => style.color)
+              : firstSharedRead === 'width' ? held.map(style => style.width)
+              : targets.map(target => target.offsetWidth);
+            return [first, held.map(style => style.color), held.map(style => style.width),
+                    targets.map(target => target.offsetWidth), held.map(style => style.display)];
+          };
+          return JSON.stringify(readShared());
+        })()"#,
+            )
+            .unwrap();
+        let expected = |color: &str, width: u32, display: &str| {
+            let px = format!("{width}px");
+            let first = match first_read {
+                "color" => serde_json::json!([color, color]),
+                "width" => serde_json::json!([px, px]),
+                "offsetWidth" => serde_json::json!([width, width]),
+                _ => unreachable!(),
+            };
+            serde_json::json!([
+                first,
+                [color, color],
+                [px, px],
+                [width, width],
+                [display, display]
+            ])
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&initial).unwrap(),
+            expected("rgb(1, 2, 3)", 100, "block"),
+            "initial state, first read {first_read}"
+        );
+        let builds = vm.layout_pass_observability_for_test().1;
+        // Capture the first answers immediately after each mutation, while the
+        // same JS evaluation is still active and the original wrappers are held.
+        let updated = vm
+            .eval(
+                r#"(() => {
+          sharedSheet.replaceSync('.shared-target {display:block;width:200px;color:rgb(4,5,6)}');
+          const replaced = readShared();
+          const declaration = sharedSheet.cssRules[0].style;
+          declaration.width = '300px';
+          declaration.color = 'rgb(7,8,9)';
+          const edited = readShared();
+          const editedClean = readShared();
+          declaration.display = 'flow-root';
+          declaration.width = '400px';
+          declaration.color = 'rgb(10,11,12)';
+          return JSON.stringify([replaced, edited, editedClean, readShared(), readShared()]);
+        })()"#,
+            )
+            .unwrap();
+        let replacement = expected("rgb(4, 5, 6)", 200, "block");
+        let edit = expected("rgb(7, 8, 9)", 300, "block");
+        let flow_root = expected("rgb(10, 11, 12)", 400, "flow-root");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&updated).unwrap(),
+            serde_json::json!([replacement, edit, edit, flow_root, flow_root]),
+            "first read {first_read}"
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds + 3);
+    }
+}
+
+#[test]
 fn realtime_cssom_pure_root_style_and_inline_reads_do_not_build_layout() {
     let mut vm =
         realtime_vm("<!doctype html><div id=target style='width:100px;color:rgb(1,2,3)'></div>");
