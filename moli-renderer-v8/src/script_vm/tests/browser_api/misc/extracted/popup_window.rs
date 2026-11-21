@@ -3174,3 +3174,18 @@ fn lightweight_blank_popup_documents_have_no_doctype() {
         .unwrap();
     assert_eq!(result, "true");
 }
+
+#[test]
+fn lightweight_popup_keeps_its_requested_initial_inner_dimensions() {
+    let mut vm = new_storage_test_vm("https://popup-initial-dimensions.test/");
+    let result = vm
+        .eval(
+            r#"
+        const opened = open('', 'probe', 'width=387,height=291');
+        const reused = open('', 'probe', 'width=487,height=391');
+        [opened.innerWidth, opened.innerHeight, opened === reused].join(',');
+    "#,
+        )
+        .expect("popup Window dimensions should evaluate");
+    assert_eq!(result, "387,291,true");
+}
