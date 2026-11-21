@@ -5,6 +5,8 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 pub(super) const TIMEOUT_MS: &str = "30000";
+// Allow navigation to reach the intended timeout phase under shared runner load.
+pub(super) const PHASE_TIMEOUT_MS: &str = "15000";
 
 // A 10s main response leaves at most 20s for the 24s activity. Resetting the
 // readiness budget would let this exact page become quiet and return normally.

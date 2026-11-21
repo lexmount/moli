@@ -120,7 +120,7 @@ impl CookieFixture {
                 "--wait-until",
                 "load",
                 "--timeout",
-                "5000",
+                super::timing::TIMEOUT_MS,
             ])
             .args(args)
             .arg(format!("{}{path}", self.base))
@@ -488,15 +488,20 @@ async fn literal_cookies_do_not_reuse_another_requests_http_cache() -> Result<()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cookie_export_runs_after_evaluation_and_raw_output_errors() -> Result<()> {
     let fixture = CookieFixture::spawn().await?;
-    for (path, args) in [
+    for (path, args, expected_error) in [
         (
             "/echo",
             vec![
                 "--eval",
                 "(() => { throw new Error('cookie-evaluation-failure'); })()",
             ],
+            "cookie-evaluation-failure",
         ),
-        ("/raw", vec!["--dump", "html"]),
+        (
+            "/raw",
+            vec!["--dump", "html"],
+            "--dump html requires a renderable HTML document, not a raw download",
+        ),
     ] {
         let jar = super::unique_temp_file_path("cookie-error-export", "cookies.txt")?;
         let jar_arg = jar.to_string_lossy();
@@ -504,6 +509,10 @@ async fn cookie_export_runs_after_evaluation_and_raw_output_errors() -> Result<(
         args.extend(["--cookie-jar", &jar_arg]);
         let output = fixture.run(path, &args, b"")?;
         assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected_error),
+            "{output:?}"
+        );
         assert!(std::fs::read_to_string(jar)?.contains("\tsession\tfixture\n"));
     }
     Ok(())

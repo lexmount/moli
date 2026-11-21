@@ -1575,9 +1575,9 @@ fn cli_dump_html_rejects_from_raw_headers_without_waiting_for_body() -> Result<(
         "--http-no-proxy",
         "*",
         "--http-timeout",
-        "30000",
+        "60000",
         "--timeout",
-        "5000",
+        timing::TIMEOUT_MS,
         "--dump",
         "html",
         &url,
@@ -2734,35 +2734,39 @@ fn cli_readiness_timeout_identifies_response_selector_and_script_phases() -> Res
     let cases: [(&[&str], &str); 4] = [
         (
             &["--wait-response-url", "/response-that-never-arrives"],
-            "fetch readiness timed out after 5000 ms while waiting for a subresource response",
+            "waiting for a subresource response",
         ),
         (
             &["--wait-selector", "#selector-that-never-appears"],
-            "fetch readiness timed out after 5000 ms while waiting for a selector",
+            "waiting for a selector",
         ),
         (
             &["--wait-script", "globalThis.scriptThatNeverBecomesTruthy"],
-            "fetch readiness timed out after 5000 ms while waiting for a script to become truthy",
+            "waiting for a script to become truthy",
         ),
         (
             &["--wait-script", "() => false"],
-            "fetch readiness timed out after 5000 ms while waiting for a script to become truthy",
+            "waiting for a script to become truthy",
         ),
     ];
 
     for (args, expected_phase) in cases {
         let mut args = args.to_vec();
-        args.extend(["--timeout", "5000"]);
+        args.extend(["--timeout", timing::PHASE_TIMEOUT_MS]);
         let output = run_fetch_cli_with_dump_and_args(&url, "html", &args)?;
         let stdout = clean_output(&output.stdout);
         let stderr = clean_output(&output.stderr);
+        let expected_reason = format!(
+            "fetch readiness timed out after {} ms while {expected_phase}",
+            timing::PHASE_TIMEOUT_MS
+        );
         assert!(
             !output.status.success(),
             "phase={expected_phase} stdout={stdout}"
         );
         assert!(stdout.is_empty(), "phase={expected_phase} stdout={stdout}");
         assert!(
-            stderr.contains(expected_phase),
+            stderr.contains(&expected_reason),
             "expected phase `{expected_phase}` in stderr={stderr}"
         );
     }
@@ -3979,7 +3983,7 @@ fn cli_readiness_plan_continues_after_http_error_replacement_navigation() -> Res
         "html",
         &[
             "--timeout",
-            "10000",
+            timing::TIMEOUT_MS,
             "--wait-response-url",
             "/wait-until-json-data",
             "--wait-response-json",
@@ -4667,7 +4671,7 @@ fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Re
                 "--wait-until",
                 wait_until,
                 "--timeout",
-                "5000",
+                timing::PHASE_TIMEOUT_MS,
                 "--dump",
                 "html",
                 &url,
@@ -4682,14 +4686,13 @@ fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Re
             "wait_until={wait_until} must report a normal fetch failure instead of aborting: stdout={stdout}\nstderr={stderr}"
         );
         assert!(stdout.is_empty(), "wait_until={wait_until} stdout={stdout}");
-        assert!(
-            stderr.contains("timed out after 5000 ms"),
-            "wait_until={wait_until} stderr={stderr}"
-        );
         assert_single_fetch_failure_reason(
             &stderr,
             &url,
-            "fetch readiness timed out after 5000 ms while streaming main body",
+            &format!(
+                "fetch readiness timed out after {} ms while streaming main body",
+                timing::PHASE_TIMEOUT_MS
+            ),
         );
         assert!(
             !stderr.contains("resident renderer page entry must retain an active PageVm"),
@@ -4774,7 +4777,7 @@ fn cli_timeout_reports_parser_blocking_stylesheet_as_one_reason() -> Result<()> 
         "--wait-until",
         "domcontentloaded",
         "--timeout",
-        "5000",
+        timing::PHASE_TIMEOUT_MS,
         "--dump",
         "html",
         &url,
@@ -4788,7 +4791,10 @@ fn cli_timeout_reports_parser_blocking_stylesheet_as_one_reason() -> Result<()> 
     assert_single_fetch_failure_reason(
         &stderr,
         &url,
-        "fetch readiness timed out after 5000 ms while waiting for parser-blocking stylesheet",
+        &format!(
+            "fetch readiness timed out after {} ms while waiting for parser-blocking stylesheet",
+            timing::PHASE_TIMEOUT_MS
+        ),
     );
     Ok(())
 }
