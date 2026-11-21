@@ -267,11 +267,12 @@ impl PageScriptHost {
         let inputs = self.screen_layout_inputs(state)?;
         if inputs.permits_reuse()
             && state.published.borrow().as_ref() == Some(&inputs)
-            && self
-                .document_layout_state
-                .borrow()
-                .latest_layout(self.document_handle())
-                .is_some()
+            && (inputs.documents[0].root.is_none()
+                || self
+                    .document_layout_state
+                    .borrow()
+                    .latest_layout(self.document_handle())
+                    .is_some())
         {
             return Ok(());
         }
@@ -282,13 +283,33 @@ impl PageScriptHost {
         let request = LayoutPassRequest::new(inputs.viewport, reason)
             .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes);
         let document = self.document_handle();
-        let pass = self
-            .build_layout_pass_for_document(document, request)?
-            .ok_or(LayoutError::NoLayoutRoot)?;
+        let Some(pass) = self.build_layout_pass_for_document(document, request)? else {
+            if self.screen_layout_inputs(state)? != inputs {
+                return Err(LayoutError::source_contract(
+                    "screen layout",
+                    "source inputs or Document owners changed during layout",
+                ));
+            }
+            // Publish an empty result and retire the previous geometry.
+            self.clear_layout_rect_cache();
+            self.document_layout_state
+                .borrow_mut()
+                .clear_latest_layout();
+            *state.published.borrow_mut() = Some(inputs);
+            crate::observer_runtime::did_publish_realtime_resize_observer_layout(self);
+            self.did_publish_realtime_font_layout();
+            return Ok(());
+        };
         self.finish_layout_publication(
             PreparedLayoutPublication(LayoutPublication::CurrentScreen { document, inputs }),
             pass,
         )
+    }
+
+    pub(crate) fn has_published_realtime_screen_layout(&self) -> bool {
+        self.realtime_layout_state
+            .as_ref()
+            .is_some_and(|state| state.published.borrow().is_some())
     }
 
     fn prepare_current_screen_styles(&self, inputs: &ScreenLayoutInputs) {

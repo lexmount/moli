@@ -21,18 +21,27 @@ fn next_frame_deadline(previous: Option<Instant>, now: Instant) -> Instant {
     now + Duration::from_nanos(((period - phase) % period) as u64)
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ScheduledRealtimeFrame {
+    id: RendererPageRenderingUpdateTaskId,
+    target: WindowDocumentTaskTarget,
+    deadline: Instant,
+    sample_all_intersections: bool,
+}
+
 struct RunningRealtimeFrame {
     ticket: (RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget),
     // The root is first. Only an explicit document.open transaction may move
     // these exact targets: it preserves the Web Document and Window, while
     // replacing Moli's task owner. Navigation never transfers this batch.
     documents: Vec<WindowDocumentTaskTarget>,
+    sample_all_intersections: bool,
 }
 
 #[derive(Default)]
 pub(super) struct RealtimeFrameState {
     next_id: u64,
-    pending: Option<(RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget)>,
+    pending: Option<ScheduledRealtimeFrame>,
     // Realtime-only metadata for an active burst. Idle/canceled/retired work
     // drops the cadence without creating a persistent wake-up source.
     last_deadline: Option<Instant>,
@@ -94,7 +103,7 @@ impl PageScriptHost {
             // follows the explicitly preserved Document in later phases.
             if frame
                 .pending
-                .is_some_and(|(_, target)| target.owner() == retired)
+                .is_some_and(|pending| pending.target.owner() == retired)
             {
                 frame.pending = None;
             }
@@ -159,6 +168,9 @@ impl PageScriptHost {
         };
         let already_requested = {
             let mut frame = state.frame.borrow_mut();
+            if let Some(running) = &mut frame.running {
+                running.sample_all_intersections = true;
+            }
             std::mem::replace(&mut frame.source_requested, true)
         };
         if !already_requested {
@@ -195,21 +207,37 @@ impl PageScriptHost {
         let environment_pending = state.environment.borrow().has_pending();
         let events_pending = self.has_realtime_rendering_events();
         let mut frame = state.frame.borrow_mut();
-        if !self.document_activity().visible
-            || (!frame.source_requested
-                && !callbacks_pending
-                && !resize_pending
-                && !environment_pending
-                && !events_pending)
-        {
+        if !self.document_activity().visible {
             frame.pending = None;
             frame.last_deadline = None;
             return;
         }
-        if frame
-            .pending
-            .is_some_and(|(_, pending_target)| pending_target == target)
+        let sample_all_intersections = frame.source_requested
+            || callbacks_pending
+            || resize_pending
+            || environment_pending
+            || events_pending;
+        let pending = frame.pending.filter(|pending| pending.target == target);
+        if sample_all_intersections
+            && pending.is_some_and(|pending| pending.sample_all_intersections)
         {
+            return;
+        }
+        let deadline = if sample_all_intersections {
+            let tick = next_frame_deadline(frame.last_deadline, frame.sampled_now());
+            Some(pending.map_or(tick, |pending| tick.min(pending.deadline)))
+        } else {
+            crate::observer_runtime::next_realtime_intersection_deadline(self)
+        };
+        let Some(deadline) = deadline else {
+            frame.pending = None;
+            frame.last_deadline = None;
+            return;
+        };
+        if let Some(mut pending) = pending.filter(|pending| pending.deadline == deadline) {
+            pending.sample_all_intersections = sample_all_intersections;
+            frame.pending = Some(pending);
+            frame.last_deadline = sample_all_intersections.then_some(deadline);
             return;
         }
         frame.pending = None;
@@ -219,8 +247,12 @@ impl PageScriptHost {
         };
         frame.next_id = next_id;
         let id = RendererPageRenderingUpdateTaskId::Frame(next_id);
-        let deadline = next_frame_deadline(frame.last_deadline, frame.sampled_now());
-        frame.pending = Some((id, target));
+        frame.pending = Some(ScheduledRealtimeFrame {
+            id,
+            target,
+            deadline,
+            sample_all_intersections,
+        });
         if self
             .page_rendering_update_sender()
             .schedule_frame(target, id, deadline)
@@ -235,24 +267,26 @@ impl PageScriptHost {
                 "retired realtime opportunity after route closure"
             );
         } else {
-            frame.last_deadline = Some(deadline);
+            // Only a burst of ordinary work sets the cadence. An IO deadline
+            // can have an arbitrary offset from a previous rendering tick.
+            frame.last_deadline = sample_all_intersections.then_some(deadline);
         }
     }
 
     pub(crate) fn current_realtime_rendering_opportunity(
         &self,
     ) -> Option<(RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget)> {
-        let (id, target) = self
+        let pending = self
             .realtime_layout_state
             .as_ref()?
             .frame
             .borrow()
             .pending?;
         self.window_document_owner_is_current_for_dispatch_scope(
-            target.owner(),
-            target.dispatch_scope(),
+            pending.target.owner(),
+            pending.target.dispatch_scope(),
         )
-        .then_some((id, target))
+        .then_some((pending.id, pending.target))
     }
 
     pub(crate) fn discard_realtime_rendering_opportunity(
@@ -263,10 +297,7 @@ impl PageScriptHost {
             return false;
         };
         let mut frame = state.frame.borrow_mut();
-        if frame
-            .pending
-            .is_some_and(|(pending_id, _)| pending_id == id)
-        {
+        if frame.pending.is_some_and(|pending| pending.id == id) {
             frame.pending = None;
             true
         } else {
@@ -283,9 +314,12 @@ impl PageScriptHost {
             self.current_realtime_rendering_opportunity() == Some((id, target)),
             "authorized realtime opportunity lost its exact payload"
         );
-        self.discard_realtime_rendering_opportunity(id);
         let state = self.realtime_layout_state.as_ref().expect("Realtime frame");
         let mut frame = state.frame.borrow_mut();
+        let scheduled = frame
+            .pending
+            .take()
+            .expect("authorized rendering opportunity");
         anyhow::ensure!(frame.running.is_none(), "reentrant rendering opportunity");
         if !self.document_activity().visible {
             return Ok(false);
@@ -298,8 +332,20 @@ impl PageScriptHost {
         frame.running = Some(RunningRealtimeFrame {
             ticket: (id, target),
             documents,
+            sample_all_intersections: scheduled.sample_all_intersections,
         });
         Ok(true)
+    }
+
+    pub(crate) fn realtime_intersection_sample(&self) -> (Instant, bool) {
+        let frame = self
+            .realtime_layout_state
+            .as_ref()
+            .expect("Realtime frame")
+            .frame
+            .borrow();
+        let running = frame.running.as_ref().expect("running Realtime frame");
+        (frame.sampled_now(), running.sample_all_intersections)
     }
 
     pub(crate) fn realtime_rendering_opportunity_is_current(
@@ -347,16 +393,8 @@ impl PageScriptHost {
             .frame
             .borrow_mut()
             .source_requested = false;
-        // Empty Documents have no layout root. A later parser/DOM commit will
-        // request a new opportunity; do not automatically retry the same input.
-        if self
-            .dom_host()
-            .dom()
-            .document_element_handle_for_document(self.document_handle())
-            .is_none()
-        {
-            return Ok(());
-        }
+        // The shared freshness gate also publishes an empty result when the
+        // root was removed, retiring the previous geometry and computation.
         self.ensure_current_screen_layout(LayoutFlushReason::RenderingOpportunity)?;
         #[cfg(test)]
         if let Some(completed) = self

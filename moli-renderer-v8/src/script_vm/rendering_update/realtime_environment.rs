@@ -110,6 +110,60 @@ impl ScriptVm {
                     }
                     continue;
                 }
+                if matches!(phase, PreAnimationPhase::Media) {
+                    let events = context_bootstrap::take_realtime_media_query_events(
+                        scope, host_ptr, target,
+                    );
+                    for (event_index, prepared) in events.iter().enumerate() {
+                        if !unsafe { &*host_ptr }
+                            .realtime_rendering_opportunity_is_current(id, root)
+                        {
+                            break;
+                        }
+                        // Only document.open can transfer this running list;
+                        // a navigation/detach cannot select a new Document.
+                        let Some(target) = unsafe { &*host_ptr }.realtime_rendering_document(
+                            id,
+                            root,
+                            document_index,
+                        ) else {
+                            break;
+                        };
+                        if !unsafe { &*host_ptr }
+                            .realtime_media_query_is_current(target, prepared.id)
+                        {
+                            continue;
+                        }
+                        let result = prepared
+                            .binding
+                            .with_current_scope(scope, host_ptr, |scope, _| -> Result<bool> {
+                                let list = v8::Local::new(scope, &prepared.list);
+                                let event = v8::Local::new(scope, &prepared.event);
+                                context_bootstrap::dispatch_realtime_media_query_event(
+                                    scope, list, event,
+                                );
+                                Self::environment_checkpoint(scope, watchdog)?;
+                                Ok(true)
+                            })
+                            .unwrap_or(Ok(false));
+                        if result.is_err()
+                            && let Some(target) = unsafe { &*host_ptr }.realtime_rendering_document(
+                                id,
+                                root,
+                                document_index,
+                            )
+                        {
+                            let uncalled = events[event_index + 1..]
+                                .iter()
+                                .map(|event| event.id)
+                                .collect::<Vec<_>>();
+                            unsafe { &*host_ptr }
+                                .restore_realtime_media_query_notifications(target, &uncalled);
+                        }
+                        invoked |= result?;
+                    }
+                    continue;
+                }
                 let Some(binding) = environment_binding(scope, host_ptr, target) else {
                     continue;
                 };
@@ -168,34 +222,6 @@ impl ScriptVm {
                         unsafe { &*host_ptr }.restore_realtime_environment_notification(pending);
                     }
                     invoked |= result?;
-                } else {
-                    invoked |= binding
-                        .with_current_scope(scope, host_ptr, |scope, _| -> Result<bool> {
-                            let events = context_bootstrap::take_realtime_media_query_events(scope);
-                            let mut invoked = false;
-                            for (index, (_, list, event)) in events.iter().enumerate() {
-                                if !environment_target_is_current(host_ptr, target) {
-                                    break;
-                                }
-                                context_bootstrap::dispatch_realtime_media_query_event(
-                                    scope, *list, *event,
-                                );
-                                invoked = true;
-                                if let Err(error) = Self::environment_checkpoint(scope, watchdog) {
-                                    let uncalled = events[index + 1..]
-                                        .iter()
-                                        .map(|(id, _, _)| *id)
-                                        .collect::<Vec<_>>();
-                                    unsafe { &*host_ptr }
-                                        .restore_realtime_media_query_notifications(
-                                            target, &uncalled,
-                                        );
-                                    return Err(error);
-                                }
-                            }
-                            Ok(invoked)
-                        })
-                        .unwrap_or(Ok(false))?;
                 }
             }
         }
