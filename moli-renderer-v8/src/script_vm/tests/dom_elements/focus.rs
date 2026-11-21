@@ -596,7 +596,7 @@ fn focusing_frame_owner_then_input_dispatches_child_window_focus_and_blur() {
 
     assert_eq!(
         result,
-        "top-window-blur,frame-focus,child-window-focus,frame-blur,child-window-blur,input-focus,top-window-focus|true"
+        "top-window-blur,frame-focus,child-window-focus,frame-blur,child-window-blur,top-window-focus,input-focus|true"
     );
 }
 
@@ -622,19 +622,74 @@ fn blurring_a_focused_frame_returns_focus_to_its_parent_viewport() {
   const events = [];
   window.onfocus = () => events.push('top-focus');
   parent.defaultView.onfocus = () => events.push(`parent-focus:${parent.activeElement.tagName}`);
-  frame.contentWindow.onblur = () => events.push(`child-blur:${frame.contentDocument.hasFocus()}`);
+  frame.contentWindow.onblur = () => events.push(`child-blur:${frame.contentDocument.hasFocus()}:${parent.activeElement.tagName}`);
 
   frame.blur();
+  const parentViewportSelected = parent.activeElement === parent.body;
   frame.blur();
   input.focus();
   input.blur();
-  return `${events.join(',')}|${document.activeElement === outer}|${parent.hasFocus()}`;
+  return `${events.join(',')}|${parentViewportSelected}|${document.activeElement === outer}|${parent.hasFocus()}`;
 })()
 "#,
         )
         .expect("nested frame blur should return focus to its owner viewport");
 
-    assert_eq!(result, "child-blur:false,parent-focus:BODY|true|true");
+    assert_eq!(
+        result,
+        "child-blur:false:IFRAME,parent-focus:IFRAME|true|true|true"
+    );
+}
+
+#[test]
+fn nested_document_focus_changes_publish_the_viewport_before_element_focus() {
+    let mut vm = new_storage_html_test_vm("https://nested-focus-phases.test/");
+    let transitions = vm
+        .eval(
+            r#"
+(() => {
+  const topInput = document.body.appendChild(document.createElement('input'));
+  const outer = document.body.appendChild(document.createElement('iframe'));
+  const middle = outer.contentDocument;
+  const inner = middle.body.appendChild(middle.createElement('iframe'));
+  const child = inner.contentDocument;
+  const input = child.body.appendChild(child.createElement('input'));
+  topInput.focus();
+
+  const documents = [document, middle, child];
+  const events = [];
+  const record = name => () => events.push(name + ':' + documents.map(doc =>
+    doc.activeElement.tagName + (doc.hasFocus() ? '+' : '-')).join('/'));
+  window.addEventListener('blur', record('top-blur'));
+  window.addEventListener('focus', record('top-focus'));
+  inner.contentWindow.addEventListener('blur', record('child-blur'));
+  inner.contentWindow.addEventListener('focus', record('child-focus'));
+  topInput.addEventListener('blur', record('top-input-blur'));
+  topInput.addEventListener('focus', record('top-input-focus'));
+  input.addEventListener('blur', record('child-input-blur'));
+  input.addEventListener('focus', record('child-input-focus'));
+
+  input.focus();
+  topInput.focus();
+  return events.join('|');
+})()
+"#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        transitions,
+        concat!(
+            "top-input-blur:BODY+/BODY-/BODY-|",
+            "top-blur:IFRAME+/IFRAME+/BODY+|",
+            "child-focus:IFRAME+/IFRAME+/BODY+|",
+            "child-input-focus:IFRAME+/IFRAME+/INPUT+|",
+            "child-input-blur:IFRAME+/IFRAME+/BODY+|",
+            "child-blur:BODY+/BODY-/BODY-|",
+            "top-focus:BODY+/BODY-/BODY-|",
+            "top-input-focus:INPUT+/BODY-/BODY-",
+        )
+    );
 }
 
 #[test]
@@ -822,8 +877,8 @@ fn shadow_root_active_element_tracks_focus_event_phases() {
 
 #[test]
 fn child_focus_transitions_preserve_the_viewport_and_scope_related_targets() {
-    // Cross-document transitions retain the old document's focused area;
-    // activeElement follows that area independently of the global input target.
+    // The old element blurs while its Document still has the focused viewport.
+    // Moving between Documents does not expose relatedTarget across them.
     for (scenario, expected) in [
         (
             "same-child",
@@ -831,15 +886,15 @@ fn child_focus_transitions_preserve_the_viewport_and_scope_related_targets() {
         ),
         (
             "enter-child",
-            "blur:main:main:body:body:null|focusout:main:main:body:body:null|focus:b:one:b:body:null|focusin:b:one:b:body:null",
+            "blur:main:body:body:body:null|focusout:main:body:body:body:null|focus:b:one:b:body:null|focusin:b:one:b:body:null",
         ),
         (
             "leave-child",
-            "blur:a:one:a:body:null|focusout:a:one:a:body:null|focus:main:main:a:body:null|focusin:main:main:a:body:null",
+            "blur:a:one:body:body:null|focusout:a:one:body:body:null|focus:main:main:body:body:null|focusin:main:main:body:body:null",
         ),
         (
             "sibling-child",
-            "blur:a:one:a:body:null|focusout:a:one:a:body:null|focus:c:two:a:c:null|focusin:c:two:a:c:null",
+            "blur:a:one:body:body:null|focusout:a:one:body:body:null|focus:c:two:body:c:null|focusin:c:two:body:c:null",
         ),
     ] {
         let mut vm = new_storage_test_vm("https://child-focus-phases.test/");

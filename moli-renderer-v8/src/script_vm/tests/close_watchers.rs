@@ -152,8 +152,6 @@ async fn close_watcher_activation_and_consumption_follow_the_focused_frame_tree(
             .as_ref()
             .expect("child unique context ID");
         vm.exec_in_execution_context(child, r#"
-            if (!document.body) document.documentElement.appendChild(document.createElement('body'));
-            document.body.tabIndex = -1;
             globalThis.events = [];
             globalThis.record = () => {
                 const watcher = new CloseWatcher();
@@ -165,8 +163,8 @@ async fn close_watcher_activation_and_consumption_follow_the_focused_frame_tree(
 
         // Parent input reaches same-origin descendants, but not an opaque child.
         close_watcher_key(&mut vm, "keydown", "x");
-        vm.exec_in_execution_context(child, "document.body.focus()")
-            .unwrap();
+        // Let the parent focus the child without giving the child activation.
+        vm.eval("frame.contentWindow.focus()").unwrap();
         close_watcher_key(&mut vm, "keydown", "Escape");
         let child_events = close_watcher_protocol(
             &mut vm,

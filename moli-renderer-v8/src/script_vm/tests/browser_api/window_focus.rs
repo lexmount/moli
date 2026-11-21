@@ -64,7 +64,8 @@ fn document_has_focus_checks_every_live_ancestor_in_the_native_focus_chain() {
         states.push(state());
         document.getElementById('top').focus();
         states.push(state());
-        if (middle.activeElement !== inner) throw Error('inactive child lost its local focused area');
+        if (middle.activeElement !== middle.body || deep.activeElement !== deep.body)
+            throw Error('a departed child Document kept its old focused area');
         middle.getElementById('middle').focus();
         states.push(state());
         deep.getElementById('deep').focus();
@@ -202,11 +203,11 @@ fn window_focus_and_blur_validate_the_receiver_in_the_callee_realm() {
         if (other.document.activeElement !== input)
             throw Error('focus on the current Window must preserve its focused control');
         window.focus();
-        if (document.activeElement !== document.body || other.document.activeElement !== input)
+        if (document.activeElement !== document.body || other.document.activeElement !== other.document.body)
             throw Error('focusing the outer Window must select its own viewport');
         other.focus();
-        if (document.activeElement !== frame || other.document.activeElement !== input)
-            throw Error('focusing a child Window must restore its local focus');
+        if (document.activeElement !== frame || other.document.activeElement !== other.document.body)
+            throw Error('focusing a child Window must select its viewport');
         if (other.blur.call(null) !== undefined) throw Error('null global receiver');
         frame.remove();
         if (other.focus() !== undefined || other.blur() !== undefined)
@@ -220,7 +221,7 @@ fn window_focus_and_blur_validate_the_receiver_in_the_callee_realm() {
 }
 
 #[test]
-fn window_focus_uses_the_target_documents_permissions_policy() {
+fn script_focus_uses_the_incumbent_documents_permissions_policy() {
     let mut vm = new_storage_test_vm("https://window-focus-policy.test/");
     vm.eval(r#"(() => {
         const root = document.documentElement || document.appendChild(document.createElement('html'));
@@ -233,11 +234,22 @@ fn window_focus_uses_the_target_documents_permissions_policy() {
         vm.eval(
             r#"(() => {
             const child = document.getElementById('child');
+            const input = document.getElementById('focused');
+            child.contentDocument.body.innerHTML = '<input id=inner>';
+            const state = [];
             child.contentWindow.focus();
-            return document.activeElement.id;
+            state.push(document.activeElement === child);
+            child.contentWindow.eval("document.getElementById('inner').focus()");
+            state.push(child.contentDocument.activeElement.id === 'inner');
+            input.focus();
+            child.contentWindow.eval("window.focus()");
+            state.push(document.activeElement === input);
+            child.contentWindow.eval("document.getElementById('inner').focus()");
+            state.push(document.activeElement === input);
+            return state.join(',');
         })()"#
         )
         .unwrap(),
-        "focused"
+        "true,true,true,true"
     );
 }

@@ -83,28 +83,31 @@
       source.remove(); destination.remove();
     }
   }
-  // Removing a retained focused area in an inactive child must not change
-  // the currently focused parent element or revive the child's old focus.
+  // Removing a previously focused element in a departed child leaves the
+  // current parent target focused and reinsertion does not revive focus.
   {
     const parentButton = document.createElement('button'); body.append(parentButton);
     const child = frame.contentDocument, input = child.createElement('input'); child.body.append(input);
     input.focus(); parentButton.focus();
-    check(child.activeElement === input, 'inactive child retains its focused area');
+    check(child.activeElement === child.body, 'leaving the child selects its viewport');
     const events = []; input.addEventListener('blur', () => events.push('blur'));
     input.remove(); child.body.append(input);
     check(document.activeElement === parentButton && child.activeElement === child.body && !events.length,
-      'inactive child removal clears only its focused area');
+      'removing and reinserting the old child target leaves parent focus intact');
     input.remove(); parentButton.remove();
   }
   {
     const parentButton = body.appendChild(document.createElement('button'));
     const child = frame.contentDocument, host = child.createElement('div'); child.body.append(host);
     const shadow = host.attachShadow({mode:'open'}), input = child.createElement('input'); shadow.append(input);
-    input.focus(); parentButton.focus();
+    input.focus();
     check(child.activeElement === host && shadow.activeElement === input,
-      'inactive child document and shadow root retain the same focused area');
+      'focused child document and shadow root expose the same focused area');
+    parentButton.focus();
+    check(child.activeElement === child.body && shadow.activeElement === null,
+      'leaving the child clears the document and shadow root focused area');
     check(!input.matches(':focus') && !host.matches(':focus') && document.activeElement === parentButton,
-      'retaining a document focused area does not change the global focus target');
+      'the parent target owns focus after leaving the child');
     input.remove(); shadow.append(input);
     check(child.activeElement === child.body && shadow.activeElement === null && document.activeElement === parentButton,
       'inactive shadow removal resets local focus without affecting the parent');

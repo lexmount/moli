@@ -16,8 +16,8 @@ pub(in crate::native_bridge) fn node_document_active_element_getter_function<'s>
         return;
     }
     let runtime = unsafe { &*runtime_ptr };
-    // A Document retains its focused area while another Document is focused.
-    // activeElement exposes that local area, not the global input-routing target.
+    // Each Document exposes its own focused area, including when its Page
+    // temporarily loses system focus.
     let handle = runtime
         .document_focused_area(handle)
         .and_then(|active| retarget_active_element_to_document(runtime, active, handle))

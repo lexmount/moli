@@ -125,7 +125,7 @@ pub(crate) fn window_focus_callback<'s>(
     else {
         return;
     };
-    if host.document_allows_window_focus(document) {
+    if host.allows_script_focus(scope, document) {
         let scope = &mut v8::ContextScope::new(scope, context);
         crate::native_bridge::element::focus_window_document(scope, host_ptr, document);
     }
