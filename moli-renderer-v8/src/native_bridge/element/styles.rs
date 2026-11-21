@@ -323,28 +323,25 @@ fn style_object_viewport<'s>(
 fn style_object_computation_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+    mode: StyleMode,
 ) -> StyleComputationContext {
     let read_document = style_object_read_document(scope, style);
     let viewport = live_computed_style_viewport(scope, style)
         .unwrap_or_else(|| style_object_viewport(scope, style));
     let mut context = StyleComputationContext::new(viewport).with_read_document(read_document);
-    if let Ok((runtime_ptr, BridgeHandle::ComputedStyle(handle, _))) =
-        bridge_handle_from_object(scope, style)
+    if mode == StyleMode::Computed
+        && runtime.layout_policy().is_realtime()
+        && let Some(document) = runtime.layout_document_for_source(handle)
+        && runtime
+            .child_browsing_context_host_for_document_handle(document)
+            .is_some()
     {
-        let runtime = unsafe { &*runtime_ptr };
-        if runtime.layout_policy().is_realtime()
-            && let Some(document) = runtime.layout_document_for_source(handle)
-            && runtime
-                .child_browsing_context_host_for_document_handle(document)
-                .is_some()
-        {
-            // The public property boundary has already refreshed canonical
-            // geometry. A hidden frame or ancestor has no member tree; an
-            // actual zero-sized viewport does, so its used values remain valid.
-            context.boxless_document = runtime
-                .with_latest_layout_tree_for_document(document, |_| ())
-                .is_none();
-        }
+        // A hidden frame has no member tree. A zero-sized frame can still have used values.
+        context.boxless_document = runtime
+            .with_latest_layout_tree_for_document(document, |_| ())
+            .is_none();
     }
     context
 }

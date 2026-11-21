@@ -35,15 +35,11 @@ fn set_style_length<'s>(
         rv.set(v8::Integer::new(scope, 0).into());
         return;
     }
-    let context = style_object_computation_context(scope, style);
-    let length = style_object_property_count_with_context(
-        scope,
-        style,
-        unsafe { &*runtime_ptr },
-        handle,
-        mode,
-        context,
-    ) as i32;
+    let runtime = unsafe { &*runtime_ptr };
+    let context = style_object_computation_context(scope, style, runtime, handle, mode);
+    let length =
+        style_object_property_count_with_context(scope, style, runtime, handle, mode, context)
+            as i32;
     rv.set(v8::Integer::new(scope, length).into());
 }
 
