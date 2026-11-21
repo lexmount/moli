@@ -5244,7 +5244,12 @@ editing/crashtests/white-space-nowrap-to-pre-line.html
 editing/other/body-should-not-deleted-even-if-empty.html
 editing/other/br-tag-not-added-with-inline-root-editable-element.html
 editing/other/cefalse-boundaries-deletion.html
+editing/other/delete-editing-host.html
+editing/other/delete.html
 editing/other/extra-text-nodes.html
+editing/other/inline-editing-host-has-placeholder-with-after-pseudo-element.html
+editing/other/inline-editing-host-has-placeholder-with-before-pseudo-element.html
+editing/other/insert-br-tag-on-text-node-removal-with-non-editable-elements.html
 editing/other/legacy-edit-command.html?command=contentReadOnly&param=false
 editing/other/legacy-edit-command.html?command=contentReadOnly&param=true
 editing/other/legacy-edit-command.html?command=decreaseFontSize
@@ -5266,10 +5271,14 @@ editing/plaintext-only/delete-around-linebreak-or-block-boundary.html?white-spac
 editing/plaintext-only/delete-around-linebreak-or-block-boundary.html?white-space=pre
 editing/plaintext-only/delete-around-linebreak-or-block-boundary.html?white-space=pre-line
 editing/plaintext-only/delete-around-linebreak-or-block-boundary.html?white-space=pre-wrap
+editing/plaintext-only/delete-part-of-white-spaces.html?white-space=pre
+editing/plaintext-only/delete-part-of-white-spaces.html?white-space=pre-wrap
 editing/plaintext-only/forwardDelete-around-linebreak-or-block-boundary.html?white-space=normal
 editing/plaintext-only/forwardDelete-around-linebreak-or-block-boundary.html?white-space=pre
 editing/plaintext-only/forwardDelete-around-linebreak-or-block-boundary.html?white-space=pre-line
 editing/plaintext-only/forwardDelete-around-linebreak-or-block-boundary.html?white-space=pre-wrap
+editing/plaintext-only/forwardDelete-part-of-white-spaces.html?white-space=pre
+editing/plaintext-only/forwardDelete-part-of-white-spaces.html?white-space=pre-wrap
 editing/plaintext-only/insertHTML.html?white-space=normal
 editing/plaintext-only/insertHTML.html?white-space=pre
 editing/plaintext-only/insertHTML.html?white-space=pre-line
