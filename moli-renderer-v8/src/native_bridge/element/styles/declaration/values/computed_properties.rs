@@ -790,13 +790,15 @@ fn computed_css_numeric_property_value(
 }
 
 #[derive(Clone, Copy)]
-enum CssNumericComputedPropertyRule {
+pub(super) enum CssNumericComputedPropertyRule {
     TimeList { non_negative: bool },
     AnimationDurationList,
     AnimationIterationCountList,
 }
 
-fn css_numeric_computed_property_rule(property: &str) -> Option<CssNumericComputedPropertyRule> {
+pub(super) fn css_numeric_computed_property_rule(
+    property: &str,
+) -> Option<CssNumericComputedPropertyRule> {
     Some(match property {
         "animation-delay" | "transition-delay" => CssNumericComputedPropertyRule::TimeList {
             non_negative: false,

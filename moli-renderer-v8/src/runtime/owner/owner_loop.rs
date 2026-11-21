@@ -137,6 +137,10 @@ impl RendererOwnerHandle {
                         continue;
                     }
                     if let Some(token) = pending_turn.turn.committed_page_view_command_token()
+                        && pending_turn
+                            .turn
+                            .committed_page_view_deadline()
+                            .is_none_or(|deadline| deadline > Instant::now())
                         && parked_turns.iter().any(|turn| {
                             turn.wake_token == token
                                 && matches!(
@@ -152,11 +156,14 @@ impl RendererOwnerHandle {
                         // has not run yet. Park the command on the same durable
                         // Page activity edge. The response-release wake puts
                         // the parser turn and continuation in front of it.
+                        // Finite command waits keep their original deadline
+                        // even while this independent handoff is blocked.
+                        let ready_at = pending_turn.turn.committed_page_view_deadline();
                         parked_turns.push_back(RenderRuntimeParkedTurn {
                             reply_tx: pending_turn.reply_tx,
                             turn: pending_turn.turn,
                             wake_token: token,
-                            ready_at: None,
+                            ready_at,
                             condition: RenderRuntimeParkCondition::PageActivity,
                             command_admission_output_predecessor: pending_turn
                                 .command_admission_output_predecessor
@@ -1129,6 +1136,14 @@ impl RendererOwnerHandle {
                 capture_policy,
             } => {
                 self.run_live_page_command_turn(token, command, capture_policy)
+                    .await
+            }
+            RenderRuntimeTurn::ContinueLivePagePrintCapture {
+                token,
+                job,
+                capture_policy,
+            } => {
+                self.continue_live_page_print_capture_turn(token, job, capture_policy)
                     .await
             }
             RenderRuntimeTurn::ContinueLivePageRuntimeCommandLifecycle {

@@ -3,7 +3,7 @@ use std::time::Duration;
 use moli_layout::{
     LayoutAnswers, LayoutBoxModel, LayoutCaretPosition, LayoutDocumentMetrics,
     LayoutElementMetrics, LayoutFlushReason, LayoutHit, LayoutIntersectionGeometry,
-    LayoutPassMetrics, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
+    LayoutPassMetrics, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect,
     LayoutResizeObserverMetrics, LayoutResizeObserverSize, LayoutScrollContainerMetrics,
     LayoutScrollIntoViewGeometry, LayoutSize,
 };
@@ -111,16 +111,28 @@ pub(crate) fn answer_query(
         LayoutQuery::ResizeObserverMetrics { source } => {
             // Keep Mock's existing approximate physical-as-logical contract.
             LayoutQueryAnswer::ResizeObserverMetrics(mock_element_metrics(runtime, *source).map(
-                |metrics| LayoutResizeObserverMetrics {
-                    content_size: metrics.content_size,
-                    content_box_size: LayoutResizeObserverSize {
-                        inline_size: metrics.content_size.width,
-                        block_size: metrics.content_size.height,
-                    },
-                    border_box_size: LayoutResizeObserverSize {
-                        inline_size: metrics.offset_size.width,
-                        block_size: metrics.offset_size.height,
-                    },
+                |metrics| {
+                    let content = metrics.content_size;
+                    let dpr = f64::from(
+                        runtime
+                            .layout_viewport_for_document(runtime.document_handle())
+                            .device_pixel_ratio,
+                    );
+                    LayoutResizeObserverMetrics {
+                        content_rect: LayoutRect::new(0.0, 0.0, content.width, content.height),
+                        content_box_size: LayoutResizeObserverSize {
+                            inline_size: content.width,
+                            block_size: content.height,
+                        },
+                        border_box_size: LayoutResizeObserverSize {
+                            inline_size: metrics.offset_size.width,
+                            block_size: metrics.offset_size.height,
+                        },
+                        device_pixel_content_box_size: (
+                            (f64::from(content.width) * dpr).round(),
+                            (f64::from(content.height) * dpr).round(),
+                        ),
+                    }
                 },
             ))
         }

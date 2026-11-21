@@ -194,21 +194,32 @@ pub(crate) fn prepare_table_layout_trees<N>(world: &mut LayoutWorld<N>)
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let roots = (0..world.boxes.len())
+    let tables = (0..world.boxes.len())
         .map(LayoutBoxId::from_index)
         .filter(|id| is_table_root(world.boxes[id.index()].kind))
+        .filter_map(|root| {
+            let mut parts = Vec::new();
+            collect_table_parts(world, root, &mut parts);
+            (!parts.is_empty()).then_some((root, parts))
+        })
         .collect::<Vec<_>>();
-    for root in roots {
-        let mut parts = Vec::new();
-        collect_table_parts(world, root, &mut parts);
-        if parts.is_empty() {
-            continue;
-        }
-        for layout_box in &mut world.boxes {
-            layout_box
-                .layout_children
-                .retain(|child| !parts.contains(child));
-        }
+    if tables.is_empty() {
+        return;
+    }
+
+    // Cells and captions terminate the part walk, so nested tables have
+    // disjoint part lists. Remove the old numeric edges before attaching them.
+    let mut is_table_part = vec![false; world.boxes.len()];
+    for part in tables.iter().flat_map(|(_, parts)| parts) {
+        is_table_part[part.index()] = true;
+    }
+    for layout_box in &mut world.boxes {
+        layout_box
+            .layout_children
+            .retain(|child| !is_table_part[child.index()]);
+    }
+
+    for (root, parts) in tables {
         for part in parts.iter().copied() {
             world.boxes[part.index()].layout_parent = Some(root);
             if is_table_structural(world.boxes[part.index()].kind) {
@@ -234,11 +245,12 @@ fn apply_parent_facing_table_inline_constraints<N>(world: &mut LayoutWorld<N>, r
 where
     N: Copy + Debug + Eq + Hash,
 {
+    if !world.boxes[root.index()].style.uses_fixed_table_layout() {
+        return;
+    }
     let mut context = build_table_context(world, root);
     context.collect_authored_fixed_cell_constraints(world);
-    let Some(min_border_box_size) = context.fixed_grid_min_border_box_size() else {
-        return;
-    };
+    let min_border_box_size = context.fixed_grid_min_border_box_size();
 
     let style = &mut world.boxes[root.index()].style.taffy;
     let percentage_basis = None;
@@ -576,9 +588,6 @@ impl TableContext {
     where
         N: Copy + Debug + Eq + Hash,
     {
-        if !self.layout_mode.is_fixed() {
-            return;
-        }
         let mut cell_constraints = vec![None; self.column_count];
         let mut cell_spans = Vec::new();
         let first_row_cells = self
@@ -827,11 +836,7 @@ impl TableContext {
         used.max(inline_insets).max(self.caption_inline_min)
     }
 
-    fn fixed_grid_min_border_box_size(&self) -> Option<f32> {
-        if !self.layout_mode.is_fixed() {
-            return None;
-        }
-
+    fn fixed_grid_min_border_box_size(&self) -> f32 {
         let padding = self
             .style
             .padding
@@ -843,9 +848,7 @@ impl TableContext {
         let inline_insets = padding.left + padding.right + border.left + border.right;
         let internal_spacing =
             self.inline_border_spacing.max(0.0) * self.column_count.saturating_sub(1) as f32;
-        Some(
-            fixed_grid_min_inline_size(&self.column_constraints) + inline_insets + internal_spacing,
-        )
+        fixed_grid_min_inline_size(&self.column_constraints) + inline_insets + internal_spacing
     }
 }
 

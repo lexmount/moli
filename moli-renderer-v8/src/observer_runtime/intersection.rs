@@ -1,6 +1,10 @@
 //! Canonical IntersectionObserver state transitions and owned check batches.
 
-use std::{collections::HashMap, mem};
+use std::{
+    collections::HashMap,
+    mem,
+    time::{Duration, Instant},
+};
 
 use crate::{
     dom::native::{DomHost, NativeNodeId},
@@ -24,6 +28,58 @@ struct IntersectionTargetCheckInput {
     previous: Option<LastReportedIntersection>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct RealtimeIntersectionSampling<'a> {
+    pub(super) observer_ids: &'a [u32],
+    pub(super) now: Instant,
+    pub(super) sample_all: bool,
+}
+
+impl RealtimeIntersectionSampling<'_> {
+    fn should_sample(self, timing: Option<&mut IntersectionSampleTime>) -> bool {
+        // A timer-driven frame only services deferred work. Registering new
+        // deferrals there would make observers with different delays poll
+        // each other after ordinary rendering work has ended.
+        match timing {
+            Some(timing) if self.now < timing.next_sample => {
+                timing.deferred |= self.sample_all;
+                false
+            }
+            Some(timing) => self.sample_all || timing.deferred,
+            None => self.sample_all,
+        }
+    }
+}
+
+struct IntersectionSampleTime {
+    next_sample: Instant,
+    deferred: bool,
+}
+
+#[derive(Default)]
+pub(super) struct RealtimeIntersectionTiming {
+    targets: HashMap<NativeNodeId, IntersectionSampleTime>,
+}
+
+impl RealtimeIntersectionTiming {
+    pub(super) fn next_deadline(&self) -> Option<Instant> {
+        self.targets
+            .values()
+            .filter_map(|timing| timing.deferred.then_some(timing.next_sample))
+            .min()
+    }
+
+    pub(super) fn remove(&mut self, target: NativeNodeId) -> bool {
+        self.targets
+            .remove(&target)
+            .is_some_and(|timing| timing.deferred)
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.targets.is_empty()
+    }
+}
+
 pub(super) struct IntersectionCheckBatch {
     observers: Vec<IntersectionObserverCheckInput>,
     geometry_cache: RootlessIntersectionGeometryCache,
@@ -42,27 +98,46 @@ pub(super) struct CompletedIntersectionCheckBatch {
 }
 
 impl ObserverStore {
-    pub(super) fn take_intersection_check_batch(&mut self) -> Option<IntersectionCheckBatch> {
-        if self.intersection_observers.is_empty() {
-            return None;
-        }
+    pub(super) fn take_intersection_check_batch(
+        &mut self,
+        realtime: Option<RealtimeIntersectionSampling<'_>>,
+    ) -> Option<IntersectionCheckBatch> {
         let mut observers = Vec::with_capacity(self.intersection_observers.len());
-        for (observer_id, state) in &self.intersection_observers {
-            observers.push(IntersectionObserverCheckInput {
-                observer_id: *observer_id,
-                options: state.options.clone(),
-                targets: state
-                    .observed_targets
-                    .iter()
-                    .copied()
-                    .map(|target| IntersectionTargetCheckInput {
-                        target,
-                        previous: state.last_reported_entries.get(&target).copied(),
+        for (&observer_id, state) in &mut self.intersection_observers {
+            if realtime
+                .is_some_and(|sample| sample.observer_ids.binary_search(&observer_id).is_err())
+            {
+                continue;
+            }
+            let mut timing = state.realtime_timing.as_deref_mut();
+            let targets = state
+                .observed_targets
+                .iter()
+                .copied()
+                .filter(|target| {
+                    realtime.is_none_or(|sample| {
+                        sample.should_sample(
+                            timing
+                                .as_deref_mut()
+                                .and_then(|timing| timing.targets.get_mut(target)),
+                        )
                     })
-                    .collect(),
+                })
+                .map(|target| IntersectionTargetCheckInput {
+                    target,
+                    previous: state.last_reported_entries.get(&target).copied(),
+                })
+                .collect::<Vec<_>>();
+            if targets.is_empty() {
+                continue;
+            }
+            observers.push(IntersectionObserverCheckInput {
+                observer_id,
+                options: state.options.clone(),
+                targets,
             });
         }
-        Some(IntersectionCheckBatch {
+        (!observers.is_empty()).then(|| IntersectionCheckBatch {
             observers,
             geometry_cache: mem::take(&mut self.rootless_geometry_cache),
         })
@@ -71,6 +146,7 @@ impl ObserverStore {
     pub(super) fn apply_intersection_check_batch(
         &mut self,
         completed: CompletedIntersectionCheckBatch,
+        sampled_at: Option<Instant>,
     ) -> bool {
         self.rootless_geometry_cache = completed.geometry_cache;
         let mut queued_any = false;
@@ -78,11 +154,29 @@ impl ObserverStore {
             let Some(state) = self.intersection_observers.get_mut(&result.observer_id) else {
                 continue;
             };
-            if !result.should_queue || !state.observed_targets.contains(&result.target) {
+            let sample_time = sampled_at.filter(|_| state.options.delay > 0);
+            if (!result.should_queue && sample_time.is_none())
+                || !state.observed_targets.contains(&result.target)
+            {
                 continue;
             }
-            queue_intersection_entry(state, result.target, result.metrics);
-            queued_any = true;
+            if let Some(now) = sample_time {
+                state
+                    .realtime_timing
+                    .get_or_insert_with(Box::default)
+                    .targets
+                    .insert(
+                        result.target,
+                        IntersectionSampleTime {
+                            next_sample: now + Duration::from_millis(state.options.delay as u64),
+                            deferred: false,
+                        },
+                    );
+            }
+            if result.should_queue {
+                queue_intersection_entry(state, result.target, result.metrics);
+                queued_any = true;
+            }
         }
         queued_any
     }
@@ -137,15 +231,27 @@ pub(super) fn compute_intersection_check_batch(
             })
             .collect();
         let queries = moli_layout::LayoutQueryBatch::new(queries);
-        let answers: Vec<_> = runtime
-            .with_latest_layout_tree_for_document(document, |tree| {
-                queries
-                    .queries
-                    .iter()
-                    .map(|query| tree.answer_query(query))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let answers: Vec<_> = if runtime.layout_policy().is_realtime() {
+            match crate::native_bridge::element::observable_geometry_batch(
+                runtime, document, &queries,
+            ) {
+                Ok(answers) => answers.answers,
+                // Missing frame members and inert Documents have no layout.
+                // Their targets retain None geometry and report nonintersection.
+                Err(moli_layout::LayoutError::NoLayoutSnapshot) => continue,
+                Err(error) => return Err(error),
+            }
+        } else {
+            runtime
+                .with_latest_layout_tree_for_document(document, |tree| {
+                    queries
+                        .queries
+                        .iter()
+                        .map(|query| tree.answer_query(query))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         for (index, answer) in indices.into_iter().zip(answers) {
             let moli_layout::LayoutQueryAnswer::IntersectionGeometry(geometry) = answer else {
                 return Err(moli_layout::LayoutError::source_contract(

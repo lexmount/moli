@@ -45,6 +45,79 @@ uv run moli-benchmark synthetic \
   --runs 5
 ```
 
+### Realtime layout cost against Chromium
+
+On Linux, the standalone probe runs identical geometry and input-state tasks
+with release Moli and Chromium. From the repository root:
+
+```bash
+uv run --no-project --with websockets==15.0.1 python \
+  moli-benchmark/scripts/probe-realtime-chromium.py \
+  --moli target/release/moli --moli-sha BUILD_COMMIT \
+  --chromium /usr/lib/chromium/chromium \
+  --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+  --nodes 1024 --runs 5 --cpu 0 \
+  --output /tmp/moli-current-layout.json
+```
+
+Set `--moli-sha` to the commit used to build that binary and provide the actual
+Chromium executable so its recorded hash identifies the browser. Both engines
+load the same TTF and use a 1280×720 viewport at DPR 1. Each sample starts a fresh
+browser with one fixture page; engine order alternates. `--cpu` binds every
+browser process and thread; omit it to retain normal scheduling. The driver
+and resource sampler remain unbound. `--positioned-blocks` adds relative
+positioning to the blocks.
+
+The workload includes clean reads, CSSOM reads, batch writes, interleaved
+writes/reads, rAF callbacks, and wheel input. Every sample must return current
+geometry. Wheel completion requires the handler, its microtask, the new width,
+and the final scroll position. ACK and completion notification timestamps are
+recorded separately by the CDP receiver. No screenshot is requested;
+presentation latency and matching pixel output need separate workloads.
+
+JSON includes binary, script, fixture and font hashes, process-tree CPU/PSS/RSS,
+raw operation timings, and all failed samples. CPU is a lower bound when threads
+exit during a phase; the affected identities are recorded. The probe refuses to
+overwrite an output file and exits unsuccessfully if any sample fails. Keep
+the separate `probe-realtime-layout.py` for Mock/OnDemand regression costs;
+those modes retain their existing geometry contract.
+
+Both `probe-realtime-layout.py` and `probe-realtime-chromium.py` accept
+`--container blocks|grid|table`. The default block fixture and its measured
+tasks retain their original bytes. Grid uses four fractional tracks; table
+uses four cells per row with automatic table layout. Both containers have a
+definite 1280px width, keeping their layout constraints equal when one engine
+reserves viewport space for scrollbars. Each contains the same
+number of fixed-size text blocks and runs the same geometry, batch mutation,
+interleaved write/read, rAF and wheel tasks. The probes check the actual computed
+container display, width and DOM membership before timing; Mock checks the
+structure while keeping its approximate geometry contract. Treat each
+container as a separate workload, and retain its fixture hash in cost reports.
+
+### Dynamic layout and input against Chromium
+
+The structure probe uses the same Ahem fixture as the PageVm cold, warm and
+eviction regression. It runs two rounds of insertion, removal, reordering,
+same-shape replacement, text/width changes, wheel scrolling, and list resizing.
+Each operation is followed by a real coordinate click on the current row.
+
+```bash
+uv run --no-project --with websockets==15.0.1 python \
+  moli-benchmark/scripts/probe-realtime-structure.py \
+  --moli target/release/moli --moli-sha BUILD_COMMIT \
+  --chromium /usr/lib/chromium/chromium \
+  --output /tmp/moli-dynamic-structure.json
+```
+
+Both engines use the repository Ahem font, 1280×720/DPR1, and hidden scrollbars.
+The driver waits for callback/DOM state without requesting screenshots or
+adding rAF callbacks, then compares all 65 geometry, hit, identity, observer and
+input snapshots. The native regression also checks that inspection does not
+repair geometry after the frame and that legal work eviction preserves output.
+The probe preserves partial failures and refuses to overwrite its JSON output.
+This finite functional comparison does not establish throughput, memory
+recovery, starvation freedom, or correctness for arbitrary DOM changes.
+
 ### WebMainBench fetch stability CI
 
 The `WebMainBench · 545 pages` job runs on pull requests, pushes to `main`, and

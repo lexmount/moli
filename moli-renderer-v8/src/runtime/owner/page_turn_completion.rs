@@ -38,6 +38,19 @@ impl RendererOwnerHandle {
 
     pub(super) fn cancel_pending_turn_on_owner_local_store(&self, turn: RenderRuntimeTurn) {
         match turn {
+            RenderRuntimeTurn::ContinueLivePagePrintCapture { token, mut job, .. } => {
+                if let Some(mut entry) =
+                    self.checkout_live_page_entry_for_cancellation(token, "print capture")
+                {
+                    // The stable Page can now contain a different Document.
+                    // PageVm cancellation must check the job's exact owner
+                    // before aborting any request in the current Host.
+                    entry.page_vm_mut().cancel_print_capture(&mut job);
+                    self.restore_live_page_entry(token, entry);
+                }
+                // Missing/retired residence still revokes the job endpoint
+                // through Drop; it never looks up a replacement by request ID.
+            }
             RenderRuntimeTurn::WaitLivePageScriptTruthy {
                 token,
                 pending_call: Some(pending_call),

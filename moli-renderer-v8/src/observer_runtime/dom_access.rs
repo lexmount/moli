@@ -6,6 +6,11 @@ use crate::{
 };
 use moli_webidl_callback::WebIdlCallbackFunction;
 
+mod realtime_resize;
+pub(crate) use realtime_resize::*;
+mod realtime_intersection;
+pub(crate) use realtime_intersection::*;
+
 use super::{
     IntersectionMutationPlan, IntersectionObserverOptions, MutationObserverOptions,
     ObserverMutationPlan, ObserverStore, build_intersection_entries_array,
@@ -64,6 +69,12 @@ fn request_task_with_access(
     scope: &mut v8::PinScope<'_, '_>,
     task: ObserverTask,
 ) {
+    if !matches!(task, ObserverTask::MutationDelivery)
+        && access.read(|host| host.layout_policy().is_realtime())
+    {
+        access.read(PageScriptHost::request_realtime_rendering_opportunity);
+        return;
+    }
     let should_enqueue = access.store(|store| store.request_task(task));
     if should_enqueue && !schedule::enqueue(scope, task) {
         access.store(|store| store.cancel_task(task));
@@ -144,6 +155,9 @@ pub(crate) fn queue_mutation_records(
     }
     match intersection {
         IntersectionMutationPlan::None => {}
+        _ if access.read(|host| host.layout_policy().is_realtime()) => {
+            access.read(PageScriptHost::request_realtime_rendering_opportunity);
+        }
         IntersectionMutationPlan::CheckNow => {
             queue_intersection_checks_with_dom(&mut access, scope, dom_host)
         }
@@ -261,7 +275,10 @@ pub(crate) fn retire_execution_context_owner(
     };
     host.dom_host()
         .set_mutation_observer_records_enabled(mutation_records_enabled);
-    retired.saturating_add(host.common.callbacks.retire_execution_context_owner(owner))
+    let retired =
+        retired.saturating_add(host.common.callbacks.retire_execution_context_owner(owner));
+    host.refresh_realtime_rendering_opportunity();
+    retired
 }
 
 pub(crate) fn retire_context_token(
@@ -275,7 +292,9 @@ pub(crate) fn retire_context_token(
     };
     host.dom_host()
         .set_mutation_observer_records_enabled(mutation_records_enabled);
-    retired.saturating_add(host.common.callbacks.retire_context_token(context_token))
+    let retired = retired.saturating_add(host.common.callbacks.retire_context_token(context_token));
+    host.refresh_realtime_rendering_opportunity();
+    retired
 }
 
 pub(super) fn observe_intersection_target(
@@ -289,6 +308,12 @@ pub(super) fn observe_intersection_target(
         return false;
     }
     let options = access.store(|store| store.intersection_observe_target(scope, observer, target));
+    if access.read(|host| host.layout_policy().is_realtime()) {
+        if options.is_some() {
+            access.read(PageScriptHost::request_realtime_rendering_opportunity);
+        }
+        return true;
+    }
     let should_check = options.as_ref().is_some_and(|options| {
         access.read(|host| target_is_intersection_observable(host.dom_host(), target, options))
     });
@@ -308,9 +333,11 @@ pub(super) fn unobserve_intersection_target(
     if !access.read(|host| node_is_intersection_target(host.dom_host(), target)) {
         return false;
     }
-    access.store(|store| {
-        store.intersection_unobserve_target(scope, observer, target);
-    });
+    let canceled =
+        access.store(|store| store.intersection_unobserve_target(scope, observer, target));
+    if canceled {
+        access.read(PageScriptHost::refresh_realtime_rendering_opportunity);
+    }
     true
 }
 
@@ -319,9 +346,11 @@ pub(super) fn disconnect_intersection_observer(
     host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
 ) {
-    ObserverHostAccess::new(host_ptr).store(|store| {
-        store.disconnect_intersection_observer(scope, observer);
-    });
+    let mut access = ObserverHostAccess::new(host_ptr);
+    let canceled = access.store(|store| store.disconnect_intersection_observer(scope, observer));
+    if canceled {
+        access.read(PageScriptHost::refresh_realtime_rendering_opportunity);
+    }
 }
 
 pub(super) fn take_intersection_records<'s>(
@@ -341,7 +370,20 @@ pub(crate) fn queue_intersection_checks(
     host_ptr: *mut PageScriptHost,
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
-    let Some(batch) = access.store(ObserverStore::take_intersection_check_batch) else {
+    if access.read(|host| host.layout_policy().is_realtime()) {
+        // Scroll, capture and mutation entry points only register demand.
+        // Sampling belongs to the frame, never to a getter or microtask.
+        if access.read(|host| {
+            host.observers(&OBSERVER_STORE_ACCESS)
+                .intersection_observers
+                .values()
+                .any(|state| !state.observed_targets.is_empty())
+        }) {
+            access.read(PageScriptHost::request_realtime_rendering_opportunity);
+        }
+        return;
+    }
+    let Some(batch) = access.store(|store| store.take_intersection_check_batch(None)) else {
         return;
     };
     let Ok(completed) = access.read(|runtime| {
@@ -349,7 +391,7 @@ pub(crate) fn queue_intersection_checks(
     }) else {
         return;
     };
-    let queued_any = access.store(|store| store.apply_intersection_check_batch(completed));
+    let queued_any = access.store(|store| store.apply_intersection_check_batch(completed, None));
     if queued_any {
         request_task_with_access(&mut access, scope, ObserverTask::IntersectionDelivery);
     }
@@ -361,7 +403,7 @@ fn queue_intersection_checks_with_dom(
     dom_host: &DomHost,
 ) {
     let Some(batch): Option<IntersectionCheckBatch> =
-        access.store(ObserverStore::take_intersection_check_batch)
+        access.store(|store| store.take_intersection_check_batch(None))
     else {
         return;
     };
@@ -370,7 +412,7 @@ fn queue_intersection_checks_with_dom(
     else {
         return;
     };
-    let queued_any = access.store(|store| store.apply_intersection_check_batch(completed));
+    let queued_any = access.store(|store| store.apply_intersection_check_batch(completed, None));
     if queued_any {
         request_task_with_access(access, scope, ObserverTask::IntersectionDelivery);
     }

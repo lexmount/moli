@@ -78,6 +78,13 @@ impl PageScriptHost {
         }
     }
 
+    pub(crate) fn pending_pointer_capture_target(&self, pointer_id: i32) -> Option<DomHandle> {
+        self.pending_pointer_capture_targets
+            .get(&pointer_id)
+            .copied()
+            .filter(|target| self.dom_host().is_connected(*target))
+    }
+
     pub(crate) fn active_pointer_capture_target(&self, pointer_id: i32) -> Option<DomHandle> {
         self.pointer_capture_targets
             .get(&pointer_id)

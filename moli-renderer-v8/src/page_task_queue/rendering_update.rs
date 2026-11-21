@@ -3,13 +3,12 @@ use crate::runtime::PageOwnerTurnOutcome;
 use super::{
     PageWindowDocumentTaskTargetEffect, PageWindowDocumentTaskTurnAction,
     RendererPageWindowDocumentTask, RendererPageWindowDocumentTaskOwner,
-    window_document_task_source::{
-        RendererPageWindowDocumentTaskRoute, RendererPageWindowDocumentTaskSender,
-        RendererPageWindowDocumentTaskSource,
-    },
 };
+mod source;
 #[cfg(test)]
 use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, WindowDocumentTaskTarget};
+pub(crate) use source::RendererPageRenderingUpdateSender;
+pub(super) use source::{RendererPageRenderingUpdateRoute, RendererPageRenderingUpdateSource};
 
 /// PageVm-local key for one pending Document rendering-update payload.
 ///
@@ -18,11 +17,14 @@ use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, WindowDocumentTask
 /// immutable Document target, so a replacement PageVm cannot consume a
 /// naturally reused local id.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct RendererPageRenderingUpdateTaskId(u64);
+pub(crate) enum RendererPageRenderingUpdateTaskId {
+    Event(u64),
+    Frame(u64),
+}
 
 impl RendererPageRenderingUpdateTaskId {
     pub(crate) const fn from_raw(raw: u64) -> Self {
-        Self(raw)
+        Self::Event(raw)
     }
 }
 
@@ -37,6 +39,7 @@ pub(crate) enum RendererPageRenderingUpdateTaskKind {
     AnimationStartScan,
     PostParseAutofocus,
     EnvironmentChange,
+    FrameLifecycle,
 }
 
 pub(crate) type RendererPageRenderingUpdateOwner = RendererPageWindowDocumentTaskOwner;
@@ -45,18 +48,6 @@ pub(crate) type RendererPageRenderingUpdateTask = RendererPageWindowDocumentTask
     RendererPageRenderingUpdateTaskKind,
 >;
 pub(crate) type RendererPageRenderingUpdateHead = RendererPageRenderingUpdateTask;
-pub(super) type RendererPageRenderingUpdateRoute = RendererPageWindowDocumentTaskRoute<
-    RendererPageRenderingUpdateTaskId,
-    RendererPageRenderingUpdateTaskKind,
->;
-pub(crate) type RendererPageRenderingUpdateSender = RendererPageWindowDocumentTaskSender<
-    RendererPageRenderingUpdateTaskId,
-    RendererPageRenderingUpdateTaskKind,
->;
-pub(super) type RendererPageRenderingUpdateSource = RendererPageWindowDocumentTaskSource<
-    RendererPageRenderingUpdateTaskId,
-    RendererPageRenderingUpdateTaskKind,
->;
 
 pub(crate) type PageRenderingUpdateTargetEffect = PageWindowDocumentTaskTargetEffect;
 pub(crate) type PageRenderingUpdateTurnAction = PageWindowDocumentTaskTurnAction<

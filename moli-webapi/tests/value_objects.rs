@@ -116,6 +116,7 @@ fn install_values(
         RealmCallbacks {
             runtime: None,
             point_mutated: reflect_point,
+            media_query_matches: |_, _| None,
         },
     );
     state

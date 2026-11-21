@@ -123,6 +123,84 @@ fn idle_accepts_documents_without_a_javascript_realm() -> Result<()> {
 }
 
 #[test]
+fn idle_waits_for_animation_frame_followups_in_all_layout_policies() -> Result<()> {
+    let url = document(
+        r#"
+        let count = 0;
+        function tick() {
+          queueMicrotask(() => {
+            if (++count === 3) document.querySelector('main').textContent = 'done';
+            else requestAnimationFrame(tick);
+          });
+        }
+        requestAnimationFrame(tick);
+    "#,
+    );
+    for policy in [None, Some("--layout"), Some("--realtime")] {
+        let mut args = vec!["--dump", "html"];
+        args.extend(policy);
+        eprintln!("layout policy: {policy:?}");
+        assert_done(run(&url, "3000", &args)?);
+    }
+    Ok(())
+}
+
+#[test]
+fn idle_times_out_for_animation_frame_loops_in_all_layout_policies() -> Result<()> {
+    let url = document("requestAnimationFrame(function tick() { requestAnimationFrame(tick); });");
+    for policy in [None, Some("--layout"), Some("--realtime")] {
+        let mut args = vec!["--dump", "html"];
+        args.extend(policy);
+        let output = run(&url, "2000", &args)?;
+        let stderr = clean_output(&output.stderr);
+        assert!(!output.status.success(), "policy={policy:?}");
+        assert!(output.stdout.is_empty(), "policy={policy:?}");
+        assert!(
+            stderr.contains("waiting for idle"),
+            "policy={policy:?}: {stderr}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn idle_settles_after_observers_and_canceled_frames_in_all_layout_policies() -> Result<()> {
+    let url = document(
+        r#"
+        let canceledRan = false;
+        const canceled = requestAnimationFrame(() => canceledRan = true);
+        cancelAnimationFrame(canceled);
+        const box = document.createElement('div');
+        box.style.cssText = 'width:40px;height:20px';
+        document.body.append(box);
+        let resized = false;
+        let intersected = false;
+        let scheduled = false;
+        function finish() {
+          if (resized && intersected && !scheduled) {
+            scheduled = true;
+            requestAnimationFrame(() => {
+              document.querySelector('main').textContent = canceledRan ? 'canceled frame ran' : 'done';
+            });
+          }
+        }
+        const resize = new ResizeObserver(() => { resized = true; finish(); });
+        const intersection = new IntersectionObserver(() => { intersected = true; finish(); });
+        resize.observe(box);
+        intersection.observe(box);
+    "#,
+    );
+    // Stable observers remain registered after delivery without keeping Idle alive.
+    for policy in [None, Some("--layout"), Some("--realtime")] {
+        let mut args = vec!["--dump", "html"];
+        args.extend(policy);
+        eprintln!("layout policy: {policy:?}");
+        assert_done(run(&url, "3000", &args)?);
+    }
+    Ok(())
+}
+
+#[test]
 fn idle_waits_for_future_timers_and_their_microtask_followups() -> Result<()> {
     let url = document(
         r#"

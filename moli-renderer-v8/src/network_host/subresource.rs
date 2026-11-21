@@ -173,6 +173,11 @@ impl PreparedSubresourceFetch {
         }
     }
 
+    pub(super) fn with_service_worker_client(mut self, client_id: ServiceWorkerClientId) -> Self {
+        self.dispatch.client_id = client_id;
+        self
+    }
+
     pub(super) fn dispatch(self, host: &PageScriptHost, internal_id: u64) {
         let SubresourceFetchRegistration::Direct(cancel_handle) = self.registration else {
             return;

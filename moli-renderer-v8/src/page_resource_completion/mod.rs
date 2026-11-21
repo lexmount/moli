@@ -1,3 +1,4 @@
+mod capture_resource;
 mod main_dynamic_import_graph;
 mod main_module_fetch;
 mod main_modulepreload;
@@ -21,6 +22,7 @@ impl fmt::Display for RendererResourceCompletionRouteClosed {
 
 impl Error for RendererResourceCompletionRouteClosed {}
 
+pub(crate) use self::capture_resource::CaptureResourceCompletion;
 pub(crate) use self::main_dynamic_import_graph::{
     MainDynamicImportGraphFetchCompletion, MainDynamicImportGraphFetchTarget,
 };

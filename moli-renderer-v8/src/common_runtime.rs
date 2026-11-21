@@ -8,9 +8,10 @@ mod callback_registry;
 
 pub(crate) use callback_registry::{
     CallbackRegistrationId, CallbackRegistrationKind, CallbackResidence,
+    RealtimeResizeObserverSampling,
 };
 
-use callback_registry::CallbackRegistry;
+pub(crate) use callback_registry::CallbackRegistry;
 
 use std::{
     cell::{Cell, RefCell},

@@ -291,6 +291,7 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
         scope,
         moli_webapi::RealmCallbacks {
             point_mutated: crate::context_bootstrap::svg_runtime::reflect_svg_point_mutation,
+            media_query_matches: crate::context_bootstrap::media_queries::read_media_query_matches,
             runtime: Some(&moli_webapi::RealmRuntime {
                 abort_signal_owner: crate::abort_signal_route::resolve_abort_signal_owner,
                 structured_clone_value: crate::context_bootstrap::structured_clone_value,

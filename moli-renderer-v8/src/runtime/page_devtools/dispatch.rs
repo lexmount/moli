@@ -32,7 +32,8 @@ impl PageVm {
                 pointer,
                 modifiers,
                 intercept_drags: _,
-            } if event_name == "wheel" => self
+            } if event_name == "wheel"
+                && self.input_dispatch_policy() == page_vm::RendererInputDispatchPolicy::LegacyWindow => self
                 .queue_wheel_event(
                     x,
                     y,
@@ -435,7 +436,7 @@ impl PageVm {
                 top_frame_id,
                 options,
             } => Ok(RendererPageReply::DevTools(RendererDevToolsPageReply::OptionalDomSnapshotCapturePayload(
-                self.dom_snapshot_capture_payload(&top_frame_id, options),
+                self.dom_snapshot_capture_payload(&top_frame_id, options)?,
             ))),
             RendererDevToolsPageCommand::DocumentChildNodeSnapshotEventsForNode {
                 inspector_session_id,

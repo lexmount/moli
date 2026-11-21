@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import errno
 import io
 import threading
+import time
+import traceback
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -435,6 +438,62 @@ class InstrumentationEvidenceTests(unittest.TestCase):
         self.assertEqual(len(value["log_readers"]), 2)
         self.assertEqual(value["resources"]["samples"], [])
         lease.close.assert_called_once()
+
+    def test_actual_probe_finally_preserves_readiness_failure_and_lifetime_save(self):
+        for filename in ("probe-realtime-layout.py", "probe-layout-lifetime.py"):
+            path = Path(__file__).resolve().parents[1] / "scripts" / filename
+            tree = ast.parse(path.read_text())
+            node = next(
+                node
+                for node in tree.body
+                if isinstance(node, ast.AsyncFunctionDef) and node.name == "one_run"
+            )
+            module = ast.Module(body=[node], type_ignores=[])
+            failure = target_serve.TargetServeReadinessTimeout(
+                "not ready",
+                evidence={
+                    "cleanup_complete": True,
+                    "resources": {"sealed": True},
+                    "marker": "preserved",
+                },
+            )
+            globals_ = {
+                "asyncio": asyncio,
+                "time": time,
+                "traceback": traceback,
+                "start_target_serve": Mock(side_effect=failure),
+                "finish_target_serve_run": target_serve.finish_target_serve_run,
+                "MODES": {"Realtime": ("--realtime",)},
+            }
+            exec(  # noqa: S102 -- Compile only the local probe one_run AST with fake I/O.
+                compile(ast.fix_missing_locations(module), str(path), "exec"), globals_
+            )
+            if "lifetime" in filename:
+                record, saves = {}, []
+                asyncio.run(
+                    globals_["one_run"](
+                        Path("/unused"),
+                        "Realtime",
+                        "unused",
+                        None,
+                        record,
+                        lambda saves=saves, record=record: saves.append(dict(record)),
+                    )
+                )
+                self.assertEqual(len(saves), 1)
+                stopped = record["stopped"]
+            else:
+                record = asyncio.run(
+                    globals_["one_run"](
+                        Path("/unused"), "Realtime", "unused", None, 1024, 1
+                    )
+                )
+                stopped = record["server"]
+            self.assertFalse(record["business_ok"])
+            self.assertFalse(record["ok"])
+            self.assertIn("not ready", record["error"])
+            self.assertIn("traceback", record)
+            self.assertEqual(stopped["marker"], "preserved")
 
     def test_fixture_cleanup_joins_even_when_close_fails(self):
         calls = []

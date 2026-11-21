@@ -625,7 +625,7 @@ where
             world.boxes[child.index()].unrounded_layout.location.y += offset;
         }
     }
-    if let Some(context) = &mut world.boxes[cell.index()].inline_layout {
+    if let Some(context) = &mut world.inline_layouts[cell.index()] {
         for line in &mut context.line_placements {
             line.translate_block_axis(offset);
         }
