@@ -1,8 +1,9 @@
 use super::realtime_opportunity::run_opportunity;
 use super::*;
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererCaptureScreencastFrameReply as CastReply;
 use crate::runtime::{
-    RendererCaptureScreencastFrameReply as CastReply, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererScreenshotPurpose,
+    RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest, RendererScreenshotPurpose,
 };
 use moli_page_types::LayoutPolicy;
 
@@ -67,6 +68,7 @@ fn print_request() -> RendererCaptureScreenshotRequest {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn screen_token(page: &PageVm) -> crate::runtime::RendererVisualStateToken {
     page.vm().visual_state_token(
         page.document_lifecycle.identity(),
@@ -98,15 +100,18 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
     run_page_vm_large_stack_async_test("realtime-print-isolation", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let mut page = fixture(&loader).await;
-        let CastReply::Captured(first) = page
-            .capture_screencast_frame(viewport_screencast_request(None))
-            .unwrap()
-        else {
-            panic!("screen capture");
+        #[cfg(feature = "devtools")]
+        let first = {
+            let CastReply::Captured(first) = page
+                .capture_screencast_frame(viewport_screencast_request(None))
+                .unwrap()
+            else {
+                panic!("screen capture");
+            };
+            // Settle the IO checks queued by screen publication before printing.
+            run_opportunity(&mut page, &loader).await.unwrap();
+            first
         };
-        // Screen publication asks existing IO targets to be checked. Settle
-        // this genuine screen work before attributing any work to printing.
-        run_opportunity(&mut page, &loader).await.unwrap();
         assert_screen_state(&mut page);
         assert!(
             page.next_rendering_opportunity_deadline_for_test()
@@ -114,6 +119,7 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
         );
         let builds = page.vm().layout_pass_observability_for_test().1;
         let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;
+        #[cfg(feature = "devtools")]
         assert_eq!(
             screen_token(&page),
             first.visual_state,
@@ -125,6 +131,7 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
         else {
             panic!("print capture");
         };
+        #[cfg(feature = "devtools")]
         assert_eq!(
             screen_token(&page),
             first.visual_state,
@@ -143,6 +150,7 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
             "child uses print media too"
         );
         assert_screen_state(&mut page);
+        #[cfg(feature = "devtools")]
         assert_eq!(
             screen_token(&page),
             first.visual_state,
@@ -166,12 +174,17 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
                     .is_none()
             );
         }
-        assert!(matches!(
-            page.capture_screencast_frame(viewport_screencast_request(Some(first.visual_state)))
+        #[cfg(feature = "devtools")]
+        {
+            assert!(matches!(
+                page.capture_screencast_frame(viewport_screencast_request(Some(
+                    first.visual_state
+                )))
                 .unwrap(),
-            CastReply::Unchanged
-        ));
-        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+                CastReply::Unchanged
+            ));
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+        }
     });
 }
 
@@ -224,6 +237,7 @@ fn realtime_print_respects_explicit_live_media_and_live_changes_invalidate_scree
     run_page_vm_large_stack_async_test("realtime-print-live-media", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let mut page = fixture(&loader).await;
+        #[cfg(feature = "devtools")]
         let CastReply::Captured(first) = page
             .capture_screencast_frame(viewport_screencast_request(None))
             .unwrap()
@@ -252,14 +266,17 @@ fn realtime_print_respects_explicit_live_media_and_live_changes_invalidate_scree
                 (media == "print").to_string()
             );
         }
-        let CastReply::Captured(changed) = page
-            .capture_screencast_frame(viewport_screencast_request(Some(
-                first.visual_state.clone(),
-            )))
-            .unwrap()
-        else {
-            panic!("live media change must invalidate the screen token");
-        };
-        assert_ne!(changed.visual_state, first.visual_state);
+        #[cfg(feature = "devtools")]
+        {
+            let CastReply::Captured(changed) = page
+                .capture_screencast_frame(viewport_screencast_request(Some(
+                    first.visual_state.clone(),
+                )))
+                .unwrap()
+            else {
+                panic!("live media change must invalidate the screen token");
+            };
+            assert_ne!(changed.visual_state, first.visual_state);
+        }
     });
 }

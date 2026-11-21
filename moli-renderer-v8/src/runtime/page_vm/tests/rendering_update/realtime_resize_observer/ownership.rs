@@ -170,6 +170,7 @@ fn realtime_ro_active_wrapper_survives_gc_and_disconnect_releases_its_cycle() {
     });
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn realtime_ro_isolated_realm_retirement_cancels_the_last_frame_demand() {
     run_page_vm_large_stack_async_test("realtime-ro-isolated-retirement", || async move {
