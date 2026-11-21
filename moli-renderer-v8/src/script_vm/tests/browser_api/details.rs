@@ -225,6 +225,45 @@ fn fragment_navigation_reveals_closed_details_ancestors_but_not_their_summary() 
 }
 
 #[test]
+fn fragment_reveal_keeps_the_original_flat_tree_ancestor_list() {
+    let mut vm = new_parsed_test_vm(
+        "https://fragment-reveal.test/",
+        r#"<!doctype html><div id="host"><span id="target"></span></div>
+        <div id="outer" hidden="until-found"></div>"#,
+    );
+    let result = vm
+        .eval(
+            r##"(() => {
+                const host = document.getElementById("host");
+                const outer = document.getElementById("outer");
+                const shadow = host.attachShadow({mode: "open"});
+                shadow.innerHTML = '<div hidden="UnTiL-FoUnD"><slot></slot></div>';
+                const ancestor = shadow.firstElementChild;
+                const events = [];
+                ancestor.addEventListener("beforematch", event => {
+                    events.push([
+                        event.target === ancestor, event.bubbles, event.cancelable,
+                        event.composed, event.isTrusted, location.hash, ancestor.hidden
+                    ]);
+                    outer.append(host);
+                });
+                outer.addEventListener("beforematch", () => events.push("outer"));
+                location.hash = "target";
+                return JSON.stringify([events, ancestor.hidden, outer.hidden]);
+            })()"##,
+        )
+        .expect("fragment navigation through a slot");
+    assert_eq!(
+        result,
+        r##"[[[true,true,false,false,true,"#target","until-found"]],false,"until-found"]"##
+    );
+    assert_eq!(
+        vm.eval("document.getElementById('outer').hidden").unwrap(),
+        "until-found"
+    );
+}
+
+#[test]
 fn canceled_fragment_hyperlink_does_not_reveal_closed_details() {
     let mut vm = new_parsed_test_vm(
         "https://details-canceled-fragment.test/",
