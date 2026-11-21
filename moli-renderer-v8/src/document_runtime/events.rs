@@ -439,7 +439,9 @@ impl DocumentRuntime {
         let composed = crate::context_bootstrap::event_backing(scope, event)
             .get(scope, v8str(scope, "composed").into())
             .is_some_and(|value| value.boolean_value(scope));
-        let mut path = if let Some(source_target) =
+        let mut path = if composed {
+            self.build_propagation_path(dispatch_target, true)
+        } else if let Some(source_target) =
             source_target_for_reference_event(scope, host_ptr, event)
         {
             self.build_source_scoped_propagation_path(dispatch_target, source_target)
