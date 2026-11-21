@@ -39,7 +39,7 @@ pub(super) fn style_named_getter<'s>(
         if forces_empty {
             return v8::Intercepted::kNo;
         }
-        let context = style_object_computation_context(scope, args.holder());
+        let context = style_object_computation_context(scope, args.holder(), runtime, handle, mode);
         let Some(name) = style_property_name_at_with_context(runtime, handle, mode, context, index)
         else {
             return v8::Intercepted::kNo;
@@ -105,7 +105,14 @@ fn live_style_named_property_value_for_handle<'s>(
         return resolve_known_style_property_name(raw_key).map(|_| String::new());
     }
     let property = resolve_style_property_name(runtime, handle, mode, raw_key)?;
-    let context = style_object_computation_context(scope, style);
+    if runtime.layout_policy().is_realtime()
+        && !super::public_layout::prepare_live_style_property(
+            scope, runtime, handle, mode, &property,
+        )
+    {
+        return None;
+    }
+    let context = style_object_computation_context(scope, style, runtime, handle, mode);
     Some(
         if let Some(pseudo) = style_object_pseudo_element(scope, style, mode) {
             style_property_value_for_pseudo_with_context(
@@ -136,7 +143,7 @@ pub(super) fn style_named_query<'s>(
     if style_object_forces_empty_computed(scope, args.holder(), mode) {
         return v8::Intercepted::kNo;
     }
-    let context = style_object_computation_context(scope, args.holder());
+    let context = style_object_computation_context(scope, args.holder(), runtime, handle, mode);
     if css_style_index_property(&raw_key).is_some_and(|index| {
         style_property_index_exists_with_context(runtime, handle, mode, context, index)
     }) {
@@ -323,14 +330,11 @@ pub(super) fn style_indexed_getter<'s>(
     if style_object_forces_empty_computed(scope, args.holder(), mode) {
         return v8::Intercepted::kNo;
     }
-    let context = style_object_computation_context(scope, args.holder());
-    let Some(name) = style_property_name_at_with_context(
-        unsafe { &*runtime_ptr },
-        handle,
-        mode,
-        context,
-        index as usize,
-    ) else {
+    let runtime = unsafe { &*runtime_ptr };
+    let context = style_object_computation_context(scope, args.holder(), runtime, handle, mode);
+    let Some(name) =
+        style_property_name_at_with_context(runtime, handle, mode, context, index as usize)
+    else {
         return v8::Intercepted::kNo;
     };
     let Some(value) = v8_string(scope, &name) else {
@@ -354,14 +358,9 @@ pub(super) fn style_indexed_query<'s>(
     if style_object_forces_empty_computed(scope, args.holder(), mode) {
         return v8::Intercepted::kNo;
     }
-    let context = style_object_computation_context(scope, args.holder());
-    if !style_property_index_exists_with_context(
-        unsafe { &*runtime_ptr },
-        handle,
-        mode,
-        context,
-        index as usize,
-    ) {
+    let runtime = unsafe { &*runtime_ptr };
+    let context = style_object_computation_context(scope, args.holder(), runtime, handle, mode);
+    if !style_property_index_exists_with_context(runtime, handle, mode, context, index as usize) {
         return v8::Intercepted::kNo;
     }
     rv.set_int32(v8::PropertyAttribute::NONE.as_u32() as i32);
@@ -383,11 +382,11 @@ pub(super) fn style_indexed_enumerator<'s>(
         rv.set(v8::Array::new(scope, 0));
         return;
     }
-    let context = style_object_computation_context(scope, args.holder());
-    let keys =
-        (0..style_property_count_with_context(unsafe { &*runtime_ptr }, handle, mode, context))
-            .map(|index| v8::Integer::new_from_unsigned(scope, index as u32).into())
-            .collect::<Vec<_>>();
+    let runtime = unsafe { &*runtime_ptr };
+    let context = style_object_computation_context(scope, args.holder(), runtime, handle, mode);
+    let keys = (0..style_property_count_with_context(runtime, handle, mode, context))
+        .map(|index| v8::Integer::new_from_unsigned(scope, index as u32).into())
+        .collect::<Vec<_>>();
     rv.set(v8::Array::new_with_elements(scope, &keys));
 }
 

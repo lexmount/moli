@@ -59,10 +59,29 @@ pub(crate) struct LayoutSnapshotCacheObservability {
 
 impl PageScriptHost {
     pub(crate) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {
+        if self.layout_policy == policy && policy.is_realtime() {
+            return;
+        }
+        // Production configuration is sealed before Page creation. Internal
+        // test/initialization setters must not discard a live frame ticket and
+        // then reuse its local id on re-entry to the same Document.
+        assert!(
+            self.realtime_layout_state
+                .as_ref()
+                .is_none_or(|state| state.frame.borrow().is_idle()
+                    && state.animation_frames.borrow().is_empty()
+                    && state.font_readiness.borrow().is_idle()),
+            "layout policy can change only at an idle realtime boundary"
+        );
         if !policy.uses_real_layout() {
             self.document_layout_state.get_mut().clear_latest_layout();
         }
+        if self.layout_policy != policy {
+            self.realtime_layout_state = policy.is_realtime().then(Box::default);
+        }
         self.layout_policy = policy;
+        self.initialize_realtime_document_fonts();
+        self.request_realtime_rendering_opportunity();
     }
 
     pub(crate) const fn layout_policy(&self) -> moli_page_types::LayoutPolicy {
@@ -79,6 +98,7 @@ impl PageScriptHost {
     }
 
     pub(crate) fn invalidate_layout_inputs(&self, change: LayoutInputChange) {
+        self.note_realtime_layout_input_change();
         match change {
             LayoutInputChange::StyleEnvironment => self
                 .style_engine
@@ -187,6 +207,12 @@ impl PageScriptHost {
         &self,
         frames: impl IntoIterator<Item = DomHandle>,
     ) {
+        // Realtime source invalidation already makes the screen layout stale.
+        // Preserve the last used viewport for a connected, hidden child until
+        // its next layout publishes a replacement.
+        if self.layout_policy().is_realtime() {
+            return;
+        }
         let frames = frames.into_iter().collect::<Vec<_>>();
         if frames.is_empty() {
             return;
@@ -209,13 +235,15 @@ impl PageScriptHost {
         self.style_viewport_generation.get()
     }
 
-    /// Marks the exact viewport selected by an active layout pass before that
-    /// pass reads the Document's styles.
+    /// Marks the exact style environment selected by an active layout pass
+    /// before that pass reads the Document's styles.
     ///
     /// An embedded Document's persistent frame viewport is published only
     /// after the recursive pass succeeds. Advancing this input generation
     /// first also distinguishes an explicit main-Document capture viewport
-    /// from ordinary DOM APIs selecting conflicting implicit viewports.
+    /// or media from ordinary DOM APIs selecting conflicting implicit inputs.
+    /// This observation epoch does not invalidate canonical screen geometry or
+    /// schedule lifecycle work: the live source inputs have not changed.
     pub(crate) fn note_layout_style_environment(
         &self,
         document: DomHandle,
@@ -330,6 +358,9 @@ impl PageScriptHost {
         }
         // A real font registration change invalidates sampled glyph advances.
         // Unchanged registration and read-only projections retain the tree.
+        self.note_realtime_layout_input_change();
+        self.note_realtime_font_loading(document);
+        self.queue_realtime_font_readiness(document);
         self.clear_layout_rect_cache();
         self.document_layout_state
             .borrow_mut()
@@ -428,6 +459,9 @@ impl PageScriptHost {
         document: DomHandle,
         pass: LayoutPassResult<DomHandle>,
     ) {
+        if let Some(state) = &self.realtime_layout_state {
+            state.clear_publication();
+        }
         let metrics = pass.metrics;
         let pass_viewport = pass.viewport;
         let frame_viewports = self
@@ -441,17 +475,49 @@ impl PageScriptHost {
                     .document_element_handle_for_document(owner)?;
                 // A fresh paint publishes nested frame trees too. Publish each
                 // frame's used content viewport from that same projection.
-                let tree = pass.tree.tree_for_root(root)?;
-                let viewport = tree.local_content_box_for_source(frame).map(|content| {
-                    LayoutViewport::new(
-                        css_viewport_dimension(f64::from(content.width)),
-                        css_viewport_dimension(f64::from(content.height)),
-                        pass_viewport.device_pixel_ratio,
-                    )
-                });
+                let tree = pass.tree.tree_for_root(root);
+                if tree.is_none() && !self.layout_policy.is_realtime() {
+                    return None;
+                }
+                let viewport = tree
+                    .and_then(|tree| tree.local_content_box_for_source(frame))
+                    .map(|content| {
+                        LayoutViewport::new(
+                            css_viewport_dimension(f64::from(content.width)),
+                            css_viewport_dimension(f64::from(content.height)),
+                            pass_viewport.device_pixel_ratio,
+                        )
+                    });
+                let viewport = if self.layout_policy.is_realtime() {
+                    // Hiding a live frame removes its geometry, not its last
+                    // Window viewport. Initially hidden frames start at zero.
+                    viewport.or_else(|| {
+                        Some(self.frame_viewport(frame).unwrap_or(LayoutViewport::new(
+                            0,
+                            0,
+                            pass_viewport.device_pixel_ratio,
+                        )))
+                    })
+                } else {
+                    viewport
+                };
                 Some((frame, viewport))
             })
             .collect::<Vec<_>>();
+        let sampled_viewports = if self.layout_policy.is_realtime() {
+            frame_viewports
+                .iter()
+                .filter_map(|(frame, viewport)| {
+                    let viewport = viewport.as_ref()?;
+                    let target = self.current_window_document_task_target_for_dispatch_scope(
+                        super::OwnerDispatchScope::Child(*frame),
+                    )?;
+                    Some((target, (viewport.css_width, viewport.css_height)))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let tree = pass.into_tree();
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
@@ -465,6 +531,9 @@ impl PageScriptHost {
         self.document_layout_state
             .borrow_mut()
             .publish_latest_layout(document, tree);
+        for (target, size) in sampled_viewports {
+            self.sample_realtime_frame_viewport(target, size);
+        }
         self.last_layout_pass_metrics.set(Some(metrics));
         self.layout_snapshot_cache_publishes
             .set(self.layout_snapshot_cache_publishes.get().saturating_add(1));
@@ -611,8 +680,18 @@ impl PageScriptHost {
 
     pub(crate) fn reset_document_layout_state(&self) {
         *self.document_layout_state.borrow_mut() = Default::default();
+        if let Some(state) = &self.realtime_layout_state {
+            state.reset();
+        }
+        self.prune_realtime_animation_frames();
+        self.prune_realtime_environment();
+        self.prune_realtime_rendering_events();
+        if self.layout_policy().is_realtime() {
+            crate::observer_runtime::prune_realtime_resize_observers(self);
+        }
         self.style_viewport_generation
             .set(self.style_viewport_generation.get().saturating_add(1));
+        self.request_realtime_rendering_opportunity();
     }
 
     pub(crate) fn invalidate_layout_after_interaction_state_change(&self) {
@@ -655,7 +734,9 @@ impl PageScriptHost {
             self.document_handle(),
             resources,
         );
-        if changed {
+        // Realtime passes select active CSS fonts from current styles. Retiring
+        // obsolete registrations is cleanup, not another layout source change.
+        if changed && !self.layout_policy().is_realtime() {
             self.invalidate_document_font_layout(document);
         }
     }
@@ -670,8 +751,13 @@ impl PageScriptHost {
             self.document_handle(),
             resource,
         );
-        if prepared.fonts_changed {
+        if prepared.fonts_changed
+            && (!self.layout_policy().is_realtime() || prepared.font_inputs_changed)
+        {
             self.invalidate_document_font_layout(document);
+        }
+        if prepared.request.is_some() {
+            self.note_realtime_font_loading(document);
         }
         prepared.request
     }
@@ -686,12 +772,23 @@ impl PageScriptHost {
             self.document_handle(),
             terminal,
         );
-        if matches!(&completion, DocumentWebFontCompletion::Registered(_)) {
+        if let DocumentWebFontCompletion::Registered(outcome) = &completion {
+            let changed = *outcome != moli_layout::WebFontRegistrationOutcome::Unchanged;
+            if changed {
+                self.note_realtime_layout_input_change();
+            }
             // Geometry sampled while the request was pending contains fallback
             // glyph advances. Retire that tree before fonts.ready observers run.
-            self.document_layout_state
-                .borrow_mut()
-                .clear_latest_layout();
+            // Preserve the legacy policy; identical Realtime registrations
+            // leave its valid sample reusable.
+            if changed || !self.layout_policy().is_realtime() {
+                self.document_layout_state
+                    .borrow_mut()
+                    .clear_latest_layout();
+            }
+        }
+        if !matches!(completion, DocumentWebFontCompletion::Stale) {
+            self.queue_realtime_font_readiness(document);
         }
         completion
     }
@@ -767,6 +864,11 @@ impl PageScriptHost {
                     ))
                     .expect("valid layout test font");
             });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn simulate_active_layout_pass_for_test(&self, active: bool) {
+        self.layout_pass_active.set(active);
     }
 
     #[cfg(test)]

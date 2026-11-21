@@ -1,0 +1,36 @@
+(async () => {
+  const tick = () => new Promise(resolve => requestAnimationFrame(resolve));
+  const settle = async () => { for (let i = 0; i < 4; ++i) await tick(); };
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'width:320px;height:100px;border:0';
+  document.body.append(frame);
+  const child = frame.contentWindow;
+  child.document.open();
+  child.document.write('<!doctype html><html style="overflow:hidden"><body style="margin:0"></body>');
+  child.document.close();
+  frame.getBoundingClientRect();
+  await settle();
+  const rows = [], late = [], aborted = [], handler = [];
+  let once = 0, retained;
+  const query = () => child.matchMedia('(min-width:400px)');
+  const lateQuery = query(), onceQuery = query(), abortQuery = query(), handlerQuery = query();
+  onceQuery.addEventListener('change', () => ++once, {once: true});
+  const controller = new AbortController();
+  abortQuery.addEventListener('change', event => aborted.push(event.matches), {signal: controller.signal});
+  controller.abort();
+  handlerQuery.onchange = event => { handler.push(event.matches); retained = event; };
+  frame.style.width = '480px'; child.innerWidth;
+  lateQuery.addEventListener('change', event => late.push(event.matches));
+  await settle();
+  rows.push(['first', once, late.slice(), aborted.slice(), handler.slice()]);
+  frame.style.width = '320px'; child.innerWidth;
+  await settle();
+  rows.push(['second', once, late.slice(), aborted.slice(), handler.slice()]);
+  handlerQuery.onchange = null;
+  frame.style.width = '480px'; child.innerWidth;
+  await settle();
+  rows.push(['third', once, late.slice(), aborted.slice(), handler.slice(), retained.matches]);
+  frame.remove();
+  rows.push(['removed', retained.matches]);
+  return {rows, failures: []};
+})()

@@ -19,6 +19,7 @@ mod marker_snapshot;
 pub(crate) use marker_snapshot::marker_hosts_for_document_snapshot;
 mod methods;
 mod named;
+mod public_layout;
 #[cfg(test)]
 mod snapshot_tests;
 
@@ -130,7 +131,7 @@ fn style_object_forces_empty_computed<'s>(
                 // A live declaration follows its Element after adoption. An
                 // outgoing Document still becomes empty when it is retired.
                 let context = computed_style_target_context(scope, runtime, handle, None);
-                let empty = context.returns_empty_style();
+                let empty = context.returns_empty_style(runtime);
                 cache_target_empty_context(scope, runtime, style, empty);
                 cache_computed_viewport(scope, style, (!empty).then(|| context.viewport(runtime)));
                 empty
@@ -140,7 +141,7 @@ fn style_object_forces_empty_computed<'s>(
             }
             ComputedStyleTargetKey::Dynamic => {
                 computed_style_target_context(scope, unsafe { &*runtime_ptr }, handle, None)
-                    .returns_empty_style()
+                    .returns_empty_style(unsafe { &*runtime_ptr })
             }
         },
         _ => true,
@@ -322,11 +323,27 @@ fn style_object_viewport<'s>(
 fn style_object_computation_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+    mode: StyleMode,
 ) -> StyleComputationContext {
     let read_document = style_object_read_document(scope, style);
     let viewport = live_computed_style_viewport(scope, style)
         .unwrap_or_else(|| style_object_viewport(scope, style));
-    StyleComputationContext::new(viewport).with_read_document(read_document)
+    let mut context = StyleComputationContext::new(viewport).with_read_document(read_document);
+    if mode == StyleMode::Computed
+        && runtime.layout_policy().is_realtime()
+        && let Some(document) = runtime.layout_document_for_source(handle)
+        && runtime
+            .child_browsing_context_host_for_document_handle(document)
+            .is_some()
+    {
+        // A hidden frame has no member tree. A zero-sized frame can still have used values.
+        context.boxless_document = runtime
+            .with_latest_layout_tree_for_document(document, |_| ())
+            .is_none();
+    }
+    context
 }
 
 fn live_computed_style_viewport<'s>(
@@ -457,10 +474,12 @@ pub(crate) enum ComputedStyleTargetContext {
 }
 
 impl ComputedStyleTargetContext {
-    pub(crate) fn returns_empty_style(self) -> bool {
+    pub(crate) fn returns_empty_style(self, host: &PageScriptHost) -> bool {
         match self {
             Self::ActiveDocument | Self::PopupDocument { .. } => false,
-            Self::ChildFrameDocument { rendered, .. } => !rendered,
+            Self::ChildFrameDocument { rendered, .. } => {
+                !rendered && !host.layout_policy().is_realtime()
+            }
             Self::EmptyForDetached => true,
         }
     }
@@ -570,6 +589,20 @@ pub(crate) fn computed_style_property_values_for_document_snapshot(
     host: &PageScriptHost,
     handles: impl IntoIterator<Item = DomHandle>,
     properties: &[String],
+) -> Result<Vec<Vec<String>>, moli_layout::LayoutError> {
+    if host.layout_policy().is_realtime() {
+        let handles = handles.into_iter().collect::<Vec<_>>();
+        public_layout::prepare_public_style_batch(host, &handles, properties)?;
+        return Ok(sample_style_property_values(host, handles, properties));
+    }
+    Ok(sample_style_property_values(host, handles, properties))
+}
+
+#[cfg(feature = "devtools")]
+fn sample_style_property_values(
+    host: &PageScriptHost,
+    handles: impl IntoIterator<Item = DomHandle>,
+    properties: &[String],
 ) -> Vec<Vec<String>> {
     computed_style_export_values_for_document_snapshot(host, handles, properties)
         .into_iter()
@@ -630,11 +663,16 @@ pub(crate) fn computed_style_export_values_for_document_snapshot(
 pub(crate) fn computed_style_properties_for_inspector_handle(
     host: &PageScriptHost,
     handle: DomHandle,
-) -> Option<Vec<(String, String)>> {
-    let node = host.dom_host().node(handle)?;
+) -> Result<Option<Vec<(String, String)>>, moli_layout::LayoutError> {
+    let Some(node) = host.dom_host().node(handle) else {
+        return Ok(None);
+    };
     if !node.is_element() {
-        return Some(Vec::new());
+        return Ok(Some(Vec::new()));
     }
+    // The complete computed declaration includes used dimensions. Establish
+    // geometry before constructing its viewport-specific style context.
+    public_layout::prepare_public_style_property(host, handle, StyleMode::Computed, "width")?;
     let Some(DocumentSnapshotStyleComputation::Available { context }) =
         style_computation_context_for_document_snapshot(host, handle)
     else {
@@ -642,9 +680,11 @@ pub(crate) fn computed_style_properties_for_inspector_handle(
         // node currently participates in a rendered document. Preserve that
         // distinction: an existing detached or hidden-frame element has an
         // empty computed declaration, while a missing handle returns None.
-        return Some(Vec::new());
+        return Ok(Some(Vec::new()));
     };
-    Some(ComputedStyleRead::new_with_context(host, handle, context).properties())
+    Ok(Some(
+        ComputedStyleRead::new_with_context(host, handle, context).properties(),
+    ))
 }
 
 enum DocumentSnapshotStyleComputation {

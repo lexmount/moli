@@ -1,5 +1,209 @@
 use super::*;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn realtime_popup_show_measure_position_and_input_complete_without_capture() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (base_url, ready, release_ready, ready_server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/popup-position-ready",
+            "ready",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let (completion_base_url, completed, release_completed, completion_server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/popup-position-completed",
+            "completed",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let html = include_str!("../../../../tests/fixtures/realtime-popup-position-input.html")
+        .replace(
+            "__READY_URL__",
+            &serde_json::to_string(&format!("{base_url}/popup-position-ready")).unwrap(),
+        )
+        .replace(
+            "__COMPLETED_URL__",
+            &serde_json::to_string(&format!("{completion_base_url}/popup-position-completed"))
+                .unwrap(),
+        );
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse(&format!("{base_url}/page")).unwrap(),
+        &html,
+    )
+    .await;
+
+    // No evaluate, capture, layout-publication helper or manual frame pump is
+    // sent before ready. The page's two rAF callbacks reveal and place the
+    // previously hidden panel using its own synchronous geometry reads.
+    tokio::time::timeout(Duration::from_secs(2), ready)
+        .await
+        .expect("the page must show, measure and position its panel without a follow-up command")
+        .unwrap();
+    release_ready.send(()).unwrap();
+    ready_server.await.unwrap();
+
+    // The fixture places a 160x48 panel at (100, 4). Pick a point inside
+    // that result without asking a selector or geometry getter for a point.
+    // An old hidden-panel width of zero would place it at x=260, so a later
+    // frame could not rescue the wrong computed position before this click.
+    for (event_name, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+        let pending = page
+            .enqueue_protocol_command(RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+                    x: 120.0,
+                    y: 16.0,
+                    event_name: event_name.to_owned(),
+                    button: 0,
+                    buttons: Some(buttons),
+                    click_count: 1,
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                    pointer: RendererPointerEventProperties::default(),
+                    modifiers: 0,
+                    intercept_drags: false,
+                },
+            ))
+            .expect("popup pointer command must enqueue");
+        let outcome = tokio::time::timeout(Duration::from_secs(2), pending.wait())
+            .await
+            .expect("popup pointer command must reach its completion ACK")
+            .expect("popup pointer command must complete");
+        let (completion, _) = outcome.into_completion_and_predecessor();
+        let (reply, _, _) = completion.into_parts();
+        assert!(
+            matches!(reply, RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(outcome)) if outcome.handled),
+            "{event_name} must dispatch through the real Page input route"
+        );
+    }
+    tokio::time::timeout(Duration::from_secs(2), completed)
+        .await
+        .expect("pointer click and its microtask must finish the business without a repair command")
+        .unwrap();
+    release_completed.send(()).unwrap();
+    completion_server.await.unwrap();
+
+    // This is a stored string created before the completion fetch, not a DOM
+    // or computed-style/geometry read that could make the business succeed.
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "window.popupResult".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let result = mouse_input_json_witness(&reply);
+    page.close_async().await.unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "phase": "closed",
+            "frames": 2,
+            "events": [
+                "hidden-frame",
+                "shown-measured-positioned",
+                ["mousedown", "choice", 120, 16],
+                ["mouseup", "choice", 120, 16],
+                ["click", "choice", 120, 16],
+                "click-microtask"
+            ],
+            "anchor": [180, 60, 80, 24],
+            "panelSize": [160, 48],
+            "placement": [100, 4],
+            "selected": "alpha",
+            "closed": true
+        }),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn realtime_input_scroll_io_and_dynamic_checkbox_complete_without_capture() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (base_url, ready, release_response, server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/realtime-input-ready",
+            "ok",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let mut page = create_test_html_page(&runtime, &loader,
+        url::Url::parse(&format!("{base_url}/page")).unwrap(), r#"
+        <!doctype html><div id=scroller style="position:absolute;left:0;top:0;width:200px;height:100px;overflow:auto">
+          <div style="height:300px"></div><div id=sentinel style="height:20px"></div>
+        </div><script>
+        window.events=[];window.clicks=0;
+        scroller.addEventListener('wheel',event=>{
+          events.push('wheel:'+event.deltaY);Promise.resolve().then(()=>events.push('wheel-microtask'));
+        });
+        window.io=new IntersectionObserver(entries=>{
+          if(!entries.some(entry=>entry.isIntersecting))return;
+          io.disconnect();events.push('io');
+          const input=document.createElement('input');input.id='toggle';input.type='checkbox';
+          input.style.cssText='position:fixed;left:230px;top:20px;width:24px;height:24px;margin:0;opacity:0';
+          input.addEventListener('click',()=>{
+            clicks++;events.push('click');Promise.resolve().then(()=>events.push('click-microtask'));
+          });
+          document.body.append(input);fetch('/realtime-input-ready');
+        },{root:scroller});io.observe(sentinel);
+        </script>
+    "#).await;
+    let outcome = dispatch_wheel_for_action_window_test(&page, 300.0).await;
+    assert!(outcome.handled);
+    tokio::time::timeout(Duration::from_secs(5), ready)
+        .await
+        .expect("wheel and IO must advance without a screenshot or barrier command")
+        .unwrap();
+    release_response.send(()).unwrap();
+    server.await.unwrap();
+    for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+        page.run_async_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+                x: 240.0,
+                y: 30.0,
+                event_name: event.to_owned(),
+                button: 0,
+                buttons: Some(buttons),
+                click_count: 1,
+                delta_x: 0.0,
+                delta_y: 0.0,
+                pointer: RendererPointerEventProperties::default(),
+                modifiers: 0,
+                intercept_drags: false,
+            },
+        ))
+        .await
+        .unwrap();
+    }
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify([scroller.scrollTop,toggle.checked,clicks,events])"
+                .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let value = renderer_json_value(reply);
+    page.close_async().await.unwrap();
+    assert_eq!(
+        value,
+        Some(serde_json::json!(
+            "[220,true,1,[\"wheel:300\",\"wheel-microtask\",\"io\",\"click\",\"click-microtask\"]]"
+        ))
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn mouse_input_completion_publishes_handler_navigation_once() {
     let runtime = initialize_layout_test_runtime();

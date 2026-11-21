@@ -9,6 +9,8 @@ mod lazy_main_world;
 mod navigation_streaming;
 mod owner_lifecycle;
 mod page_lifecycle_isolation;
+mod realtime_environment_worlds;
+mod realtime_resources;
 mod runtime_scripts;
 #[cfg(feature = "devtools")]
 mod scoped_runtime_contexts;

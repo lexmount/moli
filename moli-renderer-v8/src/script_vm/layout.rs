@@ -1,4 +1,5 @@
 use super::*;
+use crate::native_bridge::LayoutPublicationRequest;
 
 impl moli_dom::accessibility::AccessibilityStyleSource
     for crate::native_bridge::element::StyleObservation<'_>
@@ -83,11 +84,13 @@ impl ScriptVm {
         &self,
         handles: impl IntoIterator<Item = DomHandle>,
         properties: &[String],
-    ) -> Vec<Vec<String>> {
-        crate::native_bridge::element::computed_style_property_values_for_document_snapshot(
-            &self._context_host.borrow(),
-            handles,
-            properties,
+    ) -> Result<Vec<Vec<String>>> {
+        Ok(
+            crate::native_bridge::element::computed_style_property_values_for_document_snapshot(
+                &self._context_host.borrow(),
+                handles,
+                properties,
+            )?,
         )
     }
 
@@ -113,6 +116,7 @@ impl ScriptVm {
         };
         self.with_fresh_layout_pass(
             moli_layout::LayoutPassRequest::new(viewport, moli_layout::LayoutFlushReason::Explicit),
+            LayoutPublicationRequest::Screen,
             |_| Ok(()),
         )?;
         Ok(())
@@ -123,7 +127,11 @@ impl ScriptVm {
         &mut self,
         viewport: moli_layout::PaintViewport,
     ) -> anyhow::Result<Option<moli_layout::PaintSnapshot>> {
-        self.paint_layout_snapshot(viewport, moli_layout::LayoutFlushReason::Screenshot)
+        self.paint_layout_snapshot(
+            viewport,
+            moli_layout::LayoutFlushReason::Screenshot,
+            LayoutPublicationRequest::Screen,
+        )
     }
 
     #[cfg(test)]
@@ -144,6 +152,7 @@ impl ScriptVm {
     ) -> Result<bool, moli_layout::LayoutError> {
         self.with_fresh_layout_pass(
             moli_layout::LayoutPassRequest::new(viewport, moli_layout::LayoutFlushReason::Test),
+            LayoutPublicationRequest::Screen,
             |_| Ok(()),
         )
         .map(|result| result.is_some())
@@ -154,11 +163,14 @@ impl ScriptVm {
         &mut self,
         viewport: moli_layout::PaintViewport,
         reason: moli_layout::LayoutFlushReason,
+        publication: LayoutPublicationRequest,
     ) -> anyhow::Result<Option<moli_layout::PaintSnapshot>> {
         self.paint_layout_snapshot_with_capture(
             viewport,
             reason,
             moli_layout::PaintCaptureRequest::viewport(),
+            publication,
+            None,
         )
     }
 
@@ -167,19 +179,12 @@ impl ScriptVm {
         viewport: moli_layout::PaintViewport,
         reason: moli_layout::LayoutFlushReason,
         capture: moli_layout::PaintCaptureRequest,
-    ) -> anyhow::Result<Option<moli_layout::PaintSnapshot>> {
-        self.paint_layout_snapshot_with_capture_in_environment(viewport, reason, capture, None)
-    }
-
-    pub(crate) fn paint_layout_snapshot_with_capture_in_environment(
-        &mut self,
-        viewport: moli_layout::PaintViewport,
-        reason: moli_layout::LayoutFlushReason,
-        capture: moli_layout::PaintCaptureRequest,
+        publication: LayoutPublicationRequest,
         environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     ) -> anyhow::Result<Option<moli_layout::PaintSnapshot>> {
         self.with_fresh_layout_pass_in_environment(
             moli_layout::LayoutPassRequest::with_capture(viewport, reason, capture),
+            publication,
             environment_override,
             moli_layout::LayoutPassResult::take_paint_snapshot,
         )
@@ -210,30 +215,45 @@ impl ScriptVm {
     pub(super) fn with_fresh_layout_pass<T>(
         &mut self,
         request: moli_layout::LayoutPassRequest,
+        publication: LayoutPublicationRequest,
         consume: impl FnOnce(
             &mut moli_layout::LayoutPassResult<DomHandle>,
         ) -> Result<T, moli_layout::LayoutError>,
     ) -> Result<Option<T>, moli_layout::LayoutError> {
-        self.with_fresh_layout_pass_in_environment(request, None, consume)
+        self.with_fresh_layout_pass_in_environment(request, publication, None, consume)
     }
 
-    fn with_fresh_layout_pass_in_environment<T>(
+    pub(super) fn with_fresh_layout_pass_in_environment<T>(
         &mut self,
         request: moli_layout::LayoutPassRequest,
+        publication: LayoutPublicationRequest,
         environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
         consume: impl FnOnce(
             &mut moli_layout::LayoutPassResult<DomHandle>,
         ) -> Result<T, moli_layout::LayoutError>,
     ) -> Result<Option<T>, moli_layout::LayoutError> {
+        if environment_override.is_some() && publication != LayoutPublicationRequest::Transient {
+            return Err(moli_layout::LayoutError::source_contract(
+                "capture environment",
+                "temporary style environments require transient layout publication",
+            ));
+        }
         // Font resources are reconciled by the document resource lifecycle.
         // Layout consumes registered data and performs no font loading work.
         let requests_paint = request.requests_paint();
-        // Printing consumes a temporary projection. Screenshots, screencast
-        // frames and explicit refreshes publish geometry for subsequent reads.
-        let publishes_layout = request.reason != moli_layout::LayoutFlushReason::Print;
-        let (document, result) = {
+        let (document, publishes_layout, result) = {
             let context_host = self._context_host.borrow();
             let document = context_host.document_handle();
+            let publication =
+                context_host.prepare_layout_publication(document, request.viewport, publication)?;
+            let publishes_layout = publication.publishes_screen();
+            // Screen publication needs geometry from zero-sized frames too.
+            // Transient captures use the coverage requested by their output path.
+            let request = if publishes_layout && context_host.layout_policy().is_realtime() {
+                request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
+            } else {
+                request
+            };
             let result = context_host
                 .build_layout_pass_for_document_in_environment(
                     document,
@@ -250,12 +270,10 @@ impl ScriptVm {
                         Vec::new()
                     };
                     let value = consume(&mut pass)?;
-                    if publishes_layout {
-                        context_host.publish_layout_pass_for_document(document, pass);
-                    }
+                    context_host.finish_layout_publication(publication, pass)?;
                     Ok(Some((value, css_images)))
                 });
-            (document, result)
+            (document, publishes_layout, result)
         };
         let (result, css_images) = match result {
             Ok(Some((value, css_images))) => (Ok(Some(value)), css_images),
@@ -490,10 +508,12 @@ impl ScriptVm {
     pub(crate) fn computed_style_properties_for_inspector_handle(
         &self,
         handle: DomHandle,
-    ) -> Option<Vec<(String, String)>> {
-        crate::native_bridge::element::computed_style_properties_for_inspector_handle(
-            &self._context_host.borrow(),
-            handle,
+    ) -> Result<Option<Vec<(String, String)>>> {
+        Ok(
+            crate::native_bridge::element::computed_style_properties_for_inspector_handle(
+                &self._context_host.borrow(),
+                handle,
+            )?,
         )
     }
 
@@ -695,7 +715,7 @@ impl ScriptVm {
         {
             let host = self._context_host.borrow();
             if host.layout_policy().uses_real_layout() {
-                host.ensure_initial_layout()?;
+                host.ensure_observable_layout()?;
                 let document = host
                     .layout_document_for_source(handle)
                     .ok_or(moli_layout::LayoutError::NoLayoutSnapshot)?;

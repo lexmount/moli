@@ -16,6 +16,9 @@ pub type WebIdlCallbackInvocation<'s> = for<'i> fn(
 pub struct RealmCallbacks {
     /// Writes a live SVG point back to its owner; ordinary points need no action.
     pub point_mutated: for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>),
+    /// Reads the native source of a live MediaQueryListEvent without invoking script.
+    pub media_query_matches:
+        for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> Option<bool>,
     pub runtime: Option<&'static RealmRuntime>,
 }
 
@@ -76,4 +79,12 @@ pub(crate) fn reflect_point_mutation<'s>(
     if let Some(callbacks) = realm_callbacks(scope) {
         (callbacks.point_mutated)(scope, point);
     }
+}
+
+pub(crate) fn read_media_query_matches<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) -> Option<bool> {
+    let callbacks = realm_callbacks(scope)?;
+    (callbacks.media_query_matches)(scope, list)
 }

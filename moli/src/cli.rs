@@ -471,13 +471,14 @@ pub struct ServeArgs {
     #[arg(long, value_name = "ORIGINS", value_delimiter = ',')]
     pub remote_allow_origins: Vec<String>,
 
-    /// Set the screencast interval in milliseconds (default: 1000). Requires --layout.
+    /// Set the screencast interval in milliseconds (default: 1000).
+    /// Requires --layout or --realtime.
     #[arg(
         long = "screencast-interval-ms",
         alias = "screencast-interval",
         value_name = "MILLISECONDS",
         value_parser = clap::value_parser!(u32).range(1..),
-        requires = "layout"
+        requires = "real_layout"
     )]
     pub screencast_interval: Option<u32>,
 
@@ -486,6 +487,7 @@ pub struct ServeArgs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Args)]
+#[command(group(ArgGroup::new("real_layout").args(["layout", "realtime"]).multiple(true)))]
 pub struct CommonArgs {
     /// Disable same-origin access checks, CORS and ORB for this browser instance.
     /// CSP, CORP, TLS verification and credentials policies remain enforced.
@@ -624,7 +626,7 @@ pub struct CommonArgs {
     /// With `fetch --eval` or `--eval-file`, refresh layout once before running
     /// the script so geometry APIs can read it. Script mutations do not refresh it.
     ///
-    /// Without this flag Moli keeps deterministic compatibility
+    /// Without --layout or --realtime Moli keeps deterministic compatibility
     /// geometry and does not construct layout or paint output.
     #[arg(
         short,
@@ -634,12 +636,23 @@ pub struct CommonArgs {
     )]
     pub layout: bool,
 
-    /// Show native scrollbars. Requires --layout.
+    /// Experimental: maintain current geometry and run rendering callbacks
+    /// without requiring screenshots. Takes precedence over --layout.
+    /// Screenshots remain demand-driven; optional resources still require
+    /// --resource or individual flags such as --image and --font.
+    #[arg(
+        long,
+        env = "MOLI_REALTIME",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub realtime: bool,
+
+    /// Show native scrollbars. Requires --layout or --realtime.
     #[arg(
         long,
         env = "MOLI_SCROLLBARS",
         value_parser = clap::builder::BoolishValueParser::new(),
-        requires_if("true", "layout")
+        requires_if("true", "real_layout")
     )]
     pub scrollbars: bool,
 

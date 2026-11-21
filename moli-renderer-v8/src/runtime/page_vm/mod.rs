@@ -106,6 +106,7 @@ mod page_dynamic_import_owner_action;
 mod page_element_toggle_event;
 mod page_file_entry_file_callback;
 mod page_file_reading;
+mod page_font_loading;
 mod page_hash_change_delivery;
 mod page_history_traversal;
 #[cfg(test)]
@@ -114,6 +115,7 @@ mod page_image_load_event;
 mod page_indexed_db_task;
 mod page_internal_loading;
 mod page_internal_loading_task_completion;
+mod page_intersection_observer;
 mod page_main_document_post_parse;
 mod page_main_document_runtime;
 mod page_main_native_module_task;
@@ -225,10 +227,12 @@ pub(crate) use page_dynamic_import_owner_action::AuthorizedCurrentChildDynamicIm
 pub(crate) use page_element_toggle_event::AuthorizedCurrentPageElementToggleEvent;
 pub(crate) use page_file_entry_file_callback::AuthorizedCurrentPageFileEntryFileCallback;
 pub(crate) use page_file_reading::AuthorizedCurrentPageFileReadingTask;
+pub(crate) use page_font_loading::AuthorizedCurrentPageFontLoadingTask;
 pub(crate) use page_hash_change_delivery::AuthorizedCurrentPageHashChangeDelivery;
 pub(crate) use page_history_traversal::AuthorizedCurrentPageHistoryTraversal;
 pub(crate) use page_image_load_event::AuthorizedCurrentPageImageLoadEvent;
 pub(crate) use page_indexed_db_task::AuthorizedCurrentPageIndexedDbTask;
+pub(crate) use page_intersection_observer::AuthorizedCurrentPageIntersectionObserverTask;
 pub(crate) use page_media_element_event::AuthorizedCurrentPageMediaElementEvent;
 pub(crate) use page_message_port_delivery::AuthorizedCurrentPageMessagePortDelivery;
 pub(crate) use page_misc_platform_api::AuthorizedCurrentPageMiscPlatformApiTask;

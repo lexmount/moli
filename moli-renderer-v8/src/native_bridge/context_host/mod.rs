@@ -111,7 +111,9 @@ pub(crate) use image_resources::{
 mod indexed_db_tasks;
 mod interaction_batch;
 pub(crate) use interaction_batch::PendingScrollObservableEffects;
+mod font_loading;
 mod internal_node_refs;
+mod intersection_observer_tasks;
 mod layout;
 mod layout_snapshot;
 mod layout_state;
@@ -120,7 +122,13 @@ mod main_document_lifecycle;
 mod media_element_events;
 mod media_loads;
 mod misc_platform_api_tasks;
+mod realtime_animation_frames;
+mod realtime_environment;
+mod realtime_events;
+mod realtime_layout;
+mod realtime_rendering;
 pub(crate) use media_loads::PendingMediaLoadTerminalFollowup;
+pub(crate) use realtime_layout::LayoutPublicationRequest;
 mod text_track_loads;
 pub(crate) use text_track_loads::{
     PendingMediaCanPlayFollowup, PendingMediaTextTrackGateRegistration,
@@ -855,6 +863,7 @@ pub(crate) struct PageScriptHost {
     layout_policy: moli_page_types::LayoutPolicy,
     scrollbars_hidden: bool,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,
+    realtime_layout_state: Option<Box<realtime_layout::RealtimeLayoutState>>,
     layout_pass_active: Cell<bool>,
     completed_layout_pass_count: Cell<u64>,
     completed_layout_pass_time: Cell<std::time::Duration>,
@@ -968,6 +977,8 @@ pub(crate) struct PageScriptHost {
     pending_text_control_change_commit: Option<PendingTextControlChangeCommit>,
     file_reading_tasks: file_reading_tasks::FileReadingState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
+    intersection_observer_tasks:
+        Option<Box<intersection_observer_tasks::IntersectionObserverTaskState>>,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
