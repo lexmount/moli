@@ -20,7 +20,7 @@ pub struct ContentPatching<Handle, Sink> {
     ) -> bool,
     /// The active patch's destination and current reference child, if any.
     pub insertion_location: fn(&Sink, template: &Handle) -> Option<(Handle, Option<Handle>)>,
-    /// Remove the active patch's markers for a template closed by an end tag.
+    /// Remove the active patch's markers when its template is closed.
     pub finish: fn(&Sink, template: &Handle),
 }
 

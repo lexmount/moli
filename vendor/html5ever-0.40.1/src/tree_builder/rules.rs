@@ -1449,6 +1449,7 @@ where
                         self.stop_parsing()
                     } else {
                         self.unexpected(&token);
+                        self.finish_content_patch();
                         self.pop_until_named(local_name!("template"));
                         self.clear_active_formatting_to_marker();
                         self.template_modes.borrow_mut().pop();

@@ -2594,6 +2594,22 @@ mod tests {
     }
 
     #[test]
+    fn eof_finalizes_nested_content_patches() {
+        let document = parse_test_document(concat!(
+            "<!doctype html>",
+            "<div><?start name=\"outer\">old<?end>tail</div>",
+            "<template for=outer>before<?marker name=\"inner\">after",
+            "<template for=inner><span>inside"
+        ));
+        let target = first_element_by_ns(&document, HTML_NS, "div");
+
+        assert_eq!(
+            document.inner_html(target).as_deref(),
+            Some("before<span>inside</span>aftertail")
+        );
+    }
+
+    #[test]
     fn mathml_annotation_xml_text_html_is_html_integration_point() {
         let document = parse_test_document(concat!(
             "<!doctype html>",
