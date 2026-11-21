@@ -143,6 +143,11 @@ impl WindowOpenFeatures {
         self.is_popup
     }
 
+    /// Returns the width and height requested for an auxiliary window.
+    pub fn requested_size(&self) -> (Option<i32>, Option<i32>) {
+        (self.width, self.height)
+    }
+
     /// Returns the normalized enabled features used by the popup runtime.
     pub fn enabled_feature_strings(&self) -> Vec<String> {
         let mut enabled = Vec::new();
