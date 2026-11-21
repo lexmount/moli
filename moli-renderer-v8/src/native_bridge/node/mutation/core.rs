@@ -671,6 +671,27 @@ fn replace_node_child<'s>(
     let replaced =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
             let runtime = unsafe { &mut *runtime_ptr };
+            // Replacement adopts the fragment itself, as well as inserting its children.
+            let dom = runtime.dom_host();
+            let fragment_destination = document_handle.filter(|destination| {
+                dom.node(new_child).is_some_and(|node| {
+                    node.is_document_fragment()
+                        && node.owner_document() != Some(*destination)
+                        && !dom.is_shadow_root(new_child)
+                })
+            });
+            if let Some(document_handle) = fragment_destination
+                && runtime
+                    .adopt_native_node_appending_to_current_reaction_queue(
+                        scope,
+                        runtime_ptr,
+                        document_handle,
+                        new_child,
+                    )
+                    .is_none()
+            {
+                return false;
+            }
             if detached {
                 runtime.replace_detached_native_child_appending_to_current_reaction_queue(
                     scope,
