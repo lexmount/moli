@@ -267,9 +267,7 @@ impl DocumentRuntime {
         &mut self,
         node_id: DomHandle,
     ) -> Option<StylesheetElementRead> {
-        self.dom_host_mut_for_active_parser_step()
-            .node(node_id)
-            .and_then(StylesheetElementRead::from_node)
+        StylesheetElementRead::from_dom(self.dom_host_mut_for_active_parser_step().dom(), node_id)
     }
 
     pub(crate) fn parser_runtime_dom_text_content(&mut self, node_id: DomHandle) -> Option<String> {

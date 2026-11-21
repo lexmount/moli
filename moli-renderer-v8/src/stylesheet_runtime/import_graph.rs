@@ -224,6 +224,7 @@ fn fetch_stylesheet_import_graph(
         while !pending_results.is_empty() {
             for result in std::mem::take(&mut pending_results) {
                 successful &= result.terminal().is_ready();
+                let render_blocking = result.render_blocking();
                 let import_options =
                     stylesheet_import_options(result.terminal(), &document_options);
                 let mut result = result.with_import_options(import_options.clone());
@@ -236,7 +237,9 @@ fn fetch_stylesheet_import_graph(
                     ConnectedStyleImportReadiness::Pending(urls) => import_graph
                         .extend_with_options(
                             urls,
-                            import_options.as_ref().unwrap_or(&document_options),
+                            &import_options
+                                .unwrap_or_else(|| document_options.clone())
+                                .with_render_blocking(render_blocking),
                         ),
                 }
                 network_results.push(result);
@@ -265,6 +268,7 @@ fn prepare_import_requests(
     urls.into_iter()
         .map(|request| -> BoxFuture<'static, _> {
             let PendingStylesheetImport { url, options } = request;
+            let render_blocking = options.render_blocking();
             let started = moli_time::unix_epoch_millis();
             let terminal: BoxFuture<'static, _> = if url.scheme() == "data" {
                 *data_expansions += 1;
@@ -286,6 +290,7 @@ fn prepare_import_requests(
                     started,
                     terminal.await,
                 )
+                .with_render_blocking(render_blocking)
             })
         })
         .collect()

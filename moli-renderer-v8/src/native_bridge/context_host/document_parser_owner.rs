@@ -137,10 +137,7 @@ impl StylesheetBlockingReadView for ContextDocumentParserOwner<'_, '_, '_> {
     }
 
     fn stylesheet_element(&self, node_id: DomHandle) -> Option<StylesheetElementRead> {
-        self.host
-            .dom_host()
-            .node(node_id)
-            .and_then(StylesheetElementRead::from_node)
+        StylesheetElementRead::from_dom(self.host.dom_host().dom(), node_id)
     }
 
     fn child_ids(&self, node_id: DomHandle) -> Vec<DomHandle> {
@@ -390,10 +387,7 @@ impl ParserDomReadConsumer for ContextDocumentParserOwner<'_, '_, '_> {
     }
 
     fn stylesheet_element(&mut self, node_id: DomHandle) -> Option<StylesheetElementRead> {
-        self.host
-            .dom_host()
-            .node(node_id)
-            .and_then(StylesheetElementRead::from_node)
+        StylesheetElementRead::from_dom(self.host.dom_host().dom(), node_id)
     }
 
     fn text_content(&mut self, node_id: DomHandle) -> Option<String> {

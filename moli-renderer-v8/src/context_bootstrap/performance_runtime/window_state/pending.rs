@@ -260,6 +260,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn take_pending_resource_e
                 encoded_body_size: array_number(scope, record, 4)?,
                 decoded_body_size: array_number(scope, record, 5)?,
                 render_blocking_status: array_string(scope, record, 6)?,
+                render_blocking_timing: None,
                 response_status: array_number(scope, record, 7)?,
                 content_type: array_string(scope, record, 8)?,
                 initiator_url: array_string(scope, record, 9)?,

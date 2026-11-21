@@ -1399,8 +1399,7 @@ fn stylesheet_element_in_host(
     host: &DomHost,
     node_id: NativeNodeId,
 ) -> Option<StylesheetElementRead> {
-    host.node(node_id)
-        .and_then(StylesheetElementRead::from_node)
+    StylesheetElementRead::from_dom(host.dom(), node_id)
 }
 
 fn text_content_in_host(host: &DomHost, node_id: NativeNodeId) -> Option<String> {

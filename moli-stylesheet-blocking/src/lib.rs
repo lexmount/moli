@@ -26,7 +26,7 @@ pub use discovery::{
     default_screen_media_query_matches, document_node_precedes,
     document_owned_blocking_stylesheet_candidate_for_node,
     document_owned_stylesheet_discovery_input_for_node, link_rel_includes_token,
-    preload_like_link_loads_stylesheet, stylesheet_link_disposition,
+    preload_like_link_loads_stylesheet, style_element_render_blocking, stylesheet_link_disposition,
     stylesheet_preload_link_request,
 };
 pub use fetcher::{

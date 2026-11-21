@@ -71,6 +71,7 @@ pub enum DocumentOwnedBlockingStylesheetCandidate {
     ParserCreatedStyleImport {
         node_id: NodeId,
         urls: Vec<Url>,
+        render_blocking: bool,
     },
 }
 
@@ -89,6 +90,7 @@ pub enum DocumentBlockingStylesheetSignature {
 pub struct DocumentOwnedBlockingStylesheet {
     node_id: NodeId,
     signature: DocumentBlockingStylesheetSignature,
+    render_blocking: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +98,7 @@ pub struct DocumentOwnedStylesheetDiscoveryInput {
     node_id: NodeId,
     signature: DocumentBlockingStylesheetSignature,
     blocks_scripts: bool,
+    render_blocking: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +106,7 @@ pub struct StylesheetElementRead {
     is_html_element: bool,
     local_name: String,
     parser_blocking_eligible: bool,
+    render_blocking_eligible: bool,
     rel: Option<String>,
     href: Option<String>,
     as_attr: Option<String>,
@@ -118,16 +122,28 @@ pub struct StylesheetElementRead {
 }
 
 impl StylesheetElementRead {
-    pub fn from_node(node: &Node) -> Option<Self> {
+    pub fn from_dom(dom: &NativeDom, node_id: NativeNodeId) -> Option<Self> {
+        let node = dom.node(node_id)?;
         let element = node.as_element()?;
+        let parser_blocking_eligible = if element.is_html_element("link") {
+            element.link_created_by_parser()
+        } else {
+            node.flags().parser_created() && !element.style_children_parsing()
+        };
+        let potentially_render_blocking = parser_blocking_eligible
+            || element
+                .attribute_ns("", "blocking")
+                .is_some_and(|blocking| link_rel_includes_token(blocking, "render"));
+        let render_blocking_eligible = potentially_render_blocking
+            && node.is_connected()
+            && node.owner_document().is_some_and(|document| {
+                dom.document_allows_adding_render_blocking_elements(document)
+            });
         Some(Self {
             is_html_element: element.namespace() == "http://www.w3.org/1999/xhtml",
             local_name: element.local_name().to_owned(),
-            parser_blocking_eligible: if element.is_html_element("link") {
-                element.link_created_by_parser()
-            } else {
-                node.flags().parser_created() && !element.style_children_parsing()
-            },
+            parser_blocking_eligible,
+            render_blocking_eligible,
             rel: element.attribute("rel").map(str::to_owned),
             href: element.attribute("href").map(str::to_owned),
             as_attr: element.attribute("as").map(str::to_owned),
@@ -156,6 +172,7 @@ impl StylesheetElementRead {
             is_html_element: true,
             local_name: "link".to_owned(),
             parser_blocking_eligible: true,
+            render_blocking_eligible: false,
             rel: Some("stylesheet".to_owned()),
             href: Some(href.to_owned()),
             as_attr: None,
@@ -177,6 +194,7 @@ impl DocumentOwnedBlockingStylesheet {
         Self {
             node_id: candidate.node_id(),
             signature: DocumentBlockingStylesheetSignature::from_candidate(candidate),
+            render_blocking: candidate.render_blocking(),
         }
     }
 
@@ -187,11 +205,19 @@ impl DocumentOwnedBlockingStylesheet {
     pub fn signature(&self) -> &DocumentBlockingStylesheetSignature {
         &self.signature
     }
+
+    pub(crate) fn render_blocking(&self) -> bool {
+        self.render_blocking
+    }
 }
 
 impl DocumentOwnedStylesheetDiscoveryInput {
     pub fn blocks_scripts(&self) -> bool {
         self.blocks_scripts
+    }
+
+    pub(crate) fn render_blocking(&self) -> bool {
+        self.render_blocking
     }
 
     pub fn node_id(&self) -> NodeId {
@@ -214,6 +240,7 @@ impl From<&DocumentOwnedBlockingStylesheet> for DocumentOwnedStylesheetDiscovery
             node_id: blocker.node_id(),
             signature: blocker.signature().clone(),
             blocks_scripts: true,
+            render_blocking: blocker.render_blocking(),
         }
     }
 }
@@ -224,6 +251,7 @@ impl From<&DocumentOwnedBlockingStylesheetCandidate> for DocumentOwnedStylesheet
             node_id: candidate.node_id(),
             signature: DocumentBlockingStylesheetSignature::from_candidate(candidate),
             blocks_scripts: true,
+            render_blocking: candidate.render_blocking(),
         }
     }
 }
@@ -232,6 +260,15 @@ impl DocumentOwnedBlockingStylesheetCandidate {
     pub fn node_id(&self) -> NodeId {
         match self {
             Self::Link { node_id, .. } | Self::ParserCreatedStyleImport { node_id, .. } => *node_id,
+        }
+    }
+
+    fn render_blocking(&self) -> bool {
+        match self {
+            Self::Link { options, .. } => options.render_blocking(),
+            Self::ParserCreatedStyleImport {
+                render_blocking, ..
+            } => *render_blocking,
         }
     }
 }
@@ -278,8 +315,7 @@ impl StylesheetBlockingReadView for NativeDom {
     }
 
     fn stylesheet_element(&self, node_id: NativeNodeId) -> Option<StylesheetElementRead> {
-        self.node(node_id)
-            .and_then(StylesheetElementRead::from_node)
+        StylesheetElementRead::from_dom(self, node_id)
     }
 
     fn child_ids(&self, node_id: NativeNodeId) -> Vec<NativeNodeId> {
@@ -324,8 +360,7 @@ impl StylesheetBlockingReadView for DomHost {
     }
 
     fn stylesheet_element(&self, node_id: NativeNodeId) -> Option<StylesheetElementRead> {
-        self.node(node_id)
-            .and_then(StylesheetElementRead::from_node)
+        StylesheetElementRead::from_dom(self.dom(), node_id)
     }
 
     fn child_ids(&self, node_id: NativeNodeId) -> Vec<NativeNodeId> {
@@ -379,6 +414,17 @@ pub fn stylesheet_link_disposition(
     node_id: NodeId,
 ) -> Option<StylesheetLinkDisposition> {
     stylesheet_link_disposition_in_view(document, node_id)
+}
+
+pub fn style_element_render_blocking(
+    document: &(impl StylesheetBlockingReadView + ?Sized),
+    node_id: NativeNodeId,
+) -> bool {
+    document.stylesheet_element(node_id).is_some_and(|element| {
+        element.is_html_element("style")
+            && element.render_blocking_eligible
+            && document.media_query_matches(element.media.as_deref().unwrap_or_default())
+    })
 }
 
 pub fn stylesheet_preload_link_request(
@@ -462,6 +508,7 @@ fn stylesheet_link_disposition_in_view(
     let is_alternate = link_rel_includes_token(rel, "alternate");
     let blocking =
         !is_alternate && document.media_query_matches(element.media.as_deref().unwrap_or_default());
+    let options = options.with_render_blocking(blocking && element.render_blocking_eligible);
     Some(if blocking {
         StylesheetLinkDisposition::Blocking { url, options }
     } else {
@@ -603,14 +650,17 @@ pub fn document_owned_stylesheet_discovery_input_for_node(
                 options: disposition.options().clone(),
             },
             blocks_scripts: disposition.is_blocking(),
+            render_blocking: disposition.options().render_blocking(),
         });
     }
     parser_created_style_import_urls(document, node_id).map(|urls| {
+        let blocks_scripts =
+            document.media_query_matches(element.media.as_deref().unwrap_or_default());
         DocumentOwnedStylesheetDiscoveryInput {
             node_id,
             signature: DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls },
-            blocks_scripts: document
-                .media_query_matches(element.media.as_deref().unwrap_or_default()),
+            blocks_scripts,
+            render_blocking: blocks_scripts && element.render_blocking_eligible,
         }
     })
 }
@@ -632,7 +682,11 @@ pub fn document_owned_blocking_stylesheet_candidate_for_node(
             }
         }
         DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => {
-            DocumentOwnedBlockingStylesheetCandidate::ParserCreatedStyleImport { node_id, urls }
+            DocumentOwnedBlockingStylesheetCandidate::ParserCreatedStyleImport {
+                node_id,
+                urls,
+                render_blocking: input.render_blocking,
+            }
         }
     })
 }

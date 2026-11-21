@@ -26,8 +26,7 @@ impl StylesheetBlockingReadView for ParserStreamDocumentSnapshot {
     }
 
     fn stylesheet_element(&self, node_id: NativeNodeId) -> Option<StylesheetElementRead> {
-        self.node(node_id)
-            .and_then(StylesheetElementRead::from_node)
+        StylesheetElementRead::from_dom(self.native_dom(), node_id)
     }
 
     fn child_ids(&self, node_id: NativeNodeId) -> Vec<NativeNodeId> {

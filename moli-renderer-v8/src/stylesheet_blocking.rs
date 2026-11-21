@@ -247,7 +247,8 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                 .request_client()
                 .consume_document_preload(&request)
         {
-            return if let Some(response) = consumer.try_response() {
+            let render_blocking_timing = consumer.render_blocking_timing();
+            let prepared = if let Some(response) = consumer.try_response() {
                 moli_stylesheet_blocking::PreparedStylesheetFetch::reused(
                     stylesheet_terminal_from_preload(
                         &request_origin,
@@ -268,6 +269,7 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                     )
                 }))
             };
+            return prepared.with_render_blocking_timing(render_blocking_timing);
         }
         let producer = if self.link_preload {
             let client = self.loader.request_client();
@@ -291,9 +293,11 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
             self.fetch_stylesheet_resource(document_url, url, options.clone()),
         );
         if let Some(producer) = producer {
-            prepared.with_published_callback(move |terminal| {
-                producer.complete(stylesheet_preload_response(terminal, &options));
-            })
+            prepared
+                .with_render_blocking_timing(producer.render_blocking_timing())
+                .with_published_callback(move |terminal| {
+                    producer.complete(stylesheet_preload_response(terminal, &options));
+                })
         } else {
             prepared
         }
@@ -355,6 +359,7 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
         &self,
         document_url: Url,
         urls: Vec<Url>,
+        render_blocking: bool,
     ) -> Pin<
         Box<
             dyn Future<Output = moli_stylesheet_blocking::StylesheetImportGraphFetchResult>
@@ -367,7 +372,9 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                 self.clone(),
                 document_url,
                 urls,
-                self.prepare_stylesheet_fetch_options(StylesheetFetchOptions::default()),
+                self.prepare_stylesheet_fetch_options(
+                    StylesheetFetchOptions::default().with_render_blocking(render_blocking),
+                ),
             ),
         )
     }
@@ -652,7 +659,8 @@ fn stylesheet_readiness_request(
         .with_page_network_policy()
         .with_initiator_url(document_url)
         .with_request_origin(request_origin.clone())
-        .with_resource_type(resource_type);
+        .with_resource_type(resource_type)
+        .with_render_blocking(options.render_blocking());
     let captured_fetch_priority =
         moli_fetch::FetchPriorityHint::from_attribute(options.fetch_priority());
     request = apply_stylesheet_request_parameters(request, options);

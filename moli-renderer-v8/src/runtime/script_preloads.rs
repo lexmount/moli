@@ -918,6 +918,7 @@ pub(super) struct InlineStylePreload {
     pub(super) text: String,
     pub(super) nonce: Option<String>,
     media: Option<String>,
+    render_blocking: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1342,6 +1343,36 @@ impl IncrementalBufferedScriptPreloadScanner {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreloadDocumentPosition {
+    InHead,
+    AfterHead,
+    InBody,
+}
+
+impl PreloadDocumentPosition {
+    fn after_tag(self, kind: TagKind, name: &str) -> Self {
+        if self == Self::InBody {
+            return self;
+        }
+        // Track the insertion modes before the body is created, including an
+        // implicit head. In "after head", stylesheet tags are still processed
+        // in the head, while most other start tags create an implicit body.
+        match (kind, name) {
+            (TagKind::EndTag, "head") => Self::AfterHead,
+            (TagKind::EndTag, "body" | "html" | "br") => Self::InBody,
+            (TagKind::EndTag, _) => self,
+            (TagKind::StartTag, "noscript") if self == Self::InHead => self,
+            (
+                TagKind::StartTag,
+                "html" | "head" | "base" | "basefont" | "bgsound" | "link" | "meta" | "noframes"
+                | "script" | "style" | "title",
+            ) => self,
+            (TagKind::StartTag, _) => Self::InBody,
+        }
+    }
+}
+
 struct HtmlPreloadScannerSink {
     final_url: Url,
     base_url: RefCell<Url>,
@@ -1355,6 +1386,8 @@ struct HtmlPreloadScannerSink {
     seen_import_map: Cell<bool>,
     template_depth: Cell<usize>,
     picture_depth: Cell<usize>,
+    document_position: Cell<PreloadDocumentPosition>,
+    in_text_element: Cell<bool>,
     inline_style: RefCell<Option<InlineStylePreload>>,
 }
 
@@ -1373,6 +1406,8 @@ impl HtmlPreloadScannerSink {
             seen_import_map: Cell::new(false),
             template_depth: Cell::new(0),
             picture_depth: Cell::new(0),
+            document_position: Cell::new(PreloadDocumentPosition::InHead),
+            in_text_element: Cell::new(false),
             inline_style: RefCell::new(None),
         }
     }
@@ -1606,6 +1641,12 @@ impl HtmlPreloadScannerSink {
                 html_attr_value(&tag.attrs, "nonce").as_deref(),
                 html_attr_value(&tag.attrs, "charset").as_deref(),
                 html_attr_value(&tag.attrs, "fetchpriority").as_deref(),
+            )
+            .with_render_blocking(
+                is_stylesheet
+                    && !is_style_preload
+                    && !link_rel_includes_token(&rel, "alternate")
+                    && self.document_position.get() != PreloadDocumentPosition::InBody,
             ),
             request_resource_type: if self.image_fetched.get() {
                 moli_fetch::RequestResourceType::LatePreloadCssStyleSheet
@@ -1634,10 +1675,18 @@ impl HtmlPreloadScannerSink {
             text: String::new(),
             nonce: html_attr_value(&tag.attrs, "nonce"),
             media: html_attr_value(&tag.attrs, "media"),
+            render_blocking: self.document_position.get() != PreloadDocumentPosition::InBody,
         });
     }
 
-    fn append_inline_style_text(&self, text: &str) {
+    fn process_text(&self, text: &str) {
+        if self.document_position.get() != PreloadDocumentPosition::InBody
+            && self.template_depth.get() == 0
+            && !self.in_text_element.get()
+            && text.bytes().any(|byte| !byte.is_ascii_whitespace())
+        {
+            self.document_position.set(PreloadDocumentPosition::InBody);
+        }
         let mut inline_style = self.inline_style.borrow_mut();
         let Some(style) = inline_style.as_mut() else {
             return;
@@ -1670,9 +1719,11 @@ impl HtmlPreloadScannerSink {
                 .push(BufferedStylesheetPreloadRequest {
                     url,
                     media: style.media.clone(),
-                    options: StylesheetFetchOptions::default().with_document_referrer_policy(
-                        self.document_referrer_policy.borrow().clone(),
-                    ),
+                    options: StylesheetFetchOptions::default()
+                        .with_document_referrer_policy(
+                            self.document_referrer_policy.borrow().clone(),
+                        )
+                        .with_render_blocking(style.render_blocking),
                     request_resource_type: moli_fetch::RequestResourceType::CssStyleSheet,
                     link_preload: false,
                     inline_style: Some(Arc::clone(&style)),
@@ -1785,19 +1836,21 @@ impl TokenSink for HtmlPreloadScannerSink {
         let tag = match token {
             Token::TagToken(tag) => tag,
             Token::CharacterTokens(text) => {
-                self.append_inline_style_text(&text);
+                self.process_text(&text);
                 return TokenSinkResult::Continue;
             }
             Token::NullCharacterToken => {
-                self.append_inline_style_text("\u{fffd}");
+                self.process_text("\u{fffd}");
                 return TokenSinkResult::Continue;
             }
             _ => return TokenSinkResult::Continue,
         };
-        if AsRef::<str>::as_ref(&tag.name) == "style" && tag.kind == TagKind::EndTag {
+        let name = AsRef::<str>::as_ref(&tag.name);
+        self.in_text_element.set(false);
+        if name == "style" && tag.kind == TagKind::EndTag {
             self.finish_inline_style_scan();
         }
-        if AsRef::<str>::as_ref(&tag.name) == "template" {
+        if name == "template" {
             match tag.kind {
                 TagKind::StartTag => {
                     self.template_depth
@@ -1817,7 +1870,9 @@ impl TokenSink for HtmlPreloadScannerSink {
                 TokenSinkResult::Continue
             };
         }
-        if AsRef::<str>::as_ref(&tag.name) == "picture" {
+        self.document_position
+            .set(self.document_position.get().after_tag(tag.kind, name));
+        if name == "picture" {
             match tag.kind {
                 TagKind::StartTag => {
                     self.picture_depth
@@ -1836,7 +1891,7 @@ impl TokenSink for HtmlPreloadScannerSink {
 
         self.maybe_note_meta_csp(&tag);
         self.maybe_update_referrer_policy(&tag);
-        match AsRef::<str>::as_ref(&tag.name) {
+        let result = match name {
             "base" => {
                 self.maybe_update_base_url(&tag);
                 TokenSinkResult::Continue
@@ -1860,7 +1915,10 @@ impl TokenSink for HtmlPreloadScannerSink {
                 TokenSinkResult::Continue
             }
             _ => tokenizer_state_for_preload_scanner_tag(&tag),
-        }
+        };
+        self.in_text_element
+            .set(matches!(result, TokenSinkResult::RawData(_)));
+        result
     }
 }
 

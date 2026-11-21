@@ -190,6 +190,7 @@ pub struct StylesheetImportNetworkResult {
     pub(crate) terminal: StylesheetFetchTerminal,
     parsed_stylesheet: Option<StylesheetImportParsedResponse>,
     import_options: Option<crate::StylesheetFetchOptions>,
+    render_blocking: bool,
 }
 
 impl StylesheetImportNetworkResult {
@@ -204,7 +205,17 @@ impl StylesheetImportNetworkResult {
             terminal,
             parsed_stylesheet: None,
             import_options: None,
+            render_blocking: false,
         }
+    }
+
+    pub fn with_render_blocking(mut self, render_blocking: bool) -> Self {
+        self.render_blocking = render_blocking;
+        self
+    }
+
+    pub fn render_blocking(&self) -> bool {
+        self.render_blocking
     }
 
     pub fn set_parsed_stylesheet(&mut self, stylesheet: moli_css_parse::CssNativeStylesheet) {

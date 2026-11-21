@@ -1106,9 +1106,10 @@ mod tests {
             node_id: NativeNodeId,
         ) -> Option<moli_stylesheet_blocking::StylesheetElementRead> {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
-            (unsafe { &*self.host })
-                .node(node_id)
-                .and_then(moli_stylesheet_blocking::StylesheetElementRead::from_node)
+            moli_stylesheet_blocking::StylesheetElementRead::from_dom(
+                unsafe { &*self.host }.dom(),
+                node_id,
+            )
         }
 
         fn text_content(&mut self, node_id: NativeNodeId) -> Option<String> {

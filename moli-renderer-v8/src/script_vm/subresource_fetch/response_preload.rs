@@ -18,7 +18,7 @@ impl ScriptVm {
         if from_service_worker {
             preload.timing.clear_initiator();
         }
-        let (entry, response) = match result {
+        let (mut entry, response) = match result {
             Ok(response) => {
                 let filter = response_filter.cloned().unwrap_or_else(|| {
                     crate::network_host::FetchResponseRequest {
@@ -72,6 +72,7 @@ impl ScriptVm {
             Err(error) => (preload.timing.failed(&pending.info.url), Err(error.clone())),
         };
         if let Some(producer) = preload.producer.take() {
+            entry.track_render_blocking(producer.render_blocking_timing());
             producer.complete(response);
         }
         let Some(target) = pending

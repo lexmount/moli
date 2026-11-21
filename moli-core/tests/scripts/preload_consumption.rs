@@ -104,6 +104,48 @@ impl PreloadServer {
                                 "/timing-style" => ("text/css", css_timing_styles(&token)),
                                 "/timing-import" => ("text/css", format!("@import url('/timing-style?token={token}');")),
                                 "/timing-header" => ("text/html", "<!doctype html><body>Header preload timing".to_owned()),
+                                "/timing-render-blocking" => ("text/html", r#"
+                                    <!doctype html><head>
+                                    <link rel="stylesheet" href="/child-import-root.css?token=render-blocking">
+                                    <link rel="stylesheet" href="/probe-asset?token=print&as=style&auto=1" media="print">
+                                    <style>@import "/probe-asset?token=inline&as=style&auto=1";</style>
+                                    <script>
+                                      const sheet = document.createElement('link');
+                                      sheet.rel = 'stylesheet';
+                                      sheet.href = '/probe-asset?token=explicit&as=style&auto=1';
+                                      sheet.setAttribute('blocking', 'ReNdEr');
+                                      document.head.append(sheet);
+                                      sheet.removeAttribute('blocking');
+
+                                      const adoptedUrl = '/probe-asset?token=adopted&as=style';
+                                      const preload = document.createElement('link');
+                                      preload.rel = 'preload';
+                                      preload.as = 'style';
+                                      preload.href = adoptedUrl;
+                                      document.head.append(preload);
+                                      for (const [token, url] of [
+                                        ['adopted', adoptedUrl],
+                                        ['header', '/probe-asset?token=header&as=style'],
+                                      ]) {
+                                        const consumer = document.createElement('link');
+                                        consumer.rel = 'stylesheet';
+                                        consumer.setAttribute('blocking', 'render');
+                                        consumer.href = url;
+                                        document.head.append(consumer);
+                                        fetch('/probe-release?token=' + token);
+                                      }
+                                    </script>
+                                    </head><body>
+                                    <link rel="stylesheet" blocking="render"
+                                          href="/probe-asset?token=body&as=style&auto=1">
+                                    <script>
+                                      const lateSheet = document.createElement('link');
+                                      lateSheet.rel = 'stylesheet';
+                                      lateSheet.href = '/probe-asset?token=late-head&as=style&auto=1';
+                                      lateSheet.setAttribute('blocking', 'render');
+                                      document.head.append(lateSheet);
+                                    </script>
+                                "#.to_owned()),
                                 "/timing-page" => {
                                     let kind = query.get("kind").map(String::as_str).unwrap_or("inline");
                                     let style = match kind {
@@ -202,6 +244,8 @@ impl PreloadServer {
                                 let source = query.get("source").map(String::as_str).unwrap_or("network");
                                 let path = if source == "network" { "/probe-asset" } else { "/probe-worker-asset" };
                                 format!("Link: <{path}?token={token}&as={kind}&source={source}&auto=1>; rel=preload; as={kind}\r\n")
+                            } else if url.path() == "/timing-render-blocking" {
+                                "Link: </probe-asset?token=header&as=style>; rel=preload; as=style\r\n".to_owned()
                             } else { String::new() };
                             let response = format!("HTTP/1.1 {status} OK\r\nContent-Type: {mime}\r\nCache-Control: {cache}\r\n{cors}{location}{policy}{link}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
                             let _ = stream.write_all(response.as_bytes()).await;
@@ -357,6 +401,65 @@ async fn response_header_preload_timings_retain_the_request_document() -> Result
                 "header preload must count actual network requests: {source}/{kind}"
             );
         }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resource_timing_retains_stylesheet_render_blocking_at_admission() -> Result<()> {
+    let server = PreloadServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = tokio::time::timeout(
+        Duration::from_secs(30),
+        browser.fetch(&format!("{}/timing-render-blocking", server.origin)),
+    )
+    .await??;
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"(async () => {
+                if (document.readyState !== 'complete') {
+                    await new Promise(resolve => addEventListener('load', resolve, {once: true}));
+                }
+                return JSON.stringify(performance.getEntriesByType('resource').flatMap(entry => {
+                    const url = new URL(entry.name);
+                    if (url.pathname === '/probe-release') return [];
+                    const key = url.pathname === '/probe-asset'
+                        ? url.searchParams.get('token') : url.pathname;
+                    return [[key, entry.renderBlockingStatus]];
+                }).sort());
+            })()"#,
+            true,
+        ),
+    )
+    .await??;
+    let timings: Vec<(String, String)> = serde_json::from_str(
+        result["value"]
+            .as_str()
+            .context("stylesheet render-blocking timings")?,
+    )?;
+    let expected = [
+        ("/child-import-branch.css", "blocking"),
+        ("/child-import-leaf.css", "blocking"),
+        ("/child-import-root.css", "blocking"),
+        ("adopted", "blocking"),
+        ("body", "non-blocking"),
+        ("explicit", "blocking"),
+        ("header", "blocking"),
+        ("inline", "blocking"),
+        ("late-head", "non-blocking"),
+        ("print", "non-blocking"),
+    ];
+    assert_eq!(
+        timings
+            .iter()
+            .map(|(name, status)| (name.as_str(), status.as_str()))
+            .collect::<Vec<_>>(),
+        expected,
+    );
+    for token in ["adopted", "header", "inline"] {
+        let requests = server.assets.lock()[token].count.load(Ordering::Acquire);
+        assert_eq!(requests, 1, "{token} must reuse the single preload request");
     }
     Ok(())
 }

@@ -105,8 +105,8 @@ pub use mixed_content::RequestMixedContentPolicy;
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{
     DispatchedRequest, NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo,
-    PreloadResponseFilter, RawResponse, RedirectInfo, RedirectSource, Response, ResponseBody,
-    ResponseCacheState, ResponseHead, ResponsePreloadState,
+    PreloadResponseFilter, RawResponse, RedirectInfo, RedirectSource, ResourceRenderBlockingTiming,
+    Response, ResponseBody, ResponseCacheState, ResponseHead, ResponsePreloadState,
 };
 pub use runtime::PendingStreamingRawResponse;
 pub use runtime::{

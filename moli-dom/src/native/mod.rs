@@ -837,6 +837,15 @@ impl NativeDom {
         self.document_body_handle_for_document(self.document_node_id)
     }
 
+    pub fn document_allows_adding_render_blocking_elements(&self, document: NativeNodeId) -> bool {
+        self.node(document)
+            .and_then(Node::as_document)
+            .is_some_and(|data| {
+                data.content_type() == "text/html"
+                    && data.body_or_frameset_handle(self, document).is_none()
+            })
+    }
+
     pub fn document_body_handle_for_document(
         &self,
         document_node_id: NativeNodeId,

@@ -474,6 +474,7 @@ impl DocumentRuntime {
                 ConnectedLoadNetworkResult {
                     network_observed: result.terminal.network_was_observed(),
                     resource_timing: None,
+                    render_blocking: result.render_blocking,
                     resource_timing_initiator_type: result
                         .fetch
                         .as_ref()

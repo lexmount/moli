@@ -91,6 +91,7 @@ pub struct Request {
     subresource_request_metadata: Option<SubresourceRequestMetadata>,
     script_scheduler_priority: Option<ScriptFetchSchedulerPriority>,
     pub priority_hints: RequestPriorityHints,
+    render_blocking: bool,
     pub browser_request_metadata: Option<BrowserRequestMetadata>,
     browser_navigation_kind: BrowserNavigationRequestKind,
     /// An admitted destination survives redirects and cookie-context rebinding.
@@ -695,6 +696,7 @@ impl Request {
             subresource_request_metadata: None,
             script_scheduler_priority: None,
             priority_hints: RequestPriorityHints::default(),
+            render_blocking: false,
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             navigation_destination: None,
@@ -747,6 +749,7 @@ impl Request {
             subresource_request_metadata: None,
             script_scheduler_priority: None,
             priority_hints: RequestPriorityHints::default(),
+            render_blocking: false,
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             navigation_destination: None,
@@ -832,6 +835,7 @@ impl Request {
             subresource_request_metadata: None,
             script_scheduler_priority: None,
             priority_hints: RequestPriorityHints::default(),
+            render_blocking: false,
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             navigation_destination: None,
@@ -959,6 +963,16 @@ impl Request {
     pub fn with_fetch_priority_hint(mut self, fetch_priority: Option<FetchPriorityHint>) -> Self {
         self.priority_hints.fetch_priority = fetch_priority;
         self
+    }
+
+    /// Captured client status for Resource Timing when this request consumes a preload.
+    pub fn with_render_blocking(mut self, render_blocking: bool) -> Self {
+        self.render_blocking = render_blocking;
+        self
+    }
+
+    pub fn render_blocking(&self) -> bool {
+        self.render_blocking
     }
 
     pub fn with_link_preload(mut self) -> Self {

@@ -227,6 +227,44 @@ fn html_preload_scanner_collects_stylesheets_after_meta_csp_for_owner_admission(
     );
 }
 #[test]
+fn stylesheet_preload_scanner_tracks_the_body_boundary_across_chunks() {
+    let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
+    let mut scanner = IncrementalHtmlPreloadScanner::new(final_url);
+    let first = scanner.scan_chunk(
+        r#"<title>text in the head</title>
+            <script>document.body</script>
+            <noscript>head fallback</noscript>
+            <template><body><link rel=stylesheet href="/inert.css"></template>
+            <style>@import "/head-import.css";"#,
+    );
+    assert!(first.stylesheet_requests.is_empty());
+    let second = scanner.scan_chunk(
+        r#"</style></head>
+            <link rel=stylesheet href="/after-head.css">
+            <link rel="alternate stylesheet" title="alternate" href="/alternate.css">
+            <link rel=preload as=style href="/explicit-preload.css">
+            Visible text
+            <link rel=stylesheet blocking=render href="/body.css">
+            <style>@import "/body-import.css";</style>"#,
+    );
+    let timings = second
+        .stylesheet_requests
+        .iter()
+        .map(|request| (request.url.path(), request.options.render_blocking()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        timings,
+        [
+            ("/head-import.css", true),
+            ("/after-head.css", true),
+            ("/alternate.css", false),
+            ("/explicit-preload.css", false),
+            ("/body.css", false),
+            ("/body-import.css", false),
+        ]
+    );
+}
+#[test]
 fn html_preload_scanner_keeps_script_and_stylesheet_same_url_distinct() {
     let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
     let mut scanner = IncrementalHtmlPreloadScanner::new(final_url);

@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    hash::{Hash, Hasher},
     pin::Pin,
     sync::{
         Arc, OnceLock,
@@ -8,7 +9,7 @@ use std::{
 };
 
 use moli_dom::NodeId;
-use moli_fetch::{RequestCredentialsMode, RequestMode};
+use moli_fetch::{RequestCredentialsMode, RequestMode, ResourceRenderBlockingTiming};
 use moli_page_types::NavigationResponse;
 use url::Url;
 
@@ -16,8 +17,27 @@ use crate::types::{
     StylesheetBlockingStatus, StylesheetImportGraphFetchResult, StylesheetImportNetworkResult,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StylesheetFetchOptions(Arc<StylesheetFetchOptionsData>);
+#[derive(Debug, Clone, Default)]
+pub struct StylesheetFetchOptions {
+    parameters: Arc<StylesheetFetchOptionsData>,
+    render_blocking: bool,
+}
+
+// Render blocking is an observation at request admission. It does not
+// invalidate stylesheet processing or change which response can be reused.
+impl PartialEq for StylesheetFetchOptions {
+    fn eq(&self, other: &Self) -> bool {
+        self.parameters == other.parameters
+    }
+}
+
+impl Eq for StylesheetFetchOptions {}
+
+impl Hash for StylesheetFetchOptions {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.parameters.hash(state);
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 struct StylesheetFetchOptionsData {
@@ -33,12 +53,6 @@ struct StylesheetFetchOptionsData {
     quirks_mode_mime_compatibility: bool,
 }
 
-impl Default for StylesheetFetchOptions {
-    fn default() -> Self {
-        Self(Arc::new(StylesheetFetchOptionsData::default()))
-    }
-}
-
 impl StylesheetFetchOptions {
     pub fn from_link_attributes(
         cross_origin: Option<&str>,
@@ -48,84 +62,99 @@ impl StylesheetFetchOptions {
         charset: Option<&str>,
         fetch_priority: Option<&str>,
     ) -> Self {
-        Self(Arc::new(StylesheetFetchOptionsData {
-            cross_origin: normalize_cross_origin(cross_origin),
-            referrer_policy: normalize_token(referrer_policy),
-            document_referrer_policy: None,
-            referrer_url: None,
-            // Fetch exposes the original string even when it contains only spaces.
-            integrity: integrity
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned),
-            nonce: normalize_preserved_value(nonce),
-            charset: charset
-                .map(|value| {
-                    value
-                        .trim_matches(['\t', '\n', '\u{c}', '\r', ' '])
-                        .to_ascii_lowercase()
-                })
-                .filter(|value| !value.is_empty()),
-            environment_encoding: None,
-            fetch_priority: normalize_token(fetch_priority),
-            quirks_mode_mime_compatibility: false,
-        }))
+        Self {
+            parameters: Arc::new(StylesheetFetchOptionsData {
+                cross_origin: normalize_cross_origin(cross_origin),
+                referrer_policy: normalize_token(referrer_policy),
+                document_referrer_policy: None,
+                referrer_url: None,
+                // Fetch exposes the original string even when it contains only spaces.
+                integrity: integrity
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned),
+                nonce: normalize_preserved_value(nonce),
+                charset: charset
+                    .map(|value| {
+                        value
+                            .trim_matches(['\t', '\n', '\u{c}', '\r', ' '])
+                            .to_ascii_lowercase()
+                    })
+                    .filter(|value| !value.is_empty()),
+                environment_encoding: None,
+                fetch_priority: normalize_token(fetch_priority),
+                quirks_mode_mime_compatibility: false,
+            }),
+            render_blocking: false,
+        }
+    }
+
+    pub fn with_render_blocking(mut self, render_blocking: bool) -> Self {
+        self.render_blocking = render_blocking;
+        self
+    }
+
+    pub fn render_blocking(&self) -> bool {
+        self.render_blocking
     }
 
     pub fn with_quirks_mode_mime_compatibility(mut self, enabled: bool) -> Self {
-        Arc::make_mut(&mut self.0).quirks_mode_mime_compatibility = enabled;
+        Arc::make_mut(&mut self.parameters).quirks_mode_mime_compatibility = enabled;
         self
     }
 
     pub fn cross_origin(&self) -> Option<&str> {
-        self.0.cross_origin.as_deref()
+        self.parameters.cross_origin.as_deref()
     }
 
     pub fn referrer_policy(&self) -> Option<&str> {
-        self.0.referrer_policy.as_deref()
+        self.parameters.referrer_policy.as_deref()
     }
 
     pub fn with_document_referrer_policy(mut self, policy: Option<String>) -> Self {
-        Arc::make_mut(&mut self.0).document_referrer_policy = policy;
+        Arc::make_mut(&mut self.parameters).document_referrer_policy = policy;
         self
     }
 
     pub fn document_referrer_policy(&self) -> Option<&str> {
-        self.0.document_referrer_policy.as_deref()
+        self.parameters.document_referrer_policy.as_deref()
     }
 
     /// Requests initiated by an external sheet use that sheet's response URL
     /// and policy, independently of the owning Document's fetch authority.
     pub fn for_import(mut referrer_url: Url, referrer_policy: Option<String>) -> Self {
         referrer_url.set_fragment(None);
-        Self(Arc::new(StylesheetFetchOptionsData {
-            referrer_url: Some(referrer_url),
-            referrer_policy: Some(
-                referrer_policy
-                    .filter(|policy| !policy.is_empty())
-                    .unwrap_or_else(|| moli_fetch::DEFAULT_REFERRER_POLICY.to_owned()),
-            ),
-            ..Default::default()
-        }))
+        Self {
+            parameters: Arc::new(StylesheetFetchOptionsData {
+                referrer_url: Some(referrer_url),
+                referrer_policy: Some(
+                    referrer_policy
+                        .filter(|policy| !policy.is_empty())
+                        .unwrap_or_else(|| moli_fetch::DEFAULT_REFERRER_POLICY.to_owned()),
+                ),
+                ..Default::default()
+            }),
+            render_blocking: false,
+        }
     }
 
     pub fn referrer_url(&self) -> Option<&Url> {
-        self.0.referrer_url.as_ref()
+        self.parameters.referrer_url.as_ref()
     }
 
     pub fn integrity(&self) -> Option<&str> {
-        self.0.integrity.as_deref()
+        self.parameters.integrity.as_deref()
     }
 
     pub fn nonce(&self) -> Option<&str> {
-        self.0.nonce.as_deref()
+        self.parameters.nonce.as_deref()
     }
 
     pub fn charset(&self) -> Option<&str> {
-        self.0.charset.as_deref()
+        self.parameters.charset.as_deref()
     }
 
     pub fn with_environment_encoding(mut self, encoding: Option<String>) -> Self {
-        Arc::make_mut(&mut self.0).environment_encoding = encoding
+        Arc::make_mut(&mut self.parameters).environment_encoding = encoding
             .as_deref()
             .and_then(moli_encoding::encoding_for_label)
             .map(|encoding| encoding.name().to_owned());
@@ -133,15 +162,15 @@ impl StylesheetFetchOptions {
     }
 
     pub fn environment_encoding(&self) -> Option<&str> {
-        self.0.environment_encoding.as_deref()
+        self.parameters.environment_encoding.as_deref()
     }
 
     pub fn fetch_priority(&self) -> Option<&str> {
-        self.0.fetch_priority.as_deref()
+        self.parameters.fetch_priority.as_deref()
     }
 
     pub fn quirks_mode_mime_compatibility(&self) -> bool {
-        self.0.quirks_mode_mime_compatibility
+        self.parameters.quirks_mode_mime_compatibility
     }
 
     pub fn is_empty(&self) -> bool {
@@ -479,6 +508,7 @@ pub(crate) enum PreparedStylesheetResponse {
 pub struct PreparedStylesheetFetch {
     pub(crate) response: PreparedStylesheetResponse,
     pub(crate) on_published: Option<StylesheetPublishedCallback>,
+    pub(crate) render_blocking_timing: Option<ResourceRenderBlockingTiming>,
 }
 
 impl PreparedStylesheetFetch {
@@ -486,6 +516,7 @@ impl PreparedStylesheetFetch {
         Self {
             response: PreparedStylesheetResponse::Pending(response),
             on_published: None,
+            render_blocking_timing: None,
         }
     }
 
@@ -495,7 +526,13 @@ impl PreparedStylesheetFetch {
         Self {
             response: PreparedStylesheetResponse::Reused(terminal),
             on_published: None,
+            render_blocking_timing: None,
         }
+    }
+
+    pub fn with_render_blocking_timing(mut self, timing: ResourceRenderBlockingTiming) -> Self {
+        self.render_blocking_timing = Some(timing);
+        self
     }
 
     pub fn with_published_callback(
@@ -573,6 +610,7 @@ pub trait StylesheetFetcher: Clone + Send + 'static {
         &self,
         document_url: Url,
         urls: Vec<Url>,
+        render_blocking: bool,
     ) -> Pin<Box<dyn Future<Output = StylesheetImportGraphFetchResult> + Send + 'static>> {
         let fetcher = self.clone();
         Box::pin(async move {
@@ -585,10 +623,11 @@ pub trait StylesheetFetcher: Clone + Send + 'static {
                         .fetch_stylesheet_resource(
                             fetch_document_url,
                             url.clone(),
-                            StylesheetFetchOptions::default(),
+                            StylesheetFetchOptions::default().with_render_blocking(render_blocking),
                         )
                         .await;
                     StylesheetImportNetworkResult::new(url, start_unix_millis, terminal)
+                        .with_render_blocking(render_blocking)
                 }
             });
             let network_results = futures_util::future::join_all(pending).await;
@@ -626,6 +665,7 @@ struct StylesheetFetchRequest {
     terminal: OnceLock<Arc<StylesheetFetchTerminal>>,
     resource_timing_initiator_type: &'static str,
     resource_timing_initiator_url: OnceLock<String>,
+    render_blocking_timing: ResourceRenderBlockingTiming,
     physical_observation_emitted: AtomicBool,
 }
 
@@ -636,11 +676,15 @@ impl StylesheetFetch {
         options: StylesheetFetchOptions,
         start_unix_millis: f64,
         resource_timing_initiator_type: &'static str,
+        render_blocking_timing: Option<ResourceRenderBlockingTiming>,
     ) -> Self {
         let key = options.resource_key(request_url);
+        let render_blocking_timing = render_blocking_timing
+            .unwrap_or_else(|| ResourceRenderBlockingTiming::new(options.render_blocking()));
         Self(Arc::new(StylesheetFetchRequest {
             document_url,
             key,
+            render_blocking_timing,
             options,
             start_unix_millis,
             started_at: std::time::Instant::now(),
@@ -671,6 +715,18 @@ impl StylesheetFetch {
 
     pub fn resource_timing_initiator_type(&self) -> &'static str {
         self.0.resource_timing_initiator_type
+    }
+
+    pub fn render_blocking(&self) -> bool {
+        self.0.render_blocking_timing.is_blocking()
+    }
+
+    pub fn render_blocking_timing(&self) -> ResourceRenderBlockingTiming {
+        self.0.render_blocking_timing.clone()
+    }
+
+    pub(crate) fn note_render_blocking_consumer(&self) {
+        self.0.render_blocking_timing.mark_blocking();
     }
 
     pub fn resource_timing_initiator_url(&self) -> Option<&str> {
@@ -750,6 +806,7 @@ pub struct StylesheetFetchNetworkResult {
     pub request_url: Url,
     pub owner_node_ids: Vec<NodeId>,
     pub start_unix_millis: f64,
+    pub render_blocking: bool,
     pub terminal: Arc<StylesheetFetchTerminal>,
 }
 

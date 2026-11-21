@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 
 use anyhow::{Result, anyhow};
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
@@ -32,6 +35,41 @@ impl PreloadResponseFilter {
             Self::Network(kind) => kind.is_readable(),
             Self::ServiceWorker(metadata) => metadata.response_type.is_readable(),
         }
+    }
+}
+
+const TIMING_RENDER_BLOCKING: u8 = 1;
+const TIMING_REPORTED: u8 = 2;
+
+/// Render-blocking status of one physical resource request. An eligible
+/// consumer can upgrade a preload up to the point its timing is reported.
+#[derive(Debug, Clone)]
+pub struct ResourceRenderBlockingTiming(Arc<AtomicU8>);
+
+impl ResourceRenderBlockingTiming {
+    pub fn new(render_blocking: bool) -> Self {
+        Self(Arc::new(AtomicU8::new(if render_blocking {
+            TIMING_RENDER_BLOCKING
+        } else {
+            0
+        })))
+    }
+
+    pub fn mark_blocking(&self) {
+        let _ = self.0.compare_exchange(
+            0,
+            TIMING_RENDER_BLOCKING,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
+
+    pub fn is_blocking(&self) -> bool {
+        self.0.load(Ordering::Relaxed) & TIMING_RENDER_BLOCKING != 0
+    }
+
+    pub fn report(&self) -> bool {
+        self.0.fetch_or(TIMING_REPORTED, Ordering::Relaxed) & TIMING_RENDER_BLOCKING != 0
     }
 }
 

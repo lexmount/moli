@@ -3,7 +3,10 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use moli_fetch::{BrowserRequestMetadata, Request, RequestCredentialsMode, RequestMode};
+use moli_fetch::{
+    BrowserRequestMetadata, Request, RequestCredentialsMode, RequestMode,
+    ResourceRenderBlockingTiming,
+};
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 use url::Url;
@@ -81,6 +84,7 @@ impl PreloadKey {
 
 struct PreloadEntry {
     integrity: String,
+    render_blocking_timing: ResourceRenderBlockingTiming,
     result: Mutex<Option<PreloadResult>>,
     available: Notify,
 }
@@ -133,6 +137,7 @@ impl DocumentPreloads {
                 .and_then(|metadata| metadata.integrity.as_deref())
                 .unwrap_or_default()
                 .to_owned(),
+            render_blocking_timing: ResourceRenderBlockingTiming::new(request.render_blocking()),
             result: Mutex::new(None),
             available: Notify::new(),
         });
@@ -169,9 +174,11 @@ impl DocumentPreloads {
         ) {
             return None;
         }
-        Some(DocumentPreloadConsumer {
-            entry: map.entries.remove(&key)?,
-        })
+        let entry = map.entries.remove(&key)?;
+        if request.render_blocking() {
+            entry.render_blocking_timing.mark_blocking();
+        }
+        Some(DocumentPreloadConsumer { entry })
     }
 
     pub(crate) fn retire(&self) {
@@ -192,6 +199,10 @@ pub(crate) struct DocumentPreloadProducer {
 }
 
 impl DocumentPreloadProducer {
+    pub(crate) fn render_blocking_timing(&self) -> ResourceRenderBlockingTiming {
+        self.entry.render_blocking_timing.clone()
+    }
+
     pub(crate) fn complete(self, result: PreloadResult) {
         self.entry.complete(result);
     }
@@ -209,6 +220,10 @@ pub(crate) struct DocumentPreloadConsumer {
 }
 
 impl DocumentPreloadConsumer {
+    pub(crate) fn render_blocking_timing(&self) -> ResourceRenderBlockingTiming {
+        self.entry.render_blocking_timing.clone()
+    }
+
     pub(crate) fn try_response(&self) -> Option<PreloadResult> {
         self.entry.result.lock().clone().map(|result| {
             result.map(|mut preload| {
@@ -319,6 +334,25 @@ mod tests {
                 crate::types::FetchResponseType::Opaque
             ))
         );
+    }
+
+    #[test]
+    fn render_blocking_consumption_upgrades_only_unreported_preload_timing() {
+        let request = request();
+        let consumer_request = request.clone().with_render_blocking(true);
+        let preloads = DocumentPreloads::default();
+        let pending = preloads.register(&request).unwrap();
+        let pending_timing = pending.render_blocking_timing();
+        assert!(!pending_timing.is_blocking());
+        assert!(preloads.consume(&consumer_request).is_some());
+        assert!(pending_timing.report());
+
+        let completed = preloads.register(&request).unwrap();
+        let completed_timing = completed.render_blocking_timing();
+        completed.complete(Ok(response()));
+        assert!(!completed_timing.report());
+        assert!(preloads.consume(&consumer_request).is_some());
+        assert!(!completed_timing.report());
     }
 
     #[tokio::test]

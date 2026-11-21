@@ -1308,6 +1308,10 @@ impl ParserStreamDocumentSnapshot {
         self.0
     }
 
+    pub(crate) fn native_dom(&self) -> &NativeDom {
+        &self.0
+    }
+
     pub fn nodes(&self) -> NativeDomNodes<'_> {
         self.0.nodes()
     }

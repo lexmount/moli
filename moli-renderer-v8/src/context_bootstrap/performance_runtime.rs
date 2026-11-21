@@ -261,6 +261,7 @@ pub(crate) struct ResourcePerformanceEntry {
     encoded_body_size: f64,
     decoded_body_size: f64,
     render_blocking_status: String,
+    render_blocking_timing: Option<moli_fetch::ResourceRenderBlockingTiming>,
     response_status: f64,
     content_type: String,
     delivery_type: String,
@@ -304,6 +305,17 @@ impl ResourcePerformanceEntry {
 
     pub(crate) fn clear_initiator(&mut self) {
         self.initiator_url.clear();
+    }
+
+    pub(crate) fn mark_render_blocking(&mut self) {
+        self.render_blocking_status = "blocking".to_owned();
+    }
+
+    pub(crate) fn track_render_blocking(
+        &mut self,
+        timing: moli_fetch::ResourceRenderBlockingTiming,
+    ) {
+        self.render_blocking_timing = Some(timing);
     }
 
     pub(crate) fn from_network_result(
@@ -409,9 +421,8 @@ impl ResourcePerformanceEntry {
             transfer_size,
             encoded_body_size: body_size,
             decoded_body_size: body_size,
-            // The fetch lifecycle does not yet retain render-blocking metadata.
-            // Avoid claiming that a resource blocked rendering until it does.
             render_blocking_status: "non-blocking".to_owned(),
+            render_blocking_timing: None,
             response_status: f64::from(response_status),
             content_type,
             delivery_type: if cache_state == moli_fetch::ResponseCacheState::None {
@@ -509,6 +520,7 @@ impl ResourcePerformanceEntry {
             encoded_body_size: 0.0,
             decoded_body_size: 0.0,
             render_blocking_status: "non-blocking".to_owned(),
+            render_blocking_timing: None,
             response_status: 0.0,
             content_type: String::new(),
             delivery_type: String::new(),
@@ -566,13 +578,19 @@ fn initialize_service_worker_timing_slots<'s>(
 
 pub(crate) fn record_resource_performance_entry(
     scope: &mut v8::PinScope<'_, '_>,
-    entry: ResourcePerformanceEntry,
+    mut entry: ResourcePerformanceEntry,
 ) {
     if entry.preload_state.is_consumed() {
         return;
     }
     if !url::Url::parse(&entry.name).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
         return;
+    }
+    // Queuing for a lazy Performance object still records the timing.
+    if let Some(timing) = entry.render_blocking_timing.take()
+        && timing.report()
+    {
+        entry.mark_render_blocking();
     }
     let Some(performance) = window_performance_value(scope) else {
         window_state::queue_pending_resource_entry(scope, entry);

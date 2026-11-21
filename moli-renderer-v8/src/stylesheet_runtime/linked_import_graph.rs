@@ -409,7 +409,8 @@ impl DocumentRuntime {
             .and_then(|terminal| {
                 super::import_graph::stylesheet_import_options(&terminal, &document_options)
             })
-            .expect("a linked import graph requires a usable root response");
+            .expect("a linked import graph requires a usable root response")
+            .with_render_blocking(fetch.render_blocking());
         resource_loader.spawn_resource_task(async move {
             let (graph, network_results) =
                 super::import_graph_projection::fetch_observed_stylesheet_import_graph(

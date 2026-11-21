@@ -4832,6 +4832,13 @@ impl PageVm {
             );
         }
 
+        // The parser or a script may have created a body since the scan.
+        let render_blocking = options.render_blocking()
+            && document
+                .dom_host()
+                .dom()
+                .document_allows_adding_render_blocking_elements(document.document_handle());
+        let options = options.with_render_blocking(render_blocking);
         if inline_style.is_some() {
             self.vm_mut().document_runtime.preload_inline_style_import(
                 request_url,

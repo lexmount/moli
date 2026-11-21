@@ -620,6 +620,34 @@ async fn document_start_script_initializes_main_world_before_parser_script() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stylesheet_preload_timing_is_available_to_the_first_parser_script() {
+    for (source, initiator, render_blocking) in [
+        (
+            "<link rel=preload as=style href=/preload.css>",
+            "link",
+            "non-blocking",
+        ),
+        (
+            "<link rel=stylesheet href=/preload.css>",
+            "link",
+            "blocking",
+        ),
+        ("<style>@import '/preload.css';</style>", "css", "blocking"),
+        (
+            "</head><body><link rel=stylesheet blocking=render href=/preload.css>",
+            "link",
+            "non-blocking",
+        ),
+        (
+            "Visible text<style>@import '/preload.css';</style>",
+            "css",
+            "non-blocking",
+        ),
+    ] {
+        assert_early_stylesheet_timing(source, initiator, render_blocking).await;
+    }
+}
+
+async fn assert_early_stylesheet_timing(source: &str, initiator: &str, render_blocking: &str) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = url::Url::parse(&format!(
         "http://{}/page.html",
@@ -647,7 +675,9 @@ async fn stylesheet_preload_timing_is_available_to_the_first_parser_script() {
             }
         }
         gate.await.unwrap();
-        let script = "globalThis.preloadCountInFirstScript = performance.getEntriesByName(new URL('/preload.css',location.href).href).length;";
+        let script = r#"globalThis.timingInFirstScript = JSON.stringify(performance
+            .getEntriesByName(new URL('/preload.css', location.href).href)
+            .map(entry => [entry.initiatorType, entry.renderBlockingStatus]));"#;
         blocked_script.unwrap().write_all(format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{script}", script.len(),
         ).as_bytes()).await.unwrap();
@@ -662,13 +692,7 @@ async fn stylesheet_preload_timing_is_available_to_the_first_parser_script() {
     let (completion_tx, completion_rx) = oneshot::channel();
     let (body_tx, body) = ExternalRawDocumentBodyStream::channel(completion_rx);
     body_tx
-        .send(
-            br#"<!doctype html><head>
-<script src=/gate.js></script>
-<link rel=preload as=style href=/preload.css>
-</head><body>parser preload"#
-                .to_vec(),
-        )
+        .send(format!("<!doctype html><head><script src=/gate.js></script>{source}").into_bytes())
         .await
         .unwrap();
     let prepared = tokio::time::timeout(
@@ -737,16 +761,26 @@ async fn stylesheet_preload_timing_is_available_to_the_first_parser_script() {
     })
     .await
     .expect("releasing the script and the stream must finish the real Document");
+    let expected = serde_json::to_string(&[[initiator, render_blocking]]).unwrap();
     assert_eq!(
-        evaluate_lazy_test(&page, "preloadCountInFirstScript").await,
-        1
+        evaluate_lazy_test(&page, "timingInFirstScript").await,
+        expected.as_str(),
+        "{source}"
     );
     let expression = format!(
-        "JSON.stringify(performance.getEntriesByName({}).map(entry => entry.initiatorType))",
+        "JSON.stringify(performance.getEntriesByName({}).map(entry => [entry.initiatorType, entry.renderBlockingStatus]))",
         serde_json::to_string(resource_url.as_str()).unwrap(),
     );
-    assert_eq!(evaluate_lazy_test(&page, &expression).await, r#"["link"]"#);
-    assert_eq!(evaluate_lazy_test(&page, &expression).await, r#"["link"]"#);
+    assert_eq!(
+        evaluate_lazy_test(&page, &expression).await,
+        expected.as_str(),
+        "{source}"
+    );
+    assert_eq!(
+        evaluate_lazy_test(&page, &expression).await,
+        expected.as_str(),
+        "{source}"
+    );
     assert_main_world_count(&page, 1).await;
     server.await.unwrap();
     page.close_async().await.unwrap();

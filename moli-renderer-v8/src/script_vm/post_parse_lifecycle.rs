@@ -2563,6 +2563,7 @@ impl ScriptVm {
                 network_observed,
                 resource_timing,
                 resource_timing_initiator_type,
+                render_blocking,
                 import_options,
                 consumed_preload_error,
                 document_owner,
@@ -2603,6 +2604,11 @@ impl ScriptVm {
                         &result,
                     )
                 });
+                if let Some(fetch) = &stylesheet_fetch {
+                    entry.track_render_blocking(fetch.render_blocking_timing());
+                } else if render_blocking {
+                    entry.mark_render_blocking();
+                }
                 if !has_connected_link_timing
                     && let (Some(fetch), Ok(response)) = (stylesheet_fetch.as_ref(), &result)
                 {

@@ -1517,6 +1517,9 @@ impl DocumentRuntime {
                             .is_none_or(|filter| filter.is_readable()),
                     );
                 }
+                if let Some(producer) = &preload {
+                    entry.track_render_blocking(producer.render_blocking_timing());
+                }
                 let resource_timing =
                     timing.completed_at(entry, native.response_end_at().unwrap_or(completed));
                 let preload = preload.map(|producer| {
@@ -1535,6 +1538,7 @@ impl DocumentRuntime {
                         network_observed: false,
                         resource_timing: Some(Box::new(resource_timing)),
                         resource_timing_initiator_type: "link",
+                        render_blocking: false,
                         import_options: None,
                         consumed_preload_error: false,
                         document_owner,
@@ -1728,8 +1732,11 @@ impl DocumentRuntime {
             .document_url()
             .clone();
         let resource_loader = stylesheet_fetcher.resource_loader().clone();
-        let options =
-            stylesheet_fetcher.prepare_stylesheet_fetch_options(StylesheetFetchOptions::default());
+        let render_blocking =
+            moli_stylesheet_blocking::style_element_render_blocking(&self.dom_host, handle);
+        let options = stylesheet_fetcher.prepare_stylesheet_fetch_options(
+            StylesheetFetchOptions::default().with_render_blocking(render_blocking),
+        );
         resource_loader.spawn_resource_task(async move {
             let (graph, network_results) = fetch_observed_stylesheet_import_graph(
                 stylesheet_fetcher,

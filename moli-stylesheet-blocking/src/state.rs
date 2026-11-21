@@ -80,6 +80,7 @@ impl StylesheetBlockingState {
                 document_url,
                 input.node_id(),
                 input.signature().clone(),
+                input.render_blocking(),
             );
         }
     }
@@ -98,6 +99,7 @@ impl StylesheetBlockingState {
                 document_url,
                 blocker.node_id(),
                 blocker.signature().clone(),
+                blocker.render_blocking(),
             );
         }
     }
@@ -108,6 +110,7 @@ impl StylesheetBlockingState {
         document_url: &Url,
         node_id: NodeId,
         signature: DocumentBlockingStylesheetSignature,
+        render_blocking: bool,
     ) where
         F: StylesheetFetcher,
     {
@@ -133,7 +136,12 @@ impl StylesheetBlockingState {
                 StylesheetBlockingResource::Link(fetch)
             }
             DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => {
-                self.spawn_style_import_operation(fetcher.clone(), &operation, urls.clone());
+                self.spawn_style_import_operation(
+                    fetcher.clone(),
+                    &operation,
+                    urls.clone(),
+                    render_blocking,
+                );
                 StylesheetBlockingResource::StyleImports {
                     status: StylesheetBlockingStatus::Pending,
                     completed_graph: None,
@@ -154,6 +162,7 @@ impl StylesheetBlockingState {
         fetcher: F,
         operation: &StylesheetBlockingOperation,
         urls: Vec<Url>,
+        render_blocking: bool,
     ) where
         F: StylesheetFetcher,
     {
@@ -167,7 +176,7 @@ impl StylesheetBlockingState {
         let task_fetcher = fetcher.clone();
         fetcher.spawn_stylesheet_task(Box::pin(async move {
             let graph = task_fetcher
-                .fetch_stylesheet_import_graph(document_url, urls)
+                .fetch_stylesheet_import_graph(document_url, urls, render_blocking)
                 .await;
             let completion = StylesheetCompletion::style_imports(StylesheetImportCompletion {
                 operation,
@@ -387,6 +396,9 @@ impl StylesheetBlockingState {
                     || fetcher.reuse_completed_stylesheets())
             {
                 if !preload {
+                    if options.render_blocking() && (terminal.is_none() || cached.unused_preload) {
+                        cached.fetch.note_render_blocking_consumer();
+                    }
                     cached.unused_preload = false;
                 }
                 return cached.fetch.clone();
@@ -398,12 +410,15 @@ impl StylesheetBlockingState {
         // this newly pending transfer.
         let start_unix_millis = moli_time::unix_epoch_millis();
         let request_url = resource_key.request_url().clone();
+        let prepared =
+            fetcher.prepare_stylesheet_resource(document_url.clone(), request_url, options.clone());
         let fetch = StylesheetFetch::new(
             document_url.clone(),
-            request_url.clone(),
-            options.clone(),
+            resource_key.request_url().clone(),
+            options,
             start_unix_millis,
             fetcher.resource_timing_initiator_type(),
+            prepared.render_blocking_timing,
         );
         let sender = self.completion_source.sender();
         let completion_wake = self.completion_wake.clone();
@@ -423,7 +438,6 @@ impl StylesheetBlockingState {
                 unused_preload: preload,
             },
         );
-        let prepared = fetcher.prepare_stylesheet_resource(document_url, request_url, options);
         let response = match prepared.response {
             crate::fetcher::PreparedStylesheetResponse::Reused(terminal) => {
                 fetch.finish(Arc::new(terminal));
@@ -662,6 +676,7 @@ impl StylesheetBlockingState {
                         blocking_operation: None,
                         document_url: fetch.document_url().clone(),
                         request_url: fetch.request_url().clone(),
+                        render_blocking: fetch.render_blocking(),
                         owner_node_ids: Vec::new(),
                         start_unix_millis: fetch.start_unix_millis(),
                         terminal,
@@ -682,6 +697,7 @@ impl StylesheetBlockingState {
                 let retained_graph = Arc::new(graph.clone());
                 let (successful, network_results) = graph.into_parts();
                 for network_result in network_results {
+                    let render_blocking = network_result.render_blocking();
                     let (request_url, start_unix_millis, terminal) = network_result.into_parts();
                     self.ready_network_results
                         .push_back(StylesheetFetchNetworkResult {
@@ -689,6 +705,7 @@ impl StylesheetBlockingState {
                             blocking_operation: Some(operation.clone()),
                             document_url: operation.document_url().clone(),
                             request_url,
+                            render_blocking,
                             owner_node_ids: owner_node_ids.clone(),
                             start_unix_millis,
                             terminal: Arc::new(terminal),
@@ -1064,6 +1081,7 @@ mod tests {
             StylesheetFetchOptions::default(),
             1.0,
             "link",
+            None,
         );
         let first_clone = first.clone();
         let distinct = StylesheetFetch::new(
@@ -1072,6 +1090,7 @@ mod tests {
             StylesheetFetchOptions::default(),
             1.0,
             "link",
+            None,
         );
         let mut identities = HashSet::new();
 
@@ -1316,6 +1335,7 @@ mod tests {
             let candidate = DocumentOwnedBlockingStylesheetCandidate::ParserCreatedStyleImport {
                 node_id,
                 urls: vec![url],
+                render_blocking: false,
             };
             DocumentOwnedStylesheetDiscoveryInput::from(
                 &DocumentOwnedBlockingStylesheet::from_candidate(&candidate),
