@@ -747,11 +747,7 @@ fn apply_child_window_event_handler_return<'s>(
         returned.is_boolean() && !returned.boolean_value(scope)
     };
     if should_cancel && crate::context_bootstrap::event_bool_attribute(scope, event, "cancelable") {
-        let _ = crate::context_bootstrap::event_backing(scope, event).set(
-            scope,
-            v8str(scope, "defaultPrevented").into(),
-            v8::Boolean::new(scope, true).into(),
-        );
+        crate::context_bootstrap::set_event_default_prevented(scope, event);
     }
 }
 
