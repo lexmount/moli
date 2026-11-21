@@ -211,3 +211,37 @@ fn focusing_frame_owner_then_input_dispatches_child_window_focus_and_blur() {
         "top-window-blur,frame-focus,child-window-focus,frame-blur,child-window-blur,input-focus,top-window-focus|true"
     );
 }
+
+#[test]
+fn blurring_a_focused_frame_returns_focus_to_its_parent_viewport() {
+    let mut vm = new_storage_test_vm("https://focus-frame-blur.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const outer = document.createElement('iframe');
+  body.append(outer);
+  const parent = outer.contentDocument;
+  const frame = parent.createElement('iframe');
+  parent.body.append(frame);
+  frame.focus();
+
+  const events = [];
+  window.onfocus = () => events.push('top-focus');
+  parent.defaultView.onfocus = () => events.push('parent-focus');
+  frame.contentWindow.onblur = () => events.push('child-blur');
+
+  frame.blur();
+  frame.blur();
+  return events.join(',');
+})()
+"#,
+        )
+        .expect("nested frame blur should return focus to its owner viewport");
+
+    assert_eq!(result, "child-blur,parent-focus");
+}
