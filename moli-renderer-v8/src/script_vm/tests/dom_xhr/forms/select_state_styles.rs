@@ -96,7 +96,11 @@ fn selection_changes_refresh_required_select_and_container_validity_styles() {
     const INVALID_COLORS: &str = r#"["rgb(1, 2, 3)","rgb(1, 2, 3)","rgb(1, 2, 3)"]"#;
     const VALID_COLORS: &str = r#"["rgb(4, 5, 6)","rgb(4, 5, 6)","rgb(4, 5, 6)"]"#;
     let mut observed = Vec::new();
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
         for (case, change) in [
             ("selectedIndex", "validitySelect.selectedIndex=1"),
             ("value", "validitySelect.value='b'"),
