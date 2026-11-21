@@ -292,11 +292,29 @@ impl CdpConnection {
 }
 
 impl BrowserContext {
-    pub(crate) fn effective_active_emulated_device_metrics(&self) -> Option<EmulatedDeviceMetrics> {
-        self.active_page_target()
+    pub(crate) fn initial_viewport_for_target(
+        &self,
+        target: Option<&crate::conn::PageTargetHost>,
+    ) -> Option<moli_page_types::ViewportSurface> {
+        self.default_emulated_device_metrics
+            .as_ref()
+            .map(EmulatedDeviceMetrics::viewport_surface)
+            .or_else(|| {
+                target
+                    .and_then(|target| target.window_identity().auxiliary_window())
+                    .and_then(|window| window.initial_viewport())
+            })
+    }
+
+    pub(crate) fn effective_viewport_for_target(
+        &self,
+        target: &crate::conn::PageTargetHost,
+    ) -> Option<moli_page_types::ViewportSurface> {
+        target
             .effective_emulation_state
             .emulated_device_metrics
-            .clone()
-            .or_else(|| self.default_emulated_device_metrics.clone())
+            .as_ref()
+            .map(EmulatedDeviceMetrics::viewport_surface)
+            .or_else(|| self.initial_viewport_for_target(Some(target)))
     }
 }

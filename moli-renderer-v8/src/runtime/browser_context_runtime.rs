@@ -633,18 +633,20 @@ impl RendererBrowserContextRuntime {
 
     /// Allocate a stable auxiliary-context identity from this browser context.
     pub fn new_auxiliary_window(&self) -> RendererAuxiliaryWindow {
-        self.new_auxiliary_window_with_sandbox(Default::default())
+        self.new_auxiliary_window_with_sandbox(Default::default(), None)
     }
 
     pub(crate) fn new_auxiliary_window_with_sandbox(
         &self,
         sandbox: crate::document_runtime::DocumentSandboxPolicy,
+        initial_viewport: Option<moli_page_types::ViewportSurface>,
     ) -> RendererAuxiliaryWindow {
         RendererAuxiliaryWindow::new(
             self.inner
                 .next_auxiliary_window_id
                 .fetch_add(1, Ordering::Relaxed),
             sandbox,
+            initial_viewport,
         )
     }
 

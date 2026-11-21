@@ -320,6 +320,7 @@ fn navigate_element_popup_target(
             creator.base_url,
             creator.policy_container,
             false,
+            None,
         ) {
             Ok(opened) => opened,
             Err(error) => {
@@ -382,6 +383,7 @@ fn navigate_element_popup_target(
         creator.base_url,
         creator.policy_container,
         false,
+        None,
     ) else {
         let window_open_event = RendererPendingWindowOpenEvent::browser_window(
             resolved_url,
@@ -592,6 +594,7 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
                 creator.base_url,
                 creator.policy_container,
                 false,
+                None,
             )
             .ok()?;
         if !opened.prepare_navigation_activation(scope) {
@@ -648,6 +651,7 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
             creator.base_url,
             creator.policy_container,
             false,
+            None,
         ),
     }?;
     if !opened.allows_navigation_activation(scope, runtime) {

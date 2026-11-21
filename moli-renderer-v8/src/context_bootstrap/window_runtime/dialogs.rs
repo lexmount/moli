@@ -23,7 +23,7 @@ use crate::{
     },
     webidl,
 };
-use moli_window_features::WindowOpenFeatures;
+use moli_window_features::{WindowOpenFeatures, WindowOpenGeometry};
 use url::Url;
 
 #[derive(webidl::WebIdlArgs)]
@@ -468,6 +468,11 @@ pub(crate) fn window_open_callback<'s>(
     let popup_source_scope = source_child_handle
         .map(OwnerDispatchScope::Child)
         .unwrap_or(source_scope);
+    let viewport = window_open_viewport(
+        host.window_viewport_surface(popup_source_scope)
+            .unwrap_or_default(),
+        parsed_features.geometry(),
+    );
     let opener = (!suppress_opener).then_some(entered_window);
     let opener_child_handle = opener.and(source_child_handle);
     let popup_disposition = match host
@@ -494,6 +499,7 @@ pub(crate) fn window_open_callback<'s>(
             entered_base_url,
             creator_policy_container,
             true,
+            Some(viewport),
         ) {
             Ok(opened) => {
                 if opened.pending_page.is_some()
@@ -587,6 +593,7 @@ pub(crate) fn window_open_callback<'s>(
                 entered_base_url,
                 creator_policy_container,
                 true,
+                Some(viewport),
             ),
         }
     } else {
@@ -779,6 +786,50 @@ fn window_open_entered_window<'s>(
             host.lightweight_popup_window(scope, popup_id)
         }
     }
+}
+
+fn window_open_viewport(
+    mut surface: moli_page_types::ViewportSurface,
+    geometry: WindowOpenGeometry,
+) -> moli_page_types::ViewportSurface {
+    let dimension = |requested: Option<i32>, available: u32| {
+        requested
+            .filter(|&value| value != 0)
+            .map(|value| (value.max(1) as u32).min(available.max(1)))
+    };
+    let width = dimension(geometry.width, surface.screen_avail_width);
+    let height = dimension(geometry.height, surface.screen_avail_height);
+    if let Some(width) = width {
+        surface.inner_width = width;
+        surface.outer_width = width;
+    }
+    if let Some(height) = height {
+        surface.inner_height = height;
+        surface.outer_height = height;
+    }
+    if width.is_some() || height.is_some() {
+        // A new widget with explicit dimensions owns its visible extent.
+        surface.emulated_view = None;
+    }
+    let position = |requested: i32, available: u32, extent: u32| {
+        let limit = available.saturating_sub(extent).min(i32::MAX as u32) as i32;
+        requested.clamp(0, limit)
+    };
+    if geometry.x.is_some() || width.is_some() {
+        surface.window_x = position(
+            geometry.x.unwrap_or(surface.window_x),
+            surface.screen_avail_width,
+            surface.outer_width,
+        );
+    }
+    if geometry.y.is_some() || height.is_some() {
+        surface.window_y = position(
+            geometry.y.unwrap_or(surface.window_y),
+            surface.screen_avail_height,
+            surface.outer_height,
+        );
+    }
+    surface
 }
 
 fn popup_target_can_use_lightweight_window(target_name: &str, href: &str) -> bool {

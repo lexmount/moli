@@ -889,6 +889,20 @@ impl PageScriptHost {
             })
     }
 
+    pub(crate) fn window_viewport_surface(
+        &self,
+        window: OwnerDispatchScope,
+    ) -> Option<moli_page_types::ViewportSurface> {
+        if let OwnerDispatchScope::LightweightPopup(id) = window
+            && let Some(surface) = self
+                .lightweight_popup_record(id)
+                .and_then(|record| record.auxiliary_window.initial_viewport())
+        {
+            return Some(surface);
+        }
+        self.viewport_surface()
+    }
+
     pub(crate) fn open_lightweight_popup_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -900,6 +914,7 @@ impl PageScriptHost {
         creator_base_url: Url,
         creator_policy_container: DocumentPolicyContainer,
         update_existing_opener: bool,
+        initial_viewport: Option<moli_page_types::ViewportSurface>,
     ) -> Option<OpenedLightweightPopup<'s>> {
         let creator_scope =
             source_scope.unwrap_or_else(|| self.entered_owner_dispatch_scope(scope));
@@ -932,6 +947,7 @@ impl PageScriptHost {
             creator_policy_container,
             creator_is_secure_context,
             receiver,
+            initial_viewport,
         )?;
         Some(OpenedLightweightPopup {
             window,
@@ -1044,6 +1060,7 @@ impl PageScriptHost {
         creator_policy_container: DocumentPolicyContainer,
         creator_is_secure_context: bool,
         response: Option<crate::runtime::AuxiliaryDocumentResponseReceiver>,
+        initial_viewport: Option<moli_page_types::ViewportSurface>,
     ) -> Option<(v8::Local<'s, v8::Object>, u64)> {
         let parsed_url = Url::parse(href).ok()?;
         // A pending navigation starts with an about:blank Document that
@@ -1097,7 +1114,7 @@ impl PageScriptHost {
             .set(trackable_lightweight_popup_window_name(target_name).unwrap_or_default());
         let auxiliary_window = self
             .browser_context_runtime
-            .new_auxiliary_window_with_sandbox(initial_policy_container.sandbox);
+            .new_auxiliary_window_with_sandbox(initial_policy_container.sandbox, initial_viewport);
         let popup_id = auxiliary_window.id();
         let (window, facade_context) = self.bridge.bindings.instantiate_window_proxy_shell(scope);
         let initial_document_owner = self.allocate_lightweight_popup_document_owner(popup_id);

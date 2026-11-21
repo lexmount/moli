@@ -621,8 +621,7 @@ fn window_screen_position_getter<'s>(
         return;
     };
     let receiver = callback_this_object(scope, &args);
-    let position = super::window_accessors::window_host_ptr(scope, receiver)
-        .and_then(|host| unsafe { &*host }.viewport_surface())
+    let position = super::window_accessors::window_viewport_surface(scope, receiver)
         .map(|surface| {
             if matches!(name, "screenX" | "screenLeft") {
                 surface.window_x

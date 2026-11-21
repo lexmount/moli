@@ -323,11 +323,6 @@ impl TargetNavigationLoadInputs {
             .network_conditions
             .or(browser_context.default_network_conditions)
             .or(browser_context.global_network_conditions);
-        let emulated_device_metrics = page_state
-            .effective_emulation_state
-            .emulated_device_metrics
-            .clone()
-            .or_else(|| browser_context.default_emulated_device_metrics.clone());
         let effective_policy = page_state.effective_policy();
         let document_activity = browser_context
             .document_activity_for_target(target_id)
@@ -386,9 +381,7 @@ impl TargetNavigationLoadInputs {
             scrollbars_hidden: page_state.effective_emulation_state.scrollbars_hidden,
             bypass_content_security_policy: page_state.devtools_sessions.page_bypass_csp_enabled(),
             emulated_media: (&page_state.effective_emulation_state.emulated_media).into(),
-            viewport_surface: emulated_device_metrics
-                .as_ref()
-                .map(|metrics| metrics.viewport_surface()),
+            viewport_surface: browser_context.effective_viewport_for_target(target),
             document_activity,
             network_offline: page_state.network_policy.network_offline()
                 || effective_network_conditions

@@ -264,6 +264,7 @@ impl ScriptVm {
                 creator_base_url.clone(),
                 crate::document_runtime::DocumentPolicyContainer::default(),
                 false,
+                None,
             );
             let popup_id = opened_popup.as_ref().map(|popup| popup.popup_id);
             let document_response = opened_popup.and_then(|popup| popup.document_response);
@@ -348,6 +349,7 @@ impl ScriptVm {
                 creator_base_url.clone(),
                 crate::document_runtime::DocumentPolicyContainer::default(),
                 false,
+                None,
             );
             let popup_id = opened_popup.as_ref().map(|popup| popup.popup_id);
             let document_response = opened_popup.and_then(|popup| popup.document_response);

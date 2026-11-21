@@ -140,6 +140,7 @@ impl PageScriptHost {
         creator_base_url: Url,
         mut policy: DocumentPolicyContainer,
         update_existing_opener: bool,
+        initial_viewport: Option<moli_page_types::ViewportSurface>,
     ) -> Result<OpenedRendererWindow<'s>> {
         let environment = self
             .page_script_environment()
@@ -265,7 +266,7 @@ impl PageScriptHost {
             .fork_with_isolated_page_network_policy();
         let window = self
             .browser_context_runtime
-            .new_auxiliary_window_with_sandbox(policy.sandbox);
+            .new_auxiliary_window_with_sandbox(policy.sandbox, initial_viewport);
         let name = if exposes_opener {
             crate::runtime::RendererBrowsingContextName::new_auxiliary(self.browsing_context_name())
         } else {
@@ -312,7 +313,7 @@ impl PageScriptHost {
                 script_execution_disabled: !policy.sandbox.allows_scripts,
                 debugger_enabled: self.dom_debugger_state.debugger_pauses_enabled(),
                 navigator_overrides: self.navigator_overrides().clone(),
-                viewport_surface: self.viewport_surface(),
+                viewport_surface: initial_viewport.or_else(|| self.viewport_surface()),
                 ..Default::default()
             },
             network_offline: false,

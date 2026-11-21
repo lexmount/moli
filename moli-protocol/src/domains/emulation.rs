@@ -1051,9 +1051,12 @@ fn start_device_metrics_override_command(
     let previous = conn.target_session_owner_emulated_device_metrics_for_owner(&owner);
     let mut base = conn
         .target_owner_identity_for_owner(&owner)
-        .and_then(|(context_id, _)| conn.browser_context_by_id(&context_id))
-        .and_then(|context| context.default_emulated_device_metrics.as_ref())
-        .map(EmulatedDeviceMetrics::viewport_surface)
+        .and_then(|(context_id, target_id)| {
+            let context = conn.browser_context_by_id(&context_id)?;
+            context.initial_viewport_for_target(
+                target_id.as_deref().and_then(|id| context.page_target(id)),
+            )
+        })
         .unwrap_or_default();
     if let Some(state) = conn.target_owner_state_for_owner(&owner) {
         let geometry = state.window_surface_geometry;
@@ -1224,18 +1227,17 @@ fn set_viewport_metrics_from_command(
     owner: &CommandOwnerScope,
     command: &DevToolsSetViewportCommand,
 ) -> Result<EmulatedDeviceMetrics, DevToolsError> {
-    let current_metrics = conn.target_session_owner_emulated_device_metrics_for_owner(owner);
-    set_viewport_metrics_from_current(current_metrics.as_ref(), command)
+    let current = conn
+        .navigation_load_inputs_for_owner(owner)
+        .viewport_surface
+        .unwrap_or_default();
+    set_viewport_metrics_from_current(current, command)
 }
 
 fn set_viewport_metrics_from_current(
-    current_metrics: Option<&EmulatedDeviceMetrics>,
+    current: EmulatedViewportSurface,
     command: &DevToolsSetViewportCommand,
 ) -> Result<EmulatedDeviceMetrics, DevToolsError> {
-    let current = (current_metrics).map_or_else(
-        EmulatedViewportSurface::default,
-        crate::conn::EmulatedDeviceMetrics::viewport_surface,
-    );
     let default = EmulatedViewportSurface::default();
     let (width, height) = match command.viewport {
         DevToolsViewportSetting::Unchanged => (current.inner_width, current.inner_height),
@@ -2374,7 +2376,8 @@ fn prepare_devtools_set_viewport_for_browser_contexts(
     for browser_context_id in browser_context_ids {
         let current_default = conn
             .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.default_emulated_device_metrics.as_ref());
+            .and_then(|context| context.initial_viewport_for_target(None))
+            .unwrap_or_default();
         let metrics = set_viewport_metrics_from_current(current_default, &command)?;
         let browser_context = conn
             .browser_context_by_id_mut(&browser_context_id)

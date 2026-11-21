@@ -123,6 +123,18 @@ pub(crate) fn window_host_ptr(
         .or_else(|| context_host_ptr_from_global_bridge(scope))
 }
 
+pub(in crate::context_bootstrap) fn window_viewport_surface<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<moli_page_types::ViewportSurface> {
+    let host = unsafe { &*window_host_ptr(scope, receiver)? };
+    let dispatch = crate::native_bridge::lightweight_popup_id_from_window(scope, receiver).map_or(
+        OwnerDispatchScope::Top,
+        OwnerDispatchScope::LightweightPopup,
+    );
+    host.window_viewport_surface(dispatch)
+}
+
 pub(in crate::context_bootstrap) fn window_current_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
@@ -156,6 +168,11 @@ pub(crate) fn current_window_style_viewport(
     window_child_context_handle(scope, global)
         .and_then(|frame_handle| {
             crate::native_bridge::element::iframe_handle_viewport(host, frame_handle)
+        })
+        .or_else(|| {
+            let id = crate::native_bridge::lightweight_popup_id_from_window(scope, global)?;
+            host.window_viewport_surface(OwnerDispatchScope::LightweightPopup(id))
+                .map(crate::style_engine::StyleViewport::from_viewport_surface)
         })
         .unwrap_or_else(|| host.style_viewport())
 }
