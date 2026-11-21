@@ -4,8 +4,12 @@ import asyncio
 import base64
 import math
 from typing import Any
+from urllib.parse import urlsplit
+
+from playwright.async_api import async_playwright
 
 from ..assertions import SmokeError, assert_equal, record
+from ..diagnostics import new_cdp_session
 from ..navigation import (
     command as _success, navigate as _navigate, receive_response as _response_for_id,
     wait_for_load as _wait_for_load,
@@ -579,6 +583,7 @@ async def run_layout_screenshot_group(
 
     if is_moli:
         await _run_default_mock_boundary(fixture, results)
+        await _run_realtime_playwright_screenshot(fixture, results)
 
 
 async def _run_default_mock_boundary(
@@ -653,3 +658,125 @@ async def _run_default_mock_boundary(
                     pass
             await client.websocket.close()
         await stop_browser(serve)
+
+
+async def _run_realtime_playwright_screenshot(
+    fixture: str,
+    results: list[dict[str, Any]],
+) -> None:
+    serve = await start_moli_serve(layout=False, extra_args=("--realtime",))
+    try:
+        endpoint = await wait_for_browser_endpoint(serve)
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.connect_over_cdp(endpoint, timeout=10_000)
+            try:
+                await _check_screenshot_after_blocked_iframe(browser, fixture, results)
+            finally:
+                await browser.close()
+    finally:
+        await stop_browser(serve)
+
+
+async def _check_screenshot_after_blocked_iframe(
+    browser: Any,
+    fixture: str,
+    results: list[dict[str, Any]],
+) -> None:
+    context = await browser.new_context(viewport={"width": 400, "height": 300})
+    child_requested = asyncio.Event()
+    release_child_response = asyncio.Event()
+    parent_url = f"{fixture}/realtime-screenshot-parent"
+    child_url = f"http://localhost:{urlsplit(fixture).port}/realtime-screenshot-child"
+    try:
+        page = await context.new_page()
+
+        async def serve_parent(route: Any) -> None:
+            await route.fulfill(
+                content_type="text/html",
+                body=f'<!doctype html><h1>parent</h1><iframe src="{child_url}"></iframe>',
+            )
+
+        async def serve_child(route: Any) -> None:
+            child_requested.set()
+            await release_child_response.wait()
+            await route.fulfill(
+                content_type="text/html",
+                headers={"content-security-policy": "frame-ancestors 'none'"},
+                body="<!doctype html><h1>This document should be blocked</h1>",
+            )
+
+        await page.route(parent_url, serve_parent)
+        await page.route(child_url, serve_child)
+        await page.goto(parent_url, wait_until="domcontentloaded", timeout=10_000)
+        await asyncio.wait_for(child_requested.wait(), timeout=5)
+
+        cdp = await new_cdp_session(context, page)
+        frame_id = (await cdp.send("Page.getFrameTree"))["frameTree"]["frame"]["id"]
+        loop = asyncio.get_running_loop()
+        utility_world: asyncio.Future[int] = loop.create_future()
+
+        def context_created(params: dict[str, Any]) -> None:
+            execution_context = params["context"]
+            aux_data = execution_context.get("auxData", {})
+            if (
+                aux_data.get("frameId") == frame_id
+                and aux_data.get("type") == "isolated"
+                and not utility_world.done()
+            ):
+                utility_world.set_result(execution_context["id"])
+
+        cdp.on("Runtime.executionContextCreated", context_created)
+        await cdp.send("Runtime.enable")
+        context_id = await asyncio.wait_for(utility_world, timeout=5)
+
+        binding = "__moliSmokeScreenshotFontWait"
+        font_wait: asyncio.Future[str] = loop.create_future()
+
+        def binding_called(params: dict[str, Any]) -> None:
+            if (
+                params.get("name") == binding
+                and params.get("executionContextId") == context_id
+                and not font_wait.done()
+            ):
+                font_wait.set_result(params["payload"])
+
+        cdp.on("Runtime.bindingCalled", binding_called)
+        await cdp.send("Runtime.addBinding", {"name": binding, "executionContextId": context_id})
+        # Release the iframe only after Playwright has obtained the real ready
+        # promise in its utility world.
+        installed = await cdp.send("Runtime.evaluate", {
+            "contextId": context_id,
+            "expression": f"""(() => {{
+                const ready = Object.getOwnPropertyDescriptor(FontFaceSet.prototype, 'ready');
+                Object.defineProperty(FontFaceSet.prototype, 'ready', {{
+                    ...ready,
+                    get() {{
+                        const promise = ready.get.call(this);
+                        globalThis.{binding}(document.readyState);
+                        return promise;
+                    }},
+                }});
+            }})()""",
+        })
+        if installed.get("exceptionDetails"):
+            raise SmokeError(f"could not observe Playwright's font readiness wait: {installed!r}")
+
+        async with asyncio.TaskGroup() as tasks:
+            screenshot = tasks.create_task(page.screenshot(timeout=10_000))
+            ready_state = await asyncio.wait_for(font_wait, timeout=5)
+            assert_equal(ready_state, "interactive", "font wait while the iframe is loading")
+            release_child_response.set()
+            await page.wait_for_load_state("load", timeout=10_000)
+
+        if any(frame.url == child_url for frame in page.frames):
+            raise SmokeError("iframe navigation committed despite frame-ancestors 'none'")
+        image = decode_png(screenshot.result())
+        assert_equal((image.width, image.height), (400, 300), "realtime Playwright screenshot size")
+        record(
+            results,
+            "layout_realtime_playwright_screenshot_after_blocked_iframe",
+            {"readyStateAtFontWait": ready_state, "width": image.width, "height": image.height},
+        )
+    finally:
+        release_child_response.set()
+        await context.close()

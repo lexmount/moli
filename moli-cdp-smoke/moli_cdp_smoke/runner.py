@@ -230,7 +230,8 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
     ),
     SmokeGroup(
         "layout-screenshot",
-        "Raw viewport PNG, stable Shadow/iframe TreeScopes, generation-gated 1 FPS JPEG screencast, ACK, mutation, and default-Mock boundaries.",
+        "Raw viewport PNG, stable Shadow/iframe TreeScopes, generation-gated 1 FPS JPEG screencast, "
+        "ACK, mutation, and default-Mock boundaries. Realtime Playwright capture after a blocked iframe.",
         "raw",
         run_layout_screenshot_group,
     ),
