@@ -11,8 +11,10 @@ use crate::native_bridge::{PageScriptHost, SelectionBoundarySnapshot};
 use crate::util::node_wrapper_from_handle;
 
 mod line_break;
+mod paragraph_break;
 mod paragraphs;
 pub(crate) use line_break::replace_editable_selection_line_break;
+pub(crate) use paragraph_break::replace_editable_selection_paragraph;
 use paragraphs::normalize_fragment_for_fixed_paragraph;
 
 pub(crate) fn replace_editable_selection_text(

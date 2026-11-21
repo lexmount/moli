@@ -12,7 +12,7 @@ pub(super) use composed::selection_composed_boundary_order;
 pub(super) use dispatch::{boundary_order, selection_dispatch_change};
 pub(crate) use editing::{
     replace_editable_selection_fragment, replace_editable_selection_line_break,
-    replace_editable_selection_text,
+    replace_editable_selection_paragraph, replace_editable_selection_text,
 };
 pub(crate) use focus::focus_element_selection;
 pub(super) use text::{first_text_descendant, last_text_descendant, text_length};

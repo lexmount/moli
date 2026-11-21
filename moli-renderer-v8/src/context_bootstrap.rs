@@ -291,7 +291,8 @@ pub(crate) use navigation_traversal_execution::{
 };
 pub(crate) use selection::{
     focus_element_selection, replace_editable_selection_fragment,
-    replace_editable_selection_line_break, replace_editable_selection_text,
+    replace_editable_selection_line_break, replace_editable_selection_paragraph,
+    replace_editable_selection_text,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use selection_surface::window_selection_is_collapsed;

@@ -97,6 +97,7 @@ struct DocumentArenaState {
     // Sticky for this Document; aborting a parser disables document.open/write.
     active_parser_was_aborted: bool,
     css_styling_enabled: bool,
+    paragraph_separator: ParagraphSeparator,
     is_inert_template_document: bool,
     associated_inert_template_document: Option<NativeNodeId>,
     css_target: Option<NativeNodeId>,
@@ -104,6 +105,22 @@ struct DocumentArenaState {
     modal_dialogs: Vec<NativeNodeId>,
     // SVG document-root replacement retains magnification and panning.
     svg_user_transform: Option<Box<SvgUserTransform>>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub enum ParagraphSeparator {
+    #[default]
+    Div,
+    P,
+}
+
+impl ParagraphSeparator {
+    pub fn tag_name(self) -> &'static str {
+        match self {
+            Self::Div => "div",
+            Self::P => "p",
+        }
+    }
 }
 
 impl Document {
@@ -339,6 +356,10 @@ impl Document {
         self.arena_state.css_styling_enabled
     }
 
+    pub fn paragraph_separator(&self) -> ParagraphSeparator {
+        self.arena_state.paragraph_separator
+    }
+
     pub fn scripting_enabled(&self) -> bool {
         self.metadata.scripting_enabled
     }
@@ -384,6 +405,10 @@ impl Document {
 
     pub fn set_css_styling_enabled(&mut self, enabled: bool) {
         self.arena_state.css_styling_enabled = enabled;
+    }
+
+    pub fn set_paragraph_separator(&mut self, separator: ParagraphSeparator) {
+        self.arena_state.paragraph_separator = separator;
     }
 
     pub fn set_scripting_enabled(&mut self, scripting_enabled: bool) {

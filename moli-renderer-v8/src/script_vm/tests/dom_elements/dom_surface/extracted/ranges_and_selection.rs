@@ -866,6 +866,94 @@ fn exec_command_insert_line_break_preserves_the_line_and_caret() {
 }
 
 #[test]
+fn exec_command_insert_paragraph_preserves_formatting_and_document_separator() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-insert-paragraph.test/",
+        "<!doctype html><div contenteditable></div>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const command = "defaultParagraphSeparator";
+  const initial = document.queryCommandValue(command);
+  const changed = document.execCommand(command, false, "P");
+  const invalid = document.execCommand(command, false, "unsupported");
+  const child = document.body.appendChild(document.createElement("iframe")).contentDocument;
+  const state = [initial, changed, invalid, document.queryCommandValue(command), child.queryCommandValue(command)];
+  const host = document.querySelector("[contenteditable]");
+  host.focus();
+  const selection = getSelection();
+  const events = [];
+  host.onbeforeinput = event => events.push(event.type);
+  host.oninput = event => events.push([event.type, event.inputType, event.data]);
+
+  host.innerHTML = '<p id="original"><b>text</b></p>';
+  selection.collapse(host.querySelector("b").firstChild, 4);
+  const split = document.execCommand("insertParagraph");
+  const formatted = [host.innerHTML, selection.anchorNode.nodeName, selection.anchorOffset];
+
+  host.innerHTML = '<ul><li>A<ul><li>X</li><li><br></li><li>Y</li></ul></li><li>B</li></ul>';
+  selection.collapse(host.querySelector("ul ul li:nth-child(2)"), 0);
+  const outdented = document.execCommand("insertParagraph");
+  const list = host.innerHTML;
+  host.innerHTML = '<div>A<div contenteditable="false">protected</div></div>';
+  const island = host.querySelector('[contenteditable="false"]');
+  selection.collapse(host.firstChild.firstChild, 1);
+  const splitAtIsland = document.execCommand("insertParagraph");
+  const islandMovedIntact = host.lastChild.firstChild === island && island.textContent === "protected";
+  host.innerHTML = '<ul contenteditable><li><br></li></ul>';
+  const editableList = host.firstChild;
+  selection.collapse(editableList.firstChild, 0);
+  const atListBoundary = document.execCommand("insertParagraph");
+  const listPreserved = host.firstChild === editableList && editableList.innerHTML === "<li><br></li>";
+  return JSON.stringify([
+    state, split, formatted, outdented, list, splitAtIsland, islandMovedIntact,
+    atListBoundary, listPreserved, events,
+  ]);
+})()
+"#,
+        )
+        .expect("paragraph insertion should operate on the retained editing selection");
+    assert_eq!(
+        result,
+        concat!(
+            r#"[["div",true,false,"p","div"],true,["<p id=\"original\"><b>text</b></p><p><b><br></b></p>","B",0],true,"#,
+            r#""<ul><li>A<ul><li>X</li></ul></li><li><br><ul><li>Y</li></ul></li><li>B</li></ul>","#,
+            r#"true,true,true,true,[["input","insertParagraph",null],["input","insertParagraph",null],"#,
+            r#"["input","insertParagraph",null]]]"#,
+        ),
+    );
+}
+
+#[cfg(feature = "devtools")]
+#[test]
+fn keyboard_enter_inserts_a_paragraph_in_the_live_editing_host() {
+    let mut vm = new_parsed_test_vm(
+        "https://keyboard-insert-paragraph.test/",
+        "<!doctype html><div contenteditable><p>AB</p></div>",
+    );
+    vm.eval(
+        r#"
+const host = document.querySelector("[contenteditable]");
+host.focus();
+getSelection().collapse(host.querySelector("p").firstChild, 1);
+const events = [];
+for (const type of ["beforeinput", "input"]) {
+  host.addEventListener(type, event => events.push(event.inputType));
+}
+"#,
+    )
+    .expect("editable selection and input listeners");
+    vm.dispatch_key_event("keypress", "Enter", "Enter", "\r", 0, false, true)
+        .expect("keyboard input");
+    assert_eq!(
+        vm.eval("host.innerHTML + '|' + events.join(',')").unwrap(),
+        "<p>A</p><p>B</p>|insertParagraph,insertParagraph"
+    );
+}
+
+#[test]
 fn exec_command_css_styling_is_document_local() {
     let mut vm = new_parsed_test_vm(
         "https://exec-command-css-styling.test/",
