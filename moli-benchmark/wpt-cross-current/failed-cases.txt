@@ -2208,10 +2208,6 @@ html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_ori
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin_3.html
 html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-bfcache-restore-iframe.html
 html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-bfcache-restore.html
-html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-fragment-scrolling-samedoc.html
-html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-navigation-cross-origin.html
-html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-navigation-samedoc.html
-html/browsers/browsing-the-web/history-traversal/scroll-restoration-order.html
 html/browsers/browsing-the-web/navigating-across-documents/012.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204-pushState-replaceState.html
 html/browsers/browsing-the-web/navigating-across-documents/plugin-document.historical.html

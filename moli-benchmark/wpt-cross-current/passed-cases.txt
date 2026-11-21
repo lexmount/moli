@@ -6638,8 +6638,12 @@ html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-reload-naviga
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-replace-navigation.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/resume-timer-on-history-back.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-basic.html
+html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-fragment-scrolling-samedoc.html
+html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-navigation-cross-origin.html
+html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-navigation-samedoc.html
 html/browsers/browsing-the-web/history-traversal/popstate_event.html
 html/browsers/browsing-the-web/history-traversal/same-url.html
+html/browsers/browsing-the-web/history-traversal/scroll-restoration-order.html
 html/browsers/browsing-the-web/history-traversal/srcdoc/consecutive-srcdoc.html
 html/browsers/browsing-the-web/history-traversal/srcdoc/srcdoc-history-entries.html
 html/browsers/browsing-the-web/history-traversal/window-name-after-same-origin-main-frame-navigation.html
