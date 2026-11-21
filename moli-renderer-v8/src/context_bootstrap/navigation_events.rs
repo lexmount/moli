@@ -293,14 +293,6 @@ pub(super) fn clear_navigation_scroll_state<'s>(
     );
 }
 
-pub(super) fn navigation_has_active_scroll_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-) -> bool {
-    get_private_value(scope, navigation, NAVIGATION_ACTIVE_SCROLL_EVENT_SLOT)
-        .is_some_and(|value| !value.is_undefined())
-}
-
 pub(in crate::context_bootstrap) fn navigation_scroll_event_is_active<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,

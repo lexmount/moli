@@ -642,14 +642,9 @@ fn navigate_event_scroll_callback<'s>(
         return;
     }
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SCROLL_CALLED_SLOT, true);
-    if crate::context_bootstrap::event_attribute(scope, event, "navigationType")
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .is_some_and(|value| value.to_rust_string_lossy(scope) == "traverse")
+    let owner = runtime_window_owner(scope, navigation);
+    if crate::context_bootstrap::navigation_lifecycle::process_traversal_scroll(scope, owner, event)
     {
-        let owner = runtime_window_owner(scope, navigation);
-        crate::context_bootstrap::navigation_entry::restore_current_navigation_entry_scroll_position(
-            scope, owner,
-        );
         return;
     }
     let Some(target_url) = crate::context_bootstrap::event_backing(scope, event)
@@ -659,7 +654,6 @@ fn navigate_event_scroll_callback<'s>(
     else {
         return;
     };
-    let owner = runtime_window_owner(scope, navigation);
     let Some(host_ptr) = crate::util::context_host_ptr_for_navigation_owner(scope, owner) else {
         return;
     };

@@ -277,17 +277,17 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
         }
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
         crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-        dispatch_history_entry_post_commit_events(scope, applied, true, true);
+        dispatch_history_entry_post_commit_events(scope, applied, true);
         return;
     }
     let Some(_navigation) = window_navigation_for_holder(scope, applied.owner) else {
-        dispatch_history_entry_post_commit_events(scope, applied, true, false);
+        dispatch_history_entry_post_commit_events(scope, applied, false);
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
         return;
     };
     // Stopping the API method after its commit does not undo the committed
     // history entry or suppress its popstate. Only settlement is canceled.
-    dispatch_history_entry_post_commit_events(scope, applied, true, false);
+    dispatch_history_entry_post_commit_events(scope, applied, false);
     let Some(data) = settlement else {
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
         return;

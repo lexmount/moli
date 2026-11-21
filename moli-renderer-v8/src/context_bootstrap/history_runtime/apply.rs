@@ -3,8 +3,8 @@ use super::super::location_runtime::{
 };
 use super::super::navigation_entry::{
     cache_current_history_state, history_entries, history_index, navigation_current_entry,
-    navigation_entries_share_document, set_history_index,
-    sync_navigation_current_entry_from_history_entry,
+    navigation_entries_share_document, restore_current_navigation_entry_scroll_position,
+    set_history_index, sync_navigation_current_entry_from_history_entry,
 };
 use super::super::navigation_events::{
     dispatch_navigation_currententrychange, dispatch_popstate_event,
@@ -13,12 +13,13 @@ use super::super::navigation_events::{
 use super::super::navigation_mutation::sync_same_document_navigation_commit;
 use super::super::navigation_serialize::sync_navigation_entry_seed_from_owner;
 use super::super::navigation_window::{
-    navigation_document_has_opaque_origin, runtime_window_is_global, runtime_window_owner,
-    window_location_for_holder, window_navigation_for_holder,
+    child_browsing_context_handle_for_runtime_owner, navigation_document_has_opaque_origin,
+    runtime_window_owner, window_location_for_holder, window_navigation_for_holder,
 };
 use super::super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections;
+use moli_history::ScrollRestoration;
 
 pub(in crate::context_bootstrap) struct AppliedHistoryEntry<'s> {
     pub(in crate::context_bootstrap) owner: v8::Local<'s, v8::Object>,
@@ -143,31 +144,19 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_currententrychange<'s
 pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     applied: &AppliedHistoryEntry<'s>,
-    dispatch_popstate: bool,
     restore_scroll: bool,
 ) {
-    if runtime_window_is_global(scope, applied.owner) {
-        let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-            return;
-        };
-        if dispatch_popstate {
-            dispatch_popstate_event(scope, host_ptr, applied.owner, applied.state);
-            perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-            if restore_scroll {
-                restore_traversal_scroll(scope, applied);
-            }
-            queue_hash_change_for_runtime_owner(
-                scope,
-                applied.owner,
-                applied.old_url.as_deref(),
-                &applied.url,
-            );
-        }
-    } else if dispatch_popstate && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         dispatch_popstate_event(scope, host_ptr, applied.owner, applied.state);
         perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-        if restore_scroll {
-            restore_traversal_scroll(scope, applied);
+        // Author code can change the restoration mode or replace the entry in popstate.
+        if restore_scroll
+            && navigation_current_entry(scope, applied.owner)
+                .is_some_and(|entry| entry.strict_equals(applied.entry.into()))
+            && super::native::entry(scope, applied.entry)
+                .is_some_and(|entry| entry.borrow().scroll_restoration == ScrollRestoration::Auto)
+        {
+            restore_current_navigation_entry_scroll_position(scope, applied.owner);
         }
         queue_hash_change_for_runtime_owner(
             scope,
@@ -175,62 +164,33 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
             applied.old_url.as_deref(),
             &applied.url,
         );
-        let entries_share_document = applied.previous_entry.is_some_and(|previous_entry| {
-            navigation_entries_share_document(scope, previous_entry, applied.entry)
-        });
-        let is_same_document_traversal = entries_share_document
-            || applied
-                .old_url
-                .as_deref()
-                .and_then(|old_url| url::Url::parse(old_url).ok())
-                .is_some_and(|old_url| urls_equal_ignoring_fragment(&old_url, &applied.parsed_url));
         if let Some(child_handle) =
-            super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
-                scope,
-                applied.owner,
-            )
-            && !is_same_document_traversal
+            child_browsing_context_handle_for_runtime_owner(scope, applied.owner)
         {
-            unsafe { &mut *host_ptr }.queue_child_browsing_context_navigation_without_seed_update(
-                scope,
-                child_handle,
-                &applied.url,
-                None,
-                None,
-            );
+            let entries_share_document = applied.previous_entry.is_some_and(|previous_entry| {
+                navigation_entries_share_document(scope, previous_entry, applied.entry)
+            });
+            let is_same_document_traversal = entries_share_document
+                || applied
+                    .old_url
+                    .as_deref()
+                    .and_then(|old_url| url::Url::parse(old_url).ok())
+                    .is_some_and(|old_url| {
+                        urls_equal_ignoring_fragment(&old_url, &applied.parsed_url)
+                    });
+            if !is_same_document_traversal {
+                unsafe { &mut *host_ptr }
+                    .queue_child_browsing_context_navigation_without_seed_update(
+                        scope,
+                        child_handle,
+                        &applied.url,
+                        None,
+                        None,
+                    );
+            }
         }
     }
     // Release queued traversals only after this document's callbacks have run
     // and its hashchange notification has entered the DOM-manipulation queue.
     finish_history_entry_commit(scope, applied);
-}
-
-fn restore_traversal_scroll<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    applied: &AppliedHistoryEntry<'s>,
-) {
-    if navigation_document_has_opaque_origin(scope, applied.owner)
-        || !navigation_current_entry(scope, applied.owner)
-            .is_some_and(|entry| entry.strict_equals(applied.entry.into()))
-        || !super::native::entry(scope, applied.entry).is_some_and(|entry| {
-            entry.borrow().scroll_restoration == moli_history::ScrollRestoration::Auto
-        })
-    {
-        return;
-    }
-
-    if let Some(navigation) = window_navigation_for_holder(scope, applied.owner)
-        && (super::super::navigation_events::navigation_has_active_scroll_event(scope, navigation)
-            || !super::super::navigation_entry::restore_current_navigation_entry_scroll_position(
-                scope,
-                applied.owner,
-            ))
-    {
-        super::super::navigation_lifecycle::perform_navigation_scroll_if_needed(
-            scope,
-            navigation,
-            &applied.url,
-            true,
-        );
-    }
 }

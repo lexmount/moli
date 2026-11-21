@@ -97,20 +97,25 @@ pub(super) fn save_current_navigation_entry_scroll_position<'s>(
 pub(super) fn restore_current_navigation_entry_scroll_position<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(entry) = navigation_current_entry(scope, owner) else {
-        return false;
-    };
-    let Some((scroll_x, scroll_y)) =
-        native::entry(scope, entry).and_then(|entry| entry.borrow().scroll_offset)
+) {
+    let Some((scroll_x, scroll_y)) = navigation_current_entry(scope, owner)
+        .and_then(|entry| native::entry(scope, entry))
+        .and_then(|entry| entry.borrow().scroll_offset)
     else {
-        return false;
+        return;
     };
-    let scroll_x = v8::Number::new(scope, scroll_x);
-    set_private_value(scope, owner, WINDOW_SCROLL_X_SLOT, scroll_x.into());
-    let scroll_y = v8::Number::new(scope, scroll_y);
-    set_private_value(scope, owner, WINDOW_SCROLL_Y_SLOT, scroll_y.into());
-    true
+    let Some(host_ptr) = crate::util::context_host_ptr_for_navigation_owner(scope, owner) else {
+        return;
+    };
+    let host = unsafe { &*host_ptr };
+    let receiver = crate::native_bridge::WindowOperationReceiver::capture_after_access_check(
+        scope, owner, host,
+    );
+    if let Some(binding) = receiver.resolve_live_binding(host) {
+        let _ = binding.with_current_scope(scope, host_ptr, |scope, _| {
+            crate::window_host::scroll_window_to(scope, host_ptr, scroll_x, scroll_y);
+        });
+    }
 }
 
 pub(super) fn create_navigation_entry<'s>(
