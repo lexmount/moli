@@ -710,6 +710,26 @@ impl ResourceRequestClient {
             .fetch_with_cancel_callback(request, cancel_handle, callback)
     }
 
+    fn lookup_cached_raw_subresource(
+        &self,
+        request: &Request,
+        cache_key: Option<&RawSubresourceCacheKey>,
+    ) -> Option<RawResponse> {
+        if !request.effective_cache_mode().allows_memory_cache_lookup() {
+            return None;
+        }
+        let cache_key = cache_key?;
+        let mut cached = self
+            .resource_runtime
+            .memory_cache()
+            .lock()
+            .lookup_raw_subresource(cache_key)?;
+        // Cache admission requires a direct response whose final URL equals
+        // the original request URL. Project this consumer's fragment onto the hit.
+        cached.final_url.set_fragment(request.url.fragment());
+        Some(cached)
+    }
+
     async fn fetch_raw_stream_with_cancel_after_policy(
         &self,
         request: Request,
@@ -722,15 +742,7 @@ impl ResourceRequestClient {
         let cache_key = raw_subresource_memory_cache_key(&request).map(|key| {
             key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
         });
-        if request.effective_cache_mode().allows_memory_cache_lookup()
-            && let Some(cache_key) = cache_key.as_ref()
-            && let Some(mut cached) = self
-                .resource_runtime
-                .memory_cache()
-                .lock()
-                .lookup_raw_subresource(cache_key)
-        {
-            cached.final_url.set_fragment(request.url.fragment());
+        if let Some(cached) = self.lookup_cached_raw_subresource(&request, cache_key.as_ref()) {
             return streaming_raw_response_from_cached_subresource(cached);
         }
 
@@ -761,15 +773,7 @@ impl ResourceRequestClient {
         let cache_key = raw_subresource_memory_cache_key(&request).map(|key| {
             key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
         });
-        if request.effective_cache_mode().allows_memory_cache_lookup()
-            && let Some(cache_key) = cache_key.as_ref()
-            && let Some(mut cached) = self
-                .resource_runtime
-                .memory_cache()
-                .lock()
-                .lookup_raw_subresource(cache_key)
-        {
-            cached.final_url.set_fragment(request.url.fragment());
+        if let Some(cached) = self.lookup_cached_raw_subresource(&request, cache_key.as_ref()) {
             return Ok(NetworkFetchResult::without_request_observation(
                 streaming_raw_response_from_cached_subresource(cached)?,
             ));
