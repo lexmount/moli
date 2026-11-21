@@ -139,6 +139,74 @@ fn realtime_font_ready_waits_for_document_completion_and_refreshes_resolved_read
 }
 
 #[test]
+fn realtime_font_task_resolves_saved_ready_promises_in_each_world() {
+    run_page_vm_large_stack_async_test("realtime-font-ready-worlds", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/font-ready-worlds").unwrap(),
+        );
+        page.vm_mut()
+            .set_document_ready_state(crate::dom::native::DocumentReadyState::Interactive)
+            .unwrap();
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        let isolated = page
+            .vm_mut()
+            .ensure_isolated_world_for_owner(None, "font-readiness", false)
+            .unwrap();
+        let save_ready = r#"
+            globalThis.fontsSettled = false;
+            const fonts = document.fonts;
+            globalThis.savedReady = fonts.ready;
+            void savedReady.then(value => { fontsSettled = value === fonts; });
+        "#;
+        page.vm_mut().eval(save_ready).unwrap();
+        page.vm_mut()
+            .exec_in_execution_context(isolated, save_ready)
+            .unwrap();
+        let isolated_settled = |page: &mut PageVm| {
+            page.evaluate_expression_in_execution_context_with_await(
+                isolated,
+                "fontsSettled",
+                false,
+            )
+            .unwrap()["value"]
+                .as_bool()
+                .unwrap()
+        };
+        assert_eq!(drain_font_tasks(&mut page, &loader).await, 1);
+        assert_eq!(page.vm_mut().eval("String(fontsSettled)").unwrap(), "false");
+        assert!(!isolated_settled(&mut page));
+
+        page.vm_mut()
+            .eval(
+                r#"
+            globalThis.reopened = false;
+            Object.defineProperty(fonts, 'then', { configurable: true, get() {
+                delete fonts.then;
+                document.open();
+                document.write('<!doctype html><p>Reopened</p>');
+                document.close();
+                reopened = true;
+            }});
+        "#,
+            )
+            .unwrap();
+        page.vm_mut()
+            .set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
+            .unwrap();
+        assert_eq!(drain_font_tasks(&mut page, &loader).await, 1);
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([reopened,fontsSettled])")
+                .unwrap(),
+            "[true,true]"
+        );
+        assert!(isolated_settled(&mut page));
+    });
+}
+
+#[test]
 fn realtime_initial_font_task_does_not_require_a_javascript_font_set() {
     run_page_vm_large_stack_async_test("realtime-font-native-initialization", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

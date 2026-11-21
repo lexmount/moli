@@ -698,6 +698,29 @@ impl BridgeIdentityStore {
             .and_then(|entry| entry.wrapper.to_local(scope))
     }
 
+    /// Take local handles so callers can enter each Realm without holding a cache borrow.
+    pub(super) fn cached_node_wrappers_in_worlds<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        reflector_id: ReflectorId,
+    ) -> Vec<v8::Local<'s, v8::Object>> {
+        let isolated_caches = self
+            .isolated_world_wrapper_caches
+            .iter()
+            .flat_map(|caches| caches.values())
+            .filter_map(Weak::upgrade);
+        std::iter::once(self.default_world_wrapper_cache.clone())
+            .chain(isolated_caches)
+            .filter_map(|cache| {
+                cache
+                    .borrow()
+                    .wrappers
+                    .get(&reflector_id)
+                    .and_then(|entry| entry.wrapper.to_local(scope))
+            })
+            .collect()
+    }
+
     pub(super) fn cache_wrapper(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
