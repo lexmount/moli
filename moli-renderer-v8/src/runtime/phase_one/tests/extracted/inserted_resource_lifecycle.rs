@@ -1192,6 +1192,11 @@ fn parser_removed_image_pending_load_event_clears_when_dom_task_runs() {
                     .expect("parser image removal reactions should dispatch");
             }
 
+            page_vm
+                .vm_mut()
+                .perform_script_task_checkpoint(None)
+                .expect("parser task-end checkpoint should queue the image load event");
+
             let loader = page_vm.main_document_resource_loader();
             assert!(
                 page_vm

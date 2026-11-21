@@ -168,9 +168,8 @@ impl DocumentRuntime {
             return;
         }
         if followups.custom_element_reaction_queue_flush_requested {
-            crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections(
-                scope,
-            );
+            // Keep observer records and promise jobs pending until the
+            // execution owner reaches its microtask checkpoint.
             custom_elements::flush_parser_custom_element_reaction_queue(scope, host_ptr);
             self.parser_reentry.custom_element_reaction_queue_active = false;
         }

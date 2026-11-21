@@ -184,3 +184,32 @@ async fn nested_child_parser_scripts_leave_microtasks_for_the_outer_script_clean
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn parser_content_patch_delivers_one_mutation_observer_batch() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let markup = concat!(
+        r#"<!doctype html><div><script>
+          window.batches = [];
+          const names = (nodes, prefix) => Array.from(nodes, node => prefix + node.nodeName);
+          new MutationObserver(records => {
+            batches.push(records.flatMap(record => [
+              ...names(record.addedNodes, '+'), ...names(record.removedNodes, '-')
+            ]));
+          }).observe(document.currentScript.parentNode, {childList: true});
+        </script>"#,
+        r#"<?start name="patch">old<i>removed</i><?end></div>"#,
+        r#"<template for="patch"><b>new</b></template>"#
+    );
+    let mut page = browser.fetch(&markup_url(&server, markup)).await?;
+    let observed = page
+        .evaluate_runtime_expression_with_await_async("JSON.stringify(batches)", true)
+        .await?;
+    server.shutdown().await;
+    assert_eq!(
+        observed["value"].as_str(),
+        Some(r#"[["+start","+#text","+I","+end","-#text","-I","+B","-start","-end"]]"#)
+    );
+    Ok(())
+}
