@@ -34,6 +34,7 @@ mod construction;
 mod cookies;
 mod css_state;
 mod custom_element_options;
+mod delete;
 mod detached_install;
 mod detached_objects;
 mod detached_surface;
@@ -49,6 +50,7 @@ mod structure;
 
 pub(crate) use attributes::install_attr_prototype;
 pub(crate) use attributes::install_named_node_map_template_bindings;
+pub(crate) use delete::delete_in_editing_host;
 #[cfg(feature = "devtools")]
 pub(crate) use insert_break::insert_break_in_editing_host;
 #[cfg(feature = "devtools")]

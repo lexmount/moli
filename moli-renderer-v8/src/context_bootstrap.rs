@@ -274,7 +274,7 @@ pub(crate) use navigation_traversal_execution::{
     resume_pending_history_traversals,
 };
 pub(crate) use selection::{
-    focus_element_selection, replace_editable_selection_fragment,
+    delete_editable_selection, focus_element_selection, replace_editable_selection_fragment,
     replace_editable_selection_line_break, replace_editable_selection_paragraph,
     replace_editable_selection_text,
 };

@@ -357,6 +357,18 @@ pub(crate) fn replace_contenteditable_selection(
     else {
         return false;
     };
+    if matches!(
+        input_type,
+        TextEditInputType::DeleteContentBackward | TextEditInputType::DeleteContentForward
+    ) {
+        return crate::native_bridge::document::delete_in_editing_host(
+            scope,
+            runtime_ptr,
+            document,
+            handle,
+            matches!(input_type, TextEditInputType::DeleteContentForward),
+        );
+    }
     replace_contenteditable_selection_after_beforeinput(
         scope,
         runtime_ptr,

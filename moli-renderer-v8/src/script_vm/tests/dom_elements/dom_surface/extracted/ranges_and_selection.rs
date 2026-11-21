@@ -447,6 +447,47 @@ fn selection_modify_skips_contenteditable_false_islands() {
     );
 }
 #[test]
+fn exec_command_delete_uses_the_native_caret_and_reports_actual_edits() {
+    let mut vm = new_storage_test_vm("https://exec-command-delete-native-selection.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const editor = document.createElement("div");
+  editor.contentEditable = "true";
+  editor.textContent = "A👩‍👧 BC";
+  (document.body || document.documentElement || document).append(editor);
+  editor.focus();
+  const text = editor.firstChild;
+  const selection = getSelection();
+  const events = [];
+  editor.addEventListener("beforeinput", event => events.push(event.type));
+  editor.addEventListener("input", event => events.push([event.inputType, event.data]));
+
+  document.getSelection = () => { throw new Error("overridden document selection"); };
+  selection.deleteFromDocument = () => { throw new Error("overridden selection deletion"); };
+  selection.collapse(text, "A👩‍👧".length);
+  const returned = [document.execCommand("delete")];
+  const carets = [selection.anchorOffset];
+  returned.push(document.execCommand("forwardDelete"));
+  carets.push(selection.anchorOffset);
+  selection.setBaseAndExtent(text, 2, text, 1);
+  returned.push(document.execCommand("delete"));
+  carets.push(selection.anchorOffset);
+  selection.collapse(text, 0);
+  returned.push(document.execCommand("delete"));
+  return JSON.stringify([editor.textContent, returned, carets, events]);
+})()
+"#,
+        )
+        .expect("native deletion should use the recorded selection");
+    assert_eq!(
+        result,
+        r#"["AC",[true,true,true,true],[1,1,1],[["deleteContentBackward",null],["deleteContentForward",null],["deleteContentBackward",null]]]"#
+    );
+}
+
+#[test]
 fn exec_command_delete_preserves_inert_selection_endpoint_contents() {
     let mut vm = new_storage_test_vm("https://exec-command-delete-inert-selection.test/");
 

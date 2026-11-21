@@ -1,26 +1,21 @@
 use super::super::node::{
-    node_is_document, node_or_existing_detached_arg_handle,
-    node_runtime_and_handle_from_args_or_detached, node_runtime_and_handle_from_object_or_detached,
-    remove_child_in_reaction_scope,
+    node_is_document, node_runtime_and_handle_from_args_or_detached,
+    node_runtime_and_handle_from_object_or_detached,
 };
+use super::delete::exec_command_delete;
 use super::insert_break::exec_command_insert_break;
 use super::insert_html::{exec_command_insert_html, insert_html_command_target};
 use super::insert_text::{editing_insertion_target, exec_command_insert_text};
 use super::{PageScriptHost, document_has_browsing_context, is_html_document, throw_dom_exception};
 use crate::native_bridge::element::{
-    TextEditInputType, contenteditable_editing_host, dispatch_text_control_event,
-    document_copy_command_supported, is_text_control,
-    queue_text_control_document_selection_change_event, restore_focused_text_control_selection,
-    run_document_copy_command, text_control_value_dom_string,
+    TextEditInputType, contenteditable_editing_host, document_copy_command_supported,
+    run_document_copy_command,
 };
 use crate::{
     custom_elements,
     document_runtime::{DomHandle, EventTargetHandle},
     dom::native::{DocumentReadyState, Node, ParagraphSeparator},
-    util::{
-        call_object_method, node_wrapper_from_handle, utf16_next_scalar_boundary,
-        utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, v8_string, v8str,
-    },
+    util::{call_object_method, node_wrapper_from_handle, v8_string, v8str},
     webidl,
 };
 
@@ -764,12 +759,10 @@ fn execute_document_editing_command<'s>(
             let selected =
                 exec_command_select_all(scope, runtime_ptr, args.this(), document_handle);
             rv.set(v8::Boolean::new(scope, selected).into());
-            return;
         }
         EditingCommand::Copy => {
             let copied = run_document_copy_command(scope, runtime_ptr, document_handle, false);
             rv.set(v8::Boolean::new(scope, copied).into());
-            return;
         }
         EditingCommand::InsertText => {
             let Some(value) = editing_command_value(scope, args) else {
@@ -777,7 +770,6 @@ fn execute_document_editing_command<'s>(
             };
             let inserted = exec_command_insert_text(scope, runtime_ptr, document_handle, &value);
             rv.set(v8::Boolean::new(scope, inserted).into());
-            return;
         }
         EditingCommand::InsertHtml => {
             let Some(value) = editing_command_insert_html_value(scope, runtime_ptr, args) else {
@@ -785,7 +777,6 @@ fn execute_document_editing_command<'s>(
             };
             let inserted = exec_command_insert_html(scope, runtime_ptr, document_handle, &value);
             rv.set(v8::Boolean::new(scope, inserted).into());
-            return;
         }
         EditingCommand::InsertLineBreak | EditingCommand::InsertParagraph => {
             let input_type = if matches!(command, EditingCommand::InsertParagraph) {
@@ -796,7 +787,6 @@ fn execute_document_editing_command<'s>(
             let inserted =
                 exec_command_insert_break(scope, runtime_ptr, document_handle, input_type);
             rv.set(v8::Boolean::new(scope, inserted).into());
-            return;
         }
         EditingCommand::DefaultParagraphSeparator => {
             let Some(value) = editing_command_value(scope, args) else {
@@ -821,7 +811,6 @@ fn execute_document_editing_command<'s>(
                         true
                     });
             rv.set(v8::Boolean::new(scope, applied).into());
-            return;
         }
         EditingCommand::StyleWithCss | EditingCommand::UseCss => {
             let Some(value) = editing_command_value(scope, args) else {
@@ -844,13 +833,17 @@ fn execute_document_editing_command<'s>(
                         true
                     });
             rv.set(v8::Boolean::new(scope, applied).into());
-            return;
         }
-        EditingCommand::Delete | EditingCommand::ForwardDelete => {}
+        EditingCommand::Delete | EditingCommand::ForwardDelete => {
+            let removed = exec_command_delete(
+                scope,
+                runtime_ptr,
+                document_handle,
+                matches!(command, EditingCommand::ForwardDelete),
+            );
+            rv.set(v8::Boolean::new(scope, removed).into());
+        }
     }
-    let command_name: &'static str = command.into();
-    let removed = exec_command_delete_selection(scope, runtime_ptr, args.this(), command_name);
-    rv.set(v8::Boolean::new(scope, removed).into());
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'s>(
@@ -903,11 +896,9 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
             | EditingCommand::InsertText,
         ) => editing_insertion_target(runtime, document_handle).is_some(),
         Ok(EditingCommand::Delete | EditingCommand::ForwardDelete) => {
-            runtime.document_design_mode_enabled(document_handle)
-                || runtime.active_element_handle().is_some_and(|active| {
-                    is_text_control(runtime, active)
-                        || contenteditable_editing_host(runtime, active).is_some()
-                })
+            editing_insertion_target(runtime, document_handle).is_some()
+                || (runtime.document_is_fully_active(document_handle)
+                    && runtime.document_design_mode_enabled(document_handle))
         }
         Ok(EditingCommand::InsertHtml) => {
             insert_html_command_target(runtime, document_handle).is_some()
@@ -1081,279 +1072,6 @@ fn editing_command_insert_html_value<'s>(
     )
 }
 
-fn exec_command_delete_selection<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    document: v8::Local<'s, v8::Object>,
-    command: &str,
-) -> bool {
-    if let Some(active) = unsafe { &*runtime_ptr }.active_element_handle()
-        && let Some(handled) = exec_command_delete_text_control(scope, runtime_ptr, active, command)
-    {
-        return handled;
-    }
-    let Some(selection) = call_object_method(scope, document, "getSelection", &[])
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return false;
-    };
-    if !selection
-        .get(scope, v8str(scope, "isCollapsed").into())
-        .is_some_and(|value| value.boolean_value(scope))
-    {
-        if !exec_command_delete_non_collapsed_selection(scope, runtime_ptr, document, selection) {
-            let _ = call_object_method(scope, selection, "deleteFromDocument", &[]);
-        }
-        return true;
-    }
-    let Some(anchor_node_value) = selection.get(scope, v8str(scope, "anchorNode").into()) else {
-        return false;
-    };
-    if anchor_node_value.is_null_or_undefined() {
-        return false;
-    }
-    let anchor_offset = selection
-        .get(scope, v8str(scope, "anchorOffset").into())
-        .and_then(|value| value.uint32_value(scope))
-        .unwrap_or(0) as usize;
-    let Some(parent) = node_or_existing_detached_arg_handle(scope, runtime_ptr, anchor_node_value)
-    else {
-        return false;
-    };
-    let children = unsafe { &*runtime_ptr }
-        .dom_host()
-        .child_handles(parent)
-        .collect::<Vec<_>>();
-    let child = children.get(anchor_offset).copied().or_else(|| {
-        anchor_offset
-            .checked_sub(1)
-            .and_then(|index| children.get(index).copied())
-    });
-    let Some(child) = child else {
-        return false;
-    };
-    remove_child_in_reaction_scope(scope, runtime_ptr, parent, child)
-}
-
-fn exec_command_delete_text_control(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    handle: DomHandle,
-    command: &str,
-) -> Option<bool> {
-    let runtime = unsafe { &*runtime_ptr };
-    if !is_text_control(runtime, handle) {
-        return None;
-    }
-    let value = text_control_value_dom_string(runtime, handle);
-    let value_units = value.utf16_units();
-    let value_len = value_units.len() as u32;
-    let (start, end) = runtime
-        .text_control_selection(handle)
-        .map(|selection| {
-            let start = selection.start.min(value_len);
-            let end = selection.end.min(value_len);
-            if start <= end {
-                (start, end)
-            } else {
-                (end, start)
-            }
-        })
-        .unwrap_or((value_len, value_len));
-    // Selection APIs expose code units, but native editing first resolves both
-    // endpoints to caret positions that cannot split a surrogate pair.
-    let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
-    let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
-    let (from, to) = if start != end {
-        (start, end)
-    } else if command == "forwarddelete" {
-        (
-            start,
-            utf16_next_scalar_boundary(&value_units, start as usize) as u32,
-        )
-    } else {
-        (
-            utf16_previous_scalar_boundary(&value_units, start as usize) as u32,
-            start,
-        )
-    };
-    if from == to {
-        return Some(true);
-    }
-    let caret = from;
-
-    let next_value =
-        value.replace_utf16_range(from as usize, to.saturating_sub(from) as usize, &[]);
-    let runtime = unsafe { &mut *runtime_ptr };
-    let changed = runtime.set_input_value_from_user_edit(handle, &next_value);
-    if changed {
-        runtime.mark_text_control_change_pending(handle, &value);
-    }
-    let direction = runtime.text_control_selection_direction(handle, "none");
-    let selection_changed =
-        runtime.set_selection_range_with_direction(handle, caret, caret, direction);
-    if changed || selection_changed {
-        restore_focused_text_control_selection(scope, runtime_ptr, handle);
-        dispatch_text_control_event(scope, runtime_ptr, handle, "input");
-        queue_text_control_document_selection_change_event(scope, runtime_ptr, handle);
-    }
-    Some(changed || selection_changed)
-}
-
-fn exec_command_delete_non_collapsed_selection<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    document: v8::Local<'s, v8::Object>,
-    selection: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(anchor_node) = selection.get(scope, v8str(scope, "anchorNode").into()) else {
-        return false;
-    };
-    if anchor_node.is_null_or_undefined() {
-        return false;
-    }
-    let Some(focus_node) = selection.get(scope, v8str(scope, "focusNode").into()) else {
-        return false;
-    };
-    if focus_node.is_null_or_undefined() {
-        return false;
-    }
-    let Some(anchor_handle) = node_or_existing_detached_arg_handle(scope, runtime_ptr, anchor_node)
-    else {
-        return false;
-    };
-    let Some(focus_handle) = node_or_existing_detached_arg_handle(scope, runtime_ptr, focus_node)
-    else {
-        return false;
-    };
-
-    let runtime = unsafe { &*runtime_ptr };
-    if inert_ancestor_or_self(runtime, anchor_handle).is_some() {
-        return true;
-    }
-    let Some(protected_inert_root) = inert_ancestor_or_self(runtime, focus_handle) else {
-        return false;
-    };
-
-    let Some(range) = call_object_method(
-        scope,
-        selection,
-        "getRangeAt",
-        &[v8::Integer::new(scope, 0).into()],
-    )
-    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()) else {
-        return false;
-    };
-    let Some(start_node) = range.get(scope, v8str(scope, "startContainer").into()) else {
-        return false;
-    };
-    let Some(end_node) = range.get(scope, v8str(scope, "endContainer").into()) else {
-        return false;
-    };
-    let Some(start_handle) = node_or_existing_detached_arg_handle(scope, runtime_ptr, start_node)
-    else {
-        return false;
-    };
-    let Some(end_handle) = node_or_existing_detached_arg_handle(scope, runtime_ptr, end_node)
-    else {
-        return false;
-    };
-    let start_offset = range
-        .get(scope, v8str(scope, "startOffset").into())
-        .and_then(|value| value.uint32_value(scope))
-        .unwrap_or(0);
-    let end_offset = range
-        .get(scope, v8str(scope, "endOffset").into())
-        .and_then(|value| value.uint32_value(scope))
-        .unwrap_or(0);
-
-    if dom_descendant_or_self(runtime, protected_inert_root, start_handle) {
-        let Some((container_handle, offset)) =
-            boundary_after_protected_inert_root(runtime, protected_inert_root)
-        else {
-            return true;
-        };
-        let Some(container) = node_wrapper_from_handle(scope, container_handle) else {
-            return true;
-        };
-        return exec_command_delete_range_part(
-            scope, document, container, offset, end_node, end_offset,
-        );
-    }
-
-    if dom_descendant_or_self(runtime, protected_inert_root, end_handle) {
-        let Some((container_handle, offset)) =
-            boundary_before_protected_inert_root(runtime, protected_inert_root)
-        else {
-            return true;
-        };
-        let Some(container) = node_wrapper_from_handle(scope, container_handle) else {
-            return true;
-        };
-        return exec_command_delete_range_part(
-            scope,
-            document,
-            start_node,
-            start_offset,
-            container,
-            offset,
-        );
-    }
-
-    false
-}
-
-fn exec_command_delete_range_part<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-    start_node: impl Into<v8::Local<'s, v8::Value>>,
-    start_offset: u32,
-    end_node: impl Into<v8::Local<'s, v8::Value>>,
-    end_offset: u32,
-) -> bool {
-    let Some(range) = call_object_method(scope, document, "createRange", &[])
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return true;
-    };
-    let _ = call_object_method(
-        scope,
-        range,
-        "setStart",
-        &[
-            start_node.into(),
-            v8::Integer::new_from_unsigned(scope, start_offset).into(),
-        ],
-    );
-    let _ = call_object_method(
-        scope,
-        range,
-        "setEnd",
-        &[
-            end_node.into(),
-            v8::Integer::new_from_unsigned(scope, end_offset).into(),
-        ],
-    );
-    let _ = call_object_method(scope, range, "deleteContents", &[]);
-    true
-}
-
-fn inert_ancestor_or_self(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
-    let mut current = Some(handle);
-    while let Some(handle) = current {
-        if runtime
-            .dom_host()
-            .node(handle)
-            .and_then(|node| node.as_element())
-            .is_some_and(|element| element.attribute("inert").is_some())
-        {
-            return Some(handle);
-        }
-        current = runtime.dom_host().parent_node(handle);
-    }
-    None
-}
-
 fn dom_descendant_or_self(
     runtime: &PageScriptHost,
     ancestor: DomHandle,
@@ -1367,28 +1085,4 @@ fn dom_descendant_or_self(
         current = runtime.dom_host().parent_node(handle);
     }
     false
-}
-
-fn boundary_before_protected_inert_root(
-    runtime: &PageScriptHost,
-    protected_inert_root: DomHandle,
-) -> Option<(DomHandle, u32)> {
-    let parent = runtime.dom_host().parent_node(protected_inert_root)?;
-    let index = runtime
-        .dom_host()
-        .child_index(parent, protected_inert_root)?;
-    let offset = u32::try_from(index).ok()?;
-    Some((parent, offset))
-}
-
-fn boundary_after_protected_inert_root(
-    runtime: &PageScriptHost,
-    protected_inert_root: DomHandle,
-) -> Option<(DomHandle, u32)> {
-    let parent = runtime.dom_host().parent_node(protected_inert_root)?;
-    let index = runtime
-        .dom_host()
-        .child_index(parent, protected_inert_root)?;
-    let offset = u32::try_from(index + 1).ok()?;
-    Some((parent, offset))
 }

@@ -4,7 +4,7 @@ use crate::dom::native::DomHost;
 use crate::native_bridge::SelectionBoundarySnapshot;
 use crate::range_boundary::point_order_in_dom;
 
-pub(super) fn selection_boundaries(
+pub(in crate::context_bootstrap::selection::editing) fn selection_boundaries(
     runtime: &PageScriptHost,
     [start, end]: [SelectionBoundarySnapshot; 2],
     is_editable: &impl Fn(&PageScriptHost, DomHandle) -> bool,
@@ -60,7 +60,35 @@ pub(super) fn selection_boundaries(
     .then_some([start, end])
 }
 
-pub(super) fn delete_contents<'s>(
+// A range entering the first cell or leaving the last one can delete
+// contents on both sides of the table edge without removing grid nodes.
+pub(in crate::context_bootstrap::selection::editing) fn spans_partial_table_edges(
+    dom: &DomHost,
+    [start, end]: [SelectionBoundarySnapshot; 2],
+) -> bool {
+    let first = enclosing_table(dom, start.container);
+    let last = enclosing_table(dom, end.container);
+    let at_edge = |point: SelectionBoundarySnapshot, table, trailing| {
+        let Some(parent) = dom.parent_node(table) else {
+            return false;
+        };
+        if enclosing_table(dom, parent).is_some() {
+            return false;
+        }
+        let mut cells = cells_in_table(dom, table);
+        let edge_cell = if trailing {
+            cells.next_back()
+        } else {
+            cells.next()
+        };
+        edge_cell.is_some() && enclosing_cell(dom, point.container) == edge_cell
+    };
+    first != last
+        && first.is_none_or(|table| at_edge(start, table, true))
+        && last.is_none_or(|table| at_edge(end, table, false))
+}
+
+pub(in crate::context_bootstrap::selection::editing) fn delete_contents<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut PageScriptHost,
     document: DomHandle,

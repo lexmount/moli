@@ -656,6 +656,12 @@ impl PageScriptHost {
         self.selection_record_registry.document_snapshot(document)
     }
 
+    pub(crate) fn document_selection_is_backward(&self, document: DomHandle) -> bool {
+        self.selection_record_registry
+            .document_record(document)
+            .is_some_and(|record| record.direction == SelectionDirection::Backward)
+    }
+
     pub(crate) fn document_editing_selection(
         &self,
         document: DomHandle,
