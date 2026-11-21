@@ -280,6 +280,11 @@ fn realtime_environment_emulation_uses_frames_while_activity_can_run_hidden() {
             page.vm_mut().eval("JSON.stringify(events)").unwrap(),
             "[\"orientation:90\"]"
         );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        page.vm_mut().eval("requestAnimationFrame(()=>{})").unwrap();
         run_opportunity(&mut page, &loader).await.unwrap();
         assert_eq!(
             page.vm_mut().eval("JSON.stringify(events)").unwrap(),
