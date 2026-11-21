@@ -272,6 +272,10 @@ async fn realtime_child_viewport_notifies_default_and_isolated_worlds_without_qu
         for witness in world_witnesses(&mut output, &page, &contexts, "initial").await? {
             check_witness(&witness, false)?;
         }
+        let initial = RendererPageTestingHandle::new_for_testing(&page)
+            .realtime_layout_observation_async().await?;
+        ensure!(initial.frame_idle, "initial lifecycle must have settled: {initial:#?}");
+        ensure!(initial.last_pass_paint_operations == Some(0), "{initial:#?}");
         world_json(&page, None, r#"(() => {
           window.environmentControl={resize:0,media:[]};
           addEventListener('resize',()=>environmentControl.resize++);
@@ -292,6 +296,10 @@ async fn realtime_child_viewport_notifies_default_and_isolated_worlds_without_qu
         for witness in world_witnesses(&mut output, &page, &contexts, "changed").await? {
             check_witness(&witness, true)?;
         }
+        let final_state = RendererPageTestingHandle::new_for_testing(&page)
+            .realtime_layout_observation_async().await?;
+        ensure!(final_state.frame_idle, "completed finite callbacks must not renew frames: {final_state:#?}");
+        ensure!(final_state.last_pass_paint_operations == Some(0), "{final_state:#?}");
         let control = world_json(&page, None,
             "JSON.stringify({resize:environmentControl.resize,media:environmentControl.media,marker:globalThis.environmentRealm??null})".to_owned()).await?;
         ensure!(control == serde_json::json!({"resize":0,"media":[],"marker":null}), "{control}");

@@ -299,6 +299,14 @@ impl PageScriptHost {
         }
     }
 
+    #[cfg(all(test, feature = "devtools"))]
+    pub(crate) fn realtime_frame_is_idle_for_test(&self) -> bool {
+        self.realtime_layout_state.as_ref().is_some_and(|state| {
+            let frame = state.frame.borrow();
+            frame.is_idle() && !frame.source_requested
+        })
+    }
+
     pub(crate) fn current_realtime_rendering_opportunity(
         &self,
     ) -> Option<(RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget)> {

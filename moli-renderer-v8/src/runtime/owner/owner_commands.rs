@@ -874,6 +874,14 @@ impl RendererOwnerHandle {
                     .into()
             }
             #[cfg(test)]
+            RendererOwnerCommand::TestingRealtimeLayoutObservation { token } => {
+                owner_local_store_session(owner_local_store)
+                    .realtime_layout_observation_for_testing(token)
+                    .map(Box::new)
+                    .map(RendererOwnerReply::TestingRealtimeLayoutObservation)
+                    .into()
+            }
+            #[cfg(test)]
             RendererOwnerCommand::TestingDeferredPageVmDropPendingCount => {
                 Ok(RendererOwnerReply::TestingDeferredPageVmDropPendingCount(
                     deferred_page_vm_drop_pending_count_for_testing(),
