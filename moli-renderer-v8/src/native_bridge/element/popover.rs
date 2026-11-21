@@ -16,7 +16,8 @@ use super::focus::{focus_element, is_focusable, update_focus};
 use super::toggle_event::queue_element_toggle_event;
 use super::{
     PageScriptHost, dispatch_public_event, element_attribute, element_has_attribute,
-    remove_reflected_attribute, set_reflected_attribute,
+    remove_reflected_attribute, resolved_reflected_element_attribute_handle,
+    set_reflected_attribute,
 };
 
 fn canonical_popover_state(raw: &str) -> &'static str {
@@ -530,39 +531,52 @@ pub(in crate::native_bridge) fn node_toggle_popover_callback<'s>(
     rv.set_bool(opened);
 }
 
+pub(super) fn click_targets_popover_nested_in_invoker(
+    runtime: &PageScriptHost,
+    invoker: DomHandle,
+    popover: DomHandle,
+    event_target: DomHandle,
+) -> bool {
+    popover != invoker
+        && shadow_including_tree_contains(runtime, popover, event_target)
+        && shadow_including_tree_contains(runtime, invoker, popover)
+}
+
 pub(crate) fn perform_popover_invoker_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     invoker: DomHandle,
+    event_target: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    let (target_id, action) =
-        if let Some(target_id) = element_attribute(runtime, invoker, "popovertarget") {
-            let action = element_attribute(runtime, invoker, "popovertargetaction")
-                .map(|value| value.to_ascii_lowercase())
-                .unwrap_or_else(|| "toggle".to_owned());
-            (target_id, action)
-        } else if let Some(target_id) = element_attribute(runtime, invoker, "commandfor") {
-            let action = match element_attribute(runtime, invoker, "command")
-                .map(|value| value.to_ascii_lowercase())
-                .as_deref()
-            {
-                Some("show-popover") => "show",
-                Some("hide-popover") => "hide",
-                Some("toggle-popover") => "toggle",
-                _ => return false,
-            };
-            (target_id, action.to_owned())
-        } else {
+    let (target, action) = if let Some(target) =
+        resolved_reflected_element_attribute_handle(runtime, invoker, "popovertarget")
+    {
+        let action = element_attribute(runtime, invoker, "popovertargetaction")
+            .map(|value| value.to_ascii_lowercase())
+            .unwrap_or_else(|| "toggle".to_owned());
+        (target, action)
+    } else if let Some(target_id) = element_attribute(runtime, invoker, "commandfor") {
+        let action = match element_attribute(runtime, invoker, "command")
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("show-popover") => "show",
+            Some("hide-popover") => "hide",
+            Some("toggle-popover") => "toggle",
+            _ => return false,
+        };
+        let Some(target) = popover_invoker_target_for_id(runtime, invoker, &target_id) else {
             return false;
         };
-    if target_id.is_empty() {
-        return false;
-    }
-    let Some(target) = popover_invoker_target_for_id(runtime, invoker, &target_id) else {
+        (target, action.to_owned())
+    } else {
         return false;
     };
     if !element_has_attribute(runtime, target, "popover") {
+        return false;
+    }
+    if click_targets_popover_nested_in_invoker(runtime, invoker, target, event_target) {
         return false;
     }
     let open = match action.as_str() {
