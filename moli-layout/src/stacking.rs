@@ -78,11 +78,12 @@ impl PaintEntry {
 
 #[derive(Debug, Default)]
 struct FlowCollection {
-    block_backgrounds: Vec<PaintEntry>,
-    table_collapsed_borders: Vec<PaintEntry>,
+    // These stages follow the preorder traversal within this flow.
+    block_backgrounds: Vec<LayoutBoxId>,
+    table_collapsed_borders: Vec<LayoutBoxId>,
+    outlines: Vec<LayoutBoxId>,
     floats: Vec<PaintEntry>,
     inline_contents: Vec<PaintEntry>,
-    outlines: Vec<PaintEntry>,
 }
 
 #[derive(Default)]
@@ -360,7 +361,7 @@ fn emit_context<N>(
     for context in stacking.positive {
         emit_context(world, context.id, sequence, inline, events);
     }
-    emit_entries(world, outlines, sequence, inline, events);
+    events.extend(outlines.into_iter().map(PaintOrderEvent::BoxOutline));
     events.push(PaintOrderEvent::BoxOutline(root));
     events.push(PaintOrderEvent::PopStackingContext(root));
 }
@@ -424,23 +425,13 @@ fn collect_subtree<N>(
         return;
     }
     if !layout_box.inline_flattened {
-        flow.block_backgrounds.push(PaintEntry::event(
-            PaintOrderEvent::BoxOutsetShadow(id),
-            sequence[id.index()],
-        ));
-        flow.block_backgrounds.push(PaintEntry::event(
-            PaintOrderEvent::BoxBackground(id),
-            sequence[id.index()],
-        ));
+        flow.block_backgrounds.push(id);
     }
     collect_contents(world, id, sequence, inline, flow);
+    flow.outlines.push(id);
     for child in ordered_children(world, id) {
         collect_subtree(world, child, sequence, inline, flow, stacking);
     }
-    flow.outlines.push(PaintEntry::event(
-        PaintOrderEvent::BoxOutline(id),
-        sequence[id.index()],
-    ));
 }
 
 fn collect_contents<N>(
@@ -506,10 +497,7 @@ fn collect_contents<N>(
         });
     }
     if world.collapsed_table_borders.contains_key(&id) {
-        flow.table_collapsed_borders.push(PaintEntry::event(
-            PaintOrderEvent::TableCollapsedBorders(id),
-            tree_order,
-        ));
+        flow.table_collapsed_borders.push(id);
     }
 }
 
@@ -527,15 +515,17 @@ fn emit_flow<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    for entries in [
-        flow.block_backgrounds,
-        flow.table_collapsed_borders,
-        flow.floats,
-        flow.inline_contents,
-        flow.outlines,
-    ] {
-        emit_entries(world, entries, sequence, inline, events);
+    for id in flow.block_backgrounds {
+        push_background(id, events);
     }
+    events.extend(
+        flow.table_collapsed_borders
+            .into_iter()
+            .map(PaintOrderEvent::TableCollapsedBorders),
+    );
+    emit_entries(world, flow.floats, sequence, inline, events);
+    emit_entries(world, flow.inline_contents, sequence, inline, events);
+    events.extend(flow.outlines.into_iter().map(PaintOrderEvent::BoxOutline));
 }
 
 fn emit_entries<N>(
