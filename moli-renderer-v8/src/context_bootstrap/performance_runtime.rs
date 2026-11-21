@@ -76,7 +76,10 @@ pub(super) use marks_measures::{
 pub(crate) use moli_webapi::performance::observer::finalize_performance_observer_realm_bindings;
 pub(super) use resource_buffer::resource_timing_dropped_entries_count;
 pub(crate) use resource_buffer::run_resource_timing_buffer_full_task;
-pub(crate) use window_state::{bind_document_performance, bind_window_performance_seed};
+pub(crate) use window_state::{
+    bind_document_performance, bind_window_performance_seed,
+    current_window_performance_time_origin_seed,
+};
 pub(super) use window_state::{
     build_window_performance_for_receiver, ensure_current_window_performance,
     finish_window_performance_materialization, install_default_window_performance_seed,

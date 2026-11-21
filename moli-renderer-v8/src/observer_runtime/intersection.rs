@@ -29,6 +29,13 @@ pub(super) struct IntersectionCheckBatch {
     geometry_cache: RootlessIntersectionGeometryCache,
 }
 
+impl IntersectionCheckBatch {
+    pub(super) fn retain_observers(&mut self, ids: &[u32]) {
+        self.observers
+            .retain(|observer| ids.binary_search(&observer.observer_id).is_ok());
+    }
+}
+
 struct IntersectionCheckResult {
     observer_id: u32,
     target: NativeNodeId,
@@ -137,15 +144,20 @@ pub(super) fn compute_intersection_check_batch(
             })
             .collect();
         let queries = moli_layout::LayoutQueryBatch::new(queries);
-        let answers: Vec<_> = runtime
-            .with_latest_layout_tree_for_document(document, |tree| {
-                queries
-                    .queries
-                    .iter()
-                    .map(|query| tree.answer_query(query))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let answers: Vec<_> = if runtime.layout_policy().is_realtime() {
+            crate::native_bridge::element::observable_geometry_batch(runtime, document, &queries)?
+                .answers
+        } else {
+            runtime
+                .with_latest_layout_tree_for_document(document, |tree| {
+                    queries
+                        .queries
+                        .iter()
+                        .map(|query| tree.answer_query(query))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         for (index, answer) in indices.into_iter().zip(answers) {
             let moli_layout::LayoutQueryAnswer::IntersectionGeometry(geometry) = answer else {
                 return Err(moli_layout::LayoutError::source_contract(
