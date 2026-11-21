@@ -1,6 +1,7 @@
 use super::*;
 
 const ELEMENT_ANIMATIONS_SLOT: &str = "__moliElementAnimations";
+const REGISTRY_TARGET_SLOT: &str = "__moliAnimationRegistryTarget";
 
 pub(super) fn for_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -21,6 +22,14 @@ pub(super) fn register<'s>(scope: &mut v8::PinScope<'s, '_>, animation: v8::Loca
     let Some(target) = effect_target(scope, animation) else {
         return;
     };
+    register_for_target(scope, animation, target);
+}
+
+pub(super) fn register_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animation: v8::Local<'s, v8::Object>,
+    target: v8::Local<'s, v8::Object>,
+) {
     let mut animations = for_element(scope, target);
     if animations
         .iter()
@@ -28,6 +37,7 @@ pub(super) fn register<'s>(scope: &mut v8::PinScope<'s, '_>, animation: v8::Loca
     {
         return;
     }
+    set_private_value(scope, animation, REGISTRY_TARGET_SLOT, target.into());
     animations.push(animation);
     store(scope, target, &animations);
 }
@@ -36,7 +46,7 @@ pub(super) fn unregister<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     animation: v8::Local<'s, v8::Object>,
 ) {
-    let Some(target) = effect_target(scope, animation) else {
+    let Some(target) = get_private_object(scope, animation, REGISTRY_TARGET_SLOT) else {
         return;
     };
     let mut animations = for_element(scope, target);

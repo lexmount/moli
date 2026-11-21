@@ -95,6 +95,12 @@ impl PageScriptHost {
             document_node.quirks_mode(),
         )
     }
+
+    pub(crate) fn is_rendered_after_style_observation(&self, handle: DomHandle) -> bool {
+        self.style_engine
+            .is_rendered_after_style_observation(self.dom_host(), handle)
+    }
+
     pub(crate) fn documents_with_adopted_style_sheets(&self) -> Vec<DomHandle> {
         self.style_engine.documents_with_adopted_style_sheets()
     }
@@ -652,6 +658,7 @@ impl PageScriptHost {
         &mut self,
         owner: crate::native_bridge::WindowDocumentOwner,
     ) -> Option<DocumentResourceLoader> {
+        self.retire_animation_transition_state(owner);
         let retired = self.document_resource_loaders.retire(owner)?;
         let registry_id = retired.load_diagnostics().registry_id;
         let (aborted, detached_keepalive) =
@@ -1148,6 +1155,7 @@ impl PageScriptHost {
             let host_ptr = self as *mut Self;
             unsafe { &mut *self.document_runtime }
                 .apply_inline_cssom_source_change_after_invalidation(host_ptr, owner);
+            self.queue_animation_transition_scan_for_style_invalidation();
             return true;
         }
         if self.style_engine.refresh_linked_live_stylesheet_with_host(
@@ -1160,6 +1168,7 @@ impl PageScriptHost {
             let host_ptr = self as *mut Self;
             unsafe { &mut *self.document_runtime }
                 .apply_linked_cssom_source_change(host_ptr, owner);
+            self.queue_animation_transition_scan_for_style_invalidation();
             return true;
         }
         false
@@ -1182,6 +1191,7 @@ impl PageScriptHost {
         );
         if refreshed {
             self.clear_layout_rect_cache();
+            self.queue_animation_transition_scan_for_style_invalidation();
         }
         refreshed
     }
@@ -1423,6 +1433,7 @@ impl PageScriptHost {
             .unwrap_or_else(|| self.document_url().clone())
     }
 
+    #[cfg(test)]
     pub(crate) fn registered_css_custom_property_registration(
         &self,
         document: DomHandle,
@@ -1913,6 +1924,65 @@ impl PageScriptHost {
             )
     }
 
+    pub(crate) fn resolved_animation_keyframes(
+        &self,
+        handle: DomHandle,
+        name: &str,
+        default_easing: &str,
+    ) -> Option<Vec<crate::style_engine::ResolvedKeyframe>> {
+        self.style_engine.resolved_animation_keyframes(
+            self.dom_host(),
+            handle,
+            name,
+            default_easing,
+        )
+    }
+
+    pub(crate) fn animation_parent_style(
+        &self,
+        handle: DomHandle,
+    ) -> Option<(
+        DomHandle,
+        style::servo_arc::Arc<style::properties::ComputedValues>,
+    )> {
+        self.style_engine
+            .animation_parent_style(self.dom_host(), handle)
+    }
+
+    pub(crate) fn project_animation_values_with_parent(
+        &self,
+        document: DomHandle,
+        handle: DomHandle,
+        base: &style::servo_arc::Arc<style::properties::ComputedValues>,
+        values: &[crate::animation_model::EffectSample],
+        parent: Option<&style::servo_arc::Arc<style::properties::ComputedValues>>,
+    ) -> style::servo_arc::Arc<style::properties::ComputedValues> {
+        self.style_engine.project_animation_values(
+            self.dom_host(),
+            document,
+            handle,
+            base,
+            values,
+            parent,
+        )
+    }
+
+    pub(crate) fn transition_values_are_eligible(
+        &self,
+        document: DomHandle,
+        handle: DomHandle,
+        base: &style::servo_arc::Arc<style::properties::ComputedValues>,
+        pair: crate::style_engine::TransitionValuePair<'_>,
+    ) -> bool {
+        self.style_engine.transition_values_are_eligible(
+            self.dom_host(),
+            document,
+            handle,
+            base,
+            pair,
+        )
+    }
+
     #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn stylo_computed_style_property_reads_for_test(&self) -> u64 {
         self.stylo_computed_style_property_reads.get()
@@ -2003,6 +2073,7 @@ impl PageScriptHost {
             &emulated_media,
             viewport,
         );
+        self.queue_animation_transition_scan_for_style_invalidation();
     }
 
     pub(crate) fn note_focus_style_activity_with_previous_focus_within(
@@ -2023,6 +2094,7 @@ impl PageScriptHost {
                 &emulated_media,
                 viewport,
             );
+        self.queue_animation_transition_scan_for_style_invalidation();
     }
 
     pub(crate) fn note_target_style_activity(
@@ -2041,6 +2113,7 @@ impl PageScriptHost {
                 &emulated_media,
                 viewport,
             );
+        self.queue_animation_transition_scan_for_style_invalidation();
     }
 
     pub(crate) fn note_element_state_style_activity_with_old_state(
@@ -2061,6 +2134,7 @@ impl PageScriptHost {
                 &emulated_media,
                 viewport,
             );
+        self.queue_animation_transition_scan_for_style_invalidation();
     }
 
     #[cfg(feature = "devtools")]
@@ -2128,6 +2202,7 @@ impl PageScriptHost {
                 &emulated_media,
                 viewport,
             );
+        self.queue_animation_transition_scan_for_style_invalidation();
     }
 
     pub(crate) fn set_media_paused(&mut self, handle: DomHandle, paused: bool) -> bool {
@@ -2496,6 +2571,19 @@ impl PageScriptHost {
                 None,
             );
         }
+        if effects.iter().any(|effect| match effect {
+            StyleMutationEffect::Attribute { name, .. } => {
+                name.eq_ignore_ascii_case("class") || name.eq_ignore_ascii_case("style")
+            }
+            StyleMutationEffect::ConnectedSubtrees { roots } => roots.iter().any(|root| {
+                crate::native_bridge::element::element_tree_has_inline_css_lifecycle(self, *root)
+            }),
+            _ => false,
+        }) {
+            self.queue_animation_transition_scan();
+        } else if !effects.is_empty() {
+            self.queue_animation_transition_scan_for_style_invalidation();
+        }
     }
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
@@ -2503,6 +2591,7 @@ impl PageScriptHost {
         let dom_host = self.dom_host() as *const _;
         self.style_engine
             .invalidate_inline_style_subtree(unsafe { &*dom_host }, root);
+        self.queue_animation_transition_scan();
     }
 
     pub(crate) fn note_style_subtree_context_change(&mut self, root: DomHandle) {
@@ -2510,6 +2599,7 @@ impl PageScriptHost {
         let dom_host = self.dom_host() as *const _;
         self.style_engine
             .invalidate_style_subtree(unsafe { &*dom_host }, root);
+        self.queue_animation_transition_scan_for_style_invalidation();
     }
 
     pub(crate) fn migrate_inline_style_metadata_in_subtree(&mut self, root: DomHandle) {

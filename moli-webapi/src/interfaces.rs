@@ -31,7 +31,7 @@ interfaces! {
     AbortSignal: EventTarget;
     AbstractRange;
     AnalyserNode: AudioNode;
-    Animation;
+    Animation: EventTarget;
     AnimationEffect;
     AnimationEvent: Event;
     AnimationPlaybackEvent: Event;

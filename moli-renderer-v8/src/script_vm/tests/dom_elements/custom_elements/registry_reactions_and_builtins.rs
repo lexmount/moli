@@ -1484,14 +1484,16 @@ fn animation_commit_styles_enqueues_style_attribute_reactions() {
               document.body.appendChild(observed);
               const observedSetup = observedCalls.splice(0).join("|");
 
-              const firstAnimation = observed.animate([{borderColor: "rgb(0, 0, 255)"}], 1);
+              const firstAnimation = observed.animate([{borderColor: "rgb(0, 0, 255)"}], {duration:1,fill:"both"});
               const afterAnimate = observedCalls.splice(0).join("|");
+              firstAnimation.pause();firstAnimation.currentTime=1;
               firstAnimation.commitStyles();
               const afterFirstCommit = observedCalls.splice(0).join("|");
               const firstStyle = observed.getAttribute("style");
 
-              const secondAnimation = observed.animate([{borderColor: "rgb(0, 255, 0)"}], 1);
+              const secondAnimation = observed.animate([{borderColor: "rgb(0, 255, 0)"}], {duration:1,fill:"both"});
               const afterSecondAnimate = observedCalls.splice(0).join("|");
+              secondAnimation.pause();secondAnimation.currentTime=1;
               secondAnimation.commitStyles();
               const afterSecondCommit = observedCalls.splice(0).join("|");
               const secondStyle = observed.getAttribute("style");
@@ -1504,7 +1506,8 @@ fn animation_commit_styles_enqueues_style_attribute_reactions() {
               const unobserved = document.createElement("wpt-animation-unobserved-child");
               document.body.appendChild(unobserved);
               const unobservedSetup = unobservedCalls.splice(0).join("|");
-              unobserved.animate([{borderColor: "rgb(0, 0, 255)"}], 1).commitStyles();
+              const unobservedAnimation=unobserved.animate([{borderColor: "rgb(0, 0, 255)"}], {duration:1,fill:"both"});
+              unobservedAnimation.pause();unobservedAnimation.currentTime=1;unobservedAnimation.commitStyles();
               const unobservedAfterCommit = unobservedCalls.splice(0).join("|");
 
               return JSON.stringify({

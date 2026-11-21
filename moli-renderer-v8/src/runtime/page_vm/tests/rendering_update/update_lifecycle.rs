@@ -286,7 +286,7 @@ removed.remove();
             .expect("the removed target's exact animation scan should remain queued");
         assert_eq!(
             task.kind(),
-            RendererPageRenderingUpdateTaskKind::AnimationStartScan
+            RendererPageRenderingUpdateTaskKind::AnimationTransitionScan
         );
         let body = page_vm.apply_selected_page_rendering_update_turn(task)?;
         assert_eq!(
@@ -441,15 +441,15 @@ document.close();
             .expect("replacement main Document owner should exist");
         assert_ne!(before_document, after_document);
 
-        let stale = page_vm
+        let stale_start = page_vm
             .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
             .expect("retired Document animation work should remain an exact source entry");
-        let (stale_owner, stale_kind) = stale
+        let (stale_owner, stale_kind) = stale_start
             .rendering_update_owner_and_kind()
             .expect("rendering selector must retain the retired task identity");
         assert_eq!(
             stale_kind,
-            RendererPageRenderingUpdateTaskKind::AnimationStartScan
+            RendererPageRenderingUpdateTaskKind::AnimationTransitionScan
         );
         assert_eq!(
             stale_owner.target().owner(),
@@ -457,7 +457,7 @@ document.close();
             "the claimed task must retain the retired exact Document"
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(stale, &loader)
+            .run_claimed_selected_page_task_for_test(stale_start, &loader)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("String(__retiredAnimationEvents)")?,
@@ -488,7 +488,7 @@ document.getElementById("current-animation").addEventListener(
             .expect("rendering selector must retain its exact owner and kind");
         assert_eq!(
             selected_kind,
-            RendererPageRenderingUpdateTaskKind::AnimationStartScan
+            RendererPageRenderingUpdateTaskKind::AnimationTransitionScan
         );
         assert_ne!(stale_owner, current_owner);
         assert_eq!(

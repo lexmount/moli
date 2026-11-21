@@ -186,6 +186,13 @@ impl ScriptVm {
         .map_err(anyhow::Error::new)
     }
 
+    pub(crate) fn prepare_animation_visual_sample(&self) {
+        let host = self._context_host.borrow();
+        if host.animation_transition_state().has_ticking_effects() {
+            host.invalidate_animation_layout();
+        }
+    }
+
     #[cfg(feature = "devtools")]
     pub(crate) fn visual_state_token(
         &self,

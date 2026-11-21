@@ -347,6 +347,7 @@ pub(super) struct LightweightPopupDocumentState {
 }
 
 struct LightweightPopupDocumentRecord {
+    timeline_origin: std::time::Instant,
     owner: LightweightPopupDocumentOwner,
     local_window_id: LightweightPopupLocalWindowId,
     url: Url,
@@ -912,6 +913,7 @@ impl PageScriptHost {
                 opener_sandbox_policy,
                 lifecycle: LightweightPopupLifecycle::Open(Box::new(LightweightPopupOpenState {
                     document: LightweightPopupDocumentRecord {
+                        timeline_origin: std::time::Instant::now(),
                         owner: initial_document_owner,
                         local_window_id: initial_local_window_id,
                         url: initial_url.clone(),
@@ -1865,6 +1867,17 @@ impl PageScriptHost {
         true
     }
 
+    pub(crate) fn popup_document_animation_origin(
+        &self,
+        document: DomHandle,
+    ) -> Option<std::time::Instant> {
+        let popup = self.lightweight_popup_id_for_document_handle(document)?;
+        Some(
+            self.lightweight_popup_document_record(popup)?
+                .timeline_origin,
+        )
+    }
+
     pub(crate) fn lightweight_popup_document_is_open(
         &self,
         document_handle: crate::document_runtime::DomHandle,
@@ -1961,6 +1974,11 @@ impl PageScriptHost {
             return false;
         };
         let changed_document = current_document.owner != commit.owner;
+        let timeline_origin = if changed_document {
+            std::time::Instant::now()
+        } else {
+            current_document.timeline_origin
+        };
         let inherited_resource_authority = (changed_document && commit.navigation_loader.is_none())
             .then(|| {
                 self.document_resource_loader_for_window_owner(
@@ -2023,6 +2041,7 @@ impl PageScriptHost {
             let retired_document = std::mem::replace(
                 &mut open.document,
                 LightweightPopupDocumentRecord {
+                    timeline_origin,
                     owner: commit.owner,
                     local_window_id: current_local_window_id,
                     url: commit.location_url.clone(),

@@ -13,6 +13,8 @@ Kept:
 - `README.md`
 - `src/`
 - `gen/`
+- `tools/download_file.py` (unchanged from the `v152.2.0` upstream tag; the
+  prebuilt build path invokes this standard-library Python downloader)
 - `v8/include/`
 
 Moli extensions:
@@ -56,7 +58,7 @@ Version-specific corrections:
 
 Removed from the upstream crate:
 - GN/Ninja/Chromium source-build inputs such as `build/`, `buildtools/`,
-  `third_party/`, `tools/`, the rest of `v8/`, and crate-local tests/examples.
+  `third_party/`, the rest of `tools/` and `v8/`, and crate-local tests/examples.
 
 Implications:
 - default prebuilt linking remains supported
