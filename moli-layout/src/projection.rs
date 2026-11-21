@@ -640,6 +640,22 @@ where
     }
 
     fn build_fragments(&mut self) {
+        // All fragment counts are known after inline layout. Allocate once so
+        // growing the output does not repeatedly move its existing fragments.
+        let fragment_count = self
+            .world
+            .boxes
+            .iter()
+            .map(|layout_box| {
+                usize::from(!layout_box.inline_flattened)
+                    + layout_box.inline_layout.as_ref().map_or(0, |context| {
+                        let fragments = &context.fragments;
+                        fragments.lines.len() + fragments.boxes.len() + fragments.text.len()
+                    })
+            })
+            .sum();
+        self.fragments.reserve_exact(fragment_count);
+
         for index in 0..self.world.boxes.len() {
             let layout_box = &self.world.boxes[index];
             let output_box = LayoutOutputBoxId::from_index(index);
@@ -666,6 +682,8 @@ where
             let Some(context) = layout_box.inline_layout.as_ref() else {
                 continue;
             };
+            self.owner_paint_fragments[index]
+                .reserve_exact(context.fragments.boxes.len() + context.fragments.text.len());
             let layout = layout_box.final_layout;
             let box_id = LayoutBoxId::from_index(index);
             let vertical_leading_gutter =
