@@ -556,6 +556,62 @@ fn batch_membership_retirement_rebuilds_once_and_preserves_other_owners() {
 }
 
 #[test]
+fn temporary_css_declarations_reuse_loaded_css_connected_sources() {
+    for (scope, reuses_source) in [
+        (WebFontRegistrationScope::Stylesheet, true),
+        (WebFontRegistrationScope::FontFaceSetConnected, true),
+        (WebFontRegistrationScope::FontFaceSetManual, false),
+    ] {
+        let mut services =
+            DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        services
+            .register_web_font(
+                registration("screen-rule", "ScreenAlias", TEST_TTF)
+                    .with_scope(scope)
+                    .with_source_key(Some("shared-css-source".into())),
+            )
+            .unwrap();
+        let source = services.web_fonts["screen-rule"].sfnt_bytes.id();
+        let print_face = WebFontFace::new("PrintAlias");
+        services.with_stylesheet_font_declarations(
+            [WebFontDeclaration {
+                slot: "print-rule",
+                source_key: "shared-css-source",
+                face: &print_face,
+            }],
+            |selected| {
+                assert_eq!(
+                    selected
+                        .web_fonts
+                        .get("print-rule")
+                        .map(|font| font.sfnt_bytes.id()),
+                    reuses_source.then_some(source),
+                    "{scope:?}"
+                );
+                assert_eq!(
+                    selected.web_fonts.contains_key("screen-rule"),
+                    !reuses_source
+                );
+                assert_eq!(selected.web_font_count(), 1);
+                if reuses_source {
+                    assert_eq!(
+                        shape_one_character(
+                            selected.parley_mut(),
+                            web_font_style("PrintAlias", 400.0),
+                            'A',
+                        ),
+                        TEST_TTF,
+                    );
+                }
+            },
+        );
+        assert_eq!(services.web_font_count(), 1);
+        assert_eq!(services.web_fonts["screen-rule"].sfnt_bytes.id(), source);
+        assert!(!services.web_fonts.contains_key("print-rule"));
+    }
+}
+
+#[test]
 fn temporary_css_order_keeps_sources_and_restores_selection_after_an_error() {
     let mut services = DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
     let narrow = include_bytes!("../../../tests/fixtures/moli-ahem-narrow.ttf");
