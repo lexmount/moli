@@ -35,7 +35,6 @@ editing/crashtests/inserthorizontalrule-in-textarea-in-editor-and-undo-on-error-
 editing/crashtests/insertimage-with-replacing-selection-in-picture-element.html
 fetch/api/abort/serviceworker-intercepted.https.html
 focus/focus-event-after-iframe-gets-focus.html
-focus/iframe-activeelement-after-focusing-out-iframes.html
 html/browsers/browsing-the-web/back-forward-cache/storage-events.html
 html/browsers/browsing-the-web/back-forward-cache/timers.html
 html/browsers/browsing-the-web/navigating-across-documents/009.html
