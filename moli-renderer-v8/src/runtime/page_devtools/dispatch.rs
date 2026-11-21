@@ -435,7 +435,7 @@ impl PageVm {
                 top_frame_id,
                 options,
             } => Ok(RendererPageReply::DevTools(RendererDevToolsPageReply::OptionalDomSnapshotCapturePayload(
-                self.dom_snapshot_capture_payload(&top_frame_id, options),
+                self.dom_snapshot_capture_payload(&top_frame_id, options)?,
             ))),
             RendererDevToolsPageCommand::DocumentChildNodeSnapshotEventsForNode {
                 inspector_session_id,

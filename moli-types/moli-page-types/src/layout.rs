@@ -6,15 +6,23 @@ pub enum LayoutPolicy {
     /// such as renderer screenshots that require a real layout backend.
     #[default]
     Mock,
-    /// Only screenshot, screencast, and PDF output build layout.
-    /// Screenshots and screencasts publish layout; print projections are temporary.
-    /// Geometry queries and input read the last published layout, if any.
+    /// Geometry queries and input initialize a missing screen snapshot, then
+    /// keep reading it until an explicit refresh. Screenshots and screencasts
+    /// publish layout; print projections are temporary.
     OnDemand,
+    /// Keep observable screen geometry current and advance the rendering
+    /// lifecycle independently of pixel consumers. Uses the same layout
+    /// backend as OnDemand; image and font resource policies remain separate.
+    Realtime,
 }
 
 impl LayoutPolicy {
     pub const fn uses_real_layout(self) -> bool {
-        matches!(self, Self::OnDemand)
+        matches!(self, Self::OnDemand | Self::Realtime)
+    }
+
+    pub const fn is_realtime(self) -> bool {
+        matches!(self, Self::Realtime)
     }
 }
 
@@ -40,6 +48,10 @@ mod tests {
         assert_eq!(LayoutPolicy::default(), LayoutPolicy::Mock);
         assert!(!LayoutPolicy::default().uses_real_layout());
         assert!(LayoutPolicy::OnDemand.uses_real_layout());
+        assert!(LayoutPolicy::Realtime.uses_real_layout());
         assert!(!LayoutPolicy::Mock.uses_real_layout());
+        assert!(!LayoutPolicy::Mock.is_realtime());
+        assert!(!LayoutPolicy::OnDemand.is_realtime());
+        assert!(LayoutPolicy::Realtime.is_realtime());
     }
 }
