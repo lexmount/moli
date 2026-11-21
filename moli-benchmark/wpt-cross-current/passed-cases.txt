@@ -6854,6 +6854,7 @@ html/browsers/history/the-location-interface/location-tojson.html
 html/browsers/history/the-location-interface/location-valueof.html
 html/browsers/history/the-location-interface/location_assign.html
 html/browsers/history/the-location-interface/location_assign_about_blank.html
+html/browsers/history/the-location-interface/location_hash.html
 html/browsers/history/the-location-interface/location_hash_set_empty_string.html
 html/browsers/history/the-location-interface/location_hashchange_infinite_loop.html
 html/browsers/history/the-location-interface/location_host.html
@@ -7165,8 +7166,13 @@ html/editing/editing-0/making-entire-documents-editable-the-designmode-idl-attri
 html/editing/editing-0/spelling-and-grammar-checking/spellcheck-enumerated-ascii-case-insensitive.html
 html/editing/editing-0/spelling-and-grammar-checking/user-interaction-editing-spellcheck.html
 html/editing/editing-0/writing-suggestions/writingsuggestions.html
+html/editing/the-hidden-attribute/beforematch-attribute-removal-001.html
+html/editing/the-hidden-attribute/beforematch-attribute-removal-002.html
+html/editing/the-hidden-attribute/beforematch-element-removal-001.html
+html/editing/the-hidden-attribute/beforematch-infinite-loop.html
 html/editing/the-hidden-attribute/hidden-idl.html
 html/editing/the-hidden-attribute/hidden-ua-stylesheet.html
+html/editing/the-hidden-attribute/hidden-until-found-and-details.html
 html/editing/the-hidden-attribute/hidden-until-found-idl.html
 html/embedded-content/the-img-element/attr-img-fetchpriority.html
 html/infrastructure/common-dom-interfaces/collections/domstringlist.html

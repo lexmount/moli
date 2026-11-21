@@ -2221,7 +2221,6 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-docum
 html/browsers/browsing-the-web/unloading-documents/004.html
 html/browsers/history/the-history-interface/001.html
 html/browsers/history/the-history-interface/history_go_undefined.html
-html/browsers/history/the-location-interface/location_hash.html
 html/browsers/history/the-location-interface/reload_document_write_onload.html
 html/browsers/history/the-location-interface/same-hash.html
 html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
@@ -2264,7 +2263,6 @@ html/dom/partial-updates/tentative/template-for-shadow.html
 html/editing/dnd/target-origin/202.html
 html/editing/dnd/the-dropzone-attribute/dropzone_attribute.html
 html/editing/the-hidden-attribute/beforematch-element-fragment-navigation.html
-html/editing/the-hidden-attribute/beforematch-infinite-loop.html
 html/infrastructure/safe-passing-of-structured-data/transfer-audiodata.html
 html/infrastructure/safe-passing-of-structured-data/transfer-mediasourcehandle.html
 html/interaction/focus/processing-model/textarea-scroll-selection.html
