@@ -9,10 +9,7 @@ use crate::{
     native_bridge::{PageScriptHost, WindowDocumentTaskTarget},
     observer_runtime,
     page_task_queue::RendererPageRenderingUpdateTaskId,
-    v8_execution_watchdog::{
-        SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
-        V8ExecutionWatchdogOutcome,
-    },
+    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 
 #[derive(Default)]
@@ -36,15 +33,12 @@ impl ScriptVm {
         // A callback can keep appending deeper descendants. Depth convergence
         // must follow the algorithm, with an explicit failure budget for the
         // whole lifecycle rather than an arbitrary number of iterations.
-        let watchdog = V8ExecutionWatchdog::arm(
-            V8ExecutionWatchdogKind::LifecycleEvent,
-            scope.thread_safe_handle(),
-            SCRIPT_TURN_WATCHDOG_TIMEOUT,
+        let result = V8ExecutionWatchdog::with_lifecycle_budget(
+            scope,
+            "ResizeObserver lifecycle",
+            |scope| Self::run_resize_observer_documents(scope, host_ptr, id, root),
         );
-        let timeout = watchdog.timeout();
-        let result = Self::run_resize_observer_documents(scope, host_ptr, id, root, &watchdog);
-        let outcome = watchdog.disarm();
-        if (result.is_err() || outcome == V8ExecutionWatchdogOutcome::TimedOut)
+        if result.is_err()
             && unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root)
         {
             // Gather consumed check demand before broadcast. Retain unfinished
@@ -53,10 +47,6 @@ impl ScriptVm {
             // transfer failed work into a replacement Document's lifecycle.
             observer_runtime::request_realtime_resize_observer_checks(unsafe { &*host_ptr });
         }
-        ensure!(
-            outcome != V8ExecutionWatchdogOutcome::TimedOut,
-            "ResizeObserver lifecycle exceeded {timeout:?} and was terminated"
-        );
         if result.is_ok() {
             finish_resize_observer_controllers(unsafe { &*host_ptr }, id, root);
         }
@@ -68,7 +58,6 @@ impl ScriptVm {
         host_ptr: *mut PageScriptHost,
         id: RendererPageRenderingUpdateTaskId,
         root: WindowDocumentTaskTarget,
-        watchdog: &V8ExecutionWatchdog,
     ) -> Result<bool> {
         let mut invoked = false;
         // Indices belong to this running frame's fixed Document list. Only
@@ -76,7 +65,7 @@ impl ScriptVm {
         // and this opportunity's depth/error state. Navigation never does.
         let mut documents: Vec<ResizeObserverDocumentPhase> = Vec::new();
         'cycles: loop {
-            ensure_resize_lifecycle_running(scope, watchdog)?;
+            ensure_resize_lifecycle_running(scope)?;
             if !unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
                 break;
             }
@@ -97,9 +86,9 @@ impl ScriptVm {
                 if !unsafe { &*host_ptr }.realtime_rendering_target_is_runnable(target) {
                     continue;
                 }
-                ensure_resize_lifecycle_running(scope, watchdog)?;
+                ensure_resize_lifecycle_running(scope)?;
                 unsafe { &*host_ptr }.run_realtime_layout_phase(id, root)?;
-                ensure_resize_lifecycle_running(scope, watchdog)?;
+                ensure_resize_lifecycle_running(scope)?;
                 let batch = gather_realtime_resize_observers(scope, host_ptr, target, phase.depth)?;
                 phase.skipped = batch.skipped;
                 if batch.observers.is_empty() {
@@ -114,9 +103,9 @@ impl ScriptVm {
                         report_resize_loop_error(scope, host_ptr, target);
                         invoked = true;
                         repeat = true;
-                        ensure_resize_lifecycle_running(scope, watchdog)?;
+                        ensure_resize_lifecycle_running(scope)?;
                         Self::perform_microtask_checkpoints(scope, None)?;
-                        ensure_resize_lifecycle_running(scope, watchdog)?;
+                        ensure_resize_lifecycle_running(scope)?;
                     }
                     continue;
                 }
@@ -126,7 +115,7 @@ impl ScriptVm {
                     batch.sources,
                 )?;
                 for observer in batch.observers {
-                    ensure_resize_lifecycle_running(scope, watchdog)?;
+                    ensure_resize_lifecycle_running(scope)?;
                     if !unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
                         break;
                     }
@@ -144,10 +133,10 @@ impl ScriptVm {
                         invoked = true;
                         repeat = true;
                         shallowest = shallowest.min(reported_depth);
-                        ensure_resize_lifecycle_running(scope, watchdog)?;
+                        ensure_resize_lifecycle_running(scope)?;
                         Self::perform_microtask_checkpoints(scope, None)?;
                     }
-                    ensure_resize_lifecycle_running(scope, watchdog)?;
+                    ensure_resize_lifecycle_running(scope)?;
                 }
                 phase.depth = shallowest;
             }
@@ -197,12 +186,10 @@ fn finish_resize_observer_controllers(
     }
 }
 
-fn ensure_resize_lifecycle_running(
-    scope: &mut v8::PinScope<'_, '_>,
-    watchdog: &V8ExecutionWatchdog,
-) -> Result<()> {
+fn ensure_resize_lifecycle_running(scope: &v8::PinScope<'_, '_>) -> Result<()> {
     ensure!(
-        !watchdog.has_timed_out() && !scope.is_execution_terminating(),
+        !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
+            && !scope.is_execution_terminating(),
         "ResizeObserver lifecycle execution was terminated"
     );
     Ok(())

@@ -145,14 +145,17 @@ pub(crate) enum PageWindowDocumentTaskTargetEffect {
 
 /// Common owner-turn fact emitted after an exact Window/Document task settles.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PageWindowDocumentTaskTurnAction<I, K> {
-    pub(crate) owner: RendererPageWindowDocumentTaskOwner,
+pub(crate) struct PageWindowDocumentTaskTurnAction<
+    I,
+    K,
+    E = PageWindowDocumentTaskTargetEffect,
+    T = WindowDocumentTaskTarget,
+> {
+    pub(crate) owner: RendererPageWindowDocumentTaskOwner<T>,
     pub(crate) task_id: I,
     pub(crate) kind: K,
-    pub(crate) target_effect: PageWindowDocumentTaskTargetEffect,
+    pub(crate) target_effect: E,
 }
-
-impl<I, K> PageWindowDocumentTaskTurnAction<I, K> {}
 
 pub(crate) use self::broadcast_channel_delivery::{
     PageBroadcastChannelDeliveryDocumentEffect, PageBroadcastChannelDeliveryTurnAction,

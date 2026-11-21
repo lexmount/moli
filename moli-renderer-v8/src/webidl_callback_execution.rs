@@ -7,11 +7,14 @@ use moli_webidl_callback::{PreparedWebIdlCallbackFunction, invoke_webidl_callbac
 
 use crate::{
     common_runtime::{CommonRuntimeBinding, RuntimeExecutionContext},
+    context_bootstrap::dispatch_window_callback_exception,
     exception_reporting::{
         CallbackExceptionLogLevel, V8ExceptionReport, invoke_callback_with_report,
     },
-    host::report_event_callback_exception,
-    native_bridge::{PageScriptHost, WindowExecutionContextIdentity},
+    native_bridge::{
+        PageScriptHost, WindowExecutionContextBinding, WindowExecutionContextIdentity,
+    },
+    v8_execution_watchdog::V8ExecutionWatchdog,
     v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction,
     worker::dispatch_current_worker_callback_exception,
 };
@@ -150,7 +153,8 @@ impl PreparedWebIdlCallbackExecution {
     }
 
     pub(crate) fn is_current(&self, scope: &mut v8::PinScope<'_, '_>) -> bool {
-        self.environment.can_invoke(scope, &self.binding)
+        !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
+            && self.environment.can_invoke(scope, &self.binding)
     }
 
     /// Execute the caller's invocation and return conversion while the Web
@@ -242,11 +246,56 @@ impl PreparedWebIdlCallbackExecution {
         ) {
             WebIdlCallbackExecutionOutcome::Returned(_) => true,
             WebIdlCallbackExecutionOutcome::Failed(report) => {
-                self.environment
-                    .report_exception(scope, &self.binding, event_type, report);
+                self.report_exception(scope, event_type, report);
                 true
             }
             WebIdlCallbackExecutionOutcome::Unavailable => false,
+        }
+    }
+
+    /// Report an already-captured exception while its relevant Realm is
+    /// entered. The caller chooses whether this shares the invocation budget.
+    pub(crate) fn report_exception(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        event_type: &str,
+        report: Box<V8ExceptionReport>,
+    ) {
+        if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
+            return;
+        }
+        match &self.environment {
+            CallbackExecutionEnvironment::Window {
+                callback_identity, ..
+            } => {
+                if event_type == "error" {
+                    return;
+                }
+                let Some(host_ptr) = self.binding.window_host_ptr() else {
+                    return;
+                };
+                let context = self.relevant_context(scope);
+                let binding = WindowExecutionContextBinding::new(
+                    callback_identity.owner(),
+                    callback_identity.dispatch_scope(),
+                    callback_identity.realm_token(),
+                    v8::Global::new(scope, context),
+                );
+                binding.with_current_scope(scope, host_ptr, |scope, _| {
+                    dispatch_window_callback_exception(scope, host_ptr, None, &report);
+                });
+            }
+            CallbackExecutionEnvironment::Worker { context } => {
+                if !matches!(
+                    self.binding.execution_context(scope),
+                    Some(RuntimeExecutionContext::Worker)
+                ) {
+                    return;
+                }
+                let context = v8::Local::new(scope, context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                dispatch_current_worker_callback_exception(scope, *report);
+            }
         }
     }
 }
@@ -279,42 +328,6 @@ impl CallbackExecutionEnvironment {
                     && !scope.is_execution_terminating()
             }
             _ => false,
-        }
-    }
-
-    fn report_exception(
-        &self,
-        scope: &mut v8::PinScope<'_, '_>,
-        binding: &CommonRuntimeBinding,
-        event_type: &str,
-        report: Box<V8ExceptionReport>,
-    ) {
-        match self {
-            Self::Window {
-                callback_identity, ..
-            } => {
-                if let Some(host_ptr) = binding.window_host_ptr() {
-                    report_event_callback_exception(
-                        scope,
-                        host_ptr,
-                        event_type,
-                        Some(*callback_identity),
-                        None,
-                        &report,
-                    );
-                }
-            }
-            Self::Worker { context } => {
-                if !matches!(
-                    binding.execution_context(scope),
-                    Some(RuntimeExecutionContext::Worker)
-                ) {
-                    return;
-                }
-                let context = v8::Local::new(scope, context);
-                let scope = &mut v8::ContextScope::new(scope, context);
-                dispatch_current_worker_callback_exception(scope, *report);
-            }
         }
     }
 }

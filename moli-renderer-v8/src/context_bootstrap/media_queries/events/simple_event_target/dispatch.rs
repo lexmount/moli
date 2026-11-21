@@ -12,6 +12,7 @@ use crate::{
     exception_reporting::CallbackExceptionLogLevel,
     host::report_event_callback_exception,
     util::context_host_ptr_from_global_bridge,
+    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 
 fn event_stop_immediate_propagation<'s>(
@@ -184,6 +185,9 @@ fn invoke_simple_event_listeners<'s>(
     // listener, so another phase cannot consume it prematurely.
     let listeners = simple_object_event_listeners_snapshot_in_registry(scope, registry, event_type);
     for listener in &listeners {
+        if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
+            break;
+        }
         if capture.is_some_and(|capture| listener.capture != capture) {
             continue;
         }

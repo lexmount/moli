@@ -8,6 +8,7 @@ use crate::{
         PageScriptHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
     },
     util::{get_private_value, set_private_value},
+    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 use moli_webidl_callback::{
     PreparedWebIdlCallbackInterface, WebIdlCallbackInvocation, WebIdlCallbackResolutionFailure,
@@ -42,6 +43,9 @@ pub(crate) fn invoke_synchronous_webidl_callback_interface<'s, R>(
     arguments: &[v8::Local<'s, v8::Value>],
     convert_return: impl FnOnce(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Value>) -> Option<R>,
 ) -> SynchronousWebIdlCallbackOutcome<R> {
+    if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
+        return SynchronousWebIdlCallbackOutcome::Terminated;
+    }
     enum Failure {
         Captured(Box<V8ExceptionReport>),
         Pending,
@@ -184,6 +188,9 @@ impl CallbackInvoker {
         callback_name: &str,
         invocation: CallbackInvocation<'s, '_>,
     ) -> CallbackInvocationOutcome {
+        if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
+            return CallbackInvocationOutcome::Retired;
+        }
         if let Some(host_ptr) = invocation.host_ptr {
             unsafe { &*host_ptr }.debug_assert_not_in_structural_mutation("callback invocation");
         }

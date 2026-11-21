@@ -1,19 +1,14 @@
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Result, anyhow};
 
 use super::ScriptVm;
 use crate::{
-    context_bootstrap::{
-        current_window_performance_time_origin_seed, dispatch_window_error_event_with_details,
-    },
+    context_bootstrap::current_window_performance_time_origin_seed,
     native_bridge::{
-        PageScriptHost, WindowDocumentTaskTarget, WindowExecutionContextBinding,
+        PageScriptHost, WindowDocumentTaskTarget,
         element::{queue_revealed_lazy_image_load, revealed_lazy_image_load_candidates},
     },
     page_task_queue::RendererPageRenderingUpdateTaskId,
-    v8_execution_watchdog::{
-        SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
-        V8ExecutionWatchdogOutcome,
-    },
+    v8_execution_watchdog::V8ExecutionWatchdog,
     webidl_callback_execution::{PreparedWebIdlCallbackExecution, WebIdlCallbackExecutionOutcome},
 };
 
@@ -111,7 +106,7 @@ impl ScriptVm {
                     continue;
                 }
                 invoked = true;
-                invoke_animation_frame(scope, host_ptr, &callback, timestamp)?;
+                invoke_animation_frame(scope, &callback, timestamp)?;
                 // Explicit microtask policy requires embedder cleanup after
                 // each callback, including a reported exception. This is not
                 // the Page task completion and does not pump other tasks.
@@ -174,16 +169,11 @@ impl ScriptVm {
 
             // Admission can synchronously deliver a child Document's CSP
             // event. Use one budget, starting with the first actual candidate.
-            let watchdog = watchdog.get_or_insert_with(|| {
-                V8ExecutionWatchdog::arm(
-                    V8ExecutionWatchdogKind::LifecycleEvent,
-                    scope.thread_safe_handle(),
-                    SCRIPT_TURN_WATCHDOG_TIMEOUT,
-                )
-            });
+            let watchdog =
+                watchdog.get_or_insert_with(|| V8ExecutionWatchdog::arm_lifecycle(scope));
             let finished = watchdog.with_callback_dispatch_budget(scope, |scope| {
                 for handle in candidates {
-                    if watchdog.has_timed_out()
+                    if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
                         || scope.is_execution_terminating()
                         || !unsafe { &*host_ptr }
                             .realtime_rendering_opportunity_is_current(id, root)
@@ -199,11 +189,7 @@ impl ScriptVm {
             }
         }
         if let Some(watchdog) = watchdog {
-            let timeout = watchdog.timeout();
-            ensure!(
-                watchdog.disarm() != V8ExecutionWatchdogOutcome::TimedOut,
-                "Realtime lazy image admission exceeded {timeout:?} and was terminated"
-            );
+            watchdog.finish_lifecycle("Realtime lazy image admission")?;
         }
         Ok(())
     }
@@ -211,59 +197,22 @@ impl ScriptVm {
 
 fn invoke_animation_frame(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut PageScriptHost,
     callback: &PreparedWebIdlCallbackExecution,
     timestamp: f64,
 ) -> Result<()> {
-    let watchdog = V8ExecutionWatchdog::arm(
-        V8ExecutionWatchdogKind::LifecycleEvent,
-        scope.thread_safe_handle(),
-        SCRIPT_TURN_WATCHDOG_TIMEOUT,
-    );
-    let timeout = watchdog.timeout();
-    let arguments = [v8::Number::new(scope, timestamp).into()];
-    let receiver = v8::undefined(scope).into();
-    let outcome = callback.invoke_with_report(
-        scope,
-        "animation frame",
-        "animation frame callback threw",
-        "requestAnimationFrame",
-        receiver,
-        &arguments,
-    );
-    if let WebIdlCallbackExecutionOutcome::Failed(report) = outcome
-        && callback.is_current(scope)
-        && let context = callback.relevant_context(scope)
-        && let Some(identity) =
-            unsafe { &*host_ptr }.window_execution_context_identity_for_v8_context(scope, context)
-    {
-        // Report to the callback's relevant global, which need not be the
-        // Window whose animation-frame list supplied this callback.
-        let binding = WindowExecutionContextBinding::new(
-            identity.owner(),
-            identity.dispatch_scope(),
-            identity.realm_token(),
-            v8::Global::new(scope, context),
-        );
-        binding.with_current_scope(scope, host_ptr, |scope, _| {
-            let error = report
-                .exception
-                .as_ref()
-                .map(|exception| v8::Local::new(scope, exception));
-            let _ = dispatch_window_error_event_with_details(
-                scope,
-                host_ptr,
-                &report.summary,
-                report.source.as_deref().unwrap_or(""),
-                report.line.unwrap_or(0) as u32,
-                report.column.unwrap_or(0) as u32,
-                error,
-            );
-        });
-    }
-    ensure!(
-        watchdog.disarm() != V8ExecutionWatchdogOutcome::TimedOut,
-        "animation frame callback exceeded {timeout:?} and was terminated"
-    );
-    Ok(())
+    V8ExecutionWatchdog::with_lifecycle_budget(scope, "animation frame callback", |scope| {
+        let arguments = [v8::Number::new(scope, timestamp).into()];
+        let receiver = v8::undefined(scope).into();
+        if let WebIdlCallbackExecutionOutcome::Failed(report) = callback.invoke_with_report(
+            scope,
+            "animation frame",
+            "animation frame callback threw",
+            "requestAnimationFrame",
+            receiver,
+            &arguments,
+        ) {
+            callback.report_exception(scope, "animation frame", report);
+        }
+        Ok(())
+    })
 }

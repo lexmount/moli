@@ -8,7 +8,8 @@
 use crate::runtime::PageOwnerTurnOutcome;
 
 use super::{
-    RendererPageWindowDocumentTask, RendererPageWindowDocumentTaskOwner,
+    PageWindowDocumentTaskTurnAction, RendererPageWindowDocumentTask,
+    RendererPageWindowDocumentTaskOwner,
     window_document_task_source::{
         RendererPageWindowDocumentTaskRoute, RendererPageWindowDocumentTaskSender,
         RendererPageWindowDocumentTaskSource,
@@ -62,13 +63,11 @@ pub(crate) enum PageIntersectionObserverTargetEffect {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PageIntersectionObserverTurnAction {
-    pub(crate) owner: RendererPageIntersectionObserverOwner,
-    pub(crate) task_id: RendererPageIntersectionObserverTaskId,
-    pub(crate) kind: RendererPageIntersectionObserverTaskKind,
-    pub(crate) target_effect: PageIntersectionObserverTargetEffect,
-}
+pub(crate) type PageIntersectionObserverTurnAction = PageWindowDocumentTaskTurnAction<
+    RendererPageIntersectionObserverTaskId,
+    RendererPageIntersectionObserverTaskKind,
+    PageIntersectionObserverTargetEffect,
+>;
 
 pub(crate) type PageIntersectionObserverTurnOutcome =
     PageOwnerTurnOutcome<PageIntersectionObserverTurnAction>;

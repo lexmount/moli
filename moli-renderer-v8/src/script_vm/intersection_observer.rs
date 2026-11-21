@@ -7,10 +7,7 @@ use crate::{
         RendererPageIntersectionObserverTaskId, RendererPageIntersectionObserverTaskKind,
     },
     runtime::{AuthorizedCurrentPageIntersectionObserverTask, RendererDocumentToken},
-    v8_execution_watchdog::{
-        SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
-        V8ExecutionWatchdogOutcome,
-    },
+    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 
 impl ScriptVm {
@@ -52,18 +49,17 @@ impl ScriptVm {
             );
             let mut invoked = false;
             for id in ids {
-                let watchdog = V8ExecutionWatchdog::arm(
-                    V8ExecutionWatchdogKind::LifecycleEvent,
-                    scope.thread_safe_handle(),
-                    SCRIPT_TURN_WATCHDOG_TIMEOUT,
-                );
-                let delivered = crate::observer_runtime::deliver_realtime_intersection_observer(
-                    scope, host_ptr, target, id,
-                );
-                ensure!(
-                    watchdog.disarm() != V8ExecutionWatchdogOutcome::TimedOut,
-                    "IntersectionObserver callback exceeded its execution budget"
-                );
+                let delivered = V8ExecutionWatchdog::with_lifecycle_budget(
+                    scope,
+                    "IntersectionObserver callback",
+                    |scope| {
+                        Ok(
+                            crate::observer_runtime::deliver_realtime_intersection_observer(
+                                scope, host_ptr, target, id,
+                            ),
+                        )
+                    },
+                )?;
                 if delivered {
                     invoked = true;
                     Self::perform_microtask_checkpoints(scope, None)?;

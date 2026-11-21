@@ -17,14 +17,11 @@ use super::declaration::{
     set_style_entries_if_changed_with_inline_base_url, set_style_entries_with_inline_base_url,
     shorthand_longhands, style_base_url, style_entries_for_style_object,
     style_property_name_at_with_context, style_property_names_with_context,
-    style_property_priority, style_property_value, style_property_value_for_pseudo_with_context,
-    style_property_value_with_context, style_runtime_and_handle_from_object,
+    style_property_priority, style_property_value, style_runtime_and_handle_from_object,
     supported_declared_property,
 };
-use super::{
-    style_object_computation_context, style_object_forces_empty_computed,
-    style_object_pseudo_element,
-};
+use super::public_layout::read_live_style_property;
+use super::{style_object_computation_context, style_object_forces_empty_computed};
 
 pub(crate) fn style_set_property_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -211,28 +208,10 @@ pub(crate) fn style_get_property_value_callback<'s>(
         return;
     }
     let runtime = unsafe { &*runtime_ptr };
-    if runtime.layout_policy().is_realtime()
-        && !super::public_layout::prepare_live_style_property(
-            scope,
-            runtime,
-            handle,
-            mode,
-            &parsed.property,
-        )
-    {
+    let Some(value) =
+        read_live_style_property(scope, args.this(), runtime, handle, mode, &parsed.property)
+    else {
         return;
-    }
-    let context = style_object_computation_context(scope, args.this(), runtime, handle, mode);
-    let value = if let Some(pseudo) = style_object_pseudo_element(scope, args.this(), mode) {
-        style_property_value_for_pseudo_with_context(
-            runtime,
-            handle,
-            &pseudo,
-            &parsed.property,
-            context,
-        )
-    } else {
-        style_property_value_with_context(runtime, handle, mode, &parsed.property, context)
     };
     if let Some(value) = v8_string(scope, &value) {
         rv.set(value.into());
@@ -256,20 +235,7 @@ pub(crate) fn computed_style_property_value_from_object<'s>(
         return Some(String::new());
     }
     let runtime = unsafe { &*runtime_ptr };
-    if runtime.layout_policy().is_realtime()
-        && !super::public_layout::prepare_live_style_property(
-            scope, runtime, handle, mode, property,
-        )
-    {
-        return None;
-    }
-    let context = style_object_computation_context(scope, style, runtime, handle, mode);
-    let value = if let Some(pseudo) = style_object_pseudo_element(scope, style, mode) {
-        style_property_value_for_pseudo_with_context(runtime, handle, &pseudo, property, context)
-    } else {
-        style_property_value_with_context(runtime, handle, mode, property, context)
-    };
-    Some(value)
+    read_live_style_property(scope, style, runtime, handle, mode, property)
 }
 
 pub(crate) fn computed_style_property_names_from_object<'s>(

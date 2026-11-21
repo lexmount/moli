@@ -52,22 +52,6 @@ pub(super) fn observe_if_realtime<'s>(
     true
 }
 
-fn without_target<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    records: v8::Local<'s, v8::Array>,
-    target: v8::Local<'s, v8::Value>,
-) -> v8::Local<'s, v8::Array> {
-    let next = v8::Array::new(scope, 0);
-    for i in 0..records.length() {
-        if let Some(record) = records.get_index(scope, i)
-            && !observed_record_matches_target(scope, record, target)
-        {
-            let _ = next.set_index(scope, next.length(), record);
-        }
-    }
-    next
-}
-
 pub(super) fn deactivate_if_realtime<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     observer: v8::Local<'s, v8::Object>,

@@ -1,6 +1,8 @@
 //! Host entry points into JavaScript. Keep the microtask nesting boundary at
 //! the actual V8 invocation; entering a context alone does not execute script.
 
+use crate::v8_execution_watchdog::V8ExecutionWatchdog;
+
 pub(crate) fn execute_compiled_script<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     script: v8::Local<'_, v8::Script>,
@@ -21,6 +23,9 @@ pub(crate) fn call_function<'s>(
     receiver: v8::Local<'_, v8::Value>,
     arguments: &[v8::Local<'_, v8::Value>],
 ) -> Option<v8::Local<'s, v8::Value>> {
+    if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
+        return None;
+    }
     run(scope, |scope| function.call(scope, receiver, arguments))
 }
 

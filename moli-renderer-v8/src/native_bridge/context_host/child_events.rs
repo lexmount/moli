@@ -9,14 +9,15 @@ use crate::{
     exception_reporting::invoke_event_handler,
     frame_owner_model::{FrameDocumentTaskOwner, LocalWindowId},
     host::{
-        ChildWindowEventTarget, DispatchStatus, create_host_event,
-        csp_event_dispatch_has_timed_out, event_dispatch_status, invoke_prepared_event_callback,
+        ChildWindowEventTarget, DispatchStatus, create_host_event, event_dispatch_status,
+        invoke_prepared_event_callback,
     },
     native_bridge::{
         ACTIVE_CHILD_WINDOW_HANDLE_SLOT, EventCallbackId, PreparedEventCallback,
         element::EventAttributeHandlerScope, element::compile_event_attribute_handler_for_owner,
     },
     util::{get_private_value, set_private_value, v8_string, v8str},
+    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 use std::{collections::HashSet, convert::TryFrom};
 
@@ -429,7 +430,7 @@ impl PageScriptHost {
     ) -> DispatchStatus {
         let mut status = DispatchStatus::Continue;
         for slot in dispatch_slots {
-            if csp_event_dispatch_has_timed_out(scope, event_type) {
+            if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
                 status = DispatchStatus::StopImmediate;
                 break;
             }

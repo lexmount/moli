@@ -1,6 +1,6 @@
 use super::{
     OwnerDispatchScope, PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget,
-    window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask},
+    window_document_tasks::ExactWindowDocumentTaskLedger,
 };
 use crate::{
     document_runtime::DomHandle,
@@ -123,25 +123,16 @@ impl PageScriptHost {
             return;
         }
         let kind = RendererPageFontLoadingTaskKind::CheckReadiness;
-        if fonts
-            .tasks
-            .find_slot_index(target, kind, |_| true)
-            .is_some()
-        {
-            return;
-        }
-        let id = fonts
-            .tasks
-            .allocate_task_id(RendererPageFontLoadingTaskId::from_raw);
-        fonts
-            .tasks
-            .push(PendingExactWindowDocumentTask::new(id, target, kind, ()));
-        if self
-            .page_font_loading_sender()
-            .send(target, id, kind)
-            .is_err()
-        {
-            fonts.tasks.remove(id);
+        if !fonts.tasks.enqueue_notification(
+            target,
+            kind,
+            RendererPageFontLoadingTaskId::from_raw,
+            |id| {
+                self.page_font_loading_sender()
+                    .send(target, id, kind)
+                    .is_ok()
+            },
+        ) {
             tracing::debug!(?target, "font readiness route closed");
         }
     }

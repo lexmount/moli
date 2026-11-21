@@ -249,24 +249,12 @@ impl PageVm {
                 RendererScreenshotPurpose::Screenshot => LayoutPublicationRequest::Screen,
                 RendererScreenshotPurpose::Print { .. } => LayoutPublicationRequest::Transient,
             },
-            self.capture_style_environment_override(request.purpose),
+            match request.purpose {
+                RendererScreenshotPurpose::Screenshot => None,
+                RendererScreenshotPurpose::Print { .. } => self.print_style_environment_override(),
+            },
         )
         .map(RendererImageCaptureOutcome::into_screenshot_reply)
-    }
-
-    pub(super) fn capture_style_environment_override(
-        &self,
-        purpose: RendererScreenshotPurpose,
-    ) -> Option<StyloStyleEnvironment> {
-        if matches!(purpose, RendererScreenshotPurpose::Print { .. })
-            && self.document_settings.emulated_media.media.is_none()
-        {
-            let mut print = self.document_settings.emulated_media.clone();
-            print.media = Some("print".to_owned());
-            Some(StyloStyleEnvironment::from_emulated_media(&print))
-        } else {
-            None
-        }
     }
 
     /// Polls one screencast subscription. Only this request accepts a known

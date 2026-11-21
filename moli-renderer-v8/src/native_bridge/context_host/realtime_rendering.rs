@@ -40,13 +40,20 @@ struct RunningRealtimeFrame {
 }
 
 #[derive(Default)]
+enum FramePhase {
+    #[default]
+    Idle,
+    Scheduled(ScheduledRealtimeFrame),
+    Running(RunningRealtimeFrame),
+}
+
+#[derive(Default)]
 pub(super) struct RealtimeFrameState {
     next_id: u64,
-    pending: Option<ScheduledRealtimeFrame>,
+    phase: FramePhase,
     // Realtime-only metadata for an active burst. Idle/canceled/retired work
     // drops the cadence without creating a persistent wake-up source.
     last_deadline: Option<Instant>,
-    running: Option<RunningRealtimeFrame>,
     source_requested: bool,
     #[cfg(test)]
     now_for_test: Option<Instant>,
@@ -64,16 +71,32 @@ impl RealtimeFrameState {
     }
 
     pub(super) fn is_idle(&self) -> bool {
-        self.pending.is_none() && self.running.is_none()
+        matches!(self.phase, FramePhase::Idle)
+    }
+
+    fn scheduled(&self) -> Option<ScheduledRealtimeFrame> {
+        match self.phase {
+            FramePhase::Scheduled(frame) => Some(frame),
+            _ => None,
+        }
+    }
+
+    fn running(&self) -> Option<&RunningRealtimeFrame> {
+        match &self.phase {
+            FramePhase::Running(frame) => Some(frame),
+            _ => None,
+        }
     }
 
     pub(super) fn retire_document(&mut self) {
         // Do not reuse ids across document.open(), or a stale claimed task
         // could retire the replacement's payload during discard.
-        self.pending = None;
-        self.last_deadline = None;
         // The running body can outlive its Document through author callbacks.
         // Only that body's settlement may release the non-reentrancy guard.
+        if matches!(self.phase, FramePhase::Scheduled(_)) {
+            self.phase = FramePhase::Idle;
+        }
+        self.last_deadline = None;
         self.source_requested = false;
         #[cfg(test)]
         self.completed_for_test.take();
@@ -102,18 +125,19 @@ impl PageScriptHost {
             // Unstarted tasks still need a new exact-owner ticket. A running
             // body keeps its original ticket and non-reentrancy guard, but
             // follows the explicitly preserved Document in later phases.
-            if frame
-                .pending
-                .is_some_and(|pending| pending.target.owner() == retired)
-            {
-                frame.pending = None;
-            }
-            if let Some(running) = &mut frame.running {
-                for target in &mut running.documents {
-                    if target.owner() == retired {
-                        *target = WindowDocumentTaskTarget::new(current, target.dispatch_scope());
+            match &mut frame.phase {
+                FramePhase::Scheduled(scheduled) if scheduled.target.owner() == retired => {
+                    frame.phase = FramePhase::Idle;
+                }
+                FramePhase::Running(running) => {
+                    for target in &mut running.documents {
+                        if target.owner() == retired {
+                            *target =
+                                WindowDocumentTaskTarget::new(current, target.dispatch_scope());
+                        }
                     }
                 }
+                _ => {}
             }
         }
     }
@@ -169,7 +193,7 @@ impl PageScriptHost {
         };
         let already_requested = {
             let mut frame = state.frame.borrow_mut();
-            if let Some(running) = &mut frame.running {
+            if let FramePhase::Running(running) = &mut frame.phase {
                 running.sample_all_intersections = true;
                 running.source_changed = true;
             }
@@ -198,7 +222,7 @@ impl PageScriptHost {
         else {
             return;
         };
-        if state.frame.borrow().running.is_some() {
+        if matches!(state.frame.borrow().phase, FramePhase::Running(_)) {
             // This also covers document.open during a callback. There can
             // never be a second opportunity nested inside the running body.
             return;
@@ -210,7 +234,7 @@ impl PageScriptHost {
         let events_pending = self.has_realtime_rendering_events();
         let mut frame = state.frame.borrow_mut();
         if !self.document_activity().visible {
-            frame.pending = None;
+            frame.phase = FramePhase::Idle;
             frame.last_deadline = None;
             return;
         }
@@ -219,7 +243,7 @@ impl PageScriptHost {
             || resize_pending
             || environment_pending
             || events_pending;
-        let pending = frame.pending.filter(|pending| pending.target == target);
+        let pending = frame.scheduled().filter(|pending| pending.target == target);
         if sample_all_intersections
             && pending.is_some_and(|pending| pending.sample_all_intersections)
         {
@@ -232,24 +256,24 @@ impl PageScriptHost {
             crate::observer_runtime::next_realtime_intersection_deadline(self)
         };
         let Some(deadline) = deadline else {
-            frame.pending = None;
+            frame.phase = FramePhase::Idle;
             frame.last_deadline = None;
             return;
         };
         if let Some(mut pending) = pending.filter(|pending| pending.deadline == deadline) {
             pending.sample_all_intersections = sample_all_intersections;
-            frame.pending = Some(pending);
+            frame.phase = FramePhase::Scheduled(pending);
             frame.last_deadline = sample_all_intersections.then_some(deadline);
             return;
         }
-        frame.pending = None;
+        frame.phase = FramePhase::Idle;
         let Some(next_id) = frame.next_id.checked_add(1) else {
             tracing::error!("realtime rendering opportunity id exhausted");
             return;
         };
         frame.next_id = next_id;
         let id = RendererPageRenderingUpdateTaskId::Frame(next_id);
-        frame.pending = Some(ScheduledRealtimeFrame {
+        frame.phase = FramePhase::Scheduled(ScheduledRealtimeFrame {
             id,
             target,
             deadline,
@@ -260,7 +284,7 @@ impl PageScriptHost {
             .schedule_frame(target, id, deadline)
             .is_err()
         {
-            frame.pending = None;
+            frame.phase = FramePhase::Idle;
             frame.last_deadline = None;
             state.rendering_events.borrow_mut().retain(|_| false);
             tracing::debug!(
@@ -283,7 +307,7 @@ impl PageScriptHost {
             .as_ref()?
             .frame
             .borrow()
-            .pending?;
+            .scheduled()?;
         self.window_document_owner_is_current_for_dispatch_scope(
             pending.target.owner(),
             pending.target.dispatch_scope(),
@@ -299,8 +323,8 @@ impl PageScriptHost {
             return false;
         };
         let mut frame = state.frame.borrow_mut();
-        if frame.pending.is_some_and(|pending| pending.id == id) {
-            frame.pending = None;
+        if frame.scheduled().is_some_and(|pending| pending.id == id) {
+            frame.phase = FramePhase::Idle;
             true
         } else {
             false
@@ -318,11 +342,8 @@ impl PageScriptHost {
         );
         let state = self.realtime_layout_state.as_ref().expect("Realtime frame");
         let mut frame = state.frame.borrow_mut();
-        let scheduled = frame
-            .pending
-            .take()
-            .expect("authorized rendering opportunity");
-        anyhow::ensure!(frame.running.is_none(), "reentrant rendering opportunity");
+        let scheduled = frame.scheduled().expect("authorized rendering opportunity");
+        frame.phase = FramePhase::Idle;
         if !self.document_activity().visible {
             return Ok(false);
         }
@@ -331,7 +352,7 @@ impl PageScriptHost {
             documents.first() == Some(&target),
             "rendering root changed before its batch"
         );
-        frame.running = Some(RunningRealtimeFrame {
+        frame.phase = FramePhase::Running(RunningRealtimeFrame {
             ticket: (id, target),
             documents,
             sample_all_intersections: scheduled.sample_all_intersections,
@@ -347,7 +368,7 @@ impl PageScriptHost {
             .expect("Realtime frame")
             .frame
             .borrow();
-        let running = frame.running.as_ref().expect("running Realtime frame");
+        let running = frame.running().expect("running Realtime frame");
         (frame.sampled_now(), running.sample_all_intersections)
     }
 
@@ -357,8 +378,7 @@ impl PageScriptHost {
             .expect("Realtime frame state")
             .frame
             .borrow()
-            .running
-            .as_ref()
+            .running()
             .expect("running Realtime frame")
             .source_changed
     }
@@ -384,7 +404,7 @@ impl PageScriptHost {
         index: usize,
     ) -> Option<WindowDocumentTaskTarget> {
         let frame = self.realtime_layout_state.as_ref()?.frame.borrow();
-        let running = frame.running.as_ref()?;
+        let running = frame.running()?;
         (running.ticket == (id, root))
             .then(|| running.documents.get(index).copied())
             .flatten()
@@ -434,8 +454,7 @@ impl PageScriptHost {
         {
             let mut frame = state.frame.borrow_mut();
             let Some(running) = frame
-                .running
-                .as_ref()
+                .running()
                 .filter(|running| running.ticket == (id, target))
             else {
                 // Callback navigation may already have installed a new
@@ -443,7 +462,7 @@ impl PageScriptHost {
                 return;
             };
             let current_root = running.documents[0];
-            frame.running = None;
+            frame.phase = FramePhase::Idle;
             if !succeeded
                 && self.window_document_owner_is_current_for_dispatch_scope(
                     current_root.owner(),

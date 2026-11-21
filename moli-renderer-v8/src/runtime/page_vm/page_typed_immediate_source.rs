@@ -1,6 +1,13 @@
-use super::PageVm;
-use crate::page_task_queue::{
-    RendererPageReadyDescriptor, RendererPageTimerSelection, RendererPageWindowDocumentTaskOwner,
+use std::fmt::Debug;
+
+use super::{PageOwnerTurnOutcome, PageVm};
+use crate::{
+    page_task_queue::{
+        PageWindowDocumentTaskTurnAction, RendererPageReadyDescriptor, RendererPageTimerSelection,
+        RendererPageWindowDocumentTask, RendererPageWindowDocumentTaskOwner,
+    },
+    runtime::RendererDocumentToken,
+    script_vm::ScriptVm,
 };
 
 /// Proof that the Page arbiter matched a scheduler task against its exact
@@ -68,6 +75,62 @@ impl PageVm {
             may_discard_local_payload: owner.root_document()
                 == self.document_lifecycle.identity().document,
         })
+    }
+
+    pub(super) fn apply_selected_window_document_task<I, K, E, T>(
+        &mut self,
+        task: RendererPageWindowDocumentTask<I, K, T>,
+        lookup: impl FnOnce(
+            &ScriptVm,
+            I,
+            RendererDocumentToken,
+        ) -> Option<(RendererPageWindowDocumentTaskOwner<T>, K)>,
+        apply: impl FnOnce(
+            &mut ScriptVm,
+            AuthorizedCurrentWindowDocumentTask<RendererPageWindowDocumentTask<I, K, T>>,
+        ) -> anyhow::Result<E>,
+        discard: impl FnOnce(&mut ScriptVm, I) -> bool,
+        stale_effect: impl FnOnce(Option<RendererPageWindowDocumentTaskOwner<T>>) -> E,
+    ) -> anyhow::Result<PageOwnerTurnOutcome<PageWindowDocumentTaskTurnAction<I, K, E, T>>>
+    where
+        I: Copy + Debug,
+        K: Copy + Eq + Debug,
+        T: Copy + Eq + Debug,
+    {
+        let owner = task.owner();
+        let task_id = task.task_id();
+        let kind = task.kind();
+        let current = lookup(
+            self.vm(),
+            task_id,
+            self.document_lifecycle.identity().document,
+        );
+        let target_effect =
+            match self.authorize_current_window_document_task(task, owner, kind, current) {
+                Ok(authorization) => apply(self.vm_mut(), authorization)?,
+                Err(stale) => {
+                    if stale.may_discard_local_payload() {
+                        discard(self.vm_mut(), task_id);
+                    }
+                    let current_owner = stale.current_owner();
+                    tracing::debug!(
+                        ?owner,
+                        ?current_owner,
+                        ?task_id,
+                        ?kind,
+                        "discarded stale Window/Document task"
+                    );
+                    stale_effect(current_owner)
+                }
+            };
+        Ok(PageOwnerTurnOutcome::new(
+            PageWindowDocumentTaskTurnAction {
+                owner,
+                task_id,
+                kind,
+                target_effect,
+            },
+        ))
     }
 
     /// Source-local eligibility for a descriptor already visible to the Page

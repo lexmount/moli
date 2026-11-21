@@ -135,14 +135,6 @@ pub(crate) enum DispatchStatus {
     StopImmediate,
 }
 
-pub(crate) fn csp_event_dispatch_has_timed_out(
-    scope: &v8::PinScope<'_, '_>,
-    event_type: &str,
-) -> bool {
-    event_type == "securitypolicyviolation"
-        && V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
-}
-
 pub(crate) fn invoke_prepared_event_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
@@ -154,7 +146,7 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
     event: v8::Local<'s, v8::Object>,
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Option<v8::Global<v8::Value>> {
-    if csp_event_dispatch_has_timed_out(scope, event_type) {
+    if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
         return None;
     }
     let receiver = event_target_receiver(scope, host_ptr, target, event);
@@ -265,16 +257,14 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
     ) {
         CallbackInvocationOutcome::Returned(value) => Some(value),
         CallbackInvocationOutcome::Threw(report) => {
-            if !csp_event_dispatch_has_timed_out(scope, event_type) {
-                report_event_callback_exception(
-                    scope,
-                    host_ptr,
-                    event_type,
-                    relevant_identity,
-                    None,
-                    &report,
-                );
-            }
+            report_event_callback_exception(
+                scope,
+                host_ptr,
+                event_type,
+                relevant_identity,
+                None,
+                &report,
+            );
             None
         }
         CallbackInvocationOutcome::Retired => None,
@@ -507,7 +497,7 @@ fn invoke_event_target_handler_property<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
-    if csp_event_dispatch_has_timed_out(scope, event_type) {
+    if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
         return;
     }
     if matches!(target, EventTargetHandle::ChildWindow(_)) {
@@ -538,7 +528,7 @@ fn call_event_target_listeners_filtered<'s>(
     capture_only: bool,
     at_target: bool,
 ) -> std::result::Result<DispatchStatus, String> {
-    if csp_event_dispatch_has_timed_out(scope, event_type) {
+    if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
         return Ok(DispatchStatus::StopImmediate);
     }
     if let EventTargetHandle::ChildWindow(target) = target {
@@ -607,7 +597,7 @@ pub(crate) fn report_event_callback_exception<'s>(
     child_handle: Option<DomHandle>,
     report: &V8ExceptionReport,
 ) {
-    if event_type == "error" {
+    if event_type == "error" || V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
         return;
     }
 
@@ -1229,7 +1219,7 @@ impl HostEventTargetRegistry {
             ),
         ) in snapshot.into_iter().enumerate()
         {
-            if csp_event_dispatch_has_timed_out(scope, event_type) {
+            if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
                 return Ok(DispatchStatus::StopImmediate);
             }
             let still_registered = self
