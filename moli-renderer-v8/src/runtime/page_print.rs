@@ -46,18 +46,16 @@ impl PageVm {
             surface.inner_height,
             surface.device_pixel_ratio as f32,
         );
-        let result = self
-            .vm_mut()
-            .paint_layout_snapshot_with_capture_in_environment(
-                viewport,
-                moli_layout::LayoutFlushReason::Print,
-                PaintCaptureRequest {
-                    include_backgrounds: request.print_background,
-                    ..PaintCaptureRequest::print_document()
-                },
-                crate::native_bridge::LayoutPublicationRequest::Transient,
-                environment_override,
-            );
+        let result = self.vm_mut().paint_layout_snapshot_with_capture(
+            viewport,
+            moli_layout::LayoutFlushReason::Print,
+            PaintCaptureRequest {
+                include_backgrounds: request.print_background,
+                ..PaintCaptureRequest::print_document()
+            },
+            crate::native_bridge::LayoutPublicationRequest::Transient,
+            environment_override,
+        );
         Ok(match result? {
             Some(snapshot) => match moli_paint::pdf::pdf_snapshot(&snapshot, &request.options) {
                 Ok(bytes) => Reply::Printed(bytes),

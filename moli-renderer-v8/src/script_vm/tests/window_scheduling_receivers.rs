@@ -1,8 +1,20 @@
 use super::*;
+use moli_page_types::LayoutPolicy;
 
 #[test]
 fn window_scheduling_methods_accept_native_bridge_receivers_without_inheriting_their_brand() {
+    assert_native_bridge_scheduling_receivers(LayoutPolicy::Mock);
+}
+
+#[test]
+fn realtime_window_scheduling_methods_accept_native_bridge_receivers_without_inheriting_their_brand()
+ {
+    assert_native_bridge_scheduling_receivers(LayoutPolicy::Realtime);
+}
+
+fn assert_native_bridge_scheduling_receivers(policy: LayoutPolicy) {
     let mut vm = new_storage_test_vm("https://window-scheduling-receivers.test/");
+    vm.set_layout_policy(policy);
     assert_eq!(
         vm.eval(
             r#"
@@ -47,6 +59,15 @@ fn window_scheduling_methods_accept_native_bridge_receivers_without_inheriting_t
 
 #[tokio::test(flavor = "current_thread")]
 async fn window_scheduling_methods_validate_receivers_before_conversion_and_queuing() {
+    assert_window_scheduling_receivers(LayoutPolicy::Mock).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_window_scheduling_methods_validate_receivers_before_conversion_and_queuing() {
+    assert_window_scheduling_receivers(LayoutPolicy::Realtime).await;
+}
+
+async fn assert_window_scheduling_receivers(policy: LayoutPolicy) {
     let script = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/window-scheduling-receivers.js"
@@ -64,6 +85,7 @@ async fn window_scheduling_methods_validate_receivers_before_conversion_and_queu
     let same_url = server.url_for_host("localhost", "/local.html");
     let cross_url = server.url_for_host("127.0.0.1", "/remote.html");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+    vm.set_layout_policy(policy);
     vm.exec(
         &format!(
             r#"

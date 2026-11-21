@@ -1,4 +1,6 @@
-use super::state::{event_private_value, mark_event_trusted, new_event_state};
+use super::state::{
+    event_private_value, mark_event_trusted, new_event_state, set_event_private_value,
+};
 use super::{EventInit, initialize_event_object, initialize_event_wrapper};
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{new_intrinsic_interface_instance, throw_type_error, v8str};
@@ -7,6 +9,7 @@ use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 const MEDIA_SLOT: &str = "__moliMediaQueryListEventMedia";
 const MATCHES_SLOT: &str = "__moliMediaQueryListEventMatches";
+const SOURCE_LIST_SLOT: &str = "__moliMediaQueryListEventSource";
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MediaQueryListEvent, enumerable)]
@@ -143,6 +146,18 @@ pub fn create_media_query_list_event<'s>(
     }
 }
 
+pub fn create_live_media_query_list_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    media: &str,
+) -> v8::Local<'s, v8::Object> {
+    let event = create_media_query_list_event(scope, media, false);
+    // Blink's native MediaQueryListEvent refers to the live list. Script-created
+    // events keep their immutable dictionary values through the old slots.
+    set_event_private_value(scope, event, SOURCE_LIST_SLOT, list.into());
+    event
+}
+
 fn media_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -158,6 +173,14 @@ fn matches_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if let Some(list) = event_private_value(scope, args.this(), SOURCE_LIST_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        if let Some(matches) = crate::embedding::read_media_query_matches(scope, list) {
+            rv.set_bool(matches);
+        }
+        return;
+    }
     if let Some(value) = event_private_value(scope, args.this(), MATCHES_SLOT) {
         rv.set(value);
     }

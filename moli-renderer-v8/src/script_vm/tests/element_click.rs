@@ -1,5 +1,140 @@
 use super::*;
-use crate::runtime::{RendererElementClickTarget, RendererPointerEventProperties};
+use crate::runtime::{
+    RendererElementClickError, RendererElementClickTarget, RendererPointerEventProperties,
+};
+use moli_page_types::LayoutPolicy;
+
+const REALTIME_CLICK_FIXTURE: &str = r#"<!doctype html><style>body{margin:0}</style>
+<div id=under style="position:absolute;left:0;top:0;width:640px;height:200px"></div>
+<button id=target style="position:absolute;left:40px;top:40px;width:120px;height:70px;border:0;padding:0">go</button>"#;
+
+#[test]
+fn realtime_native_click_preparation_observes_current_geometry_and_obstructions() {
+    for (mutation, expected) in [
+        ("target.style.left='300px'", Ok(360.0)),
+        (
+            "const veil=document.createElement('div');veil.style.cssText='position:fixed;inset:0;z-index:999';document.body.append(veil)",
+            Err(RendererElementClickError::Obscured),
+        ),
+        (
+            "const style=document.createElement('style');document.head.append(style);style.sheet.insertRule('button {pointer-events:none}')",
+            Err(RendererElementClickError::Obscured),
+        ),
+        (
+            "target.style.display='none'",
+            Err(RendererElementClickError::NoClickableRect),
+        ),
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://realtime-native-click.test/",
+            REALTIME_CLICK_FIXTURE,
+        );
+        vm.set_layout_policy(LayoutPolicy::Realtime);
+        let target = vm.document_runtime.get_element_by_id("target").unwrap();
+        let before = vm.layout_pass_observability_for_test().1;
+        let RendererElementClickTarget::Pointer(first) = vm.prepare_element_click(target).unwrap()
+        else {
+            panic!("Realtime native click must prepare pointer input");
+        };
+        assert_eq!((first.root_x, first.root_y), (100.0, 75.0));
+        assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+        vm.eval(mutation).unwrap();
+        for _ in 0..2 {
+            let actual = vm.prepare_element_click(target).map(|prepared| {
+                let RendererElementClickTarget::Pointer(click) = prepared else {
+                    panic!("Realtime native click must not fall back to DOM activation");
+                };
+                assert_eq!(click.root_y, 75.0);
+                click.root_x
+            });
+            assert_eq!(actual, expected, "{mutation}");
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                before + 2,
+                "one changed input must refresh once, including rejected preparation: {mutation}"
+            );
+        }
+        assert_eq!(
+            vm.layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+    }
+}
+
+#[test]
+fn realtime_native_click_rehits_each_phase_at_the_prepared_point() {
+    let mut vm = new_parsed_test_vm(
+        "https://realtime-native-click.test/",
+        REALTIME_CLICK_FIXTURE,
+    );
+    vm.set_layout_policy(LayoutPolicy::Realtime);
+    vm.eval(
+        r#"
+        window.events=[];
+        for(const name of ['mousemove','mousedown','mouseup','click'])
+            document.addEventListener(name,event=>events.push(event.type+':'+event.target.id));
+        target.addEventListener('mousemove',()=>{target.style.left='300px'},{once:true});
+    "#,
+    )
+    .unwrap();
+    let target = vm.document_runtime.get_element_by_id("target").unwrap();
+    let RendererElementClickTarget::Pointer(click) = vm.prepare_element_click(target).unwrap()
+    else {
+        panic!("Realtime native click must prepare pointer input");
+    };
+    assert_eq!((click.root_x, click.root_y), (100.0, 75.0));
+    vm.dispatch_prepared_element_click(click).unwrap();
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "mousemove:target|mousedown:under|mouseup:under|click:under"
+    );
+    assert_eq!(
+        vm.layout_pass_observability_for_test()
+            .3
+            .unwrap()
+            .paint_operation_count,
+        0
+    );
+}
+
+#[test]
+fn dom_click_activates_obscured_controls_without_pointer_input_or_layout() {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://dom-activation.test/",
+            r#"<!doctype html><input id=target type=checkbox style="display:none">
+            <div style="position:fixed;inset:0;z-index:999"></div>"#,
+        );
+        vm.set_layout_policy(policy);
+        vm.eval(
+            r#"
+            window.events=[];
+            for(const name of ['pointerdown','mousedown','mouseup','click','input','change'])
+                target.addEventListener(name,event=>events.push(event.type+':'+event.isTrusted));
+        "#,
+        )
+        .unwrap();
+        let before = vm.layout_pass_observability_for_test().1;
+        assert_eq!(
+            vm.eval("target.click();JSON.stringify([target.checked,events])")
+                .unwrap(),
+            r#"[true,["click:false","input:true","change:true"]]"#,
+            "{policy:?}"
+        );
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            before,
+            "{policy:?}"
+        );
+    }
+}
 
 #[test]
 fn native_element_click_initializes_layout_once() {

@@ -1,0 +1,207 @@
+#![cfg(feature = "devtools")]
+
+use super::realtime_opportunity::run_opportunity;
+use super::*;
+use crate::runtime::{
+    RendererDevToolsPageCommand, RendererPageCommand, RendererPointerEventProperties,
+};
+use moli_page_types::LayoutPolicy;
+
+fn mouse(page: &mut PageVm, event: &str, x: f64, y: f64, delta: f64) {
+    page.dispatch_renderer_page_command(RendererPageCommand::DevTools(
+        RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+            x,
+            y,
+            event_name: event.to_owned(),
+            button: if event == "wheel" { -1 } else { 0 },
+            buttons: Some(i32::from(event == "mousedown")),
+            click_count: 1,
+            delta_x: 0.0,
+            delta_y: delta,
+            pointer: RendererPointerEventProperties::default(),
+            modifiers: 0,
+            intercept_drags: false,
+        },
+    ))
+    .unwrap();
+}
+
+#[test]
+fn queued_realtime_wheel_uses_layout_at_dispatch() {
+    run_page_vm_large_stack_async_test("realtime-input-wheel", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime-input").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut().eval(r#"
+            document.body.innerHTML='<div id=scroller style="position:absolute;left:250px;top:0;width:200px;height:100px;overflow:auto"><div style="height:600px"></div></div>';
+            window.wheelTargets=[];
+            window.scroller.addEventListener('wheel',event=>wheelTargets.push(event.deltaY));
+            String(scroller.getBoundingClientRect().left);
+        "#).unwrap();
+        mouse(&mut page, "wheel", 10.0, 10.0, 30.0);
+        assert!(page.next_action_window_deadline().is_some());
+        assert_eq!(page.vm_mut().eval("wheelTargets.join(',')").unwrap(), "");
+        page.vm_mut().eval("scroller.style.left='0px'").unwrap();
+        page.flush_page_action_window(moli_action_window::ActionBarrier::Explicit)
+            .unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([wheelTargets,scroller.scrollTop])")
+                .unwrap(),
+            "[[30],30]"
+        );
+    });
+}
+
+#[test]
+fn legacy_input_modes_keep_the_wheel_window_and_batch_checkpoint() {
+    run_page_vm_large_stack_async_test("legacy-input-window", || async move {
+        for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+            let loader =
+                crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+            let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/legacy-input").unwrap(),
+            );
+            page.vm_mut().set_layout_policy(policy);
+            page.vm_mut()
+                .eval(
+                    r#"
+                document.body.innerHTML='<div style="width:200px;height:200px"></div>';
+                window.events=[];addEventListener('wheel',event=>{
+                    events.push('wheel:'+event.deltaY);
+                    Promise.resolve().then(()=>events.push('microtask:'+event.deltaY));
+                },true);
+            "#,
+                )
+                .unwrap();
+            mouse(&mut page, "wheel", 10.0, 10.0, 30.0);
+            let deadline = page.next_action_window_deadline().expect("legacy window");
+            mouse(&mut page, "wheel", 10.0, 10.0, -20.0);
+            assert_eq!(page.next_action_window_deadline(), Some(deadline));
+            assert_eq!(page.vm_mut().eval("events.join('|')").unwrap(), "");
+            page.flush_page_action_window(moli_action_window::ActionBarrier::Explicit)
+                .unwrap();
+            assert_eq!(
+                page.vm_mut().eval("events.join('|')").unwrap(),
+                "wheel:30|wheel:-20|microtask:30|microtask:-20"
+            );
+            assert!(page.next_action_window_deadline().is_none());
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+        }
+    });
+}
+
+#[test]
+fn realtime_input_clicks_new_transparent_controls_and_uses_their_current_position() {
+    run_page_vm_large_stack_async_test("realtime-input-checkbox", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime-checkbox").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut()
+            .eval("document.body.innerHTML='<div style=height:100px></div>'")
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        page.vm_mut().eval(r#"
+            window.toggle=document.createElement('input');toggle.type='checkbox';
+            toggle.style.cssText='position:fixed;left:24px;top:24px;width:24px;height:24px;margin:0;opacity:0';
+            document.body.append(toggle);window.clicks=0;
+            toggle.addEventListener('click',()=>{clicks++;toggle.style.left='124px'});
+        "#).unwrap();
+        for (x, expected) in [(30.0, "true:1"), (30.0, "true:1"), (130.0, "false:2")] {
+            mouse(&mut page, "mousedown", x, 30.0, 0.0);
+            mouse(&mut page, "mouseup", x, 30.0, 0.0);
+            assert_eq!(
+                page.vm_mut()
+                    .eval("String(toggle.checked)+':'+clicks")
+                    .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            page.vm()
+                .layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+    });
+}
+
+#[test]
+fn realtime_input_clicks_transparent_checkbox_over_later_static_label() {
+    run_page_vm_large_stack_async_test("realtime-input-todo-checkbox", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime-todo-checkbox").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut()
+            .eval(
+                r#"
+            document.body.innerHTML=`<style>
+                html,body { margin:0 }
+                ul { margin:0; padding:0; list-style:none; width:200px }
+                li { position:relative }
+                .toggle { appearance:none; border:none; position:absolute;
+                    top:0; bottom:0; width:40px; height:40px; margin:auto 0; opacity:0 }
+                label { display:block; padding:15px 15px 15px 60px; line-height:24px }
+                .completed label { text-decoration:line-through }
+            </style><ul id=todos></ul>`;
+        "#,
+            )
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        page.vm_mut().eval(r#"
+            todos.innerHTML='<li id=row><div><input id=toggle class=toggle type=checkbox><label>A</label></div></li>';
+            window.events=[];
+            for(const name of ['click','input','change'])
+                toggle.addEventListener(name,e=>events.push(e.type+':'+e.target.id+':'+e.target.checked));
+            toggle.addEventListener('change',()=>row.classList.toggle('completed',toggle.checked));
+        "#).unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    r#"
+                const rect=toggle.getBoundingClientRect();
+                [rect.width,rect.height,document.elementFromPoint(20,20).id].join(':')
+            "#
+                )
+                .unwrap(),
+            "40:40:toggle"
+        );
+        for checked in [true, false] {
+            mouse(&mut page, "mousedown", 20.0, 20.0, 0.0);
+            mouse(&mut page, "mouseup", 20.0, 20.0, 0.0);
+            assert_eq!(
+                page.vm_mut()
+                    .eval("String(toggle.checked)+':'+row.classList.contains('completed')")
+                    .unwrap(),
+                format!("{checked}:{checked}")
+            );
+        }
+        assert_eq!(
+            page.vm_mut().eval("events.join('|')").unwrap(),
+            "click:toggle:true|input:toggle:true|change:toggle:true|click:toggle:false|input:toggle:false|change:toggle:false"
+        );
+        assert_eq!(
+            page.vm()
+                .layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+    });
+}

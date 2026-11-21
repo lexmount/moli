@@ -6,6 +6,9 @@ impl ScriptVm {
     pub(crate) fn set_script_execution_disabled(&mut self, disabled: bool) {
         self.document_runtime
             .set_script_execution_disabled(disabled);
+        self._context_host
+            .borrow()
+            .refresh_realtime_rendering_opportunity();
     }
 
     pub(crate) fn script_execution_disabled(&self) -> bool {
