@@ -28,3 +28,6 @@ mod upload_preflight;
 mod xhr;
 
 mod response_type;
+
+#[cfg(feature = "devtools")]
+mod editing_shortcuts;

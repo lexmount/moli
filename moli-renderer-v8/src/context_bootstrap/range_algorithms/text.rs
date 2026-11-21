@@ -104,7 +104,7 @@ pub(super) fn range_selection_string_contents_for_boundaries(
         active_modal_dialog: selection_text_active_modal_dialog(runtime, document),
         ..Default::default()
     };
-    let mut out = String::new();
+    let mut out = SelectionTextOutput::default();
     append_selection_rendered_text(
         scope,
         runtime,
@@ -119,7 +119,17 @@ pub(super) fn range_selection_string_contents_for_boundaries(
         &rendered_text_sources,
         &mut out,
     )?;
-    Some(out)
+    // An element boundary before a following sibling can include the closing
+    // line break of the selected block. Ending inside its contents does not.
+    if runtime
+        .dom_host()
+        .child_handles(end)
+        .nth(end_offset as usize)
+        .is_some()
+    {
+        out.flush_breaks();
+    }
+    Some(out.text)
 }
 
 fn collect_selection_text_sources(
@@ -218,6 +228,34 @@ struct RangeTextBounds {
     end_offset: u32,
 }
 
+#[derive(Default)]
+struct SelectionTextOutput {
+    text: String,
+    pending_breaks: usize,
+}
+
+impl SelectionTextOutput {
+    fn require_breaks(&mut self, count: usize) {
+        if !self.text.is_empty() {
+            self.pending_breaks = self.pending_breaks.max(count);
+        }
+    }
+
+    fn flush_breaks(&mut self) {
+        if !self.text.is_empty() && self.pending_breaks != 0 {
+            while self.text.ends_with(' ') {
+                self.text.pop();
+            }
+            let trailing = self.text.chars().rev().take_while(|ch| *ch == '\n').count();
+            self.text.extend(std::iter::repeat_n(
+                '\n',
+                self.pending_breaks.saturating_sub(trailing),
+            ));
+        }
+        self.pending_breaks = 0;
+    }
+}
+
 fn append_selection_rendered_text(
     scope: &mut v8::PinScope<'_, '_>,
     runtime: &crate::native_bridge::PageScriptHost,
@@ -225,7 +263,7 @@ fn append_selection_rendered_text(
     bounds: RangeTextBounds,
     state: SelectionTextState,
     rendered_text_sources: &HashSet<DomHandle>,
-    out: &mut String,
+    out: &mut SelectionTextOutput,
 ) -> Option<()> {
     let node_type = node_type_for_handle(scope, handle)?;
     match node_type {
@@ -245,7 +283,8 @@ fn append_selection_rendered_text(
                 return Some(());
             };
             let mut next_state = state;
-            let mut preformatted_block = false;
+            let mut block_breaks = 0;
+            let before = out.text.len();
             if let Some(element) = node.as_element() {
                 if selection_text_element_is_hidden(runtime, handle) {
                     return Some(());
@@ -269,19 +308,36 @@ fn append_selection_rendered_text(
                 let user_select = selection_text_user_select_value(runtime, handle);
                 if user_select.as_deref() == Some("none")
                     && !state.suppressed_by_user_select
-                    && out.ends_with(' ')
+                    && out.text.ends_with(' ')
                 {
-                    out.push(' ');
+                    out.text.push(' ');
                 }
                 next_state.suppressed_by_user_select = match user_select.as_deref() {
                     Some("none") => true,
                     Some("text" | "all") => false,
                     _ => state.suppressed_by_user_select,
                 };
-                preformatted_block = element.is_html_element("pre");
+                if element.is_html_element("br")
+                    && !next_state.suppressed_by_user_select
+                    && !matches!(
+                        style_property_value(runtime, handle, StyleMode::Computed, "visibility")
+                            .as_str(),
+                        "hidden" | "collapse"
+                    )
+                    && selection_node_may_intersect_range(scope, handle, bounds)?
+                {
+                    out.flush_breaks();
+                    out.text.push('\n');
+                }
+                if matches!(
+                    style_property_value(runtime, handle, StyleMode::Computed, "display").as_str(),
+                    "block" | "flow-root" | "list-item"
+                ) {
+                    block_breaks = if element.is_html_element("p") { 2 } else { 1 };
+                }
             }
-            if preformatted_block && selection_node_may_intersect_range(scope, handle, bounds)? {
-                append_newline_allowing_double(out);
+            if block_breaks != 0 && selection_node_may_intersect_range(scope, handle, bounds)? {
+                out.require_breaks(block_breaks);
             }
             let length = range_node_length_handle(scope, handle)?;
             for child in child_handles_between_offsets(scope, handle, 0, length)? {
@@ -295,6 +351,13 @@ fn append_selection_rendered_text(
                     out,
                 )?;
             }
+            if out.text.len() != before
+                && block_breaks != 0
+                && point_order_handles(scope, handle, length, bounds.end, bounds.end_offset)?
+                    == Ordering::Less
+            {
+                out.require_breaks(block_breaks);
+            }
         }
     }
     Some(())
@@ -306,7 +369,7 @@ fn append_selected_character_data(
     bounds: RangeTextBounds,
     state: SelectionTextState,
     rendered_text_sources: &HashSet<DomHandle>,
-    out: &mut String,
+    out: &mut SelectionTextOutput,
 ) -> Option<()> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let runtime = unsafe { &*host_ptr };
@@ -320,10 +383,17 @@ fn append_selected_character_data(
     if !rendered_text_sources.contains(&handle) && !data.chars().all(char::is_whitespace) {
         return Some(());
     }
+    if data.chars().all(char::is_whitespace)
+        && (out.pending_breaks != 0
+            || (out.text.is_empty() && !rendered_text_sources.contains(&handle)))
+    {
+        return Some(());
+    }
+    out.flush_breaks();
     if state.in_visible_script_or_style {
-        append_collapsed_trimmed_text(out, &data);
+        append_collapsed_trimmed_text(&mut out.text, &data);
     } else {
-        append_rendered_text_node(out, &data);
+        append_rendered_text_node(&mut out.text, &data);
     }
     Some(())
 }
@@ -559,16 +629,6 @@ fn append_newline_collapsed(out: &mut String) {
     if !out.ends_with('\n') {
         out.push('\n');
     }
-}
-
-fn append_newline_allowing_double(out: &mut String) {
-    if out.is_empty() {
-        return;
-    }
-    if out.ends_with("\n\n") {
-        return;
-    }
-    out.push('\n');
 }
 
 fn slice_character_data_handle(

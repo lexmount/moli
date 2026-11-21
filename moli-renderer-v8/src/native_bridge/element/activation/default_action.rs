@@ -5,6 +5,8 @@ pub(crate) use devtools::{
     accepts_drop_default_action, activate_handle_after_pointer_release,
     perform_auxiliary_link_default_action, perform_drop_default_action,
 };
+mod deletion;
+use deletion::{apply_boundary_deletion, resolve_boundary_deletion};
 
 use crate::context_bootstrap::{
     LocationNavigationKind, navigate_location_object_with_source_element,
@@ -30,6 +32,8 @@ use crate::{
 };
 
 use super::super::super::PageScriptHost;
+#[cfg(feature = "devtools")]
+use super::super::construct_input_event;
 use super::super::forms::{
     FormAssociatedResetCallbackTiming, dispatch_form_reset_event, reset_form_default_action,
 };
@@ -37,8 +41,8 @@ use super::super::url_attributes::parsed_hyperlink_url;
 use super::super::{
     ClickEventSource, InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     closed_details_ancestors_to_reveal, construct_click_event, construct_command_event,
-    construct_input_event, construct_simple_event, contenteditable_editing_host,
-    dispatch_beforeinput, dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
+    construct_simple_event, contenteditable_editing_host, dispatch_beforeinput,
+    dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
     element_has_attribute, form_associated_form_owner, is_disabled_form_control, is_focusable,
     is_valid_submit_button, label_activation_control_handle,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
@@ -282,6 +286,55 @@ fn replace_selected_dom_range<'s>(
     true
 }
 
+fn replace_selected_dom_range_with_plain_lines<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    selection: v8::Local<'s, v8::Object>,
+    text: &str,
+) -> bool {
+    let Some(range) = selected_dom_range(scope, target, selection) else {
+        return false;
+    };
+    let Some(document) = object_property_as_object(scope, target, "ownerDocument") else {
+        return false;
+    };
+    let Some(fragment) = call_object_method(scope, document, "createDocumentFragment", &[])
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return false;
+    };
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut caret = None;
+    for (index, line) in normalized.split('\n').enumerate() {
+        if index != 0 {
+            let br = v8str(scope, "br");
+            let Some(br) = call_object_method(scope, document, "createElement", &[br.into()])
+            else {
+                return false;
+            };
+            if call_object_method(scope, fragment, "appendChild", &[br]).is_none() {
+                return false;
+            }
+        }
+        let Some(node) = create_text_node(scope, line) else {
+            return false;
+        };
+        if call_object_method(scope, fragment, "appendChild", &[node.into()]).is_none() {
+            return false;
+        }
+        caret = Some((node, utf16_len(line) as u32));
+    }
+    if call_object_method(scope, range, "deleteContents", &[]).is_none()
+        || call_object_method(scope, range, "insertNode", &[fragment.into()]).is_none()
+    {
+        return false;
+    }
+    if let Some((node, offset)) = caret {
+        collapse_selection_to(scope, selection, node, offset);
+    }
+    true
+}
+
 fn append_text_to_editing_host(
     scope: &mut v8::PinScope<'_, '_>,
     target: v8::Local<'_, v8::Object>,
@@ -373,14 +426,152 @@ pub(super) fn replace_contenteditable_selection_after_beforeinput(
     replacement_text: &str,
     input_type: TextEditInputType,
 ) -> bool {
+    replace_contenteditable_selection_after_beforeinput_with_transfer(
+        scope,
+        runtime_ptr,
+        handle,
+        replacement_text,
+        input_type,
+        None,
+    )
+}
+
+pub(super) fn replace_contenteditable_selection_after_beforeinput_with_transfer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    replacement_text: &str,
+    input_type: TextEditInputType,
+    data_transfer: Option<v8::Local<'s, v8::Object>>,
+) -> bool {
     let Some(handle) = contenteditable_editing_host(unsafe { &*runtime_ptr }, handle) else {
         return false;
     };
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
-    let inserted = if let Some(selection) = window_selection(scope) {
-        if let Some((node, start, end)) = selected_text_node_range(scope, target, selection) {
+    // A selection moved by an author callback must not turn a read-only or
+    // inert descendant into a native editing target.
+    if let Some((anchor, _, focus, _)) = crate::context_bootstrap::native_editing_selection(scope) {
+        let runtime = unsafe { &*runtime_ptr };
+        for boundary in [anchor, focus] {
+            if contenteditable_editing_host(runtime, boundary) != Some(handle) {
+                return false;
+            }
+            let mut current = Some(boundary);
+            while let Some(node) = current {
+                if runtime
+                    .dom_host()
+                    .node(node)
+                    .and_then(|node| node.as_element())
+                    .is_some_and(|element| element.has_attribute("inert"))
+                {
+                    return false;
+                }
+                if node == handle {
+                    break;
+                }
+                current = runtime
+                    .dom_host()
+                    .node(node)
+                    .and_then(|node| node.parent_node());
+            }
+        }
+    }
+    let selection = window_selection(scope);
+    let mut text_range =
+        selection.and_then(|selection| selected_text_node_range(scope, target, selection));
+    let deletion_backward = match input_type {
+        #[cfg(feature = "devtools")]
+        TextEditInputType::DeleteContentBackward => Some(true),
+        #[cfg(feature = "devtools")]
+        TextEditInputType::DeleteContentForward => Some(false),
+        _ => None,
+    };
+    let mut boundary_deletion = None;
+    if let Some((node, mut start, mut end)) = text_range
+        && start == end
+        && let Some(backward) = deletion_backward
+    {
+        let Some(node_handle) = crate::native_bridge::callback_value_dom_handle(scope, node.into())
+        else {
+            return false;
+        };
+        let runtime = unsafe { &*runtime_ptr };
+        let value = runtime
+            .dom_host()
+            .text_content(node_handle)
+            .unwrap_or_default();
+        let units = utf16_units(&value);
+        if backward {
+            start = crate::util::utf16_previous_scalar_boundary(&units, start);
+        } else {
+            end = crate::util::utf16_next_scalar_boundary(&units, end);
+        }
+        if start == end {
+            boundary_deletion = resolve_boundary_deletion(runtime, handle, node_handle, backward);
+            if boundary_deletion.is_none() {
+                return false;
+            }
+        } else {
+            text_range = Some((node, start, end));
+        }
+    }
+    let multiline_paste = input_type == TextEditInputType::InsertFromPaste
+        && replacement_text.contains(['\n', '\r'])
+        && !element_attribute(unsafe { &*runtime_ptr }, handle, "contenteditable")
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("plaintext-only"))
+        && !matches!(
+            super::super::style_property_value(
+                unsafe { &*runtime_ptr },
+                handle,
+                super::super::StyleMode::Computed,
+                "white-space"
+            )
+            .as_str(),
+            "pre" | "pre-wrap" | "pre-line" | "break-spaces"
+        );
+    let additional_node = if multiline_paste {
+        // Inserting line-break nodes can split a selected text node and change
+        // its parent's children, even when both selection endpoints are text.
+        crate::context_bootstrap::native_editing_selection(scope)
+            .and_then(|(anchor, _, _, _)| {
+                unsafe { &*runtime_ptr }
+                    .dom_host()
+                    .node(anchor)
+                    .and_then(Node::parent_node)
+            })
+            .filter(|parent| {
+                unsafe { &*runtime_ptr }
+                    .dom_host()
+                    .dom()
+                    .node(handle)
+                    .is_some_and(|node| {
+                        node.contains(unsafe { &*runtime_ptr }.dom_host().dom(), *parent)
+                    })
+            })
+    } else {
+        boundary_deletion.map(|operation| operation.capture_root())
+    };
+    let undo =
+        super::editing_history::capture_edit_including(scope, runtime_ptr, handle, additional_node);
+    let inserted = if let Some(selection) = selection {
+        if let Some(operation) = boundary_deletion {
+            let Some((node, offset, _)) = text_range else {
+                return false;
+            };
+            apply_boundary_deletion(
+                scope,
+                runtime_ptr,
+                target,
+                selection,
+                (node, offset as u32),
+                operation,
+                deletion_backward == Some(true),
+            )
+        } else if multiline_paste {
+            replace_selected_dom_range_with_plain_lines(scope, target, selection, replacement_text)
+        } else if let Some((node, start, end)) = text_range {
             if !replace_text_node_range(scope, node, start, end, replacement_text) {
                 return false;
             }
@@ -403,11 +594,17 @@ pub(super) fn replace_contenteditable_selection_after_beforeinput(
     if !inserted {
         return false;
     }
-    if let Some(event) = construct_input_event(
+    super::editing_history::commit_edit(scope, runtime_ptr, undo, input_type);
+    if let Some(event) = super::super::construct_input_event_with_transfer(
         scope,
         "input",
         input_type,
-        input_type.data(replacement_text),
+        if data_transfer.is_some() {
+            None
+        } else {
+            input_type.data(replacement_text)
+        },
+        data_transfer,
     ) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
