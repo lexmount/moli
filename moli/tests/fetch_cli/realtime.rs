@@ -1,4 +1,4 @@
-use super::{clean_output, run_fetch_cli_with_dump_and_args, run_moli};
+use super::{PNG_FIXTURE_BODY, clean_output, run_fetch_cli_with_dump_and_args, run_moli};
 use anyhow::Result;
 
 #[test]
@@ -61,6 +61,88 @@ fn realtime_fetch_waits_for_raf_resize_and_intersection_business_without_capture
         html.contains("<output id=\"ready\">200:200px</output>"),
         "{html}"
     );
+    Ok(())
+}
+
+#[test]
+fn realtime_fetch_loads_visible_lazy_images_without_capture() -> Result<()> {
+    use axum::{Router, extract::Path, response::Html, routing::get};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+
+    let html = r#"<!doctype html>
+      <style>img { position:absolute; left:10px; top:10px; }</style>
+      <img id=near loading=lazy width=100 height=100 src="/images/near.png">
+      <img id=far loading=lazy width=100 height=100 src="/images/far.png" style="top:10000px">
+      <script>
+      window.loaded = [];
+      const near = document.querySelector('#near');
+      const far = document.querySelector('#far');
+      near.onload = () => loaded.push('near:' + near.naturalWidth);
+      far.onload = () => loaded.push('far:' + far.naturalWidth);
+      window.initialWidth = near.offsetWidth;
+      new IntersectionObserver(([entry], observer) => {
+        if (entry.isIntersecting) return;
+        observer.disconnect();
+        window.initialFarTop = entry.boundingClientRect.top;
+        requestAnimationFrame(() => {
+          far.style.top = '20px';
+          const frame = document.createElement('iframe');
+          frame.style.cssText = 'width:320px;height:180px;border:0';
+          document.body.append(frame);
+          const image = frame.contentDocument.createElement('img');
+          image.loading = 'lazy';
+          image.width = image.height = 100;
+          image.onload = () => loaded.push('child:' + image.naturalWidth);
+          image.src = new URL('/images/child.png', location.href).href;
+          frame.contentDocument.body.append(image);
+        });
+      }).observe(far);
+      </script>"#;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()?;
+    let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))?;
+    let url = format!("http://{}/", listener.local_addr()?);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let record_requests = Arc::clone(&requests);
+    let router = Router::new()
+        .route("/", get(async move || Html(html)))
+        .route(
+            "/images/{image}",
+            get(move |Path(image): Path<String>| {
+                record_requests.lock().push(image);
+                async { ([("content-type", "image/png")], PNG_FIXTURE_BODY) }
+            }),
+        );
+    let server = runtime.spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let output = run_moli([
+        "moli",
+        "fetch",
+        "--realtime",
+        "--image",
+        "--http-no-proxy",
+        "*",
+        "--wait-script",
+        "window.loaded?.length === 3",
+        "--eval",
+        "[initialWidth, initialFarTop, loaded.sort()]",
+        "--timeout",
+        "3000",
+        &url,
+    ]);
+    server.abort();
+    let output = output?;
+    assert!(output.status.success(), "{}", clean_output(&output.stderr));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(
+        value,
+        serde_json::json!([100, 10000, ["child:1", "far:1", "near:1"]])
+    );
+    let mut requests = requests.lock();
+    requests.sort();
+    assert_eq!(*requests, ["child.png", "far.png", "near.png"]);
     Ok(())
 }
 
