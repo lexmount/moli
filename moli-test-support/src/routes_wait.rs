@@ -35,9 +35,10 @@ const noteReadiness = value => {
 fetch('/wait-until-json-data').then(response => response.json()).then(data => {
   document.body.setAttribute('data-readiness-response', data.ret[0]);
   noteReadiness('response');
+  return fetch('/wait-until-readiness-plan/response-applied', {method: 'POST'});
 });
 </script>
-<script src="/assets/runtime_owned_in_order_load_slow.js"></script>
+<script src="/wait-until-readiness-plan/block-load.js"></script>
 <script>
 window.addEventListener('load', () => {
   setTimeout(() => {
@@ -295,6 +296,14 @@ pub(super) fn add_wait_routes(router: Router) -> Router {
         .route(
             "/wait-until-readiness-plan",
             get(wait_until_readiness_plan_page),
+        )
+        .route(
+            "/wait-until-readiness-plan/response-applied",
+            axum::routing::post(wait_until_readiness_plan_response_applied),
+        )
+        .route(
+            "/wait-until-readiness-plan/block-load.js",
+            get(wait_until_readiness_plan_block_load_script),
         )
         .route(
             "/wait-until-cookie-fetch",
@@ -686,6 +695,21 @@ async fn wait_until_delayed_json_fetch_page() -> Html<&'static str> {
 
 async fn wait_until_readiness_plan_page() -> Html<&'static str> {
     Html(WAIT_UNTIL_READINESS_PLAN_HTML)
+}
+
+async fn wait_until_readiness_plan_response_applied(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> StatusCode {
+    state.readiness_plan_response_applied.signal();
+    StatusCode::NO_CONTENT
+}
+
+async fn wait_until_readiness_plan_block_load_script(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> Response {
+    state.readiness_plan_response_applied.wait().await;
+    // Keep the intentional navigation cost for the shared-deadline test.
+    asset_runtime_owned_in_order_load_slow_script().await
 }
 
 async fn wait_until_cookie_fetch_page() -> Response {
