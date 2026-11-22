@@ -7,6 +7,9 @@
 // Relative positioning of atomic inline boxes additionally follows Blitz
 // commit 4a9be930accc971675d5730e4fde3cfa13c3b57e.
 
+pub(crate) mod display;
+mod truncation;
+
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Debug,
@@ -183,6 +186,9 @@ pub(crate) struct InlineFormattingContext {
     /// capacity on every IFC increases the peak footprint of the fresh layout
     /// world more than it saves allocator traffic.
     pub(crate) content_widths: InlineContentWidthsMemo,
+    /// Root and all text runs prohibit soft wrapping. Inline objects must not
+    /// introduce a break before Parley has encountered the first text run.
+    pub(crate) no_soft_wrap: bool,
     pub(crate) text_units: Vec<InlineTextUnit>,
     pub(crate) source_map: Vec<InlineSourceMapEntry>,
     pub(crate) selection: Option<InlineSelection>,
@@ -384,8 +390,32 @@ pub(crate) enum InlineSelection {
     Caret { offset: usize, color: PaintColor },
 }
 
-/// Glyph-to-source mapping shared by semantic text and selection coverage.
-pub(crate) fn glyph_cluster_ranges(run: &parley::Run<'_, TextBrush>) -> Vec<Range<usize>> {
+/// Advances styled segments through their shared shaped run's source map.
+/// Create one cursor per line and consume every segment, including hidden or
+/// masked segments, before deciding which glyphs to paint.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct GlyphSourceCursor {
+    run_index: Option<usize>,
+    ranges: std::vec::IntoIter<Range<usize>>,
+}
+
+#[cfg(test)]
+impl GlyphSourceCursor {
+    pub(crate) fn segment<'a>(
+        &'a mut self,
+        glyphs: &'a parley::GlyphRun<'_, TextBrush>,
+    ) -> impl Iterator<Item = (parley::Glyph, Range<usize>)> + 'a {
+        if self.run_index != Some(glyphs.run().index()) {
+            self.ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
+            self.run_index = Some(glyphs.run().index());
+        }
+        glyphs.glyphs().zip(self.ranges.by_ref())
+    }
+}
+
+#[cfg(test)]
+fn glyph_cluster_ranges(run: &parley::Run<'_, TextBrush>) -> Vec<Range<usize>> {
     // Join ligature continuations in logical order first: in RTL their
     // visual order puts the continuation before the glyph-bearing cluster.
     let mut atoms: Vec<(Range<usize>, usize)> = Vec::new();
@@ -531,9 +561,6 @@ pub(crate) struct InlineLineFragment {
     pub(crate) rect: PaintRect,
     /// Included in `rect` for CSSOM and painting; excluded from scrolling on demand.
     pub(crate) hanging_advance: f32,
-    /// Conservative glyph/decoration/shadow ink used only by capture culling.
-    /// CSSOM line geometry continues to use `rect`.
-    pub(crate) paint_bounds: InlinePaintBounds,
     pub(crate) baseline: f32,
 }
 
@@ -558,6 +585,18 @@ pub(crate) enum InlinePaintBounds {
 }
 
 impl InlinePaintBounds {
+    pub(crate) fn include_text_ink(
+        &mut self,
+        rect: PaintRect,
+        style: &parley::layout::Style<TextBrush>,
+        font_size: f32,
+    ) {
+        match text_style_paint_outsets(style) {
+            Some(outsets) => self.include(outsets.outset(rect, font_size.max(0.0) * 2.0 + 1.0)),
+            None => *self = Self::Unbounded,
+        }
+    }
+
     fn include(&mut self, rect: PaintRect) {
         *self = match *self {
             Self::Empty => Self::Bounded(rect),
@@ -600,11 +639,6 @@ pub(crate) fn build_inline_fragments(
     let mut fragments = InlineFragments::default();
     let mut box_fragments = HashMap::<(usize, usize), FragmentAccumulator>::new();
     let mut source_fragments = HashMap::<SourceFragmentKey, FragmentAccumulator>::new();
-    let style_paint_outsets = layout
-        .styles()
-        .iter()
-        .map(text_style_paint_outsets)
-        .collect::<Vec<_>>();
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
@@ -626,12 +660,6 @@ pub(crate) fn build_inline_fragments(
             line_index,
             rect: line_rect,
             hanging_advance: metrics.hanging_advance,
-            paint_bounds: context
-                .selection
-                .as_ref()
-                .map_or(InlinePaintBounds::Empty, |_| {
-                    InlinePaintBounds::Bounded(line_rect)
-                }),
             baseline: placement.map_or(metrics.baseline, |placement| placement.baseline),
         });
         if let Some(placement) = placement {
@@ -669,22 +697,6 @@ pub(crate) fn build_inline_fragments(
                 cluster.advance().max(0.0),
                 (ascent + descent).max(0.0),
             );
-            if let Some(style) = layout.styles().get(style_index)
-                && style.brush.paint
-            {
-                // Parley exposes typographic cluster boxes rather than
-                // exact outline bounds. A two-em guard is deliberately
-                // conservative for italic/color-glyph overhang, while the
-                // style sidecar adds CSS stroke, shadow, and decoration
-                // ink. This work happens once, alongside final
-                // fragment materialization, not during every paint.
-                let glyph_guard = run.font_size().max(0.0) * 2.0 + 1.0;
-                let line = &mut fragments.lines[line_index];
-                match style_paint_outsets.get(style_index).copied().flatten() {
-                    Some(outsets) => line.paint_bounds.include(outsets.outset(rect, glyph_guard)),
-                    None => line.paint_bounds = InlinePaintBounds::Unbounded,
-                }
-            }
             for unit in overlapping_output_ranges(&context.text_units, &range) {
                 for ancestor in &unit.ancestors {
                     box_fragments
@@ -880,6 +892,35 @@ pub(crate) fn break_inline_lines(
     layout: &mut Layout<TextBrush>,
     max_advance: Option<f32>,
 ) {
+    if context.no_soft_wrap
+        && context
+            .objects
+            .iter()
+            .any(|object| object.role == InlineObjectRole::Atomic)
+        && context
+            .objects
+            .iter()
+            .all(|object| object.role != InlineObjectRole::Float)
+        && let Some(width) = max_advance.filter(|width| width.is_finite())
+    {
+        // Parley's initial wrap policy is Wrap until a text atom updates it.
+        // A leading atomic box must obey the containing nowrap style too.
+        // Keep forced breaks and the real alignment width, only removing the
+        // soft width constraint for this non-wrapping paragraph.
+        let mut breaker = layout.break_lines();
+        breaker.state_mut().set_layout_max_advance(f32::INFINITY);
+        while !breaker.is_done() {
+            breaker.state_mut().set_line_max_advance(f32::MAX);
+            match breaker.break_next() {
+                Some(parley::YieldData::LineBreak(_)) => breaker.set_prior_line_width(width),
+                _ => break,
+            }
+        }
+        breaker.state_mut().set_layout_max_advance(width);
+        breaker.state_mut().set_line_max_advance(width);
+        breaker.finish();
+        return;
+    }
     layout.break_all_lines(max_advance);
     let Some(width) = max_advance.filter(|width| width.is_finite() && *width > 0.0) else {
         return;
@@ -2247,6 +2288,20 @@ impl InlineBuildInput {
             1.0,
             quantize,
         );
+        let no_soft_wrap = styles
+            .iter()
+            .chain(std::iter::once(&root_text_style))
+            .all(|style| style.text_wrap_mode == parley::style::TextWrapMode::NoWrap);
+        // CSS direction defines the paragraph, even when its first strong
+        // character has the opposite direction. Plaintext alone asks Unicode
+        // bidi analysis to choose it from the contents.
+        let root_style = &world.boxes[self.root_style.index()].style;
+        if root_style.unicode_bidi() != InlineUnicodeBidi::Plaintext {
+            builder.set_base_direction(match root_style.direction() {
+                InlineDirection::Ltr => parley::BaseDirection::Ltr,
+                InlineDirection::Rtl => parley::BaseDirection::Rtl,
+            });
+        }
         let style_indices = styles
             .iter()
             .map(|style| builder.push_style(style.clone()))
@@ -2313,6 +2368,7 @@ impl InlineBuildInput {
             measurement_layout: Some(layout),
             laid_out: None,
             content_widths: InlineContentWidthsMemo::default(),
+            no_soft_wrap,
             text_units: self.units,
             source_map: self.source_map,
             selection,
@@ -2985,6 +3041,93 @@ mod tests {
     use super::*;
 
     #[test]
+    fn glyph_source_cursor_advances_styled_segments_in_both_directions_and_resets_per_line() {
+        for (text, font, direction, offsets, step) in [
+            (
+                "ABCD\nEFGH",
+                include_bytes!("../tests/fixtures/moli-ahem.ttf").as_slice(),
+                parley::BaseDirection::Ltr,
+                [0, 1, 2, 3, 5, 6, 7, 8],
+                1,
+            ),
+            (
+                "אבבא\nבאאב",
+                include_bytes!("../tests/fixtures/moli-hebrew-emoji.ttf").as_slice(),
+                parley::BaseDirection::Rtl,
+                [6, 4, 2, 0, 15, 13, 11, 9],
+                2,
+            ),
+        ] {
+            let mut services =
+                DocumentLayoutServices::with_system_font_policy(crate::SystemFontPolicy::Disabled);
+            services
+                .register_web_font(crate::WebFontRegistration::new(
+                    "cursor",
+                    crate::WebFontFace::new("CursorTest"),
+                    font.to_vec(),
+                ))
+                .unwrap();
+            let parley = services.parley_mut();
+            let mut style = TextStyle {
+                font_family: "CursorTest".into(),
+                ..TextStyle::default()
+            };
+            parley.resolve_font_families(&mut style, None);
+            let mut hidden = style.clone();
+            hidden.brush.paint = false;
+            let mut builder =
+                parley
+                    .layout_context
+                    .style_run_builder(&mut parley.font_context, text, 1.0, true);
+            builder.set_base_direction(direction);
+            let first = builder.push_style(style);
+            let skipped = builder.push_style(hidden);
+            builder.push_style_run(first, 0..step);
+            builder.push_style_run(skipped, step..3 * step);
+            builder.push_style_run(first, 3 * step..5 * step + 1);
+            builder.push_style_run(skipped, 5 * step + 1..7 * step + 1);
+            builder.push_style_run(first, 7 * step + 1..text.len());
+            let mut layout = builder.build(text);
+            layout.break_all_lines(None);
+            let mut ranges = Vec::new();
+            let mut shared_run = false;
+            for line in layout.lines() {
+                let mut sources = GlyphSourceCursor::default();
+                let mut previous = None;
+                for item in line.items() {
+                    let PositionedLayoutItem::GlyphRun(glyphs) = item else {
+                        continue;
+                    };
+                    shared_run |= previous == Some(glyphs.run().index());
+                    previous = Some(glyphs.run().index());
+                    // Even the segment excluded from paint must advance the cursor.
+                    let segment = sources
+                        .segment(&glyphs)
+                        .map(|(_, range)| range)
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        Some(glyphs.text_range()),
+                        segment.iter().cloned().reduce(|range, cluster| {
+                            range.start.min(cluster.start)..range.end.max(cluster.end)
+                        }),
+                        "a positioned view must describe this styled segment, not its full run"
+                    );
+                    ranges.extend(segment);
+                }
+            }
+            assert!(
+                shared_run,
+                "fixture must exercise styled segments sharing a shaped run"
+            );
+            assert_eq!(
+                ranges,
+                offsets.map(|offset| offset..offset + step),
+                "{direction:?}"
+            );
+        }
+    }
+
+    #[test]
     fn carriage_returns_separate_space_styles_at_atomic_and_float_objects() {
         let root = LayoutBoxId::from_index(0);
         let prefix = LayoutBoxId::from_index(1);
@@ -3526,6 +3669,7 @@ mod tests {
             measurement_layout: Some(layout.clone()),
             laid_out: None,
             content_widths: InlineContentWidthsMemo::default(),
+            no_soft_wrap: false,
             text_units: Vec::new(),
             source_map: Vec::new(),
             selection: None,
@@ -3642,6 +3786,7 @@ mod tests {
                     measurement_layout: None,
                     laid_out: None,
                     content_widths: InlineContentWidthsMemo::default(),
+                    no_soft_wrap: false,
                     text_units: Vec::new(),
                     source_map,
                     selection: None,

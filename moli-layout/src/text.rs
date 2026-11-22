@@ -420,7 +420,7 @@ impl ParleyDocumentServices {
         metrics
     }
 
-    fn primary_font_identity(
+    pub(crate) fn primary_font_identity(
         &mut self,
         style: &TextStyle<'static, 'static, TextBrush>,
     ) -> Option<(u64, u32)> {

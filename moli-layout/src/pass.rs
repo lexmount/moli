@@ -3,7 +3,7 @@ use crate::{
     LayoutScrollbarAxis, LayoutSource, LayoutStyleResolver, LayoutViewport, LayoutWorld,
     PaintCaptureRequest, PaintSnapshot, PaintViewport, build_layout_world,
     form::prepare_form_controls,
-    inline::prepare_inline_contexts,
+    inline::{display, prepare_inline_contexts},
     list::prepare_list_markers,
     overflow::OverflowProjection,
     projection::finish_layout_pass,
@@ -319,6 +319,7 @@ where
     let phase_started = Instant::now();
     let numeric_metrics = compute_world_layout_with_scrollbars(&mut world, request.viewport);
     let object_geometry = prepare_svg_content(&mut world, source);
+    let prepared_display = display::prepare(&world, services);
     let numeric_layout_elapsed = phase_started.elapsed();
     if moli_trace::cpu_profile_enabled() {
         tracing::info!(
@@ -377,6 +378,7 @@ where
     let embedded_frame_elapsed = phase_started.elapsed();
     finish_layout_pass(
         &world,
+        prepared_display,
         source,
         request.viewport,
         request.reason,

@@ -3146,6 +3146,7 @@ fn empty_inline_context() -> InlineFormattingContext {
         measurement_layout: Some(parley::Layout::default()),
         laid_out: None,
         content_widths: InlineContentWidthsMemo::default(),
+        no_soft_wrap: false,
         text_units: Vec::new(),
         source_map: Vec::new(),
         selection: None,
