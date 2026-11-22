@@ -486,6 +486,36 @@ fn shadow_dir_pseudo_styles_slotted_nodes_from_document_direction() {
 }
 
 #[test]
+fn computed_direction_respects_the_cascade_and_preserves_html_dir_matching() {
+    let mut vm = new_parsed_test_vm(
+        "https://computed-direction-cascade.test/",
+        r#"<!doctype html>
+        <style>
+          .author { direction: ltr; }
+          #important { direction: rtl !important; }
+        </style>
+        <div id="author" class="author" dir="rtl"><span id="inherited">text</span></div>
+        <span id="auto" class="author" dir="auto">ת</span>
+        <bdi id="bdi" class="author">ת</bdi>
+        <div id="important" style="direction: ltr" dir="ltr">text</div>
+        <div dir="rtl"><input id="tel" type="tel"></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"
+Array.from(document.querySelectorAll('[id]'), element =>
+    getComputedStyle(element).direction + ':' + element.matches(':dir(rtl)')
+).join('|')
+"#,
+        )
+        .expect("CSS direction and HTML directionality should both evaluate");
+    assert_eq!(
+        result,
+        "ltr:true|ltr:true|ltr:true|ltr:true|rtl:false|ltr:false"
+    );
+}
+
+#[test]
 fn computed_direction_tracks_input_html_directionality() {
     let mut vm = new_storage_test_vm("https://input-direction-computed-style.test/");
 

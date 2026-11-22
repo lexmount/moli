@@ -782,15 +782,9 @@ pub(super) fn computed_direction_with_resolution(
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> String {
-    if let Some(entry) = inline_style_entry_for_inline_style(runtime, handle, "direction") {
-        let value = entry.value.to_ascii_lowercase();
-        if matches!(value.as_str(), "ltr" | "rtl") {
-            return value;
-        }
-    }
     let direction = resolution.raw_property(runtime, handle, "direction");
-    if direction.eq_ignore_ascii_case("rtl") {
-        return "rtl".to_owned();
+    if matches!(direction.as_str(), "ltr" | "rtl") {
+        return direction;
     }
     html_directionality(runtime.dom_host(), handle)
         .as_str()
