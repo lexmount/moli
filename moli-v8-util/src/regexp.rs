@@ -19,28 +19,32 @@ fn native_regexp_context<'s>(scope: &mut PinScope<'s, '_>) -> Local<'s, Context>
 
 /// A bounded user-agent regular expression, isolated from author intrinsics
 /// and the observable legacy RegExp statics of every author realm.
-pub struct NativeRegExp<'s> {
-    context: Local<'s, Context>,
-    regexp: Local<'s, RegExp>,
+pub struct NativeRegExp(Global<RegExp>);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeRegExpCompileError {
+    InvalidPattern,
+    Unavailable,
 }
 
-impl<'s> NativeRegExp<'s> {
-    /// Compile without exposing syntax errors to the surrounding script.
+impl NativeRegExp {
+    /// Compile a pattern that can be reused across handle scopes in the isolate.
     pub fn new(
-        scope: &mut PinScope<'s, '_>,
-        pattern: Local<v8::String>,
+        scope: &mut PinScope<'_, '_>,
+        pattern: &str,
         flags: RegExpCreationFlags,
-    ) -> Option<Self> {
-        let context = native_regexp_context(scope);
-        let scope = &mut v8::ContextScope::new(scope, context);
-        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-        let mut scope = try_catch.init();
-        let regexp =
-            RegExp::new_with_backtrack_limit(&scope, pattern, flags, NATIVE_REGEXP_BACKTRACK_LIMIT);
-        if regexp.is_none() {
-            scope.reset();
-        }
-        regexp.map(|regexp| Self { context, regexp })
+    ) -> Result<Self, NativeRegExpCompileError> {
+        let regexp = compile(scope, pattern, flags)?;
+        Ok(Self(Global::new(scope, regexp)))
+    }
+
+    /// Check the standalone source without retaining a compiled handle.
+    pub fn validate(
+        scope: &mut PinScope<'_, '_>,
+        pattern: &str,
+        flags: RegExpCreationFlags,
+    ) -> Result<(), NativeRegExpCompileError> {
+        compile(scope, pattern, flags).map(|_| ())
     }
 
     /// `Some(false)` includes exhausted backtracking budgets. `None` indicates
@@ -50,15 +54,44 @@ impl<'s> NativeRegExp<'s> {
         scope: &mut PinScope<'_, '_>,
         subject: Local<v8::String>,
     ) -> Option<bool> {
-        let scope = &mut v8::ContextScope::new(scope, self.context);
+        let context = native_regexp_context(scope);
+        let regexp = Local::new(scope, &self.0);
+        let scope = &mut v8::ContextScope::new(scope, context);
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
         let mut scope = try_catch.init();
-        let result = self.regexp.exec(&scope, subject);
+        let result = regexp.exec(&scope, subject);
         if result.is_none() {
             scope.reset();
         }
         result.map(|value| !value.is_null())
     }
+}
+
+fn compile<'s>(
+    scope: &mut PinScope<'s, '_>,
+    pattern: &str,
+    flags: RegExpCreationFlags,
+) -> Result<Local<'s, RegExp>, NativeRegExpCompileError> {
+    if scope.is_execution_terminating() {
+        return Err(NativeRegExpCompileError::Unavailable);
+    }
+    let pattern = v8::String::new(scope, pattern).ok_or(NativeRegExpCompileError::Unavailable)?;
+    let context = native_regexp_context(scope);
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+    let mut scope = try_catch.init();
+    if let Some(regexp) =
+        RegExp::new_with_backtrack_limit(&scope, pattern, flags, NATIVE_REGEXP_BACKTRACK_LIMIT)
+    {
+        return Ok(regexp);
+    }
+    let error = if scope.has_caught() && !scope.has_terminated() {
+        NativeRegExpCompileError::InvalidPattern
+    } else {
+        NativeRegExpCompileError::Unavailable
+    };
+    scope.reset();
+    Err(error)
 }
 
 #[cfg(test)]
@@ -79,6 +112,13 @@ mod tests {
     fn native_regexp_does_not_read_author_intrinsics_or_change_realm_statics() {
         moli_v8_test_util::ensure_v8();
         let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        let regexp = {
+            let scope = pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let context = Context::new(scope, Default::default());
+            let scope = &mut v8::ContextScope::new(scope, context);
+            NativeRegExp::new(scope, "(different)", RegExpCreationFlags::UNICODE_SETS).unwrap()
+        };
         let scope = pin!(v8::HandleScope::new(&mut isolate));
         let scope = &mut scope.init();
         let contexts = [
@@ -98,10 +138,7 @@ mod tests {
                 });
                 "#,
             );
-            let source = v8::String::new(scope, "(different)").unwrap();
             let subject = v8::String::new(scope, "different").unwrap();
-            let regexp =
-                NativeRegExp::new(scope, source, RegExpCreationFlags::UNICODE_SETS).unwrap();
             assert_eq!(regexp.is_match(scope, subject), Some(true));
             assert_eq!(scope.get_current_context(), context);
             assert!(eval(scope, "originalRegExp.$1 === 'sentinel'").is_true());

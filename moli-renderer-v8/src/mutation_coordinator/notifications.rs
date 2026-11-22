@@ -64,6 +64,7 @@ pub(crate) fn notify_native_dom_mutation(
         host.apply_stylesheet_owner_changes(effects.stylesheet_owners().changes());
     }
     host.note_app_manifest_link_mutation(dom_host, effects);
+    host.invalidate_changed_input_patterns(effects);
 
     let profile = moli_trace::cpu_profile_enabled();
     let started = profile.then(Instant::now);

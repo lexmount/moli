@@ -334,6 +334,7 @@ pub(crate) use focus::{
 pub(super) use focus::{node_blur_callback, node_focus_callback};
 #[cfg(feature = "devtools")]
 pub(crate) use focus::{perform_mouse_focus_default_action, update_focus_preserving_selection};
+pub(in crate::native_bridge) use forms::InputPatternCache;
 #[cfg(feature = "devtools")]
 pub(crate) use forms::cache_input_files_from_selected_files;
 #[cfg(feature = "devtools")]

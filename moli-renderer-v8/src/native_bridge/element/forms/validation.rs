@@ -1,6 +1,8 @@
+use hashlink::LinkedHashMap;
 use v8::RegExpCreationFlags;
 
 use crate::custom_elements::is_form_associated_custom_element_handle;
+use crate::dom::native::DomMutationEffects;
 use crate::webidl;
 use moli_dom::forms::{
     FormControlValidity, form_control_type_supports_intrinsic_validation, input_range_overflow,
@@ -11,7 +13,7 @@ use moli_dom::forms::{
     text_control_suffers_too_long as form_text_control_suffers_too_long,
     text_control_suffers_too_short as form_text_control_suffers_too_short,
 };
-use moli_v8_util::NativeRegExp;
+use moli_v8_util::{NativeRegExp, NativeRegExpCompileError};
 use moli_webapi::validity_state::ValidityStateDeclaration;
 
 use super::super::{
@@ -28,6 +30,86 @@ struct SetCustomValidityArgs {
 }
 
 type ControlValidity = FormControlValidity;
+
+// The native DOM arena keeps detached nodes addressable. Bound the persistent
+// V8 handles even when a long-lived page creates and validates many inputs.
+const MAX_CACHED_INPUT_PATTERNS: usize = 256;
+
+#[derive(Default)]
+pub(in crate::native_bridge) struct InputPatternCache {
+    entries: LinkedHashMap<DomHandle, CachedInputPattern>,
+    #[cfg(test)]
+    compilation_attempts: usize,
+}
+
+struct CachedInputPattern {
+    source: Box<str>,
+    regexp: Option<NativeRegExp>,
+}
+
+impl InputPatternCache {
+    fn get_or_compile(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        source: &str,
+    ) -> Option<&NativeRegExp> {
+        if self
+            .entries
+            .get(&handle)
+            .is_none_or(|entry| &*entry.source != source)
+        {
+            self.entries.remove(&handle);
+            #[cfg(test)]
+            {
+                self.compilation_attempts += 1;
+            }
+            let regexp = match compile_html_pattern(scope, source) {
+                Ok(regexp) => Some(regexp),
+                Err(NativeRegExpCompileError::InvalidPattern) => None,
+                Err(NativeRegExpCompileError::Unavailable) => return None,
+            };
+            self.entries.insert(
+                handle,
+                CachedInputPattern {
+                    source: source.into(),
+                    regexp,
+                },
+            );
+            if self.entries.len() > MAX_CACHED_INPUT_PATTERNS {
+                self.entries.pop_front();
+            }
+        }
+        self.entries.to_back(&handle)?.regexp.as_ref()
+    }
+
+    pub(in crate::native_bridge) fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+impl PageScriptHost {
+    pub(crate) fn invalidate_changed_input_patterns(&mut self, effects: &DomMutationEffects) {
+        let cache = self.input_pattern_cache.get_mut();
+        if cache.entries.is_empty() {
+            return;
+        }
+        for mutation in effects.style().attribute_mutations() {
+            if mutation.namespace().is_none()
+                && mutation.local_name().eq_ignore_ascii_case("pattern")
+                && mutation.old_value() != mutation.new_value()
+            {
+                cache.entries.remove(&mutation.target());
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn input_pattern_cache_state_for_test(&self) -> (usize, usize) {
+        let cache = self.input_pattern_cache.borrow();
+        (cache.entries.len(), cache.compilation_attempts)
+    }
+}
 
 pub(in crate::native_bridge) fn form_validate_for_submission(
     scope: &mut v8::PinScope<'_, '_>,
@@ -352,7 +434,7 @@ fn control_validity(
     ControlValidity {
         value_missing: control_suffers_required_value_missing(runtime, handle, element),
         type_mismatch: control_suffers_type_mismatch(runtime, handle, element),
-        pattern_mismatch: control_suffers_pattern_mismatch(scope, element),
+        pattern_mismatch: control_suffers_pattern_mismatch(scope, runtime, handle, element),
         too_long: control_suffers_too_long(runtime, handle, element),
         too_short: control_suffers_too_short(runtime, handle, element),
         range_underflow: control_suffers_range_underflow(runtime, handle, element),
@@ -529,7 +611,12 @@ fn control_suffers_type_mismatch(
     )
 }
 
-fn control_suffers_pattern_mismatch(scope: &mut v8::PinScope<'_, '_>, element: &Element) -> bool {
+fn control_suffers_pattern_mismatch(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+    element: &Element,
+) -> bool {
     if !element.is_html_input()
         || !element_type_supports_intrinsic_validation(element)
         || !element.input_type().supports_pattern()
@@ -543,43 +630,69 @@ fn control_suffers_pattern_mismatch(scope: &mut v8::PinScope<'_, '_>, element: &
     if value.is_empty() {
         return false;
     }
-    let Some(pattern) = compile_html_pattern(scope, pattern) else {
+    let mut cache = runtime.input_pattern_cache.borrow_mut();
+    let Some(pattern) = cache.get_or_compile(scope, handle, pattern) else {
         return false;
     };
     if element.input_type() == InputType::Email && element.has_attribute("multiple") {
         return value
             .split(',')
             .map(str::trim)
-            .any(|part| pattern_mismatches_value(scope, &pattern, part));
+            .any(|part| pattern_mismatches_value(scope, pattern, part));
     }
-    pattern_mismatches_value(scope, &pattern, &value)
+    pattern_mismatches_value(scope, pattern, &value)
 }
 
 pub(crate) fn v8_pattern_is_usable(scope: &mut v8::PinScope<'_, '_>, pattern: &str) -> Option<()> {
-    let pattern = v8_string(scope, pattern)?;
-    NativeRegExp::new(scope, pattern, RegExpCreationFlags::UNICODE_SETS).map(|_| ())
+    NativeRegExp::validate(scope, pattern, RegExpCreationFlags::UNICODE_SETS).ok()
 }
 
-fn compile_html_pattern<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+fn compile_html_pattern(
+    scope: &mut v8::PinScope<'_, '_>,
     pattern: &str,
-) -> Option<NativeRegExp<'s>> {
+) -> Result<NativeRegExp, NativeRegExpCompileError> {
     // HTML validates the standalone source before anchoring it; invalid source
     // must not become usable merely because the wrapper balances its groups.
-    v8_pattern_is_usable(scope, pattern)?;
+    NativeRegExp::validate(scope, pattern, RegExpCreationFlags::UNICODE_SETS)?;
     let anchored_pattern = format!("^(?:{pattern})$");
-    let pattern = v8_string(scope, &anchored_pattern)?;
-    NativeRegExp::new(scope, pattern, RegExpCreationFlags::UNICODE_SETS)
+    NativeRegExp::new(scope, &anchored_pattern, RegExpCreationFlags::UNICODE_SETS)
 }
 
 fn pattern_mismatches_value(
     scope: &mut v8::PinScope<'_, '_>,
-    pattern: &NativeRegExp<'_>,
+    pattern: &NativeRegExp,
     value: &str,
 ) -> bool {
     v8_string(scope, value)
         .and_then(|subject| pattern.is_match(scope, subject))
         .is_some_and(|matched| !matched)
+}
+
+#[cfg(test)]
+#[test]
+fn input_pattern_cache_evicts_the_least_recently_used_control() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let mut cache = InputPatternCache::default();
+    for index in 0..MAX_CACHED_INPUT_PATTERNS {
+        assert!(
+            cache
+                .get_or_compile(scope, DomHandle::new(index), "test")
+                .is_some()
+        );
+    }
+    let touched = DomHandle::new(0);
+    assert!(cache.get_or_compile(scope, touched, "test").is_some());
+    assert_eq!(cache.compilation_attempts, MAX_CACHED_INPUT_PATTERNS);
+    let newest = DomHandle::new(MAX_CACHED_INPUT_PATTERNS);
+    assert!(cache.get_or_compile(scope, newest, "test").is_some());
+    assert_eq!(cache.entries.len(), MAX_CACHED_INPUT_PATTERNS);
+    assert!(cache.entries.contains_key(&touched));
+    assert!(!cache.entries.contains_key(&DomHandle::new(1)));
 }
 
 fn control_suffers_too_long(
