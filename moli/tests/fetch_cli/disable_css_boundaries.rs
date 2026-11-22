@@ -1,4 +1,4 @@
-use super::{Output, clean_output, run_fetch_cli_with_args};
+use super::{Output, clean_output, run_fetch_cli_with_args, timing::TIMEOUT_MS};
 use anyhow::Result;
 use axum::{
     Router,
@@ -355,7 +355,7 @@ fn resource_mode_fetches_dom_resources_without_fetching_css_derived_resources() 
             "--disable-css",
             "--resource",
             "--timeout",
-            "5000",
+            TIMEOUT_MS,
             "--wait-script",
             RESOURCE_READY_SCRIPT,
         ],
@@ -384,7 +384,7 @@ fn css_module_fetch_is_blocked_but_explicit_fetch_of_css_remains_available() -> 
         &[
             "--disable-css",
             "--timeout",
-            "5000",
+            TIMEOUT_MS,
             "--wait-script",
             CSS_MODULE_READY_SCRIPT,
         ],
@@ -407,7 +407,7 @@ fn cached_fetch_response_cannot_bypass_css_module_blocking() -> Result<()> {
         &[
             "--disable-css",
             "--timeout",
-            "5000",
+            TIMEOUT_MS,
             "--wait-script",
             CACHE_WARMED_CSS_MODULE_READY_SCRIPT,
         ],
@@ -432,7 +432,7 @@ fn service_worker_cannot_intercept_a_policy_blocked_stylesheet() -> Result<()> {
         &[
             "--disable-css",
             "--timeout",
-            "10000",
+            TIMEOUT_MS,
             "--wait-script",
             SERVICE_WORKER_READY_SCRIPT,
         ],

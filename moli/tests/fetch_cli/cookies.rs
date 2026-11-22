@@ -264,7 +264,8 @@ async fn cookie_inputs_read_fifo_streams_without_replacing_them() -> Result<()> 
     use std::{os::unix::fs::FileTypeExt, time::Duration};
 
     let fixture = CookieFixture::spawn().await?;
-    let timeout = Duration::from_secs(10);
+    // Allow for FIFO setup and child startup in addition to the readiness budget.
+    let process_timeout = Duration::from_secs(45);
     for flag in ["--cookie", "--cookie-file"] {
         for (input, expected) in [
             (record(), "file=loaded"),
@@ -276,15 +277,16 @@ async fn cookie_inputs_read_fifo_streams_without_replacing_them() -> Result<()> 
             let pipe = super::unique_temp_file_path("cookie-fifo-input", "cookies.fifo")?;
             let mut create = Command::new("mkfifo");
             create.arg(&pipe);
-            assert_success(&run_command_with_process_timeout(create, timeout)?);
+            assert_success(&run_command_with_process_timeout(create, process_timeout)?);
 
             let mut producer = Command::new("sh");
             producer.args(["-c", "printf '%s' \"$1\" > \"$2\"", "cookie-fifo-writer"]);
             producer.arg(input).arg(&pipe);
             // The FIFO open pairs reader and writer; producer exit delivers EOF.
             // Bound both children independently so either missing peer is reaped.
-            let writer =
-                std::thread::spawn(move || run_command_with_process_timeout(producer, timeout));
+            let writer = std::thread::spawn(move || {
+                run_command_with_process_timeout(producer, process_timeout)
+            });
             let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
             command
                 .args([
@@ -296,12 +298,12 @@ async fn cookie_inputs_read_fifo_streams_without_replacing_them() -> Result<()> 
                     "--wait-until",
                     "load",
                     "--timeout",
-                    "5000",
+                    super::timing::TIMEOUT_MS,
                     flag,
                 ])
                 .arg(&pipe)
                 .arg(format!("{}/echo", fixture.base));
-            let output = run_command_with_process_timeout(command, timeout);
+            let output = run_command_with_process_timeout(command, process_timeout);
             let written = writer.join().expect("FIFO producer should not panic");
             let is_fifo = std::fs::metadata(&pipe)?.file_type().is_fifo();
             std::fs::remove_file(&pipe)?;

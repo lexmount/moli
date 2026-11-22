@@ -150,6 +150,9 @@ async fn preload_integrity_checks_service_worker_response_filter() -> Result<()>
         .await?;
     let mut cases = Vec::new();
     for destination in DESTINATIONS {
+        // Fetch rejects a Service Worker opaque response to a CORS request.
+        // Leave as=fetch without crossorigin to exercise SRI on opaque responses.
+        let cors = destination != "fetch";
         for source in ["basic", "cors", "default", "opaque"] {
             for (name, integrity) in [
                 ("match", INTEGRITY),
@@ -157,11 +160,23 @@ async fn preload_integrity_checks_service_worker_response_filter() -> Result<()>
                 ("empty", ""),
                 ("unsupported", "unknown-AAAA"),
             ] {
-                cases.push(serde_json::json!({
-                    "name":format!("{destination}/{source}/{name}"), "destination":destination,
-                    "src":format!("/sw-{source}.js?{destination}-{name}"), "integrity":integrity,
-                    "expected":if name == "mismatch" || (name == "match" && source == "opaque") {"error"} else {"load"}
-                }));
+                let opaque_rejected = source == "opaque" && (cors || name == "match");
+                let expected = if name == "mismatch" || opaque_rejected {
+                    "error"
+                } else {
+                    "load"
+                };
+                let mut case = serde_json::json!({
+                    "name": format!("{destination}/{source}/{name}"),
+                    "destination": destination,
+                    "src": format!("/sw-{source}.js?{destination}-{name}"),
+                    "integrity": integrity,
+                    "expected": expected,
+                });
+                if cors {
+                    case["crossOrigin"] = "anonymous".into();
+                }
+                cases.push(case);
             }
         }
     }
