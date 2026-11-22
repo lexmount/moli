@@ -368,10 +368,10 @@ pub(super) fn prepare_collapsed_table_borders<N>(world: &mut LayoutWorld<N>, roo
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let context = super::build_table_context(world, root);
-    if !context.collapsed_borders {
+    if !world.boxes[root.index()].style.table_border_is_collapsed() {
         return;
     }
+    let context = super::build_table_context(world, root);
 
     let mut borders = CollapsedTableBorders::new(context.rows.len(), context.column_count);
     let mut box_order = 0usize;
