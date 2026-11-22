@@ -34,7 +34,7 @@ impl NativeRegExp {
         pattern: &str,
         flags: RegExpCreationFlags,
     ) -> Result<Self, NativeRegExpCompileError> {
-        let regexp = compile(scope, pattern, flags)?;
+        let regexp = compile(scope, pattern, flags, NATIVE_REGEXP_BACKTRACK_LIMIT)?;
         Ok(Self(Global::new(scope, regexp)))
     }
 
@@ -44,7 +44,7 @@ impl NativeRegExp {
         pattern: &str,
         flags: RegExpCreationFlags,
     ) -> Result<(), NativeRegExpCompileError> {
-        compile(scope, pattern, flags).map(|_| ())
+        compile(scope, pattern, flags, NATIVE_REGEXP_BACKTRACK_LIMIT).map(|_| ())
     }
 
     /// `Some(false)` includes exhausted backtracking budgets. `None` indicates
@@ -71,6 +71,7 @@ fn compile<'s>(
     scope: &mut PinScope<'s, '_>,
     pattern: &str,
     flags: RegExpCreationFlags,
+    backtrack_limit: u32,
 ) -> Result<Local<'s, RegExp>, NativeRegExpCompileError> {
     if scope.is_execution_terminating() {
         return Err(NativeRegExpCompileError::Unavailable);
@@ -80,8 +81,7 @@ fn compile<'s>(
     let scope = &mut v8::ContextScope::new(scope, context);
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
-    if let Some(regexp) =
-        RegExp::new_with_backtrack_limit(&scope, pattern, flags, NATIVE_REGEXP_BACKTRACK_LIMIT)
+    if let Some(regexp) = RegExp::new_with_backtrack_limit(&scope, pattern, flags, backtrack_limit)
     {
         return Ok(regexp);
     }
@@ -96,7 +96,7 @@ fn compile<'s>(
 
 #[cfg(test)]
 mod tests {
-    use std::pin::pin;
+    use std::{cell::Cell, pin::pin, rc::Rc};
 
     use super::*;
 
@@ -143,5 +143,58 @@ mod tests {
             assert_eq!(scope.get_current_context(), context);
             assert!(eval(scope, "originalRegExp.$1 === 'sentinel'").is_true());
         }
+    }
+
+    #[test]
+    fn native_regexp_treats_exhausted_backtracking_as_a_failed_match() {
+        moli_v8_test_util::ensure_v8();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let pattern = r"^([a-z]+)\1$";
+        let flags = RegExpCreationFlags::UNICODE_SETS;
+        let subject = v8::String::new(scope, "abcabc").unwrap();
+        let limited = compile(scope, pattern, flags, 1).unwrap();
+        let limited = NativeRegExp(Global::new(scope, limited));
+        assert_eq!(limited.is_match(scope, subject), Some(false));
+
+        let regular = NativeRegExp::new(scope, pattern, flags).unwrap();
+        assert_eq!(regular.is_match(scope, subject), Some(true));
+    }
+
+    #[test]
+    fn native_regexp_handle_and_context_have_independent_lifetimes() {
+        moli_v8_test_util::ensure_v8();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let context_released = Rc::new(Cell::new(false));
+        let (regexp, regexp_probe, context_probe) = {
+            let scope = pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let author_context = Context::new(scope, Default::default());
+            let scope = &mut v8::ContextScope::new(scope, author_context);
+            let regexp =
+                NativeRegExp::new(scope, "test", RegExpCreationFlags::UNICODE_SETS).unwrap();
+            let native_context = native_regexp_context(scope);
+            let released = Rc::clone(&context_released);
+            let context_probe = v8::Weak::with_guaranteed_finalizer(
+                scope,
+                native_context,
+                Box::new(move || released.set(true)),
+            );
+            let regexp_probe = v8::Weak::new(scope, &regexp.0);
+            (regexp, regexp_probe, context_probe)
+        };
+
+        isolate.low_memory_notification();
+        assert!(!regexp_probe.is_empty());
+        drop(regexp);
+        isolate.low_memory_notification();
+        assert!(regexp_probe.is_empty());
+        assert!(!context_probe.is_empty());
+        assert!(!context_released.get());
+        drop(isolate);
+        assert!(context_released.get());
     }
 }
