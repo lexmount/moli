@@ -239,10 +239,13 @@ impl ConcurrentParseTimeRuntime {
     pub(super) fn new_parser_owner(
         loader: ResourceRequestClient,
         stage: PageVmInitStage,
-        state: ParseTimeDriverState,
+        mut state: ParseTimeDriverState,
         mut page_vm: PageVm,
     ) -> Self {
         page_vm.set_target_stage(stage);
+        state
+            .buffered_document_preloads
+            .bind_document_preloads(page_vm.main_document_resource_loader());
         page_vm
             .vm_mut()
             .document_runtime

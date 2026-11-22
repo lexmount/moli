@@ -706,6 +706,9 @@ fn response_document_parser_with_mime(
     let decoder = new_document_response_decoder(headers, content_type, &state.final_url, None);
     state.response_links =
         crate::response_links::DocumentResponseLinks::parse(&state.final_url, headers);
+    state
+        .buffered_document_preloads
+        .set_response_script_preloads(&state.response_links.scripts);
     // Headers/defaults are observable even when no body chunk is ready yet.
     // A later BOM or decoder decision can still replace this tentative value.
     sync_state_document_character_set_from_decoder(&mut state, &decoder);

@@ -104,6 +104,19 @@ impl PreloadServer {
                                 "/timing-style" => ("text/css", css_timing_styles(&token)),
                                 "/timing-import" => ("text/css", format!("@import url('/timing-style?token={token}');")),
                                 "/timing-header" => ("text/html", "<!doctype html><body>Header preload timing".to_owned()),
+                                "/timing-parser-script-preloads-frame" => ("text/html", "<!doctype html><iframe src='/timing-parser-script-preloads'></iframe>".to_owned()),
+                                "/timing-parser-script-preloads" => ("text/html", r#"
+                                    <!doctype html><head>
+                                    <link rel="preload" as="script" href="/probe-asset?token=classic&auto=1&delay=150">
+                                    <script src="/probe-asset?token=classic&auto=1&delay=150"></script>
+                                    <link rel="preload" as="script" href="/probe-asset?token=defer&auto=1">
+                                    <script defer src="/probe-asset?token=defer&auto=1"></script>
+                                    <link rel="preload" as="script" crossorigin="anonymous" href="/probe-asset?token=cors&auto=1&delay=150">
+                                    <script crossorigin src="/probe-asset?token=cors&auto=1&delay=150"></script>
+                                    <link rel="preload" as="script" type="image/png" href="/probe-asset?token=unsupported&auto=1">
+                                    <script defer src="/probe-asset?token=unsupported&auto=1"></script>
+                                    </head><body>
+                                "#.to_owned()),
                                 "/timing-script-render-blocking-frame" => ("text/html", "<!doctype html><iframe src='/timing-script-render-blocking'></iframe>".to_owned()),
                                 "/timing-script-render-blocking" => ("text/html", r#"
                                     <!doctype html><head>
@@ -231,6 +244,9 @@ impl PreloadServer {
                                     asset.count.fetch_add(1, Ordering::AcqRel);
                                     asset.started.notify_waiters();
                                     if !query.contains_key("auto") { asset.wait(true).await; }
+                                    if let Some(delay) = query.get("delay").and_then(|delay| delay.parse().ok()) {
+                                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                                    }
                                     cache = query.get("cache").cloned().unwrap_or(cache);
                                     if query.get("as").is_some_and(|kind| kind == "image") {
                                         ("image/svg+xml", "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1'/></svg>".to_owned())
@@ -422,6 +438,67 @@ async fn response_header_preload_timings_retain_the_request_document() -> Result
                     .map(|asset| asset.count.load(Ordering::Acquire)),
                 Some(if source == "default" { 0 } else { 1 }),
                 "header preload must count actual network requests: {source}/{kind}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn parser_scripts_consume_matching_document_preloads() -> Result<()> {
+    for path in [
+        "timing-parser-script-preloads",
+        "timing-parser-script-preloads-frame",
+    ] {
+        let server = PreloadServer::spawn().await?;
+        let browser = Browser::new(AppConfig::default())?;
+        let mut page = browser.fetch(&format!("{}/{path}", server.origin)).await?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            page.evaluate_runtime_expression_with_await_async(
+                r#"(async () => {
+                    const target = document.querySelector('iframe')?.contentWindow ?? window;
+                    if (target.document.readyState !== 'complete') {
+                        await new Promise(resolve => target.addEventListener('load', resolve, {once: true}));
+                    }
+                    const timings = target.performance.getEntriesByType('resource').flatMap(entry => {
+                        const url = new URL(entry.name);
+                        return url.pathname === '/probe-asset'
+                            ? [[url.searchParams.get('token'), entry.initiatorType, entry.renderBlockingStatus]]
+                            : [];
+                    }).sort();
+                    return JSON.stringify([target.preloadExecuted, timings]);
+                })()"#,
+                true,
+            ),
+        )
+        .await??;
+        let (executions, timings): (usize, Vec<(String, String, String)>) =
+            serde_json::from_str(result["value"].as_str().context("parser preload timings")?)?;
+        assert_eq!(executions, 4, "{path}");
+        assert_eq!(
+            timings
+                .iter()
+                .map(|(name, initiator, status)| (
+                    name.as_str(),
+                    initiator.as_str(),
+                    status.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("classic", "link", "blocking"),
+                ("cors", "link", "blocking"),
+                ("defer", "link", "non-blocking"),
+                ("unsupported", "script", "non-blocking"),
+            ],
+            "{path}",
+        );
+        let assets = server.assets.lock();
+        for token in ["classic", "cors", "defer", "unsupported"] {
+            assert_eq!(
+                assets[token].count.load(Ordering::Acquire),
+                1,
+                "{path} {token}"
             );
         }
     }

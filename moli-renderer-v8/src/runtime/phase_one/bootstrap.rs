@@ -155,6 +155,9 @@ impl ConcurrentParseTimeRuntime {
     ) -> Result<ParseTimePageVmCreationOutcome> {
         let mut state = ParseTimeDriverState::new_xml(final_url.clone());
         state.response_links = response_links;
+        state
+            .buffered_document_preloads
+            .set_response_script_preloads(&state.response_links.scripts);
         state.document_character_set = document_character_set.to_owned();
         state
             .buffered_document_preloads

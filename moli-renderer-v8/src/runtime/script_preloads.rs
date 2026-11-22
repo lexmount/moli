@@ -15,15 +15,20 @@ use url::Url;
 use moli_script::script_element_nonce_is_nonceable;
 use parking_lot::Mutex;
 
+use crate::link_as::{LinkAsDestination, link_as_destination};
 use crate::modulepreload::{
     ModulepreloadAsState, modulepreload_as_state_from_attribute,
     modulepreload_media_attribute_matches, resolve_parser_network_resource_url,
 };
-use crate::network::ResourceRequestClient;
+use crate::network::{
+    ResourceRequestClient, context::DocumentResourceLoader, preloads::PreloadKey,
+};
 use crate::page_task_queue::RendererOwnerWakeSender;
 use crate::parser::{PreparedScript, ScriptSource};
 use crate::planning::{
-    SharedScriptSourceLoad, prepared_script_with_loaded_source, script_preload_network_result,
+    SharedScriptSourceLoad, external_script_credentials_mode, external_script_request_mode,
+    has_document_preload_for_script, prepared_script_with_loaded_source,
+    script_preload_network_result,
 };
 use crate::runtime::RendererBrowserContextRuntime;
 use crate::runtime::page_vm::{
@@ -52,6 +57,7 @@ pub(super) struct BufferedDocumentPreloadState {
     pub(super) entries: DocumentScriptPreloadStore,
     document_character_set: String,
     response_referrer_policy: Option<String>,
+    response_script_preloads: Vec<crate::response_links::ResponseScriptPreload>,
     script_fetch_requires_owner_admission: bool,
     response_csp_requires_parser_admission: bool,
     owner_wake: Option<RendererOwnerWakeSender>,
@@ -109,6 +115,7 @@ pub(super) struct BufferedScriptPreloadEntry {
 #[derive(Clone, Default)]
 pub(crate) struct DocumentScriptPreloadStore {
     entries: Arc<Mutex<HashMap<BufferedScriptPreloadKey, BufferedScriptPreloadEntry>>>,
+    document_loader: Option<DocumentResourceLoader>,
 }
 
 impl std::fmt::Debug for DocumentScriptPreloadStore {
@@ -166,7 +173,16 @@ impl DocumentScriptPreloadStore {
         let entry = entries
             .get(&key)
             .filter(|entry| entry.request.matches_script(script))?;
+        if self.has_document_preload(script) {
+            return None;
+        }
         Some((entry.load.clone(), entry.request.resource_type_hint))
+    }
+
+    fn has_document_preload(&self, script: &PreparedScript) -> bool {
+        self.document_loader
+            .as_ref()
+            .is_some_and(|loader| has_document_preload_for_script(loader, script))
     }
 
     pub(crate) fn shared_preload_for_script(
@@ -207,6 +223,7 @@ impl Default for BufferedDocumentPreloadState {
             entries: DocumentScriptPreloadStore::default(),
             document_character_set: "UTF-8".to_owned(),
             response_referrer_policy: None,
+            response_script_preloads: Vec::new(),
             script_fetch_requires_owner_admission: false,
             response_csp_requires_parser_admission: false,
             owner_wake: None,
@@ -222,6 +239,10 @@ impl Default for BufferedDocumentPreloadState {
 }
 
 impl BufferedDocumentPreloadState {
+    pub(super) fn bind_document_preloads(&mut self, loader: DocumentResourceLoader) {
+        self.entries.document_loader = Some(loader);
+    }
+
     pub(super) fn document_script_preload_store(&self) -> DocumentScriptPreloadStore {
         self.entries.clone()
     }
@@ -256,6 +277,9 @@ impl BufferedDocumentPreloadState {
             }
 
             let mut script = request.to_preload_script();
+            if self.entries.has_document_preload(&script) {
+                continue;
+            }
             // These classic preloads can start before a Document exists. The
             // parser's prepared consumer supplies the status at publication.
             script.fetch_metadata.render_blocking = false;
@@ -375,6 +399,23 @@ impl BufferedDocumentPreloadState {
         self.response_csp_requires_parser_admission = required;
     }
 
+    pub(super) fn set_response_script_preloads(
+        &mut self,
+        preloads: &[crate::response_links::ResponseScriptPreload],
+    ) {
+        self.response_script_preloads = preloads.to_vec();
+    }
+
+    fn main_document_scanner(&mut self, final_url: &Url) -> &mut IncrementalHtmlPreloadScanner {
+        self.main_document_scanner.get_or_insert_with(|| {
+            Box::new(
+                IncrementalHtmlPreloadScanner::new(final_url.clone())
+                    .with_document_referrer_policy(self.response_referrer_policy.clone())
+                    .with_response_script_preloads(&self.response_script_preloads),
+            )
+        })
+    }
+
     pub(super) fn append_to_main_document_scan(
         &mut self,
         final_url: &Url,
@@ -396,12 +437,7 @@ impl BufferedDocumentPreloadState {
         if html.is_empty() {
             return;
         }
-        let scanner = self.main_document_scanner.get_or_insert_with(|| {
-            Box::new(
-                IncrementalHtmlPreloadScanner::new(final_url.clone())
-                    .with_document_referrer_policy(self.response_referrer_policy.clone()),
-            )
-        });
+        let scanner = self.main_document_scanner(final_url);
         let batch = scanner.scan_chunk(html);
         self.meta_csp_preload_gate
             .note_scanner_seen(batch.discovered_meta_csp_count);
@@ -426,12 +462,7 @@ impl BufferedDocumentPreloadState {
             return;
         }
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
-        let scanner = self.main_document_scanner.get_or_insert_with(|| {
-            Box::new(
-                IncrementalHtmlPreloadScanner::new(final_url.clone())
-                    .with_document_referrer_policy(self.response_referrer_policy.clone()),
-            )
-        });
+        let scanner = self.main_document_scanner(final_url);
         let batch = scanner.scan_chunk(html);
         self.meta_csp_preload_gate
             .note_scanner_seen(batch.discovered_meta_csp_count);
@@ -832,6 +863,7 @@ struct BufferedPreloadScannerRequests {
     stylesheet_requests: Vec<BufferedStylesheetPreloadRequest>,
     image_requests: Vec<BufferedImagePreloadRequest>,
     seen: HashSet<BufferedPreloadKey>,
+    script_link_preloads: HashMap<PreloadKey, Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1076,6 +1108,12 @@ fn admit_script_preloads(
         service_worker_context,
     );
     for mut request in native_modules {
+        if state
+            .entries
+            .has_document_preload(&request.to_preload_script())
+        {
+            continue;
+        }
         let document = &page_vm.vm().document_runtime;
         request.fetch_metadata.render_blocking &= document
             .dom_host()
@@ -1279,6 +1317,27 @@ impl IncrementalHtmlPreloadScanner {
         self
     }
 
+    fn with_response_script_preloads(
+        self,
+        preloads: &[crate::response_links::ResponseScriptPreload],
+    ) -> Self {
+        let mut requests = self.tokenizer.sink.requests.borrow_mut();
+        for preload in preloads {
+            if let Some(key) = script_link_preload_key(
+                preload.url.clone(),
+                crate::types::ScriptKind::Classic,
+                &preload.metadata,
+            ) {
+                requests
+                    .script_link_preloads
+                    .entry(key)
+                    .or_insert_with(|| preload.metadata.integrity.clone());
+            }
+        }
+        drop(requests);
+        self
+    }
+
     pub(super) fn new(initiator_url: Url) -> Self {
         Self::with_meta_csp_mode(initiator_url, MetaCspScannerMode::CollectDescriptors)
     }
@@ -1434,6 +1493,44 @@ impl HtmlPreloadScannerSink {
         }
     }
 
+    fn maybe_note_script_link_preload(&self, tag: &Tag) {
+        let Some(rel) = html_attr_value(&tag.attrs, "rel") else {
+            return;
+        };
+        if !link_rel_includes_token(&rel, "preload")
+            || link_rel_includes_token(&rel, "modulepreload")
+            || link_rel_includes_token(&rel, "stylesheet")
+            || link_as_destination(html_attr_value(&tag.attrs, "as").as_deref())
+                != LinkAsDestination::Script
+            || !LinkAsDestination::Script
+                .preload_type_matches(html_attr_value(&tag.attrs, "type").as_deref())
+        {
+            return;
+        }
+        let Some(href) = html_attr_value(&tag.attrs, "href") else {
+            return;
+        };
+        let Some(url) = resolve_parser_network_resource_url(&self.base_url.borrow(), &href) else {
+            return;
+        };
+        let metadata = crate::planning::ScriptFetchMetadata::from_script_attributes(
+            html_attr_value(&tag.attrs, "crossorigin").as_deref(),
+            None,
+            None,
+            html_attr_value(&tag.attrs, "integrity").as_deref(),
+            None,
+            None,
+        );
+        if let Some(key) =
+            script_link_preload_key(url, crate::types::ScriptKind::Classic, &metadata)
+        {
+            self.requests
+                .borrow_mut()
+                .script_link_preloads
+                .insert(key, metadata.integrity);
+        }
+    }
+
     fn maybe_collect_script_preload(&self, tag: &Tag) {
         if matches!(self.meta_csp_mode, MetaCspScannerMode::StopAfterMeta)
             && self.seen_meta_csp_count.get() != 0
@@ -1492,6 +1589,20 @@ impl HtmlPreloadScannerSink {
             nonce,
             html_attr_value(&tag.attrs, "fetchpriority").as_deref(),
         );
+        if !requests.script_link_preloads.is_empty()
+            && script_link_preload_key(url.clone(), kind_hint, &fetch_metadata)
+                .and_then(|key| requests.script_link_preloads.get(&key))
+                .is_some_and(|integrity| {
+                    crate::subresource_integrity::integrity_metadata_allows_preload_consumption(
+                        integrity.as_deref().unwrap_or_default(),
+                        fetch_metadata.integrity.as_deref(),
+                    )
+                })
+        {
+            // Let the earlier link create the Document preload. The parser
+            // still fetches normally if that link is never admitted.
+            return;
+        }
         let async_attribute = html_attr_present(&tag.attrs, "async");
         let defer_attribute = html_attr_present(&tag.attrs, "defer");
         // Module fetches can publish their timing while the parser is paused.
@@ -1828,6 +1939,18 @@ impl HtmlPreloadScannerSink {
     }
 }
 
+fn script_link_preload_key(
+    url: Url,
+    kind: crate::types::ScriptKind,
+    metadata: &crate::planning::ScriptFetchMetadata,
+) -> Option<PreloadKey> {
+    PreloadKey::for_script(
+        url,
+        external_script_request_mode(kind, metadata),
+        external_script_credentials_mode(kind, metadata),
+    )
+}
+
 fn buffered_script_preload_resource_type(
     kind: crate::types::ScriptKind,
     mode: crate::types::ScriptMode,
@@ -1925,6 +2048,7 @@ impl TokenSink for HtmlPreloadScannerSink {
                 TokenSinkResult::RawData(Rawtext)
             }
             "link" => {
+                self.maybe_note_script_link_preload(&tag);
                 self.maybe_collect_modulepreload(&tag);
                 self.maybe_collect_stylesheet_preload(&tag);
                 TokenSinkResult::Continue

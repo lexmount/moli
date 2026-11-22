@@ -413,6 +413,12 @@ impl ResourceRequestClient {
         }
     }
 
+    pub(crate) fn can_consume_document_preload(&self, request: &Request) -> bool {
+        self.document_requests
+            .as_ref()
+            .is_some_and(|context| context.preloads.can_consume(request))
+    }
+
     // Looking up a Document response must not apply the transport's offline
     // policy: a miss can still be handled by a Service Worker. The request
     // entry points retain their normal policy and response validation.

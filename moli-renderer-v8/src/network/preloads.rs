@@ -39,7 +39,7 @@ impl std::error::Error for ConsumedPreloadError {}
 type PreloadResult = Result<DocumentPreloadResponse, String>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-struct PreloadKey {
+pub(crate) struct PreloadKey {
     url: Url,
     destination: &'static str,
     mode: RequestMode,
@@ -47,6 +47,19 @@ struct PreloadKey {
 }
 
 impl PreloadKey {
+    pub(crate) fn for_script(
+        url: Url,
+        mode: RequestMode,
+        credentials: RequestCredentialsMode,
+    ) -> Option<Self> {
+        matches!(url.scheme(), "http" | "https").then_some(Self {
+            url,
+            destination: "script",
+            mode,
+            credentials,
+        })
+    }
+
     fn from_request(request: &Request) -> Option<Self> {
         if request.method != "GET"
             || request.body.is_some()
@@ -80,6 +93,22 @@ impl PreloadKey {
             credentials: request.credentials_mode,
         })
     }
+
+    fn for_consumer(request: &Request) -> Option<Self> {
+        if request.priority_hints.link_preload {
+            return None;
+        }
+        // Fetch/XHR author headers make the request ineligible for preload
+        // consumption. DOM-initiated requests do not set the unsafe-request flag.
+        if matches!(
+            request.browser_request_metadata(),
+            Some(BrowserRequestMetadata::Fetch | BrowserRequestMetadata::Xhr)
+        ) && !request.request_headers.is_empty()
+        {
+            return None;
+        }
+        Self::from_request(request)
+    }
 }
 
 struct PreloadEntry {
@@ -108,6 +137,20 @@ struct PreloadMap {
     // Includes consumed entries, so retiring the Document also wakes consumers
     // waiting for a response that has not yet reached the loader.
     pending: Vec<Weak<PreloadEntry>>,
+}
+
+impl PreloadMap {
+    fn can_consume(&self, key: &PreloadKey, request: &Request) -> bool {
+        !self.retired
+            && self.entries.get(key).is_some_and(|entry| {
+                integrity_metadata_allows_preload_consumption(
+                    &entry.integrity,
+                    request
+                        .subresource_request_metadata()
+                        .and_then(|metadata| metadata.integrity.as_deref()),
+                )
+            })
+    }
 }
 
 #[derive(Clone, Default)]
@@ -147,31 +190,15 @@ impl DocumentPreloads {
         Some(DocumentPreloadProducer { entry })
     }
 
+    pub(crate) fn can_consume(&self, request: &Request) -> bool {
+        PreloadKey::for_consumer(request)
+            .is_some_and(|key| self.0.lock().can_consume(&key, request))
+    }
+
     pub(crate) fn consume(&self, request: &Request) -> Option<DocumentPreloadConsumer> {
-        if request.priority_hints.link_preload {
-            return None;
-        }
-        // Fetch/XHR author headers make the request ineligible for preload
-        // consumption. DOM-initiated requests do not set the unsafe-request flag.
-        if matches!(
-            request.browser_request_metadata(),
-            Some(BrowserRequestMetadata::Fetch | BrowserRequestMetadata::Xhr)
-        ) && !request.request_headers.is_empty()
-        {
-            return None;
-        }
-        let key = PreloadKey::from_request(request)?;
+        let key = PreloadKey::for_consumer(request)?;
         let mut map = self.0.lock();
-        if map.retired {
-            return None;
-        }
-        let entry = map.entries.get(&key)?;
-        if !integrity_metadata_allows_preload_consumption(
-            &entry.integrity,
-            request
-                .subresource_request_metadata()
-                .and_then(|metadata| metadata.integrity.as_deref()),
-        ) {
+        if !map.can_consume(&key, request) {
             return None;
         }
         let entry = map.entries.remove(&key)?;

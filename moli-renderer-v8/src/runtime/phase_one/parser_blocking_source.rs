@@ -23,7 +23,6 @@ pub(super) enum MainParserBlockingSourceDisposition {
 
 pub(super) fn prepare_main_parser_blocking_source_load(
     page_vm: &mut PageVm,
-    loader: &ResourceRequestClient,
     buffered_document_preloads: &mut BufferedDocumentPreloadState,
     script: &mut PreparedScript,
 ) -> MainParserBlockingSourceLoadDecision {
@@ -67,7 +66,6 @@ pub(super) fn prepare_main_parser_blocking_source_load(
             let source_load = spawn_parser_blocking_script_source_load(
                 page_vm,
                 script.clone(),
-                loader.clone(),
                 document_character_set,
             );
             arm_main_parser_source_load_continuation(page_vm, &source_load);
@@ -159,11 +157,12 @@ fn parser_blocking_script_element_csp_request(
 fn spawn_parser_blocking_script_source_load(
     page_vm: &mut PageVm,
     script: PreparedScript,
-    loader: ResourceRequestClient,
     document_character_set: String,
 ) -> crate::planning::SharedScriptSourceLoad {
     let request_resource_type = moli_fetch::RequestResourceType::ParserBlockingScript;
-    let resource_task_runner = page_vm.resource_task_runner();
+    let resource_loader = page_vm.main_document_resource_loader();
+    let resource_task_runner = resource_loader.task_runner();
+    let loader = resource_loader.request_client().clone();
     if page_vm
         .vm()
         .should_intercept_parser_script_source_fetch(&script)
@@ -173,7 +172,7 @@ fn spawn_parser_blocking_script_source_load(
             .vm_mut()
             .start_parser_script_source_fetch_interception(
                 script,
-                loader.clone(),
+                loader,
                 resource_task_runner,
                 browser_context_runtime,
                 Some(document_character_set),
@@ -185,12 +184,7 @@ fn spawn_parser_blocking_script_source_load(
     else {
         return crate::planning::SharedScriptSourceLoad::spawn_with_request_resource_type(
             script,
-            page_vm
-                .vm()
-                .current_main_document_resource_loader()
-                .expect("parser script requires its Document authority")
-                .fetch_context()
-                .request_origin(),
+            resource_loader.fetch_context().request_origin(),
             loader,
             resource_task_runner,
             Some(document_character_set),
@@ -201,12 +195,7 @@ fn spawn_parser_blocking_script_source_load(
     let document_url = page_vm.vm().document_runtime.document_url().clone();
     crate::planning::spawn_service_worker_aware_external_script_source_load(
         script,
-        page_vm
-            .vm()
-            .current_main_document_resource_loader()
-            .expect("parser script requires its Document authority")
-            .fetch_context()
-            .request_origin(),
+        resource_loader.fetch_context().request_origin(),
         loader,
         resource_task_runner,
         Some(document_character_set),

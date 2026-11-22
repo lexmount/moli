@@ -1414,10 +1414,13 @@ impl DocumentRuntime {
             if self.document_write_script_preloads.contains_key(&key) {
                 continue;
             }
+            let mut script = request.to_preload_script();
+            if crate::planning::has_document_preload_for_script(&resource_loader, &script) {
+                continue;
+            }
             let load_id = self.allocate_document_write_external_script_load_id();
             let target =
                 crate::types::DocumentWriteExternalScriptFetchTarget::new(task_owner, load_id);
-            let mut script = request.to_preload_script();
             script.fetch_metadata.render_blocking &= document_allows_render_blocking;
             let resource_type_hint = request.resource_type_hint();
             self.document_write_script_preloads.insert(
@@ -1516,7 +1519,12 @@ impl DocumentRuntime {
             return false;
         };
         let loader = resource_loader.request_client().clone();
-        let preload = self.take_matching_document_write_script_preload(&start.script);
+        let preload =
+            if crate::planning::has_document_preload_for_script(&resource_loader, &start.script) {
+                None
+            } else {
+                self.take_matching_document_write_script_preload(&start.script)
+            };
         let (target, preload_was_started, ready_completion) = match preload {
             Some(preload) => (preload.target, true, preload.ready_completion),
             None => {

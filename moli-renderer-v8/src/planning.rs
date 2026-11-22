@@ -466,6 +466,20 @@ async fn load_external_script_request_source_outcome(
     outcome
 }
 
+pub(crate) fn has_document_preload_for_script(
+    loader: &crate::network::context::DocumentResourceLoader,
+    script: &PreparedScript,
+) -> bool {
+    matches!(script.source, ScriptSource::External)
+        && loader
+            .request_client()
+            .can_consume_document_preload(&external_script_request(
+                script,
+                &loader.fetch_context().request_origin(),
+                None,
+            ))
+}
+
 pub(crate) fn external_script_request(
     script: &PreparedScript,
     request_origin: &moli_url::WebOrigin,

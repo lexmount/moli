@@ -1112,7 +1112,6 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     .claim_pending_script_preload_for_parser(&script);
                 let source_decision = prepare_main_parser_blocking_source_load(
                     page_vm,
-                    self.loader,
                     self.buffered_document_preloads,
                     &mut script,
                 );
@@ -1278,15 +1277,15 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     .document_runtime
                     .document_character_set()
                     .to_owned();
-                let resource_task_runner = page_vm.resource_task_runner();
+                let resource_loader = page_vm.main_document_resource_loader();
                 let accepted = claimed
                     || self
                         .scheduler
                         .recover_parse_time_async_handoff_with_load_delay_binding(
                             script,
-                            self.loader,
-                            page_vm.vm().current_main_document_resource_loader().expect("parser script requires its Document authority").fetch_context().request_origin(),
-                            resource_task_runner,
+                            resource_loader.request_client(),
+                            resource_loader.fetch_context().request_origin(),
+                            resource_loader.task_runner(),
                             shared_preload,
                             Some(&document_character_set),
                             |_| {
@@ -1703,17 +1702,12 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             .document_runtime
             .document_character_set()
             .to_owned();
-        let resource_task_runner = page_vm.resource_task_runner();
+        let resource_loader = page_vm.main_document_resource_loader();
         let _ = self.scheduler.accept_parser_discovered_async_candidate(
             script,
-            self.loader,
-            page_vm
-                .vm()
-                .current_main_document_resource_loader()
-                .expect("parser script requires its Document authority")
-                .fetch_context()
-                .request_origin(),
-            resource_task_runner,
+            resource_loader.request_client(),
+            resource_loader.fetch_context().request_origin(),
+            resource_loader.task_runner(),
             shared_preload,
             Some(&document_character_set),
             |script| {
