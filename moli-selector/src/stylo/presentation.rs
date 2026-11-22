@@ -26,7 +26,11 @@ use style_traits::{ParsingMode, ToCss};
 
 use crate::dom::native::Element;
 
-use super::{presentational_hints::synthesize_hidden_presentational_hint, query::QueryElement};
+use super::{
+    atoms::normalized_direction,
+    presentational_hints::synthesize_hidden_presentational_hint,
+    query::{QueryElement, element_uses_auto_directionality},
+};
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
@@ -196,22 +200,17 @@ fn append_html_direction_declaration(
     // isolation rule is separate, and layout consumes both computed values.
     // Per WHATWG HTML §15.3.5, dir="auto" and <bdi> without valid dir="ltr|rtl"
     // resolve their directionality from first-strong text direction.
-    let direction = match element.attribute("dir") {
-        Some(value) if value.eq_ignore_ascii_case("ltr") => Some(Direction::Ltr),
-        Some(value) if value.eq_ignore_ascii_case("rtl") => Some(Direction::Rtl),
-        Some(value) if value.eq_ignore_ascii_case("auto") => {
-            Some(match query_element.resolved_direction() {
-                CssDirection::Ltr => Direction::Ltr,
-                CssDirection::Rtl => Direction::Rtl,
-            })
-        }
-        _ if element.local_name() == "bdi" => Some(match query_element.resolved_direction() {
+    let direction = element
+        .attribute_ns("", "dir")
+        .and_then(normalized_direction)
+        .or_else(|| {
+            element_uses_auto_directionality(element).then(|| query_element.resolved_direction())
+        });
+    if let Some(direction) = direction {
+        let direction = match direction {
             CssDirection::Ltr => Direction::Ltr,
             CssDirection::Rtl => Direction::Rtl,
-        }),
-        _ => None,
-    };
-    if let Some(direction) = direction {
+        };
         block.push(
             PropertyDeclaration::Direction(direction),
             Importance::Normal,

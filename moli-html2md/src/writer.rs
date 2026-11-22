@@ -140,6 +140,11 @@ impl<'a> Writer<'a> {
         self.pending_text.push_str(text);
     }
 
+    pub(crate) fn bidi_controls(&mut self, controls: &str) {
+        // Generated formatting controls do not supply a readable name.
+        self.pending_text.push_str(controls);
+    }
+
     fn flush_pending_text(&mut self) {
         if self.pending_text.is_empty() {
             return;

@@ -18,6 +18,8 @@ mod element;
 // This logic is intentionally split from `element` because it changes with web
 // platform semantics, while the element adapter should stay mostly structural.
 mod pseudo;
+pub(super) use pseudo::element_uses_auto_directionality;
+pub use pseudo::html_auto_directionality_root;
 pub(crate) use pseudo::html_directionality;
 
 use style::{

@@ -77,6 +77,7 @@ pub use invalidation::{
     stylo_stylesheet_source_scope_fallback_roots,
 };
 pub use presentation::is_svg_presentation_attribute_name;
+pub use query::html_auto_directionality_root;
 pub(crate) use query::html_directionality;
 use query::{QueryDocument, QueryElement, QueryNode};
 #[cfg(test)]

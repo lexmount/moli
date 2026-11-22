@@ -2,7 +2,10 @@ use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use dom::ElementState as StyloElementState;
 use indexmap::IndexSet;
-use moli_selector::StyloStyleSourceScope as StyleSourceScope;
+use moli_selector::{
+    CssDirection, StyloStyleSourceScope as StyleSourceScope, html_auto_directionality_root,
+    html_directionality,
+};
 use smallvec::SmallVec;
 
 use crate::{
@@ -190,6 +193,7 @@ impl MoliStyleEngine {
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
     ) {
+        self.invalidate_direction_hint_subtrees_for_mutations(world, host, effects);
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(std::time::Instant::now);
         let source_scope_started = profile_enabled.then(std::time::Instant::now);
@@ -244,6 +248,7 @@ impl MoliStyleEngine {
             // Exhausted fragments can still contribute detached roots and source
             // ownership. Resolve these against the full history before pruning.
             self.invalidate_detached_style_subtrees_for_mutations(host, &effects);
+            self.invalidate_direction_hint_subtrees_for_mutations(world, host, &effects);
             let source_scope = source_scope_for_mutations(host, &effects);
             let merged_count = effects.len();
             retain_live_structural_mutation_effects(host, &mut effects);
@@ -277,6 +282,43 @@ impl MoliStyleEngine {
                 source_scope,
                 PendingStyleInvalidationCause::Mutation(pending_effects),
             );
+        }
+    }
+
+    fn invalidate_direction_hint_subtrees_for_mutations(
+        &self,
+        world: &DocumentStyleWorld,
+        host: &DomHost,
+        effects: &[StyleMutationEffect],
+    ) {
+        let mut roots = effects
+            .iter()
+            .filter_map(|effect| {
+                let parent = match effect {
+                    StyleMutationEffect::CharacterData { node } => {
+                        let node = host.node(*node)?;
+                        node.as_text()?;
+                        node.parent_node()?
+                    }
+                    StyleMutationEffect::ChildList { parent, .. } => *parent,
+                    StyleMutationEffect::Attribute { element, name, .. } if name == "dir" => {
+                        // A dir change can also admit or exclude this subtree's
+                        // text from the enclosing element's auto-direction scan.
+                        let root = host
+                            .parent_node(*element)
+                            .and_then(|parent| html_auto_directionality_root(host, parent));
+                        return Some(root.unwrap_or(*element));
+                    }
+                    _ => return None,
+                };
+                html_auto_directionality_root(host, parent)
+            })
+            .peekable();
+        if roots.peek().is_some() {
+            // The hint contributes to inherited computed style even when no
+            // stylesheet selector depends on direction.
+            self.invalidation_cleanup_for_world(world)
+                .invalidate_subtrees(host, roots);
         }
     }
 
@@ -402,6 +444,16 @@ impl MoliStyleEngine {
         };
         let source_scope = source_scope_for_element_state_change(host, element, state);
         let world = self.world_for_document(document);
+        if state.intersects(StyloElementState::LTR | StyloElementState::RTL)
+            && html_auto_directionality_root(host, element) == Some(element)
+            && old_state.is_none_or(|old| {
+                let is_rtl = html_directionality(host, element) == CssDirection::Rtl;
+                old.contains(StyloElementState::RTL) != is_rtl
+            })
+        {
+            self.invalidation_cleanup_for_world(&world)
+                .invalidate_subtrees(host, [element]);
+        }
         self.queue_style_invalidation_scope(
             document,
             &world,
