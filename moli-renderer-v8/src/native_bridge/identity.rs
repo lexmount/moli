@@ -144,6 +144,7 @@ pub(crate) enum ComputedStyleTargetKey {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum DomTokenListKind {
+    Blocking,
     Class,
     Part,
     Rel,

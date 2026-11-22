@@ -315,6 +315,10 @@ pub(super) fn class_list_supports_callback<'s>(
         return;
     };
     match kind {
+        DomTokenListKind::Blocking => {
+            rv.set_bool(parsed.token.eq_ignore_ascii_case("render"));
+            return;
+        }
         DomTokenListKind::Class | DomTokenListKind::Part => {
             throw_type_error(scope, "DOMTokenList has no supported tokens.");
             return;

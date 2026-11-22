@@ -3066,3 +3066,57 @@ fn svg_svg_element_deselect_all_clears_the_owner_document_selection() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn blocking_token_lists_follow_their_element_and_forward_the_original_value() {
+    let mut vm = new_storage_test_vm("https://blocking-tokens.test/");
+    let result = vm.eval(
+        r#"
+        (() => {
+              function assert(value, message) {
+                if (!value) throw new Error(message);
+              }
+              const detached = document.implementation.createHTMLDocument("");
+              for (const ownerDocument of [document, detached]) {
+                for (const tag of ["link", "script", "style"]) {
+                  const element = ownerDocument.createElement(tag);
+                  const blocking = element.blocking;
+                  assert(Object.prototype.toString.call(blocking) === "[object DOMTokenList]", `${tag} blocking type`);
+                  assert(blocking === element.blocking, `${tag} blocking SameObject`);
+                  assert(blocking.supports("ReNdEr") && !blocking.supports("extra"), `${tag} supported tokens`);
+                  element.blocking = "render extra render";
+                  assert(blocking.value === "render extra render" && blocking.length === 2, `${tag} PutForwards`);
+                  blocking.remove("extra");
+                  assert(element.getAttribute("blocking") === "render", `${tag} mutation reflects`);
+                  element.removeAttribute("blocking");
+                  assert(blocking.length === 0 && blocking.value === "", `${tag} attribute removal updates list`);
+                }
+
+              }
+              const script = detached.createElement("script");
+              const blocking = script.blocking;
+              document.adoptNode(script);
+              assert(script.blocking === blocking, "blocking identity survives adoption");
+              blocking.value = "render";
+              assert(script.getAttribute("blocking") === "render", "adopted blocking reflects");
+
+              const setter = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, "blocking").set;
+              const raw = {toString() { throw new Error("unexpected coercion"); }};
+              let observed;
+              let reads = 0;
+              const target = {set value(value) { observed = value; }};
+              Object.defineProperty(script, "blocking", {get() { ++reads; return target; }});
+              setter.call(script, raw);
+              assert(reads === 1 && observed === raw, "PutForwards reads the getter and passes the original value");
+              assert(blocking.value === "render", "PutForwards respects the overridden target");
+              const unbranded = {get blocking() { ++reads; return target; }};
+              let error;
+              try { setter.call(unbranded, raw); } catch (caught) { error = caught; }
+              assert(error instanceof TypeError && reads === 1, "receiver check precedes PutForwards");
+
+              return "ok";
+        })();
+        "#,
+    ).unwrap();
+    assert_eq!(result, "ok");
+}
