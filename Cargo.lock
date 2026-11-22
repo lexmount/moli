@@ -3566,6 +3566,7 @@ dependencies = [
  "app_units",
  "cssparser",
  "euclid",
+ "icu_properties",
  "indexmap",
  "moli-css-parse",
  "moli-dom",

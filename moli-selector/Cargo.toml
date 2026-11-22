@@ -9,6 +9,7 @@ app_units = "0.7.8"
 cssparser = "0.38"
 dom = { package = "stylo_dom", version = "0.22" }
 euclid = "0.22"
+icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 moli-css-parse = { path = "../moli-css-parse" }
 moli-dom = { path = "../moli-dom" }
 indexmap = "2.14.2"
