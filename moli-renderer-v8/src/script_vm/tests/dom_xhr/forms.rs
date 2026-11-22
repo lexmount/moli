@@ -632,63 +632,39 @@ fn live_input_pattern_preserves_non_ascii_whitespace_in_email_values() {
 }
 
 #[test]
-fn live_input_pattern_shares_valid_and_invalid_patterns_between_controls() {
-    let mut vm = new_storage_test_vm("https://input-pattern-cache.test/");
-    let host = vm.context_host_weak_for_test().upgrade().unwrap();
-    let cache_state = || host.borrow().input_pattern_cache_state_for_test();
+fn live_input_pattern_checks_each_email_against_the_current_pattern() {
+    let mut vm = new_storage_test_vm("https://email-pattern.test/");
 
     let result = vm
         .eval(
             r#"
-globalThis.patternProbe = document.createElement('input');
-globalThis.patternPeer = document.createElement('input');
-patternProbe.type = 'email';
-patternProbe.multiple = true;
-patternProbe.pattern = '.*@site\\.test';
-patternPeer.pattern = patternProbe.pattern;
-patternPeer.value = 'peer@site.test';
-patternProbe.value = 'one@site.test,two@site.test';
-const firstRead = patternProbe.validity.patternMismatch;
-const bothMatch = patternProbe.checkValidity();
-patternProbe.value = 'one@site.test,two@other.test';
-[firstRead, bothMatch, patternProbe.validity.patternMismatch, patternPeer.checkValidity()].join('|');
+(() => {
+  const input = document.createElement('input');
+  input.type = 'email';
+  input.multiple = true;
+  const pattern = '.*@site\\.test';
+  const validity = () => `${input.validity.patternMismatch}/${input.checkValidity()}`;
+  input.pattern = pattern;
+  input.value = 'one@site.test,two@site.test';
+  const bothMatch = validity();
+  input.value = 'one@site.test,two@other.test';
+  const secondMismatch = validity();
+
+  // The full-match wrapper would balance this invalid pattern's parentheses.
+  input.setAttributeNS(null, 'pattern', 'prefix)|(suffix');
+  const invalidPattern = validity();
+  input.removeAttribute('pattern');
+  const removedPattern = validity();
+  input.pattern = pattern;
+  return [bothMatch, secondMismatch, invalidPattern, removedPattern, validity()].join('|');
+})()
 "#,
         )
         .unwrap();
-    assert_eq!(result, "false|true|true|true");
-    assert_eq!(cache_state(), (1, 1));
-
-    // This source has unmatched parentheses that the full-match wrapper
-    // would balance. It is still an invalid HTML pattern.
-    vm.eval("patternProbe.setAttributeNS(null, 'pattern', 'prefix)|(suffix')")
-        .unwrap();
-    assert_eq!(cache_state(), (1, 1));
     assert_eq!(
-        vm.eval("[patternProbe.validity.patternMismatch, patternProbe.checkValidity()].join('|')")
-            .unwrap(),
-        "false|true"
+        result,
+        "false/true|true/false|false/true|false/true|true/false"
     );
-    assert_eq!(cache_state(), (2, 2));
-
-    assert_eq!(
-        vm.eval(
-            r#"
-const originalPattern = patternPeer.pattern;
-patternPeer.pattern = patternProbe.pattern;
-const peerValid = patternPeer.checkValidity();
-patternProbe.removeAttribute('pattern');
-const removedMismatch = patternProbe.validity.patternMismatch;
-patternProbe.pattern = originalPattern;
-[peerValid, removedMismatch, patternProbe.validity.patternMismatch].join('|');
-"#,
-        )
-        .unwrap(),
-        "true|false|true"
-    );
-    assert_eq!(cache_state(), (2, 2));
-
-    drop(vm);
-    assert_eq!(cache_state(), (0, 2));
 }
 
 #[test]

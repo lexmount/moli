@@ -1,6 +1,3 @@
-use std::{cell::RefCell, rc::Rc};
-
-use hashlink::LinkedHashMap;
 use v8::RegExpCreationFlags;
 
 use crate::custom_elements::is_form_associated_custom_element_handle;
@@ -14,7 +11,7 @@ use moli_dom::forms::{
     text_control_suffers_too_long as form_text_control_suffers_too_long,
     text_control_suffers_too_short as form_text_control_suffers_too_short,
 };
-use moli_v8_util::{NativeRegExp, NativeRegExpCompileError};
+use moli_v8_util::NativeRegExp;
 use moli_webapi::validity_state::ValidityStateDeclaration;
 
 use super::super::{
@@ -31,57 +28,6 @@ struct SetCustomValidityArgs {
 }
 
 type ControlValidity = FormControlValidity;
-
-// Bound the retained V8 handles even when a long-lived page changes patterns.
-const MAX_CACHED_INPUT_PATTERNS: usize = 256;
-
-#[derive(Default)]
-pub(in crate::native_bridge) struct InputPatternCache {
-    entries: RefCell<LinkedHashMap<Box<str>, Option<Rc<NativeRegExp>>>>,
-    #[cfg(test)]
-    compilation_attempts: std::cell::Cell<usize>,
-}
-
-impl InputPatternCache {
-    fn get_or_compile(
-        &self,
-        scope: &mut v8::PinScope<'_, '_>,
-        source: &str,
-    ) -> Option<Rc<NativeRegExp>> {
-        if let Some(cached) = self.entries.borrow_mut().to_back(source) {
-            return cached.clone();
-        }
-        #[cfg(test)]
-        self.compilation_attempts
-            .set(self.compilation_attempts.get() + 1);
-        let regexp = match compile_html_pattern(scope, source) {
-            Ok(regexp) => Some(Rc::new(regexp)),
-            Err(NativeRegExpCompileError::InvalidPattern) => None,
-            Err(NativeRegExpCompileError::Unavailable) => return None,
-        };
-        let mut entries = self.entries.borrow_mut();
-        entries.insert(source.into(), regexp.clone());
-        if entries.len() > MAX_CACHED_INPUT_PATTERNS {
-            entries.pop_front();
-        }
-        regexp
-    }
-
-    pub(in crate::native_bridge) fn clear(&mut self) {
-        self.entries.get_mut().clear();
-    }
-}
-
-impl PageScriptHost {
-    #[cfg(test)]
-    pub(crate) fn input_pattern_cache_state_for_test(&self) -> (usize, usize) {
-        let cache = &self.input_pattern_cache;
-        (
-            cache.entries.borrow().len(),
-            cache.compilation_attempts.get(),
-        )
-    }
-}
 
 pub(in crate::native_bridge) fn form_validate_for_submission(
     scope: &mut v8::PinScope<'_, '_>,
@@ -406,7 +352,7 @@ fn control_validity(
     ControlValidity {
         value_missing: control_suffers_required_value_missing(runtime, handle, element),
         type_mismatch: control_suffers_type_mismatch(runtime, handle, element),
-        pattern_mismatch: control_suffers_pattern_mismatch(scope, runtime, element),
+        pattern_mismatch: control_suffers_pattern_mismatch(scope, element),
         too_long: control_suffers_too_long(runtime, handle, element),
         too_short: control_suffers_too_short(runtime, handle, element),
         range_underflow: control_suffers_range_underflow(runtime, handle, element),
@@ -583,11 +529,7 @@ fn control_suffers_type_mismatch(
     )
 }
 
-fn control_suffers_pattern_mismatch(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime: &PageScriptHost,
-    element: &Element,
-) -> bool {
+fn control_suffers_pattern_mismatch(scope: &mut v8::PinScope<'_, '_>, element: &Element) -> bool {
     if !element.is_html_input()
         || !element_type_supports_intrinsic_validation(element)
         || !element.input_type().supports_pattern()
@@ -601,7 +543,7 @@ fn control_suffers_pattern_mismatch(
     if value.is_empty() {
         return false;
     }
-    let Some(pattern) = runtime.input_pattern_cache.get_or_compile(scope, pattern) else {
+    let Some(pattern) = compile_html_pattern(scope, pattern) else {
         return false;
     };
     if element.input_type() == InputType::Email && element.has_attribute("multiple") {
@@ -614,66 +556,28 @@ fn control_suffers_pattern_mismatch(
 }
 
 pub(crate) fn v8_pattern_is_usable(scope: &mut v8::PinScope<'_, '_>, pattern: &str) -> Option<()> {
-    NativeRegExp::validate(scope, pattern, RegExpCreationFlags::UNICODE_SETS).ok()
+    NativeRegExp::new(scope, pattern, RegExpCreationFlags::UNICODE_SETS).map(|_| ())
 }
 
-fn compile_html_pattern(
-    scope: &mut v8::PinScope<'_, '_>,
+fn compile_html_pattern<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     pattern: &str,
-) -> Result<NativeRegExp, NativeRegExpCompileError> {
+) -> Option<NativeRegExp<'s>> {
     // HTML validates the standalone source before anchoring it; invalid source
     // must not become usable merely because the wrapper balances its groups.
-    NativeRegExp::validate(scope, pattern, RegExpCreationFlags::UNICODE_SETS)?;
+    v8_pattern_is_usable(scope, pattern)?;
     let anchored_pattern = format!("^(?:{pattern})$");
     NativeRegExp::new(scope, &anchored_pattern, RegExpCreationFlags::UNICODE_SETS)
 }
 
 fn pattern_mismatches_value(
     scope: &mut v8::PinScope<'_, '_>,
-    pattern: &NativeRegExp,
+    pattern: &NativeRegExp<'_>,
     value: &str,
 ) -> bool {
     v8_string(scope, value)
         .and_then(|subject| pattern.is_match(scope, subject))
         .is_some_and(|matched| !matched)
-}
-
-#[cfg(test)]
-#[test]
-fn input_pattern_cache_releases_evicted_patterns() {
-    crate::ensure_v8_for_test();
-    let mut isolate = v8::Isolate::new(Default::default());
-    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
-    let scope = &mut scope.init();
-    let context = v8::Context::new(scope, Default::default());
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let mut cache = InputPatternCache::default();
-    let active = cache.get_or_compile(scope, "first").unwrap();
-    let evicted = Rc::downgrade(&cache.get_or_compile(scope, "second").unwrap());
-    for index in 2..MAX_CACHED_INPUT_PATTERNS {
-        assert!(
-            cache
-                .get_or_compile(scope, &format!("pattern{index}"))
-                .is_some()
-        );
-    }
-    let touched = cache.get_or_compile(scope, "first").unwrap();
-    assert!(Rc::ptr_eq(&active, &touched));
-    drop(touched);
-    assert_eq!(cache.compilation_attempts.get(), MAX_CACHED_INPUT_PATTERNS);
-
-    cache.get_or_compile(scope, "newest").unwrap();
-    assert_eq!(cache.entries.borrow().len(), MAX_CACHED_INPUT_PATTERNS);
-    assert!(cache.entries.borrow().contains_key("first"));
-    assert!(evicted.upgrade().is_none());
-
-    let active_weak = Rc::downgrade(&active);
-    cache.clear();
-    assert!(cache.entries.borrow().is_empty());
-    let subject = v8_string(scope, "first").unwrap();
-    assert_eq!(active.is_match(scope, subject), Some(true));
-    drop(active);
-    assert!(active_weak.upgrade().is_none());
 }
 
 fn control_suffers_too_long(

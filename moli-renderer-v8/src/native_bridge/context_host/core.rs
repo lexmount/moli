@@ -394,7 +394,6 @@ impl PageScriptHost {
             page_default_context: None,
             common: Rc::new(crate::common_runtime::CommonRuntimeState::default()),
             bridge: NativeDomBridge::new(bindings),
-            input_pattern_cache: Default::default(),
             dom_agent_state: crate::runtime::RendererDomAgentState::new(
                 backend_node_registry.clone(),
             ),

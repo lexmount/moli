@@ -257,7 +257,6 @@ pub(in crate::native_bridge) use self::text_control::{
     text_control_set_selection_range_callback, textarea_value_getter_function,
     textarea_value_setter_function,
 };
-pub(in crate::native_bridge) use self::validation::InputPatternCache;
 pub(crate) use self::validation::control_has_datalist_ancestor;
 pub(crate) use self::validation::v8_pattern_is_usable;
 pub(in crate::native_bridge) use self::validation::{
