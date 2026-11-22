@@ -22,7 +22,7 @@ pub use microtasks::*;
 pub use object_readers::*;
 pub use promises::*;
 pub use properties::*;
-pub use regexp::NativeRegExp;
+pub use regexp::{NativeRegExp, NativeRegExpCompileError};
 pub use strings::*;
 pub use symbols::*;
 
