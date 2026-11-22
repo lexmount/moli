@@ -306,7 +306,7 @@ impl RendererResourceScheduler {
                             from_service_worker,
                         );
                     }
-                    Some(Err(_)) => context.record_failure(&script.url),
+                    Some(Err(_)) => context.record_failure(&observed_request),
                     _ => {}
                 }
             }

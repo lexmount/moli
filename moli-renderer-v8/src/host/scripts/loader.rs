@@ -10,7 +10,10 @@ use crate::{
         },
     },
 };
-use moli_script::{ScriptPreparationDisposition, script_element_nonce_is_nonceable};
+use moli_script::{
+    ScriptPreparationDisposition, script_element_nonce_is_nonceable,
+    script_fetch_is_render_blocking,
+};
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -172,11 +175,37 @@ impl ScriptElementLoader {
         node: NativeNodeId,
         options: ScriptElementLoaderOptions,
     ) -> PreparedScriptElementStart {
-        let preparation = RuntimeScriptPreparationContext::capture(dom_host, document, node);
+        let mut preparation = RuntimeScriptPreparationContext::capture(dom_host, document, node);
         let decision = reject_unresolvable_external_script_src(
             &preparation.base_url,
             decide_runtime_script_start(dom_host, node, options),
         );
+        if let RuntimeScriptStartDecision::Queue {
+            kind, source_kind, ..
+        } = &decision
+            && let Some(element) = dom_host
+                .node(node)
+                .filter(|node| node.is_connected())
+                .and_then(Node::as_element)
+                .filter(|element| element.is_html_script())
+        {
+            let document_allows_render_blocking =
+                dom_host
+                    .owner_document_handle(node)
+                    .is_some_and(|document| {
+                        dom_host
+                            .dom()
+                            .document_allows_adding_render_blocking_elements(document)
+                    });
+            preparation.fetch_metadata.render_blocking = script_fetch_is_render_blocking(
+                *kind,
+                *source_kind,
+                preparation.fetch_metadata.parser_inserted,
+                element.has_attribute("async") || element.has_attribute("defer"),
+                element.attribute_ns("", "blocking"),
+                document_allows_render_blocking,
+            );
+        }
         PreparedScriptElementStart {
             preparation,
             decision,

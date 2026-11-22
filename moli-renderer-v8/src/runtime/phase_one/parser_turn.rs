@@ -776,11 +776,9 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 .and_then(|applied| applied.network_result.as_deref())
                 && let Some(script) = prepared_script.as_ref()
             {
-                page_vm.vm_mut().record_script_subresource_network_result(
-                    script.initiator_url.clone(),
-                    script.url.clone(),
-                    network_result,
-                );
+                page_vm
+                    .vm_mut()
+                    .record_script_subresource_network_result(script, network_result);
             }
             if let (Some(script_handle), Some(prepared_script)) =
                 (parser_blocking_script_handle, prepared_script)
@@ -1250,11 +1248,9 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                         .await
                     && let Some(network_result) = applied.network_result.as_deref()
                 {
-                    page_vm.vm_mut().record_script_subresource_network_result(
-                        script.initiator_url.clone(),
-                        script.url.clone(),
-                        network_result,
-                    );
+                    page_vm
+                        .vm_mut()
+                        .record_script_subresource_network_result(&script, network_result);
                 }
                 bind_parser_owned_script_handle(page_vm, &mut script);
                 let _ = page_vm
@@ -1334,11 +1330,9 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                         .await
                     && let Some(network_result) = applied.network_result.as_deref()
                 {
-                    page_vm.vm_mut().record_script_subresource_network_result(
-                        script.initiator_url.clone(),
-                        script.url.clone(),
-                        network_result,
-                    );
+                    page_vm
+                        .vm_mut()
+                        .record_script_subresource_network_result(&script, network_result);
                 }
                 bind_parser_owned_script_handle(page_vm, &mut script);
                 let _ = page_vm

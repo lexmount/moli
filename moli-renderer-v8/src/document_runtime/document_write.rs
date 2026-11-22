@@ -1387,6 +1387,10 @@ impl DocumentRuntime {
             return;
         };
         let document_url = self.document_url().clone();
+        let document_allows_render_blocking = self
+            .dom_host
+            .dom()
+            .document_allows_adding_render_blocking_elements(self.document_handle());
         for request in requests {
             if !request.is_parser_blocking_classic() {
                 continue;
@@ -1413,7 +1417,8 @@ impl DocumentRuntime {
             let load_id = self.allocate_document_write_external_script_load_id();
             let target =
                 crate::types::DocumentWriteExternalScriptFetchTarget::new(task_owner, load_id);
-            let script = request.to_preload_script();
+            let mut script = request.to_preload_script();
+            script.fetch_metadata.render_blocking &= document_allows_render_blocking;
             let resource_type_hint = request.resource_type_hint();
             self.document_write_script_preloads.insert(
                 key,
@@ -1441,13 +1446,15 @@ impl DocumentRuntime {
                     Some(resource_type_hint),
                 )
                 .await;
+                let mut script = script;
+                script.source_fetch_timing = outcome.fetch_timing;
                 let _ = completion_tx.send_document_write_external_script(
                     crate::types::DocumentWriteExternalScriptLoadCompletion::new(
                         target,
                         outcome.source_result,
                         outcome.network_result,
                         network_attribution,
-                    ),
+                    ).with_script(script),
                 );
             });
         }
@@ -1563,13 +1570,16 @@ impl DocumentRuntime {
                     None,
                 )
                 .await;
+            let mut script = script_for_load;
+            script.source_fetch_timing = outcome.fetch_timing;
             let _ = completion_tx.send_document_write_external_script(
                 crate::types::DocumentWriteExternalScriptLoadCompletion::new(
                     target,
                     outcome.source_result,
                     outcome.network_result,
                     network_attribution,
-                ),
+                )
+                .with_script(script),
             );
         });
         true

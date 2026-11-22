@@ -1060,8 +1060,7 @@ impl ScriptVm {
                         if script.kind == crate::types::ScriptKind::Module {
                             if let Some(network_result) = source_network_result.as_deref() {
                                 self.record_script_subresource_network_result(
-                                    script.initiator_url.clone(),
-                                    script.url.clone(),
+                                    &script,
                                     network_result,
                                 );
                             }
@@ -1081,11 +1080,7 @@ impl ScriptVm {
                             "flush_pending_work executing ready dynamic script"
                         );
                         if let Some(network_result) = source_network_result.as_deref() {
-                            self.record_script_subresource_network_result(
-                                script.initiator_url.clone(),
-                                script.url.clone(),
-                                network_result,
-                            );
+                            self.record_script_subresource_network_result(&script, network_result);
                         }
                         let document_owner_before_run =
                             self.current_main_document_task_owner().expect(
@@ -1240,11 +1235,7 @@ impl ScriptVm {
                             return Ok(RuntimePendingWorkFlushOutcome::Complete);
                         }
                         if let Some(network_result) = source_network_result.as_deref() {
-                            self.record_script_subresource_network_result(
-                                script.initiator_url.clone(),
-                                script.url.clone(),
-                                network_result,
-                            );
+                            self.record_script_subresource_network_result(&script, network_result);
                         }
                         self.record_runtime_warning(format_args!(
                             "dynamic script load failed for `{}`: {message}",

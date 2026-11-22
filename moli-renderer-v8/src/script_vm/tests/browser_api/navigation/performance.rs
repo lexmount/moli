@@ -596,7 +596,13 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
         "void 0;".to_owned(),
     ));
 
-    vm.record_script_subresource_network_result(document_url, script_url, &response);
+    vm.record_parser_script_subresource_network_result(
+        document_url,
+        script_url,
+        &response,
+        None,
+        None,
+    );
 
     let result = vm
         .eval(

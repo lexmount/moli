@@ -423,6 +423,7 @@ async fn load_external_script_request_source_outcome(
 ) -> PreparedScriptSourceLoadOutcome {
     let started = std::time::Instant::now();
     let start_unix_millis = moli_time::unix_epoch_millis();
+    let render_blocking = request.render_blocking();
     let cancel = moli_fetch::FetchCancelHandle::new();
     // Box the streaming fetch future so parser/script planning does not
     // inherit the chunk collector's larger state machine across awaits.
@@ -460,6 +461,7 @@ async fn load_external_script_request_source_outcome(
         start_unix_millis,
         completed: std::time::Instant::now(),
         native: Some(cancel.response_timing()),
+        render_blocking,
     }));
     outcome
 }
@@ -488,6 +490,7 @@ pub(crate) fn external_script_request(
                 .unwrap_or_else(|| script_fetch_resource_type(script.kind, script.mode)),
         )
         .with_script_fetch_metadata(script_fetch_request_metadata(script))
+        .with_render_blocking(script.fetch_metadata.render_blocking)
 }
 
 pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
@@ -534,6 +537,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome_wit
 ) -> PreparedScriptSourceLoadOutcome {
     let started = std::time::Instant::now();
     let start_unix_millis = moli_time::unix_epoch_millis();
+    let render_blocking = request.render_blocking();
     if let Some(outcome) = local_or_unsupported_external_script_source_load_outcome(
         script,
         request_origin,
@@ -614,6 +618,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome_wit
             start_unix_millis,
             completed: std::time::Instant::now(),
             native: None,
+            render_blocking,
         }));
     }
     outcome

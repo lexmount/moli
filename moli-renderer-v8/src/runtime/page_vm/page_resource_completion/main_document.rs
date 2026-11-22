@@ -57,11 +57,14 @@ impl PageVm {
         }
 
         if let Some(network_result) = completion.network_result() {
-            self.vm_mut().record_script_subresource_network_result(
-                completion.network_attribution().document_url().clone(),
-                completion.network_attribution().request_url().clone(),
-                network_result.as_ref(),
-            );
+            self.vm_mut()
+                .record_parser_script_subresource_network_result(
+                    completion.network_attribution().document_url().clone(),
+                    completion.network_attribution().request_url().clone(),
+                    network_result.as_ref(),
+                    None,
+                    completion.script(),
+                );
         }
         let application = self
             .vm_mut()

@@ -280,11 +280,7 @@ impl ScriptVm {
                 match self.start_runtime_module_script_graph_for_owner(&script, id) {
                     RuntimeModuleScriptGraphStart::Started(actions) => {
                         if let Some(network_result) = source_network_result.as_deref() {
-                            self.record_script_subresource_network_result(
-                                script.initiator_url.clone(),
-                                script.url.clone(),
-                                network_result,
-                            );
+                            self.record_script_subresource_network_result(&script, network_result);
                         }
                         self.commit_runtime_module_graph_start_actions(actions);
                         advance = Some(RuntimeScriptOwnerAdvance::StartedModuleGraph);
@@ -1581,11 +1577,7 @@ impl ScriptVm {
             terminal.script.url, terminal.message
         ));
         if let Some(network_result) = terminal.source_network_result.as_deref() {
-            self.record_script_subresource_network_result(
-                terminal.script.initiator_url.clone(),
-                terminal.script.url.clone(),
-                network_result,
-            );
+            self.record_script_subresource_network_result(&terminal.script, network_result);
         }
         let lease = self
             .document_runtime
@@ -2927,18 +2919,19 @@ impl ScriptVm {
 
     pub(crate) fn record_script_subresource_network_result(
         &mut self,
-        document_url: Url,
-        request_url: Url,
+        script: &PreparedScript,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) {
-        self.record_script_subresource_network_result_with_initiator(
-            document_url,
-            request_url,
-            SubresourceRequestInitiatorType::Parser,
+        self.record_parser_script_subresource_network_result(
+            script.initiator_url.clone(),
+            script.url.clone(),
             result,
+            None,
+            Some(script),
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn record_script_subresource_network_result_with_initiator(
         &mut self,
         document_url: Url,
@@ -3096,6 +3089,15 @@ impl ScriptVm {
                 result,
             )
         };
+        if script.is_some_and(|script| {
+            script.fetch_metadata.render_blocking
+                || script
+                    .source_fetch_timing
+                    .as_deref()
+                    .is_some_and(|timing| timing.render_blocking)
+        }) {
+            performance_entry.mark_render_blocking();
+        }
         if let Some(head) = head.as_ref() {
             let source = script
                 .and_then(|script| script.resource_timing_initiator_url.as_deref())

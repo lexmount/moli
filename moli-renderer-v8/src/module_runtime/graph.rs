@@ -448,6 +448,7 @@ impl NativeModuleGraphFetchRequest {
             .with_initiator_url(&self.initiator_url)
             .with_request_origin(request_origin.clone())
             .with_credentials_mode(self.fetch_metadata.credentials_mode)
+            .with_render_blocking(self.fetch_metadata.render_blocking)
             .with_script_fetch_metadata(metadata);
         // A module's Referer identifies its importing script, while the request
         // origin and cookie context still belong to the fetch client Document.
@@ -567,7 +568,7 @@ impl NativeModuleGraphFetchRequest {
                 let mut network_result: Option<SharedNavigationResponseResult> = None;
                 let result = response
                 .map_err(|error| {
-                    if let Some(context) = &response_context { context.record_failure(&source_url); }
+                    if let Some(context) = &response_context { context.record_failure(&observed_request); }
                     ModuleLoadError::new(
                         ModuleLoadStage::Fetch,
                         format!("failed to fetch module `{source_url}`: {error} (FailedToLoad)"),
@@ -583,7 +584,7 @@ impl NativeModuleGraphFetchRequest {
                     if let Some(context) = &response_context {
                         if csp_context.is_none()
                             && let Err(error) = context.check_response_url(&source_url, &response) {
-                            context.record_failure(&source_url);
+                            context.record_failure(&observed_request);
                             return Err(error);
                         }
                         context.record_response(&observed_request, &response, service_worker_filter.as_ref(), native_timing, &resource_initiator, from_service_worker);
@@ -2319,6 +2320,7 @@ fn local_fetch_metadata(metadata: &module_tree::ModuleFetchMetadata) -> ModuleFe
             }),
         },
         parser_inserted: metadata.parser_inserted,
+        render_blocking: metadata.render_blocking,
     }
 }
 
@@ -2579,6 +2581,7 @@ fn chromium_fetch_metadata(
         request_context: moli_module_script_tree::ModuleRequestContext::Script,
         destination: moli_module_script_tree::ModuleRequestDestination::Script,
         parser_inserted: metadata.parser_inserted,
+        render_blocking: metadata.render_blocking,
     }
 }
 

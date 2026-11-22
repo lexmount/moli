@@ -256,10 +256,12 @@ fn structured_clone_rejects_non_serializable_platform_objects_without_prototype_
 fn structured_clone_rejects_real_performance_entries_without_prototype_spoofing() {
     let document_url = Url::parse("https://performance-entry-clone.test/").expect("document URL");
     let mut vm = new_storage_test_vm(document_url.as_str());
-    vm.record_script_subresource_network_result(
+    vm.record_parser_script_subresource_network_result(
         document_url.clone(),
         document_url.join("resource.js").expect("resource URL"),
         &Err("synthetic resource failure".to_owned()),
+        None,
+        None,
     );
 
     let result = vm

@@ -103,11 +103,9 @@ pub(super) fn record_main_parser_blocking_applied_preload_network_result(
     if let Some(applied) = applied_preload
         && let Some(network_result) = applied.network_result.as_deref()
     {
-        page_vm.vm_mut().record_script_subresource_network_result(
-            script.initiator_url.clone(),
-            script.url.clone(),
-            network_result,
-        );
+        page_vm
+            .vm_mut()
+            .record_script_subresource_network_result(script, network_result);
     }
 }
 

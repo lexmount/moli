@@ -1720,6 +1720,7 @@ pub(super) struct DocumentWriteExternalScriptLoadCompletion {
     result: std::result::Result<String, String>,
     network_result: Option<SharedNavigationResponseResult>,
     network_attribution: DocumentWriteExternalScriptNetworkAttribution,
+    script: Option<Box<crate::planning::PreparedScript>>,
 }
 
 impl DocumentWriteExternalScriptLoadCompletion {
@@ -1734,7 +1735,17 @@ impl DocumentWriteExternalScriptLoadCompletion {
             result,
             network_result,
             network_attribution,
+            script: None,
         }
+    }
+
+    pub(crate) fn with_script(mut self, script: crate::planning::PreparedScript) -> Self {
+        self.script = Some(Box::new(script));
+        self
+    }
+
+    pub(crate) fn script(&self) -> Option<&crate::planning::PreparedScript> {
+        self.script.as_deref()
     }
 
     pub(crate) fn target(&self) -> DocumentWriteExternalScriptFetchTarget {

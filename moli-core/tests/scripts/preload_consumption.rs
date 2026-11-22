@@ -104,6 +104,29 @@ impl PreloadServer {
                                 "/timing-style" => ("text/css", css_timing_styles(&token)),
                                 "/timing-import" => ("text/css", format!("@import url('/timing-style?token={token}');")),
                                 "/timing-header" => ("text/html", "<!doctype html><body>Header preload timing".to_owned()),
+                                "/timing-script-render-blocking-frame" => ("text/html", "<!doctype html><iframe src='/timing-script-render-blocking'></iframe>".to_owned()),
+                                "/timing-script-render-blocking" => ("text/html", r#"
+                                    <!doctype html><head>
+                                    <script src="/probe-asset?token=head-classic&auto=1"></script>
+                                    <script async src="/probe-asset?token=head-async&auto=1"></script>
+                                    <script defer blocking="ReNdEr" src="/probe-asset?token=head-defer-explicit&auto=1"></script>
+                                    <script>
+                                        document.write('<script src="/probe-asset?token=head-docwrite&auto=1"><\/script>');
+                                        const script = document.createElement("script");
+                                        script.src = "/probe-asset?token=head-dynamic-explicit&auto=1";
+                                        script.blocking = "render";
+                                        document.head.append(script);
+                                        script.removeAttribute("blocking");
+                                    </script>
+                                    </head><body>
+                                    <script src="/probe-asset?token=body-classic&auto=1"></script>
+                                    <script>
+                                        const lateScript = document.createElement("script");
+                                        lateScript.src = "/probe-asset?token=late-head-dynamic-explicit&auto=1";
+                                        lateScript.blocking = "render";
+                                        document.head.append(lateScript);
+                                    </script>
+                                "#.to_owned()),
                                 "/timing-render-blocking" => ("text/html", r#"
                                     <!doctype html><head>
                                     <link rel="stylesheet" href="/child-import-root.css?token=render-blocking">
@@ -401,6 +424,60 @@ async fn response_header_preload_timings_retain_the_request_document() -> Result
                 "header preload must count actual network requests: {source}/{kind}"
             );
         }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resource_timing_retains_script_render_blocking_at_preparation() -> Result<()> {
+    for child in [false, true] {
+        let server = PreloadServer::spawn().await?;
+        let browser = Browser::new(AppConfig::default())?;
+        let path = if child {
+            "timing-script-render-blocking-frame"
+        } else {
+            "timing-script-render-blocking"
+        };
+        let mut page = browser.fetch(&format!("{}/{path}", server.origin)).await?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            page.evaluate_runtime_expression_with_await_async(
+                r#"(async () => {
+                    const target = document.querySelector('iframe')?.contentWindow ?? window;
+                    if (target.document.readyState !== 'complete') {
+                        await new Promise(resolve => target.addEventListener('load', resolve, {once: true}));
+                    }
+                    return JSON.stringify(target.performance.getEntriesByType('resource').flatMap(entry => {
+                        const url = new URL(entry.name);
+                        return url.pathname === '/probe-asset'
+                            ? [[url.searchParams.get('token'), entry.renderBlockingStatus]]
+                            : [];
+                    }).sort());
+                })()"#,
+                true,
+            ),
+        ).await??;
+        let timings: Vec<(String, String)> = serde_json::from_str(
+            result["value"]
+                .as_str()
+                .context("script render-blocking timings")?,
+        )?;
+        assert_eq!(
+            timings
+                .iter()
+                .map(|(name, status)| (name.as_str(), status.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("body-classic", "non-blocking"),
+                ("head-async", "non-blocking"),
+                ("head-classic", "blocking"),
+                ("head-defer-explicit", "blocking"),
+                ("head-docwrite", "blocking"),
+                ("head-dynamic-explicit", "blocking"),
+                ("late-head-dynamic-explicit", "non-blocking"),
+            ],
+            "{path}",
+        );
     }
     Ok(())
 }

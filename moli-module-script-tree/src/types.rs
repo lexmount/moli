@@ -249,6 +249,7 @@ pub struct ModuleFetchMetadata {
     /// distinguishes parser-inserted requests from script-created requests,
     /// and descendant module fetch options preserve this value.
     pub parser_inserted: bool,
+    pub render_blocking: bool,
 }
 
 impl ModuleFetchMetadata {
@@ -275,6 +276,7 @@ impl Default for ModuleFetchMetadata {
             request_context: ModuleRequestContext::Script,
             destination: ModuleRequestDestination::Script,
             parser_inserted: false,
+            render_blocking: false,
         }
     }
 }

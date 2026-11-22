@@ -550,12 +550,13 @@ fn script_host_defined_options<'s>(
     let partition = format!(
         "\n// moli-referrer:{}",
         moli_crypto::sha256_hex(format!(
-            "{base_url}\0{}\0{}\0{muted_errors}\0{}\0{:?}\0{:?}",
+            "{base_url}\0{}\0{}\0{muted_errors}\0{}\0{:?}\0{:?}\0{}",
             metadata.nonce().unwrap_or_default(),
             metadata.parser_inserted,
             request_url.map(Url::as_str).unwrap_or_default(),
             metadata.credentials_mode,
             metadata.request_metadata.referrer_policy,
+            metadata.render_blocking,
         ))
     );
     let marker = v8_string(scope, SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER)?;
@@ -588,7 +589,7 @@ fn script_host_defined_options<'s>(
             .unwrap_or_default(),
     )?;
     let options =
-        v8::PrimitiveArray::new(scope, 9 + usize::from(context_extension_count.is_some()));
+        v8::PrimitiveArray::new(scope, 10 + usize::from(context_extension_count.is_some()));
     options.set(scope, 0, marker.into());
     options.set(scope, 1, value.into());
     options.set(scope, 2, nonce.into());
@@ -598,12 +599,17 @@ fn script_host_defined_options<'s>(
     options.set(scope, 6, request_url.into());
     options.set(scope, 7, credentials.into());
     options.set(scope, 8, referrer_policy.into());
+    options.set(
+        scope,
+        9,
+        v8::Boolean::new(scope, metadata.render_blocking).into(),
+    );
     if let Some(count) = context_extension_count {
         // V8's CompileFunction cache lookup precedes its context-extension
         // check. Distinguish the compiled scope chain without changing the
         // source text, source URL, or dynamic-import metadata.
         let count = v8::Number::new(scope, count as f64);
-        options.set(scope, 9, count.into());
+        options.set(scope, 10, count.into());
     }
     Some(options.into())
 }
@@ -644,6 +650,11 @@ pub(crate) fn script_fetch_metadata_from_host_defined_options(
             host_defined_options,
         )
         .unwrap_or(false),
+        render_blocking: (options.length() >= 10)
+            .then(|| options.get(scope, 9))
+            .flatten()
+            .and_then(|value| v8::Local::<v8::Boolean>::try_from(value).ok())
+            .is_some_and(|value| value.is_true()),
     })
 }
 
@@ -1424,6 +1435,7 @@ mod tests {
             let metadata = ModuleFetchMetadata {
                 credentials_mode,
                 parser_inserted: true,
+                render_blocking: true,
                 request_metadata: moli_fetch::ScriptFetchRequestMetadata {
                     nonce: Some("initiator-nonce".to_owned()),
                     referrer_policy: Some("no-referrer".to_owned()),
@@ -1444,6 +1456,7 @@ mod tests {
                 Some("no-referrer")
             );
             assert!(decoded.parser_inserted);
+            assert!(decoded.render_blocking);
             assert!(decoded.integrity().is_none());
         }
 

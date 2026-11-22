@@ -213,11 +213,7 @@ impl<'page, 'loader> MainParserDeferredClassicDocumentScriptOwner<'page, 'loader
         if let Some(network_result) = source_network_result.map(AsRef::as_ref) {
             self.page_vm
                 .vm_mut()
-                .record_script_subresource_network_result(
-                    script.initiator_url.clone(),
-                    script.url.clone(),
-                    network_result,
-                );
+                .record_script_subresource_network_result(script, network_result);
         }
     }
 

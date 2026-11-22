@@ -222,14 +222,20 @@ impl NativeModuleFetchContext {
             Some(&filter),
             self.web_security_disabled,
         );
+        if request.render_blocking() {
+            entry.mark_render_blocking();
+        }
         if !from_service_worker {
             initiator.apply(&mut entry, &head, filter.is_readable());
         }
         *self.entry.lock() = Some(entry);
     }
 
-    pub(crate) fn record_failure(&self, url: &Url) {
-        let entry = self.timing.lock().failed(url);
+    pub(crate) fn record_failure(&self, request: &Request) {
+        let mut entry = self.timing.lock().failed(&request.url);
+        if request.render_blocking() {
+            entry.mark_render_blocking();
+        }
         *self.entry.lock() = Some(entry);
     }
 

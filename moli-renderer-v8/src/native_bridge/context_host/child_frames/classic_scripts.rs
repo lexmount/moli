@@ -166,6 +166,14 @@ impl PageScriptHost {
         if let Some(end) = attribution.response_end {
             entry = attribution.timing.completed_at(entry, end);
         }
+        if completion
+            .outcome
+            .fetch_timing
+            .as_deref()
+            .is_some_and(|timing| timing.render_blocking)
+        {
+            entry.mark_render_blocking();
+        }
         self.pending_document_resource_timings.push((
             super::super::WindowDocumentTaskTarget::new(
                 super::super::WindowDocumentOwner::Frame(completion.owner),

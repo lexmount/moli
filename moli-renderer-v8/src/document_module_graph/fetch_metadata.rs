@@ -7,6 +7,7 @@ pub(crate) struct ModuleFetchMetadata {
     pub(crate) credentials_mode: RequestCredentialsMode,
     pub(crate) request_metadata: ScriptFetchRequestMetadata,
     pub(crate) parser_inserted: bool,
+    pub(crate) render_blocking: bool,
 }
 
 impl Default for ModuleFetchMetadata {
@@ -15,6 +16,7 @@ impl Default for ModuleFetchMetadata {
             credentials_mode: RequestCredentialsMode::SameOrigin,
             request_metadata: ScriptFetchRequestMetadata::default(),
             parser_inserted: false,
+            render_blocking: false,
         }
     }
 }
@@ -91,6 +93,7 @@ impl ModuleFetchMetadata {
                 scheduler_priority: None,
             },
             parser_inserted: metadata.parser_inserted,
+            render_blocking: metadata.render_blocking,
         }
     }
 

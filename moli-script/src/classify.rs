@@ -89,6 +89,28 @@ pub fn html_script_element_supports_type(script_type: &str) -> bool {
     matches!(script_type, "classic" | "module" | "importmap")
 }
 
+pub fn script_fetch_is_render_blocking(
+    kind: ScriptKind,
+    source_kind: ScriptSourceKind,
+    parser_inserted: bool,
+    has_async_or_defer: bool,
+    blocking_attribute: Option<&str>,
+    document_allows_render_blocking: bool,
+) -> bool {
+    let potentially_render_blocking =
+        blocking_attribute.is_some_and(|value| {
+            value
+                .split_ascii_whitespace()
+                .any(|token| token.eq_ignore_ascii_case("render"))
+        }) || (kind == ScriptKind::Classic && parser_inserted && !has_async_or_defer);
+    potentially_render_blocking
+        && match source_kind {
+            ScriptSourceKind::External => document_allows_render_blocking,
+            // Inline modules can carry render-blocking options to their imports.
+            ScriptSourceKind::Inline => kind == ScriptKind::Module,
+        }
+}
+
 fn classify_script_kind_from_attributes(
     script_type: Option<&str>,
     language: Option<&str>,

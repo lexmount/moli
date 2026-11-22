@@ -43,11 +43,11 @@ impl ModuleInitiatorServer {
                     captured.lock().push(path.to_owned());
                     let (mime, body) = match path {
                         "/parser" => ("text/html", r#"<!doctype html><head><base href='/wrong/'>
-                            <script type='module' src='/root.js'></script>
+                            <script type='module' blocking='render' src='/root.js'></script>
                             <script type='module'>import '/inline-leaf.js'; globalThis.inlineReady=true;</script>
                             </head><body>module initiator"#),
-                        "/root.js" => ("text/javascript", "import '/leaf.js'; globalThis.rootReady=true;"),
-                        "/leaf.js" | "/inline-leaf.js" | "/nested.js" => ("text/javascript", "export const value=1;"),
+                        "/root.js" => ("text/javascript", "import '/leaf.js'; import('/root-dynamic-leaf.js').then(() => globalThis.rootReady=true);"),
+                        "/leaf.js" | "/inline-leaf.js" | "/nested.js" | "/root-dynamic-leaf.js" => ("text/javascript", "export const value=1;"),
                         "/dynamic" => ("text/html", "<!doctype html><body><script src='/caller.js'></script><script src='/later.js'></script>"),
                         "/caller.js" => ("text/javascript", r#"Promise.resolve().then(() => {
                             const script=document.createElement('script'); script.type='module'; script.src='/dynamic.js';
@@ -107,7 +107,7 @@ impl ModuleInitiatorServer {
 
 async fn initiators(page: &mut moli_core::page::Page, window: &str) -> Result<serde_json::Value> {
     let result = page.evaluate_runtime_expression_by_value_async(&format!(
-        "JSON.stringify({window}.performance.getEntriesByType('resource').filter(e=>new URL(e.name).pathname.endsWith('.js')).map(e=>({{path:new URL(e.name).pathname,initiator:e.initiatorUrl,type:e.initiatorType,json:e.toJSON().initiatorUrl,transfer:e.transferSize,encoded:e.encodedBodySize,status:e.responseStatus,delivery:e.deliveryType}})))"
+        "JSON.stringify({window}.performance.getEntriesByType('resource').filter(e=>new URL(e.name).pathname.endsWith('.js')).map(e=>({{path:new URL(e.name).pathname,initiator:e.initiatorUrl,type:e.initiatorType,json:e.toJSON().initiatorUrl,transfer:e.transferSize,encoded:e.encodedBodySize,status:e.responseStatus,delivery:e.deliveryType,renderBlocking:e.renderBlockingStatus}})))"
     )).await?;
     Ok(serde_json::from_str(result["value"].as_str().unwrap())?)
 }
@@ -153,6 +153,21 @@ async fn parser_modules_attribute_roots_and_static_imports_to_their_sources() ->
             ("/inline-leaf.js", "/wrong/"),
         ] {
             assert_initiator(&entries, path, &format!("{}{source}", server.origin));
+        }
+        for (path, expected) in [
+            ("/root.js", "blocking"),
+            ("/leaf.js", "blocking"),
+            ("/root-dynamic-leaf.js", "blocking"),
+            ("/inline-leaf.js", "non-blocking"),
+        ] {
+            let statuses = entries
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["path"] == path)
+                .map(|entry| entry["renderBlocking"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(statuses, [expected], "{path}, child={child}: {entries}");
         }
         if child {
             assert_eq!(

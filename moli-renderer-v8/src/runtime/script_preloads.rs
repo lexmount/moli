@@ -255,7 +255,10 @@ impl BufferedDocumentPreloadState {
                 continue;
             }
 
-            let script = request.to_preload_script();
+            let mut script = request.to_preload_script();
+            // These classic preloads can start before a Document exists. The
+            // parser's prepared consumer supplies the status at publication.
+            script.fetch_metadata.render_blocking = false;
             let document_character_set = self.document_character_set.to_owned();
             let load = if let Some(context) = service_worker_context {
                 crate::planning::spawn_service_worker_aware_external_script_source_load(
@@ -1072,7 +1075,12 @@ fn admit_script_preloads(
         loader,
         service_worker_context,
     );
-    for request in native_modules {
+    for mut request in native_modules {
+        let document = &page_vm.vm().document_runtime;
+        request.fetch_metadata.render_blocking &= document
+            .dom_host()
+            .dom()
+            .document_allows_adding_render_blocking_elements(document.document_handle());
         let request_url = request.url.clone();
         if let Err(error) = page_vm
             .vm_mut()
@@ -1476,7 +1484,7 @@ impl HtmlPreloadScannerSink {
         .then_some(nonce.as_deref())
         .flatten();
         let mut requests = self.requests.borrow_mut();
-        let fetch_metadata = crate::planning::ScriptFetchMetadata::from_script_attributes(
+        let mut fetch_metadata = crate::planning::ScriptFetchMetadata::from_script_attributes(
             html_attr_value(&tag.attrs, "crossorigin").as_deref(),
             html_attr_value(&tag.attrs, "referrerpolicy").as_deref(),
             html_attr_value(&tag.attrs, "charset").as_deref(),
@@ -1484,16 +1492,27 @@ impl HtmlPreloadScannerSink {
             nonce,
             html_attr_value(&tag.attrs, "fetchpriority").as_deref(),
         );
+        let async_attribute = html_attr_present(&tag.attrs, "async");
+        let defer_attribute = html_attr_present(&tag.attrs, "defer");
+        // Module fetches can publish their timing while the parser is paused.
+        // Only a scan from the start of the Document knows their position.
+        let known_position = kind_hint == crate::types::ScriptKind::Classic
+            || matches!(self.meta_csp_mode, MetaCspScannerMode::CollectDescriptors);
+        fetch_metadata.render_blocking = moli_script::script_fetch_is_render_blocking(
+            kind_hint,
+            crate::types::ScriptSourceKind::External,
+            true,
+            async_attribute || defer_attribute,
+            html_attr_value(&tag.attrs, "blocking").as_deref(),
+            known_position && self.document_position.get() != PreloadDocumentPosition::InBody,
+        );
         let Some(key) = BufferedScriptPreloadKey::new(url.clone(), kind_hint, &fetch_metadata)
         else {
             return;
         };
         if requests.seen.insert(BufferedPreloadKey::Script(key)) {
-            let mode_hint = buffered_script_mode_hint_from_attrs(
-                kind_hint,
-                html_attr_present(&tag.attrs, "async"),
-                html_attr_present(&tag.attrs, "defer"),
-            );
+            let mode_hint =
+                buffered_script_mode_hint_from_attrs(kind_hint, async_attribute, defer_attribute);
             requests.script_requests.push(BufferedScriptPreloadRequest {
                 url,
                 initiator_url: self.final_url.clone(),

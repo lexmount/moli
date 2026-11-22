@@ -10,6 +10,7 @@ use moli_page_types::{ScriptKind, ScriptMode, ScriptSourceKind};
 use moli_script::{
     ScriptElementClassificationInput, ScriptPreparationClassificationInput,
     ScriptPreparationDisposition, classify_script_preparation, script_element_nonce_is_nonceable,
+    script_fetch_is_render_blocking,
 };
 
 pub struct ParserScriptRead {
@@ -28,9 +29,16 @@ pub struct ParserScriptRead {
     pub defer_attribute_present: bool,
     pub fetch_metadata: ScriptFetchMetadata,
     pub document_referrer_policy: Option<String>,
+    html_render_blocking: Option<HtmlScriptRenderBlocking>,
+}
+
+struct HtmlScriptRenderBlocking {
+    attribute: Option<String>,
+    document_allows_render_blocking: bool,
 }
 
 fn parser_script_read_from_node(
+    dom: &NativeDom,
     node: &Node,
     script_src: Option<String>,
     script_text: Option<String>,
@@ -95,6 +103,14 @@ fn parser_script_read_from_node(
             element.attribute("fetchpriority"),
         )
         .with_parser_inserted(node.flags().parser_created()),
+        html_render_blocking: (is_html_script && node.is_connected()).then(|| {
+            HtmlScriptRenderBlocking {
+                attribute: element.attribute_ns("", "blocking").map(str::to_owned),
+                document_allows_render_blocking: node.owner_document().is_some_and(|document| {
+                    dom.document_allows_adding_render_blocking_elements(document)
+                }),
+            }
+        }),
     })
 }
 
@@ -141,6 +157,7 @@ impl ParserPlanningReadView for NativeDom {
     fn parser_script_read(&self, node_id: NativeNodeId) -> Option<ParserScriptRead> {
         let node = self.node(node_id)?;
         parser_script_read_from_node(
+            self,
             node,
             self.script_src(node_id).map(str::to_owned),
             self.script_text(node_id),
@@ -181,6 +198,7 @@ impl ParserPlanningReadView for DomHost {
             .and_then(|text| (!text.is_empty()).then_some(text));
 
         parser_script_read_from_node(
+            self.dom(),
             node,
             node.as_element()
                 .and_then(|element| element.script_source_attribute())
@@ -218,6 +236,7 @@ impl ParserPlanningReadView for ParserStreamDocumentSnapshot {
     fn parser_script_read(&self, node_id: NativeNodeId) -> Option<ParserScriptRead> {
         let node = self.node(node_id)?;
         parser_script_read_from_node(
+            self.native_dom(),
             node,
             self.script_src(node_id).map(str::to_owned),
             self.script_text(node_id),
@@ -276,6 +295,7 @@ pub struct ScriptSourceFetchTiming {
     pub start_unix_millis: f64,
     pub completed: std::time::Instant,
     pub native: Option<moli_fetch::FetchResponseTiming>,
+    pub render_blocking: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -307,6 +327,8 @@ pub struct ScriptFetchMetadata {
     /// not equivalent to whether the eventual fetch runs on a parser-owned
     /// scheduler lane.
     pub parser_inserted: bool,
+    /// HTML's script fetch options capture this flag during preparation.
+    pub render_blocking: bool,
     /// Whether synchronous exceptions from this classic script must expose only
     /// the cross-origin-safe `Script error.` surface. This is false while the
     /// request is prepared and is populated from the response taint once an
@@ -334,6 +356,7 @@ impl ScriptFetchMetadata {
             nonce: normalize_non_empty_attr(nonce),
             fetch_priority: FetchPriorityHint::from_attribute(fetch_priority),
             parser_inserted: false,
+            render_blocking: false,
             muted_errors: false,
         }
     }
@@ -474,7 +497,7 @@ pub fn classify_parser_script(
     document: &impl ParserPlanningReadView,
     node_id: NativeNodeId,
 ) -> Option<ScriptClassification> {
-    let script = document.parser_script_read(node_id)?;
+    let mut script = document.parser_script_read(node_id)?;
     let source_kind = ScriptSourceKind::from_script_src(&script.script_src);
     let classification = classify_script_preparation(ScriptPreparationClassificationInput {
         element: ScriptElementClassificationInput {
@@ -490,6 +513,16 @@ pub fn classify_parser_script(
         defer_attribute_present: script.defer_attribute_present,
         source_kind,
     });
+    if let Some(blocking) = &script.html_render_blocking {
+        script.fetch_metadata.render_blocking = script_fetch_is_render_blocking(
+            classification.disposition.kind(),
+            source_kind,
+            script.parser_inserted_for_prepare,
+            script.async_attribute_present || script.defer_attribute_present,
+            blocking.attribute.as_deref(),
+            blocking.document_allows_render_blocking,
+        );
+    }
     Some(ScriptClassification {
         script,
         disposition: classification.disposition,
