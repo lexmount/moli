@@ -2054,7 +2054,7 @@ pub(crate) fn prepare_inline_contexts<N>(
             preparation_elapsed += started.elapsed();
             prepared_context_count += 1;
         }
-        world.boxes[owner.index()].inline_layout = Some(context);
+        world.boxes[owner.index()].inline_layout = Some(Box::new(context));
         initialized = true;
     }
     if initialized {
