@@ -190,32 +190,18 @@ impl TableIntrinsicInlineSizes {
     }
 }
 
-pub(crate) fn prepare_table_layout_trees<N>(world: &mut LayoutWorld<N>)
+pub(crate) fn prepare_tables<N>(world: &mut LayoutWorld<N>, mut tables: Vec<LayoutBoxId>)
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let roots = (0..world.boxes.len())
-        .map(LayoutBoxId::from_index)
-        .filter(|id| is_table_root(world.boxes[id.index()].kind))
-        .collect::<Vec<_>>();
-    for root in roots {
-        let mut parts = Vec::new();
-        collect_table_parts(world, root, &mut parts);
-        if parts.is_empty() {
+    tables.sort_unstable_by_key(|id| id.index());
+    for root in tables {
+        if !world.boxes[root.index()].children.iter().any(|child| {
+            let kind = world.boxes[child.index()].kind;
+            kind.is_internal_table_box() || kind == LayoutBoxKind::TableCaption
+        }) {
             continue;
         }
-        for layout_box in &mut world.boxes {
-            layout_box
-                .layout_children
-                .retain(|child| !parts.contains(child));
-        }
-        for part in parts.iter().copied() {
-            world.boxes[part.index()].layout_parent = Some(root);
-            if is_table_structural(world.boxes[part.index()].kind) {
-                world.boxes[part.index()].layout_children.clear();
-            }
-        }
-        world.boxes[root.index()].layout_children.extend(parts);
         prepare_collapsed_table_borders(world, root);
         apply_parent_facing_table_inline_constraints(world, root);
     }
@@ -234,11 +220,12 @@ fn apply_parent_facing_table_inline_constraints<N>(world: &mut LayoutWorld<N>, r
 where
     N: Copy + Debug + Eq + Hash,
 {
+    if !world.boxes[root.index()].style.uses_fixed_table_layout() {
+        return;
+    }
     let mut context = build_table_context(world, root);
     context.collect_authored_fixed_cell_constraints(world);
-    let Some(min_border_box_size) = context.fixed_grid_min_border_box_size() else {
-        return;
-    };
+    let min_border_box_size = context.fixed_grid_min_border_box_size();
 
     let style = &mut world.boxes[root.index()].style.taffy;
     let percentage_basis = None;
@@ -260,28 +247,6 @@ where
         style.min_size.width = Dimension::length(min_style_size).into();
     } else if current.tag() == taffy::CompactLength::LENGTH_TAG {
         style.min_size.width = Dimension::length(current.value().max(min_style_size)).into();
-    }
-}
-
-fn collect_table_parts<N>(world: &LayoutWorld<N>, root: LayoutBoxId, output: &mut Vec<LayoutBoxId>)
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    for child in world.boxes[root.index()].children.iter().copied() {
-        let kind = world.boxes[child.index()].kind;
-        if matches!(
-            kind,
-            LayoutBoxKind::TableCaption
-                | LayoutBoxKind::TableCell
-                | LayoutBoxKind::AnonymousTableCell
-        ) {
-            output.push(child);
-            continue;
-        }
-        if is_table_structural(kind) {
-            output.push(child);
-            collect_table_parts(world, child, output);
-        }
     }
 }
 
@@ -576,9 +541,6 @@ impl TableContext {
     where
         N: Copy + Debug + Eq + Hash,
     {
-        if !self.layout_mode.is_fixed() {
-            return;
-        }
         let mut cell_constraints = vec![None; self.column_count];
         let mut cell_spans = Vec::new();
         let first_row_cells = self
@@ -827,11 +789,7 @@ impl TableContext {
         used.max(inline_insets).max(self.caption_inline_min)
     }
 
-    fn fixed_grid_min_border_box_size(&self) -> Option<f32> {
-        if !self.layout_mode.is_fixed() {
-            return None;
-        }
-
+    fn fixed_grid_min_border_box_size(&self) -> f32 {
         let padding = self
             .style
             .padding
@@ -843,9 +801,7 @@ impl TableContext {
         let inline_insets = padding.left + padding.right + border.left + border.right;
         let internal_spacing =
             self.inline_border_spacing.max(0.0) * self.column_count.saturating_sub(1) as f32;
-        Some(
-            fixed_grid_min_inline_size(&self.column_constraints) + inline_insets + internal_spacing,
-        )
+        fixed_grid_min_inline_size(&self.column_constraints) + inline_insets + internal_spacing
     }
 }
 
@@ -1579,7 +1535,7 @@ fn set_box_layout<N>(
     };
 }
 
-fn is_table_root(kind: LayoutBoxKind) -> bool {
+pub(crate) fn is_table_root(kind: LayoutBoxKind) -> bool {
     matches!(
         kind,
         LayoutBoxKind::TableWrapper
@@ -1588,7 +1544,7 @@ fn is_table_root(kind: LayoutBoxKind) -> bool {
     )
 }
 
-fn is_table_structural(kind: LayoutBoxKind) -> bool {
+pub(crate) fn is_table_structural(kind: LayoutBoxKind) -> bool {
     matches!(
         kind,
         LayoutBoxKind::TableRowGroup

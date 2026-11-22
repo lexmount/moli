@@ -30,7 +30,7 @@ use crate::{
     },
     replaced::{AvailableSpaceMargins, measure_replaced},
     style::{InlineDirection, resolve_stylo_calc_value},
-    table::{compute_table_layout, prepare_table_layout_trees},
+    table::{compute_table_layout, is_table_root, is_table_structural, prepare_tables},
     world::InlineStaticPosition,
 };
 
@@ -156,8 +156,8 @@ where
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
     update_viewport_layout_style(world, viewport);
-    let positioned_static_sources = prepare_layout_tree(world);
-    prepare_table_layout_trees(world);
+    let (positioned_static_sources, tables) = prepare_layout_tree(world);
+    prepare_tables(world, tables);
     let mut prepared = PreparedWorldLayout {
         positioned_static_sources,
         numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
@@ -440,15 +440,21 @@ fn scale_layout(layout: Layout, factor: f32) -> Layout {
     }
 }
 
-fn prepare_layout_tree<N>(world: &mut LayoutWorld<N>) -> Vec<PositionedStaticSource>
+fn prepare_layout_tree<N>(
+    world: &mut LayoutWorld<N>,
+) -> (Vec<PositionedStaticSource>, Vec<LayoutBoxId>)
 where
     N: Copy + Debug + Eq + Hash,
 {
     let mut positioned_static_sources = Vec::new();
+    let mut tables = Vec::new();
+    let mut table_children = Vec::new();
     let root = world.root;
     world.viewport_layout.children.push(root);
+    if is_table_root(world.boxes[root.index()].kind) {
+        tables.push(root);
+    }
 
-    let mut preorder = Vec::with_capacity(world.boxes.len().saturating_sub(1));
     let mut stack = world.boxes[root.index()]
         .children
         .iter()
@@ -456,16 +462,36 @@ where
         .copied()
         .collect::<Vec<_>>();
     while let Some(id) = stack.pop() {
-        preorder.push(id);
         stack.extend(world.boxes[id.index()].children.iter().rev().copied());
-    }
-
-    for id in preorder {
-        let original_parent = world.boxes[id.index()]
+        let layout_box = &world.boxes[id.index()];
+        let original_parent = layout_box
             .parent
             .expect("every non-root layout box has a box-tree parent");
-        let inline_owner = world.boxes[id.index()].inline_context_owner;
-        let is_flattened = world.boxes[id.index()].inline_flattened;
+        if is_table_root(layout_box.kind) {
+            tables.push(id);
+        }
+        // Table groups, rows and columns have already been normalized in
+        // the box tree. The parent was visited first, so a structural part's
+        // numeric parent already identifies its table. Cells and captions
+        // stop that inheritance, including when they contain another table.
+        let table = if layout_box.kind.is_internal_table_box()
+            || layout_box.kind == LayoutBoxKind::TableCaption
+        {
+            let parent = &world.boxes[original_parent.index()];
+            if is_table_root(parent.kind) {
+                Some(original_parent)
+            } else if is_table_structural(parent.kind) {
+                parent
+                    .layout_parent
+                    .filter(|parent| is_table_root(world.boxes[parent.index()].kind))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let inline_owner = layout_box.inline_context_owner;
+        let is_flattened = layout_box.inline_flattened;
         let is_positioned = world.boxes[id.index()].style.is_absolute_positioned()
             || world.boxes[id.index()].style.is_fixed_positioned();
         let positioned_containing_block = if world.boxes[id.index()].style.is_fixed_positioned() {
@@ -531,9 +557,11 @@ where
                 placeholder.capability_diagnostics.clear();
                 placeholder.layout_parent = Some(original_parent);
                 let placeholder = world.allocate(placeholder);
-                world.boxes[original_parent.index()]
-                    .layout_children
-                    .push(placeholder);
+                if accepts_numeric_children(world, original_parent) {
+                    world.boxes[original_parent.index()]
+                        .layout_children
+                        .push(placeholder);
+                }
                 positioned_static_sources.push(PositionedStaticSource::BlockPlaceholder {
                     child: id,
                     placeholder,
@@ -548,7 +576,10 @@ where
             }
         }
         world.boxes[id.index()].positioned_containing_block = positioned_containing_block;
-        world.boxes[id.index()].layout_parent = layout_parent;
+        world.boxes[id.index()].layout_parent = table.or(layout_parent);
+        if let Some(table) = table {
+            table_children.push((table, id));
+        }
         // Text, line breaks and structural inline boxes are represented by the
         // owner's single Parley item stream. Atomic inline boxes remain real
         // Taffy children so they can be measured before line breaking.
@@ -559,6 +590,9 @@ where
         // marker gutter.
         if !is_flattened && !world.boxes[id.index()].outside_list_marker {
             if let Some(parent) = layout_parent {
+                if table.is_some() || !accepts_numeric_children(world, parent) {
+                    continue;
+                }
                 world.boxes[parent.index()].layout_children.push(id);
             } else {
                 world.viewport_layout.children.push(id);
@@ -578,7 +612,23 @@ where
         children.sort_by_key(|child| world.boxes[child.index()].style.order());
         world.boxes[parent_index].layout_children = children;
     }
-    positioned_static_sources
+    // The table adapter consumes parts in box-tree order after the wrapper's
+    // ordinary numeric children (for example its positioned descendants).
+    for (table, child) in table_children {
+        world.boxes[table.index()].layout_children.push(child);
+    }
+    (positioned_static_sources, tables)
+}
+
+fn accepts_numeric_children<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> bool
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let parent = &world.boxes[id.index()];
+    !(is_table_structural(parent.kind)
+        && parent
+            .layout_parent
+            .is_some_and(|table| is_table_root(world.boxes[table.index()].kind)))
 }
 
 fn original_parent_uses_block_layout<N>(world: &LayoutWorld<N>, parent: LayoutBoxId) -> bool
