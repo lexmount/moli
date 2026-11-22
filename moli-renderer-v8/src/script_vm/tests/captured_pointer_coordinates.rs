@@ -235,18 +235,23 @@ async fn captured_pointer_remains_deliverable_without_an_invertible_frame_mappin
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn pointer_raw_update_release_reprojects_move_to_root_without_refresh() {
+async fn raw_update_release_preserves_pressed_mouse_frame_route() {
     let mut vm = captured_child_vm(false, false).await;
-    vm.eval(r#"
+    vm.eval(
+        r#"
         globalThis.rawCoordinates=[];
         captured.addEventListener('pointerrawupdate',event=>{
             rawCoordinates.push([event.clientX,event.clientY]);
             captured.releasePointerCapture(event.pointerId);
             frame.style.left='300px';
         });
-        outside.addEventListener('mousemove',event=>events.push([event.type,event.target.id,event.clientX,event.clientY]));
+        captureDocument.addEventListener('mousemove',event=>
+            events.push([event.type,event.target.id,event.clientX,event.clientY]));
+        outside.addEventListener('pointerup',()=>events.push(['unexpected outer release']));
         'installed'
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     let builds = vm.layout_pass_observability_for_test().1;
     dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
@@ -256,13 +261,19 @@ async fn pointer_raw_update_release_reprojects_move_to_root_without_refresh() {
     );
     assert_eq!(
         vm.eval("JSON.stringify(events)").unwrap(),
-        r#"[["pointerdown","captured",30,30],["pointermove","outside",20,20],["mousemove","outside",20,20]]"#
+        r#"[["pointerdown","captured",30,30],["pointermove","",-80,-40],["mousemove","",-80,-40]]"#
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    dispatch(&mut vm, "mouseup", 20.0, 20.0, 0);
+    dispatch(&mut vm, "mousemove", 20.0, 20.0, 0);
+    assert_eq!(
+        vm.eval("JSON.stringify(events.slice(3))").unwrap(),
+        r#"[["pointerup","",-280,-40],["pointermove","outside",20,20]]"#
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn pointer_raw_update_capture_transfer_uses_pre_callback_frame_projection() {
+async fn raw_update_capture_transfer_requires_active_document() {
     let mut vm = captured_child_vm(false, false).await;
     vm.eval(r#"
         globalThis.second=document.createElement('iframe');
@@ -274,14 +285,23 @@ async fn pointer_raw_update_capture_transfer_uses_pre_callback_frame_projection(
         .await;
     vm.eval(r#"
         globalThis.next=second.contentDocument.getElementById('next');
-        globalThis.rawCoordinates=[];
+        globalThis.replacement=captureDocument.createElement('div');
+        replacement.id='replacement';
+        captureDocument.body.append(replacement);
+        globalThis.captureAttempts=[];
         captured.addEventListener('pointerrawupdate',event=>{
-            rawCoordinates.push([event.clientX,event.clientY]);
             next.setPointerCapture(event.pointerId);
-            second.style.left='600px';second.style.top='300px';
+            replacement.setPointerCapture(event.pointerId);
+            captureAttempts.push([
+                next.hasPointerCapture(event.pointerId),replacement.hasPointerCapture(event.pointerId)
+            ]);
         });
-        for(const type of ['pointermove','mousemove'])
-            next.addEventListener(type,event=>events.push([event.type,event.target.id,event.clientX,event.clientY]));
+        next.addEventListener('pointerdown',event=>{
+            next.setPointerCapture(event.pointerId);
+            captureAttempts.push([next.hasPointerCapture(event.pointerId)]);
+        });
+        replacement.addEventListener('gotpointercapture',event=>
+            transitions.push([event.type,event.target.id]));
         'installed'
     "#).unwrap();
     vm.publish_layout_for_test().unwrap();
@@ -289,12 +309,132 @@ async fn pointer_raw_update_capture_transfer_uses_pre_callback_frame_projection(
     dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
     assert_eq!(
-        vm.eval("JSON.stringify(rawCoordinates)").unwrap(),
-        "[[-80,-40]]"
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"[["pointerdown","captured",30,30],["pointermove","replacement",-80,-40]]"#
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(transitions)").unwrap(),
+        r#"[["gotpointercapture","captured"],["lostpointercapture","captured"],["gotpointercapture","replacement"]]"#
+    );
+    dispatch(&mut vm, "mouseup", 20.0, 20.0, 0);
+    dispatch(&mut vm, "mousedown", 425.0, 220.0, 1);
+    assert_eq!(
+        vm.eval("JSON.stringify(captureAttempts)").unwrap(),
+        "[[false,true],[true]]"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn capture_transitions_inherit_pointer_geometry_before_compatibility_mouse_geometry() {
+    let mut vm = captured_child_vm(false, false).await;
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+    vm.eval(
+        r#"
+        globalThis.captureSamples=[];
+        for(const type of ['gotpointercapture','pointerup','mouseup','lostpointercapture'])
+            captured.addEventListener(type,event=>{
+                captureSamples.push([type,event.clientX,event.clientY,event.screenX,event.screenY,
+                    event.button,event.buttons,event.timeStamp]);
+                if(type==='gotpointercapture') {
+                    frame.style.left='200px';
+                    frame.getBoundingClientRect();
+                }
+            });
+        'installed'
+    "#,
+    )
+    .unwrap();
+    dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);
+    dispatch(&mut vm, "mouseup", 130.0, 90.0, 0);
+    assert_eq!(
+        vm.eval("JSON.stringify(captureSamples.map(row=>row.slice(0,7)))")
+            .unwrap(),
+        r#"[["gotpointercapture",30,30,130,90,0,0],["pointerup",30,30,130,90,0,0],["mouseup",-70,30,130,90,0,0],["lostpointercapture",30,30,130,90,0,0]]"#
+    );
+    assert_eq!(vm.eval("String(captureSamples[0][7]===captureSamples[1][7] && captureSamples[1][7]===captureSamples[3][7])").unwrap(), "true");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn touch_coordinates_share_the_frame_projection_and_release_restores_hit_routing() {
+    let mut vm = captured_child_vm(false, true).await;
+    vm.eval(r#"
+        globalThis.touchSamples=[];
+        captured.addEventListener('pointerdown',event=>captured.releasePointerCapture(event.pointerId));
+        captured.addEventListener('touchstart',event=>{
+            const point=event.changedTouches[0];
+            touchSamples.push([point.clientX,point.clientY,point.screenX,point.screenY,point.pageX,point.pageY]);
+        });
+        outside.addEventListener('pointerup',event=>
+            events.push([event.type,event.target.id,event.clientX,event.clientY]));
+        'installed'
+    "#).unwrap();
+    vm.dispatch_touch_event_at_point(160.0, 120.0, "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_point(20.0, 20.0, "touchmove", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_point(20.0, 20.0, "touchend", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(touchSamples)").unwrap(),
+        "[[30,30,160,120,30,30]]"
     );
     assert_eq!(
         vm.eval("JSON.stringify(events)").unwrap(),
-        r#"[["pointerdown","captured",30,30],["pointermove","next",-380,-180],["mousemove","next",-380,-180]]"#
+        r#"[["pointerdown","captured",30,30],["pointermove","outside",20,20],["pointerup","outside",20,20]]"#
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn capture_projects_through_a_frame_box_without_a_child_layout_tree() {
+    let mut vm = captured_child_vm(false, false).await;
+    dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);
+    vm.eval("frame.style.cssText+=';width:0;height:0;border:5px solid transparent';'collapsed'")
+        .unwrap();
+    vm.publish_layout_for_test().unwrap();
+    {
+        let host = vm._context_host.borrow();
+        let frame = host.child_browsing_context_handles_in_document_order()[0];
+        let document = host.child_browsing_context_document_handle(frame).unwrap();
+        assert!(
+            host.with_latest_layout_tree_for_document(document, |_| ())
+                .is_none()
+        );
+    }
+    dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
+    dispatch(&mut vm, "mouseup", 20.0, 20.0, 0);
+    assert_eq!(
+        vm.eval("JSON.stringify(events.slice(1))").unwrap(),
+        r#"[["pointermove","captured",-85,-45],["pointerup","captured",-85,-45]]"#
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frame_navigation_retires_the_capture_route_and_old_projection() {
+    let mut vm = captured_child_vm(false, false).await;
+    dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);
+    dispatch(&mut vm, "mousemove", 131.0, 91.0, 1);
+    let (frame, old_document, old_sample) = {
+        let host = vm._context_host.borrow();
+        let frame = host.child_browsing_context_handles_in_document_order()[0];
+        let document = host.child_browsing_context_document_handle(frame).unwrap();
+        (frame, document, host.published_frame_geometry().unwrap())
+    };
+    vm.eval("frame.srcdoc='<body>replacement</body>'").unwrap();
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "replace captured frame owner")
+        .await;
+    {
+        let host = vm._context_host.borrow();
+        let replacement = host.child_browsing_context_document_handle(frame).unwrap();
+        assert_ne!(old_document, replacement);
+        assert!(old_sample.root_to_viewport(&host, old_document).is_none());
+        assert!(old_sample.root_to_viewport(&host, replacement).is_none());
+    }
+    vm.publish_layout_for_test().unwrap();
+    dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
+    dispatch(&mut vm, "mouseup", 20.0, 20.0, 0);
+    assert_eq!(
+        vm.eval("JSON.stringify(events.slice(2))").unwrap(),
+        r#"[["pointermove","outside",20,20]]"#
+    );
 }

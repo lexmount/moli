@@ -274,6 +274,18 @@ pub fn event_time_stamp<'s>(
         .unwrap_or(0.0)
 }
 
+/// A derived trusted event is associated with the input that created its source.
+pub fn inherit_event_time_stamp<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    derived: v8::Local<'s, v8::Object>,
+    source: v8::Local<'s, v8::Object>,
+) {
+    let timestamp = event_time_stamp(scope, source);
+    let event = event_backing(scope, derived);
+    let timestamp = v8::Number::new(scope, timestamp);
+    set_private_value(scope, event, EVENT_TIMESTAMP_PRIVATE_SLOT, timestamp.into());
+}
+
 pub fn initialize_event_object_with_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,

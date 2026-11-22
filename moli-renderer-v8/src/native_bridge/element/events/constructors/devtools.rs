@@ -148,25 +148,6 @@ pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
     construct_native_pointer_event(scope, event_type, mouse, pointer)
 }
 
-pub(crate) fn construct_pointer_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    coordinates: InputEventCoordinates,
-    button: i32,
-    buttons: i32,
-    pointer: &RendererPointerEventProperties,
-) -> Option<v8::Local<'s, v8::Object>> {
-    construct_pointer_event_with_modifiers(
-        scope,
-        event_type,
-        coordinates,
-        button,
-        buttons,
-        pointer,
-        0,
-    )
-}
-
 pub(crate) fn construct_pointer_event_with_related_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,

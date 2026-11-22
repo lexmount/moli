@@ -492,9 +492,7 @@ impl PageScriptHost {
             pending_text_track_load_sequences: HashMap::new(),
             next_text_track_load_sequence_id: 1,
             pending_media_text_track_gates: HashMap::new(),
-            active_pointer_capture_ids: HashSet::new(),
-            pending_pointer_capture_targets: HashMap::new(),
-            pointer_capture_targets: HashMap::new(),
+            pointers: HashMap::new(),
             #[cfg(feature = "devtools")]
             mouse_input: mouse_click::MouseInputState::default(),
             lazy_media_load_candidates: HashSet::new(),

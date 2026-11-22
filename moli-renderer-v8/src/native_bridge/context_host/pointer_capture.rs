@@ -1,21 +1,48 @@
 use super::*;
 
+#[derive(Default)]
+pub(super) struct PointerState {
+    buttons_active: bool,
+    document: Option<WindowDocumentTaskTarget>,
+    pending: Option<PointerCaptureTarget>,
+    #[cfg(feature = "devtools")]
+    active: Option<PointerCaptureTarget>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PointerCaptureTarget {
+    pub(crate) element: DomHandle,
+    document: WindowDocumentTaskTarget,
+}
+
 impl PageScriptHost {
-    pub(crate) fn pointer_capture_is_active(&self, pointer_id: i32) -> bool {
-        self.active_pointer_capture_ids.contains(&pointer_id)
+    pub(crate) fn pointer_is_known(&self, pointer_id: i32) -> bool {
+        self.pointers.contains_key(&pointer_id)
     }
 
     pub(crate) fn set_pending_pointer_capture_target(
         &mut self,
         pointer_id: i32,
-        target: DomHandle,
+        element: DomHandle,
     ) {
-        self.pending_pointer_capture_targets
-            .insert(pointer_id, target);
+        let Some(state) = self.pointers.get(&pointer_id) else {
+            return;
+        };
+        let Some(document) = state.document.filter(|_| state.buttons_active) else {
+            return;
+        };
+        let capture = PointerCaptureTarget { element, document };
+        if self.pointer_capture_target_is_current(capture)
+            && let Some(state) = self.pointers.get_mut(&pointer_id)
+        {
+            state.pending = Some(capture);
+        }
     }
 
     pub(crate) fn release_pending_pointer_capture_target(&mut self, pointer_id: i32) {
-        self.pending_pointer_capture_targets.remove(&pointer_id);
+        if let Some(state) = self.pointers.get_mut(&pointer_id) {
+            state.pending = None;
+        }
     }
 
     pub(crate) fn has_pending_pointer_capture_target(
@@ -23,27 +50,38 @@ impl PageScriptHost {
         pointer_id: i32,
         target: DomHandle,
     ) -> bool {
-        self.pending_pointer_capture_targets
+        self.pointers
             .get(&pointer_id)
-            .is_some_and(|current| *current == target)
+            .and_then(|state| state.pending)
+            .is_some_and(|capture| {
+                capture.element == target && self.pointer_capture_target_is_current(capture)
+            })
+    }
+
+    pub(crate) fn pointer_capture_target_is_current(&self, capture: PointerCaptureTarget) -> bool {
+        let Some(document) = self.input_document_for_owner(capture.document) else {
+            return false;
+        };
+        let dom = self.dom_host();
+        dom.is_connected(capture.element)
+            && dom.owner_document_handle(capture.element) == Some(document)
     }
 
     pub(crate) fn clear_pending_pointer_capture_targets_in_disconnected_subtree(
         &mut self,
         root: DomHandle,
     ) {
-        if self.pending_pointer_capture_targets.is_empty() {
-            return;
-        }
-        let pending_targets = self
-            .pending_pointer_capture_targets
+        let removed: Vec<_> = self
+            .pointers
             .iter()
-            .map(|(pointer_id, target)| (*pointer_id, *target))
-            .collect::<Vec<_>>();
-        for (pointer_id, target) in pending_targets {
-            if self.pointer_capture_subtree_contains(root, target) {
-                self.pending_pointer_capture_targets.remove(&pointer_id);
-            }
+            .filter_map(|(&pointer_id, state)| {
+                let target = state.pending?.element;
+                self.pointer_capture_subtree_contains(root, target)
+                    .then_some(pointer_id)
+            })
+            .collect();
+        for pointer_id in removed {
+            self.release_pending_pointer_capture_target(pointer_id);
         }
     }
 
@@ -62,121 +100,96 @@ impl PageScriptHost {
     }
 
     pub(crate) fn clear_pointer_capture_state(&mut self) {
-        self.active_pointer_capture_ids.clear();
-        self.pending_pointer_capture_targets.clear();
-        self.pointer_capture_targets.clear();
+        self.pointers.clear();
     }
 }
 
 #[cfg(feature = "devtools")]
 impl PageScriptHost {
-    pub(crate) fn set_pointer_capture_active(&mut self, pointer_id: i32, active: bool) {
-        if active {
-            self.active_pointer_capture_ids.insert(pointer_id);
-        } else {
-            self.active_pointer_capture_ids.remove(&pointer_id);
-        }
+    pub(crate) fn update_pointer_input(
+        &mut self,
+        pointer_id: i32,
+        buttons_active: bool,
+        document: Option<WindowDocumentTaskTarget>,
+    ) {
+        let state = self.pointers.entry(pointer_id).or_default();
+        state.buttons_active = buttons_active;
+        state.document = document;
+    }
+
+    pub(crate) fn remove_touch_pointer_input(&mut self, pointer_id: i32) {
+        self.pointers.remove(&pointer_id);
     }
 
     pub(crate) fn pending_pointer_capture_target(&self, pointer_id: i32) -> Option<DomHandle> {
-        self.pending_pointer_capture_targets
-            .get(&pointer_id)
-            .copied()
-            .filter(|target| self.dom_host().is_connected(*target))
+        self.pointers
+            .get(&pointer_id)?
+            .pending
+            .filter(|capture| self.pointer_capture_target_is_current(*capture))
+            .map(|capture| capture.element)
     }
 
     pub(crate) fn active_pointer_capture_target(&self, pointer_id: i32) -> Option<DomHandle> {
-        self.pointer_capture_targets
-            .get(&pointer_id)
-            .copied()
-            .filter(|target| self.dom_host().is_connected(*target))
+        self.pointers
+            .get(&pointer_id)?
+            .active
+            .filter(|capture| self.pointer_capture_target_is_current(*capture))
+            .map(|capture| capture.element)
     }
 
     pub(crate) fn pointer_capture_target_for_click(&self, pointer_id: i32) -> Option<DomHandle> {
-        // Click keeps the active capture target even when a release listener
-        // detaches it. Capture cleanup still sends lostpointercapture.
-        self.pointer_capture_targets.get(&pointer_id).copied()
+        // A release listener can detach the active capture target before
+        // click targeting. Keep the override while its Document still owns it.
+        let capture = self.pointers.get(&pointer_id)?.active?;
+        let document = self.input_document_for_owner(capture.document)?;
+        (self.dom_host().owner_document_handle(capture.element) == Some(document))
+            .then_some(capture.element)
     }
 
-    pub(crate) fn pointer_capture_target_is_connected(&self, target: DomHandle) -> bool {
-        self.dom_host().is_connected(target)
-    }
-
-    pub(crate) fn clear_pointer_capture_target_if_matches(
+    pub(crate) fn begin_pointer_capture_transition(
         &mut self,
         pointer_id: i32,
-        target: DomHandle,
-    ) {
-        if self
-            .pointer_capture_targets
+    ) -> (Option<DomHandle>, Option<PointerCaptureTarget>) {
+        let pending = self
+            .pointers
             .get(&pointer_id)
-            .is_some_and(|current| *current == target)
-        {
-            self.pointer_capture_targets.remove(&pointer_id);
+            .and_then(|state| state.pending)
+            .filter(|capture| self.pointer_capture_target_is_current(*capture));
+        let Some(state) = self.pointers.get_mut(&pointer_id) else {
+            return (None, None);
+        };
+        state.pending = pending;
+        if state.active == pending {
+            return (None, None);
         }
-        if self
-            .pending_pointer_capture_targets
-            .get(&pointer_id)
-            .is_some_and(|pending| *pending == target)
-        {
-            self.pending_pointer_capture_targets.remove(&pointer_id);
-        }
+        let previous = state.active.take();
+        let lost_target = previous.and_then(|capture| {
+            let document = self.input_document_for_owner(capture.document)?;
+            Some(if self.pointer_capture_target_is_current(capture) {
+                capture.element
+            } else {
+                document
+            })
+        });
+        (lost_target, pending)
     }
 
-    pub(crate) fn lost_pointer_capture_target_after_got(
+    pub(crate) fn finish_pointer_capture_transition(
         &mut self,
         pointer_id: i32,
-        target: DomHandle,
+        capture: PointerCaptureTarget,
     ) -> Option<DomHandle> {
-        if self.dom_host().is_connected(target) {
+        if self.pointer_capture_target_is_current(capture) {
+            if let Some(state) = self.pointers.get_mut(&pointer_id) {
+                state.active = Some(capture);
+            }
             return None;
         }
-        self.clear_pointer_capture_target_if_matches(pointer_id, target);
-        Some(self.document_handle())
-    }
-
-    pub(crate) fn process_pending_pointer_capture(
-        &mut self,
-        pointer_id: i32,
-    ) -> Vec<PointerCaptureDispatchEvent> {
-        let current_target = self.pointer_capture_targets.get(&pointer_id).copied();
-        let pending_target = self
-            .pending_pointer_capture_targets
-            .get(&pointer_id)
-            .copied()
-            .filter(|target| self.dom_host().is_connected(*target));
-
-        if pending_target.is_none() {
-            self.pending_pointer_capture_targets.remove(&pointer_id);
+        if let Some(state) = self.pointers.get_mut(&pointer_id)
+            && state.pending == Some(capture)
+        {
+            state.pending = None;
         }
-
-        if current_target == pending_target {
-            return Vec::new();
-        }
-
-        let mut events = Vec::new();
-        if let Some(current_target) = current_target {
-            let target = if self.dom_host().is_connected(current_target) {
-                current_target
-            } else {
-                self.document_handle()
-            };
-            self.pointer_capture_targets.remove(&pointer_id);
-            events.push(PointerCaptureDispatchEvent {
-                event_name: "lostpointercapture",
-                target,
-            });
-        }
-
-        if let Some(pending_target) = pending_target {
-            self.pointer_capture_targets
-                .insert(pointer_id, pending_target);
-            events.push(PointerCaptureDispatchEvent {
-                event_name: "gotpointercapture",
-                target: pending_target,
-            });
-        }
-
-        events
+        self.input_document_for_owner(capture.document)
     }
 }

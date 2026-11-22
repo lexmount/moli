@@ -275,6 +275,49 @@ impl PageScriptHost {
         Some(WindowDocumentTaskTarget::new(owner, dispatch_scope))
     }
 
+    pub(crate) fn input_document_for_owner(
+        &self,
+        owner: WindowDocumentTaskTarget,
+    ) -> Option<DomHandle> {
+        let scope = owner.dispatch_scope();
+        if self.current_window_document_task_target_for_dispatch_scope(scope) != Some(owner) {
+            return None;
+        }
+        match scope {
+            OwnerDispatchScope::Top => Some(self.document_handle()),
+            OwnerDispatchScope::Child(frame) => self
+                .child_browsing_context_host_is_active(frame)
+                .then(|| self.child_browsing_context_document_handle(frame))
+                .flatten(),
+            OwnerDispatchScope::LightweightPopup(popup) => {
+                self.lightweight_popup_document_handle(popup)
+            }
+        }
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn input_owner_for_document(
+        &self,
+        document: DomHandle,
+        sampled: Option<&super::PublishedFrameGeometry>,
+    ) -> Option<WindowDocumentTaskTarget> {
+        if document == self.document_handle() {
+            return self
+                .current_window_document_task_target_for_dispatch_scope(OwnerDispatchScope::Top);
+        }
+        if self.layout_policy().uses_real_layout() {
+            let state = self.document_layout_state.borrow();
+            return state
+                .frame_geometry()
+                .map(std::rc::Rc::as_ref)
+                .or(sampled)?
+                .owner_for_document(self, document);
+        }
+        let scope = self.owner_dispatch_scope_for_node(document)?;
+        let owner = self.current_window_document_task_target_for_dispatch_scope(scope)?;
+        (self.input_document_for_owner(owner) == Some(document)).then_some(owner)
+    }
+
     pub(crate) fn current_window_document_task_target(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
