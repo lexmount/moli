@@ -1,7 +1,156 @@
 use super::*;
 use crate::runtime::{
-    RendererCaptureScreenshotRequest, RendererPrintToPdfReply, RendererPrintToPdfRequest,
+    RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest, RendererPrintToPdfReply,
+    RendererPrintToPdfRequest, RendererScreenshotPurpose,
 };
+use moli_page_types::LayoutPolicy;
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_pdf_embeds_a_loaded_font_under_its_print_declaration() {
+    run_page_vm_async_test(async move {
+        use base64::Engine;
+
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        loader.set_optional_resource_fetch_mask(crate::protocol_types::OptionalResourceFetchMask::FONT);
+        let data = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+            "../../../../../../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+            let mut page = test_page_vm_with_loader_and_document_url(
+                &loader,
+                Vec::new(),
+                Url::parse("https://cached-print-sources.test/")?,
+            );
+            page.layout_configuration.policy = policy;
+            page.vm_mut().set_layout_policy(policy);
+            let loaded = page.vm_mut().eval(&format!(r#"
+                document.head.innerHTML = '<style>' +
+                    '@media screen {{ @font-face {{ font-family: ScreenOnly; src: url(data:font/woff2;base64,{data}) }} }}' +
+                    '@media print {{ @font-face {{ font-family: PrintOnly; src: url(data:font/woff2;base64,{data}) }}' +
+                    'p {{ font-family: PrintOnly }} }}' + '</style>';
+                document.body.innerHTML = '<p style="font-size:16px">Cached text</p>';
+                window.screenFonts = document.fonts;
+                window.screenFace = [...screenFonts].find(face => face.family === 'ScreenOnly');
+                screenFace.load();
+                JSON.stringify([screenFonts.size, screenFace.status]);
+            "#))?;
+            assert_eq!(loaded, r#"[1,"loaded"]"#);
+            let fonts = page.vm_mut().document_web_font_counts_for_test();
+            let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;
+
+            let reply = page.print_to_pdf(RendererPrintToPdfRequest::default())?;
+            let RendererPrintToPdfReply::Printed(bytes) = reply else {
+                anyhow::bail!("expected PDF for {policy:?}, got {reply:?}");
+            };
+            let pdf = lopdf::Document::load_mem(&bytes)?;
+            assert!(pdf.extract_text(&[1])?.contains("Cached text"));
+            assert!(
+                pdf.objects.values().any(|object| {
+                    object.as_dict().is_ok_and(|dict| {
+                        dict.get(b"BaseFont")
+                            .and_then(lopdf::Object::as_name)
+                            .is_ok_and(|name| String::from_utf8_lossy(name).contains("MoliAhem"))
+                    })
+                }),
+                "{policy:?} must embed the font loaded through the screen declaration"
+            );
+            assert_eq!(page.vm().layout_snapshot_cache_observability_for_test().2, publishes);
+            assert_eq!(page.vm_mut().document_web_font_counts_for_test(), fonts);
+            assert_eq!(
+                page.vm_mut().eval(
+                    "JSON.stringify([document.fonts === screenFonts, screenFonts.size, \
+                     screenFonts.has(screenFace), screenFace.status, matchMedia('print').matches])"
+                )?,
+                r#"[true,1,true,"loaded",false]"#
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("printing should reuse the loaded font without changing the screen FontFaceSet");
+}
+
+#[test]
+fn print_truncates_deep_frames_without_publishing_partial_screen_layout() {
+    run_page_vm_large_stack_async_test("bounded-print-frame-coverage", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+            for depth in [31, 32] {
+                let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+                    &loader,
+                    Url::parse("https://bounded-print.test/").unwrap(),
+                );
+                page.layout_configuration.policy = policy;
+                page.vm_mut().set_layout_policy(policy);
+                let count = page
+                    .vm_mut()
+                    .eval(&format!(
+                        r#"(() => {{
+                        let d = document;
+                        d.body.innerHTML = '<p>Layer 0</p>';
+                        for (let i = 1; i <= {depth}; ++i) {{
+                            const frame = d.createElement('iframe');
+                            frame.style.cssText = 'width:400px;height:100px;border:0';
+                            d.body.appendChild(frame);
+                            d = frame.contentDocument;
+                            d.body.innerHTML = '<p>Layer ' + i + '</p>';
+                        }}
+                        let count = 0;
+                        for (d = document; d; ++count) {{
+                            const frame = d.querySelector('iframe');
+                            d = frame && frame.contentDocument;
+                        }}
+                        return count;
+                    }})()"#,
+                    ))
+                    .unwrap();
+                assert_eq!(count, (depth + 1).to_string());
+                let strict_screen_exceeds_depth = policy.is_realtime() && depth == 32;
+                let screen_width = page.vm_mut().eval("document.body.offsetWidth");
+                if strict_screen_exceeds_depth {
+                    assert!(
+                        screen_width
+                            .unwrap_err()
+                            .to_string()
+                            .contains("embedded frame coverage")
+                    );
+                } else {
+                    assert!(screen_width.unwrap().parse::<u32>().unwrap() > 0);
+                }
+                let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;
+
+                let reply = page
+                    .print_to_pdf(RendererPrintToPdfRequest::default())
+                    .unwrap();
+                let RendererPrintToPdfReply::Printed(bytes) = reply else {
+                    panic!("PDF output for {policy:?} at depth {depth} failed with {reply:?}");
+                };
+                let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+                assert!(pdf.extract_text(&[1]).unwrap().contains("Layer 0"));
+
+                let reply = page
+                    .capture_screenshot(RendererCaptureScreenshotRequest {
+                        purpose: RendererScreenshotPurpose::Print {
+                            print_background: true,
+                        },
+                        ..RendererCaptureScreenshotRequest::viewport_png()
+                    })
+                    .unwrap();
+                assert!(
+                    matches!(reply, RendererCaptureScreenshotReply::Captured(image) if !image.bytes.is_empty())
+                );
+                assert_eq!(
+                    page.vm().layout_snapshot_cache_observability_for_test().2,
+                    publishes
+                );
+                if strict_screen_exceeds_depth {
+                    let error = page.vm_mut().eval("document.body.offsetWidth").unwrap_err();
+                    assert!(error.to_string().contains("embedded frame coverage"));
+                }
+            }
+        }
+    });
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn native_pdf_prints_dense_link_columns_without_losing_content_or_annotations() {
