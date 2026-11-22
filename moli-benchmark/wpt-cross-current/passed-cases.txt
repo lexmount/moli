@@ -9809,6 +9809,7 @@ resource-timing/tentative/initiator-url/set-timeout.html
 resource-timing/tentative/initiator-url/xml-http-request.html
 resource-timing/tojson.html
 resource-timing/xhr-resource-timing.html
+sanitizer-api/sethtml-xml-document.html
 scheduler/post-task-then-detach.html
 scheduler/post-task-with-signal-from-detached-iframe.html
 scheduler/tentative/yield/yield-priority-idle-callbacks.html
