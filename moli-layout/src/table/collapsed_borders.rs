@@ -10,7 +10,7 @@ use std::{fmt::Debug, hash::Hash};
 use taffy::{Rect, ResolveOrZero, style_helpers};
 
 use super::TableStructure;
-use super::structure::{TableCell, TableRow};
+use super::structure::{TableCell, row_groups};
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutRect, LayoutWorld, PaintBorderStyle, PaintColor,
     PaintEdgeSizes, ResolvedLayoutStyle, style::resolve_stylo_calc_value,
@@ -392,10 +392,10 @@ pub(super) fn prepare_collapsed_table_borders<N>(
             borders.mark_spanned_cell_interior(cell);
         }
     }
-    for row in &structure.rows {
+    for (index, row) in structure.rows.iter().enumerate() {
         box_order += 1;
         borders.merge_box(
-            row.index,
+            index,
             0,
             1,
             structure.column_count,
@@ -403,12 +403,15 @@ pub(super) fn prepare_collapsed_table_borders<N>(
             box_order,
         );
     }
-    for (group, start, span) in row_groups(&structure.rows) {
+    for (start, rows) in row_groups(&structure.rows) {
+        let Some(group) = rows[0].group else {
+            continue;
+        };
         box_order += 1;
         borders.merge_box(
             start,
             0,
-            span,
+            rows.len(),
             structure.column_count,
             &world.boxes[group.index()].style,
             box_order,
@@ -615,23 +618,6 @@ fn half(widths: PaintEdgeSizes) -> PaintEdgeSizes {
         widths.bottom / 2.0,
         widths.left / 2.0,
     )
-}
-
-fn row_groups(rows: &[TableRow]) -> Vec<(LayoutBoxId, usize, usize)> {
-    let mut groups = Vec::new();
-    for row in rows {
-        let Some(group) = row.group else {
-            continue;
-        };
-        if groups.last().is_some_and(|(last, _, _)| *last == group) {
-            if let Some((_, _, span)) = groups.last_mut() {
-                *span += 1;
-            }
-        } else {
-            groups.push((group, row.index, 1));
-        }
-    }
-    groups
 }
 
 #[cfg(test)]
