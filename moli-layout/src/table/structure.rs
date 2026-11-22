@@ -17,16 +17,7 @@ pub(super) struct TableCell {
 pub(super) struct TableRow {
     pub(super) id: LayoutBoxId,
     pub(super) group: Option<LayoutBoxId>,
-    pub(super) index: usize,
-    start_cell_index: usize,
-    cell_count: usize,
-    section_end: usize,
-}
-
-impl TableRow {
-    pub(super) fn cells(&self) -> Range<usize> {
-        self.start_cell_index..self.start_cell_index + self.cell_count
-    }
+    pub(super) cells: Range<usize>,
 }
 
 #[derive(Debug)]
@@ -95,7 +86,6 @@ impl TableStructure {
                 is_body: Some(section) != children.header && Some(section) != children.footer,
             });
         }
-        index_row_sections(&mut rows);
         place_table_cells(&mut cells, &rows, &mut column_count);
         Self {
             cells,
@@ -243,67 +233,57 @@ fn collect_rows<N>(
             rows.push(TableRow {
                 id: current,
                 group,
-                index: row_index,
-                start_cell_index,
-                cell_count: cells.len() - start_cell_index,
-                section_end: 0,
+                cells: start_cell_index..cells.len(),
             });
         }
         _ => {}
     }
 }
 
-/// Cache the end of each contiguous placement group in one reverse pass.
-/// Consecutive ungrouped rows share a boundary, just as grouped rows do.
-fn index_row_sections(rows: &mut [TableRow]) {
-    let mut next_group = None;
-    let mut section_end = rows.len();
-    for row in rows.iter_mut().rev() {
-        if next_group != Some(row.group) {
-            section_end = row.index + 1;
-            next_group = Some(row.group);
-        }
-        row.section_end = section_end;
-    }
+/// Consecutive ungrouped rows share a placement boundary too.
+pub(super) fn row_groups(rows: &[TableRow]) -> impl Iterator<Item = (usize, &[TableRow])> {
+    let mut next_row = 0;
+    rows.chunk_by(|left, right| left.group == right.group)
+        .map(move |group| {
+            let start = next_row;
+            next_row += group.len();
+            (start, group)
+        })
 }
 
 fn place_table_cells(cells: &mut [TableCell], rows: &[TableRow], max_columns: &mut usize) {
     let mut occupied_until = Vec::<usize>::new();
-    let mut active_group = None;
 
-    for row in rows {
-        if active_group != Some(row.group) {
-            occupied_until.clear();
-            active_group = Some(row.group);
-        }
-        let section_end = row.section_end;
-        let mut cursor = 0usize;
-        for cell in &mut cells[row.cells()] {
-            let span = cell.column_span.max(1);
-            loop {
-                let end = cursor.saturating_add(span);
-                if occupied_until.len() < end {
-                    occupied_until.resize(end, 0);
-                }
-                if occupied_until[cursor..end]
-                    .iter()
-                    .all(|occupied| *occupied <= row.index)
-                {
-                    cell.column = cursor;
-                    let row_span = if cell.row_span == 0 {
-                        section_end.saturating_sub(row.index)
-                    } else {
-                        cell.row_span
-                    };
-                    cell.row_span = row_span.min(section_end.saturating_sub(row.index)).max(1);
-                    for occupied in &mut occupied_until[cursor..end] {
-                        *occupied = row.index.saturating_add(cell.row_span);
+    for (start, group) in row_groups(rows) {
+        occupied_until.clear();
+        for (offset, row) in group.iter().enumerate() {
+            let row_index = start + offset;
+            let remaining_rows = group.len() - offset;
+            let mut cursor = 0usize;
+            for cell in &mut cells[row.cells.clone()] {
+                let span = cell.column_span.max(1);
+                loop {
+                    let end = cursor.saturating_add(span);
+                    if occupied_until.len() < end {
+                        occupied_until.resize(end, 0);
                     }
-                    cursor = end;
-                    *max_columns = (*max_columns).max(end);
-                    break;
+                    if occupied_until[cursor..end]
+                        .iter()
+                        .all(|occupied| *occupied <= row_index)
+                    {
+                        cell.column = cursor;
+                        cell.row_span = if cell.row_span == 0 {
+                            remaining_rows
+                        } else {
+                            cell.row_span.min(remaining_rows)
+                        };
+                        occupied_until[cursor..end].fill(row_index + cell.row_span);
+                        cursor = end;
+                        *max_columns = (*max_columns).max(end);
+                        break;
+                    }
+                    cursor += 1;
                 }
-                cursor += 1;
             }
         }
     }
@@ -354,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn indexed_placement_clips_spans_at_group_boundaries_including_ungrouped_rows() {
+    fn placement_clips_spans_at_group_boundaries_including_ungrouped_rows() {
         let a = LayoutBoxId::from_index(20);
         let b = LayoutBoxId::from_index(21);
         let groups = [Some(a), Some(a), Some(a), None, None, Some(b), None];
@@ -366,10 +346,7 @@ mod tests {
             rows.push(TableRow {
                 id: LayoutBoxId::from_index(index),
                 group,
-                index,
-                start_cell_index: cells.len(),
-                cell_count,
-                section_end: 0,
+                cells: cells.len()..cells.len() + cell_count,
             });
             for _ in 0..cell_count {
                 let (column_span, row_span) = spans[cells.len()];
@@ -382,10 +359,11 @@ mod tests {
                 });
             }
         }
-        index_row_sections(&mut rows);
         assert_eq!(
-            rows.iter().map(|row| row.section_end).collect::<Vec<_>>(),
-            [3, 3, 3, 5, 5, 6, 7]
+            row_groups(&rows)
+                .map(|(start, group)| start..start + group.len())
+                .collect::<Vec<_>>(),
+            [0..3, 3..5, 5..6, 6..7]
         );
         let mut columns = 0;
         place_table_cells(&mut cells, &rows, &mut columns);

@@ -155,7 +155,7 @@ fn apply_parent_facing_table_inline_constraints<N>(
     let mut cell_constraints = vec![None; column_count];
     let mut cell_spans = Vec::new();
     if let Some(first_row) = structure.rows.first() {
-        for cell in &structure.cells[first_row.cells()] {
+        for cell in &structure.cells[first_row.cells.clone()] {
             let constraint = authored_table_cell_inline_constraint(
                 &world.boxes[cell.id.index()].style.taffy,
                 style.writing_mode(),
@@ -565,7 +565,7 @@ impl TableContext {
             self.structure
                 .rows
                 .first()
-                .map_or(&[][..], |row| &self.structure.cells[row.cells()])
+                .map_or(&[][..], |row| &self.structure.cells[row.cells.clone()])
         } else {
             &self.structure.cells
         };
@@ -1123,11 +1123,8 @@ fn apply_structural_layout<N>(
     let content_height = row_bounds.end - row_bounds.start;
     if context.collapsed_borders {
         // Empty-section tracks occupy space without adding conflict-grid rows.
-        let mut row_lines: Vec<_> = context
-            .structure
-            .rows
-            .iter()
-            .map(|row| row_starts[context.grid_row(row.index)])
+        let mut row_lines: Vec<_> = (0..context.structure.rows.len())
+            .map(|index| row_starts[context.grid_row(index)])
             .collect();
         if let Some(first) = row_lines.first_mut() {
             *first = origin.y;
@@ -1148,15 +1145,13 @@ fn apply_structural_layout<N>(
         set_collapsed_border_geometry(world, root, &column_lines, &row_lines);
     }
 
-    for row in &context.structure.rows {
-        let y = row_starts
-            .get(context.grid_row(row.index))
-            .copied()
-            .unwrap_or(origin.y);
+    for (index, row) in context.structure.rows.iter().enumerate() {
+        let grid_row = context.grid_row(index);
+        let y = row_starts.get(grid_row).copied().unwrap_or(origin.y);
         let height = detailed
             .rows
             .positions
-            .get(context.grid_row(row.index))
+            .get(grid_row)
             .map_or(0.0, |track| track.end - track.start);
         set_table_part_layout(world, row.id, part_x, y, part_width, height);
     }
