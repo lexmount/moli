@@ -245,10 +245,10 @@ pub fn email_value_type_mismatch(value: &str, multiple: bool) -> bool {
     if multiple {
         return value
             .split(',')
-            .map(str::trim)
+            .map(|address| address.trim_matches(is_ascii_whitespace_char))
             .any(|address| address.is_empty() || !is_valid_email_address(address));
     }
-    !is_valid_email_address(value.trim())
+    !is_valid_email_address(value.trim_matches(is_ascii_whitespace_char))
 }
 
 pub fn is_valid_email_address(value: &str) -> bool {
