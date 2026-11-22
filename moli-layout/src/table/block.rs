@@ -48,14 +48,14 @@ impl TableContext {
     ) where
         N: Copy + Debug + Eq + Hash,
     {
-        let mut baselines: Vec<Option<f32>> = vec![None; self.rows.len()];
-        for cell in &self.cells {
-            if let Some(baseline) = cell.block_layout.and_then(|layout| layout.baseline) {
+        let mut baselines: Vec<Option<f32>> = vec![None; self.structure.rows.len()];
+        for (cell, layout) in self.structure.cells.iter().zip(&self.cell_layouts) {
+            if let Some(baseline) = layout.block_layout.and_then(|layout| layout.baseline) {
                 baselines[cell.row] = Some(baselines[cell.row].unwrap_or(0.0).max(baseline));
             }
         }
-        for cell in &self.cells {
-            if let Some(baseline) = cell.block_layout.and_then(|layout| layout.baseline) {
+        for (cell, layout) in self.structure.cells.iter().zip(&self.cell_layouts) {
+            if let Some(baseline) = layout.block_layout.and_then(|layout| layout.baseline) {
                 let offset = baselines[cell.row].unwrap_or(baseline) - baseline;
                 if offset > 0.0 {
                     shift_cell_contents(world, cell.id, offset);
@@ -70,11 +70,11 @@ impl TableContext {
                 .map(|track| track.start)
                 .collect();
             if let Some(Some(baseline)) = baselines.first() {
-                output.baselines.first = Some(starts[self.rows[0].grid_index] + baseline);
+                output.baselines.first = Some(starts[self.grid_row(0)] + baseline);
             }
             if let Some(Some(baseline)) = baselines.last() {
                 output.baselines.last =
-                    Some(starts[self.rows.last().unwrap().grid_index] + baseline);
+                    Some(starts[self.grid_row(self.structure.rows.len() - 1)] + baseline);
             }
         }
     }
@@ -170,6 +170,7 @@ impl TableContext {
             .unwrap_or(0.0)
             .max(min.unwrap_or(0.0));
         let mut rows: Vec<_> = self
+            .structure
             .rows
             .iter()
             .map(|row| {
@@ -186,14 +187,14 @@ impl TableContext {
             .collect();
         let mut spans = Vec::new();
         let cell_percentage_basis = self.column_sizes.iter().sum::<f32>()
-            + self.inline_border_spacing * self.column_count.saturating_sub(1) as f32;
+            + self.inline_border_spacing * self.structure.column_count.saturating_sub(1) as f32;
         // The first cell pass uses the table content box, including outer
         // spacing. The final pass uses the row width. Their padding can
         // differ without shrinking the row's first-pass minimum.
         let measurement_percentage_basis = cell_percentage_basis + 2.0 * self.inline_border_spacing;
         let mut fallback_descents = vec![None::<f32>; rows.len()];
-        for index in 0..self.cells.len() {
-            let cell = &self.cells[index];
+        for index in 0..self.structure.cells.len() {
+            let cell = self.structure.cells[index];
             let authored_style = &world.boxes[cell.id.index()].style.taffy;
             let dimension = mode.to_logical(authored_style.size).block_size;
             let cell_padding = authored_style
@@ -243,9 +244,9 @@ impl TableContext {
                 vertical_margins_are_collapsible: Line::FALSE,
             };
             // Freeze the measurement basis while determining the row minimum.
-            self.cells[index].style.padding = cell_padding.map(style_helpers::length);
+            self.cell_layouts[index].style.padding = cell_padding.map(style_helpers::length);
             let restricted = !preferred.is_auto() || fixed(dimension).is_some();
-            let cell_id = self.cells[index].id;
+            let cell_id = self.structure.cells[index].id;
             let restored =
                 restrict_scrollable_percentage_children(world, cell_id, mode, restricted);
             let mut wrapper = TableTreeWrapper {
@@ -255,13 +256,12 @@ impl TableContext {
             let output = wrapper.with_grid_cell_style(index, |world, cell| {
                 world.measure_complete_layout(cell.to_taffy(), measure_inputs)
             });
-            self.cells[index].style.padding = final_padding.map(style_helpers::length);
+            self.cell_layouts[index].style.padding = final_padding.map(style_helpers::length);
             for (id, style) in restored {
                 world.boxes[id.index()].style.taffy = style;
                 world.cache_clear(id.to_taffy());
             }
             let natural = mode.to_logical(output.size).block_size;
-            let cell = &mut self.cells[index];
             let baseline = if mode.is_horizontal() {
                 output.baselines.first.or(output.block_content_end)
             } else {
@@ -279,7 +279,7 @@ impl TableContext {
             );
             let baseline = (baseline_aligned && !world.boxes[cell.id.index()].children.is_empty())
                 .then(|| baseline.unwrap_or((natural - end_inset).max(0.0)));
-            cell.block_layout = Some(CellBlockLayout {
+            self.cell_layouts[index].block_layout = Some(CellBlockLayout {
                 size: 0.0,
                 natural_size: natural,
                 definite: fixed(dimension).is_some(),
@@ -337,8 +337,8 @@ impl TableContext {
             (used - insets).max(0.0),
             self.block_border_spacing,
         );
-        for cell in &mut self.cells {
-            let layout = cell.block_layout.as_mut().unwrap();
+        for (cell, layout) in self.structure.cells.iter().zip(&mut self.cell_layouts) {
+            let layout = layout.block_layout.as_mut().unwrap();
             layout.size = rows[cell.row..cell.row + cell.row_span]
                 .iter()
                 .map(|row| row.size)
@@ -353,9 +353,9 @@ impl TableContext {
         for row in &mut rows {
             row.ascent = None;
         }
-        for index in 0..self.cells.len() {
-            let cell = &self.cells[index];
-            let layout = cell.block_layout.unwrap();
+        for index in 0..self.structure.cells.len() {
+            let cell = self.structure.cells[index];
+            let layout = self.cell_layouts[index].block_layout.unwrap();
             if layout.baseline.is_none() {
                 continue;
             }
@@ -395,8 +395,11 @@ impl TableContext {
             let output = wrapper.with_grid_cell_style(index, |world, cell| {
                 layout_cell(world, cell, measure_inputs, mode, Some(layout))
             });
-            let cell = &mut self.cells[index];
-            cell.block_layout.as_mut().unwrap().baseline = output.baselines.first;
+            self.cell_layouts[index]
+                .block_layout
+                .as_mut()
+                .unwrap()
+                .baseline = output.baselines.first;
             if let Some(baseline) = output.baselines.first {
                 let row = &mut rows[cell.row];
                 row.ascent = Some(row.ascent.unwrap_or(0.0).max(baseline));
@@ -406,7 +409,7 @@ impl TableContext {
         // Empty sections take up height, but do not introduce cell spacing.
         // With such sections, explicit spacer tracks express the gaps before
         // real rows and after the table that a uniform Grid gap cannot model.
-        let explicit_spacing = (self.rows.is_empty()
+        let explicit_spacing = (self.structure.rows.is_empty()
             || self.sections.iter().any(|section| section.rows.is_empty()))
             && self.block_border_spacing > 0.0;
         if explicit_spacing {
@@ -416,6 +419,7 @@ impl TableContext {
             self.style.padding.bottom =
                 style_helpers::length((padding.bottom - self.block_border_spacing).max(0.0));
         }
+        self.grid_rows.resize(self.structure.rows.len(), 0);
         for section in &self.sections {
             let mut start = tracks.len();
             if section.rows.is_empty() {
@@ -430,24 +434,21 @@ impl TableContext {
                             start += 1;
                         }
                     }
-                    self.rows[index].grid_index = tracks.len();
+                    self.grid_rows[index] = tracks.len();
                     tracks.push(rows[index].size);
                 }
             }
             self.section_tracks.push(start..tracks.len());
         }
-        if explicit_spacing && !self.rows.is_empty() {
+        if explicit_spacing && !self.structure.rows.is_empty() {
             tracks.push(self.block_border_spacing);
         }
-        for cell in &mut self.cells {
-            cell.style.grid_row.start = style_helpers::line(
-                (self.rows[cell.row].grid_index + 1).min(i16::MAX as usize) as i16,
-            );
-            cell.style.grid_row.end = style_helpers::span(
-                (self.rows[cell.row + cell.row_span - 1].grid_index
-                    - self.rows[cell.row].grid_index
-                    + 1)
-                .min(u16::MAX as usize) as u16,
+        for (cell, layout) in self.structure.cells.iter().zip(&mut self.cell_layouts) {
+            layout.style.grid_row.start =
+                style_helpers::line((self.grid_rows[cell.row] + 1).min(i16::MAX as usize) as i16);
+            layout.style.grid_row.end = style_helpers::span(
+                (self.grid_rows[cell.row + cell.row_span - 1] - self.grid_rows[cell.row] + 1)
+                    .min(u16::MAX as usize) as u16,
             );
         }
         if tracks.is_empty() {
@@ -481,7 +482,7 @@ impl TableContext {
             })
             .collect();
         let baseline = |index: usize| {
-            starts[self.rows[index].grid_index]
+            starts[self.grid_row(index)]
                 + rows[index].ascent.unwrap_or_else(|| {
                     fallback_descents[index]
                         .map_or(0.0, |descent| (rows[index].size - descent).max(0.0))

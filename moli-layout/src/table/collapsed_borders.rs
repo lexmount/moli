@@ -9,7 +9,8 @@ use std::{fmt::Debug, hash::Hash};
 
 use taffy::{Rect, ResolveOrZero, style_helpers};
 
-use super::{TableCell, TableColumn, TableRow};
+use super::TableStructure;
+use super::structure::{TableCell, TableColumn, TableRow};
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutRect, LayoutWorld, PaintBorderStyle, PaintColor,
     PaintEdgeSizes, ResolvedLayoutStyle, style::resolve_stylo_calc_value,
@@ -364,22 +365,20 @@ impl CollapsedTableBorders {
     }
 }
 
-pub(super) fn prepare_collapsed_table_borders<N>(world: &mut LayoutWorld<N>, root: LayoutBoxId)
-where
+pub(super) fn prepare_collapsed_table_borders<N>(
+    world: &mut LayoutWorld<N>,
+    root: LayoutBoxId,
+    structure: &TableStructure,
+) where
     N: Copy + Debug + Eq + Hash,
 {
-    if !world.boxes[root.index()].style.table_border_is_collapsed() {
-        return;
-    }
-    let context = super::build_table_context(world, root);
-
-    let mut borders = CollapsedTableBorders::new(context.rows.len(), context.column_count);
+    let mut borders = CollapsedTableBorders::new(structure.rows.len(), structure.column_count);
     let mut box_order = 0usize;
 
     // CSS Tables conflict precedence is established by merge order. Equal
     // width/style candidates retain the first source: cell, row, row group,
     // column, column group, then table.
-    for cell in &context.cells {
+    for cell in &structure.cells {
         box_order += 1;
         borders.merge_box(
             cell.row,
@@ -393,31 +392,31 @@ where
             borders.mark_spanned_cell_interior(cell);
         }
     }
-    for row in &context.rows {
+    for row in &structure.rows {
         box_order += 1;
         borders.merge_box(
             row.index,
             0,
             1,
-            context.column_count,
+            structure.column_count,
             &world.boxes[row.id.index()].style,
             box_order,
         );
     }
-    for (group, start, span) in row_groups(&context.rows) {
+    for (group, start, span) in row_groups(&structure.rows) {
         box_order += 1;
         borders.merge_box(
             start,
             0,
             span,
-            context.column_count,
+            structure.column_count,
             &world.boxes[group.index()].style,
             box_order,
         );
     }
     box_order += 1;
     let column_box_order = box_order;
-    for column in context
+    for column in structure
         .columns
         .iter()
         .filter(|column| world.boxes[column.id.index()].kind == LayoutBoxKind::TableColumn)
@@ -426,7 +425,7 @@ where
             borders.merge_box(
                 0,
                 column.start + offset,
-                context.rows.len(),
+                structure.rows.len(),
                 1,
                 &world.boxes[column.id.index()].style,
                 column_box_order,
@@ -435,11 +434,11 @@ where
     }
     box_order += 1;
     let column_group_box_order = box_order;
-    for (group, start, span) in column_groups(world, &context.columns) {
+    for (group, start, span) in column_groups(world, &structure.columns) {
         borders.merge_box(
             0,
             start,
-            context.rows.len(),
+            structure.rows.len(),
             span,
             &world.boxes[group.index()].style,
             column_group_box_order,
@@ -449,8 +448,8 @@ where
     borders.merge_box(
         0,
         0,
-        context.rows.len(),
-        context.column_count,
+        structure.rows.len(),
+        structure.column_count,
         &world.boxes[root.index()].style,
         box_order,
     );
@@ -458,18 +457,18 @@ where
     let table_strut = borders.table_strut();
     set_layout_border(world, root, table_strut);
     world.boxes[root.index()].collapsed_table_border_part = true;
-    for cell in &context.cells {
+    for cell in &structure.cells {
         let strut = borders.cell_strut(cell);
         set_layout_border(world, cell.id, strut);
         world.boxes[cell.id.index()].collapsed_table_border_part = true;
     }
-    for part in context
+    for part in structure
         .rows
         .iter()
         .map(|row| row.id)
-        .chain(context.rows.iter().filter_map(|row| row.group))
-        .chain(context.columns.iter().map(|column| column.id))
-        .chain(context.columns.iter().filter_map(|column| column.group))
+        .chain(structure.rows.iter().filter_map(|row| row.group))
+        .chain(structure.columns.iter().map(|column| column.id))
+        .chain(structure.columns.iter().filter_map(|column| column.group))
     {
         world.boxes[part.index()].collapsed_table_border_part = true;
     }

@@ -140,6 +140,7 @@ where
 {
     world.resolved_grid_tracks.clear();
     world.native_grid_details.clear();
+    world.table_structures.clear();
     for index in 0..world.boxes.len() {
         world.clear_layout_caches(LayoutBoxId::from_index(index));
         let layout_box = &mut world.boxes[index];
