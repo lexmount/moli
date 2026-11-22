@@ -17,7 +17,7 @@ pub(super) struct TableCell {
 pub(super) struct TableRow {
     pub(super) id: LayoutBoxId,
     pub(super) group: Option<LayoutBoxId>,
-    pub(super) cells: Range<usize>,
+    cells: Range<usize>,
 }
 
 #[derive(Debug)]
@@ -54,6 +54,12 @@ pub(crate) struct TableStructure {
 }
 
 impl TableStructure {
+    pub(super) fn first_row_cells(&self) -> &[TableCell] {
+        self.rows
+            .first()
+            .map_or(&[], |row| &self.cells[row.cells.clone()])
+    }
+
     pub(super) fn column_groups(&self) -> impl Iterator<Item = (LayoutBoxId, Range<usize>)> + '_ {
         // Each column group is collected as one contiguous run.
         self.columns

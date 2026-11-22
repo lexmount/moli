@@ -154,15 +154,13 @@ fn apply_parent_facing_table_inline_constraints<N>(
     let mut columns = authored_column_constraints(world, structure);
     let mut cell_constraints = vec![None; column_count];
     let mut cell_spans = Vec::new();
-    if let Some(first_row) = structure.rows.first() {
-        for cell in &structure.cells[first_row.cells.clone()] {
-            let constraint = authored_table_cell_inline_constraint(
-                &world.boxes[cell.id.index()].style.taffy,
-                style.writing_mode(),
-                TableLayoutMode::Fixed,
-            );
-            collect_cell_constraint(cell, constraint, &mut cell_constraints, &mut cell_spans);
-        }
+    for cell in structure.first_row_cells() {
+        let (constraint, _) = authored_table_cell_inline_constraint(
+            &world.boxes[cell.id.index()].style.taffy,
+            style.writing_mode(),
+            TableLayoutMode::Fixed,
+        );
+        collect_cell_constraint(cell, constraint, &mut cell_constraints, &mut cell_spans);
     }
     apply_cell_constraints(
         &mut columns,
@@ -562,10 +560,7 @@ impl TableContext {
         let mut cell_constraints = vec![None; self.structure.column_count];
         let mut cell_spans = Vec::new();
         let measured_cells = if self.layout_mode.is_fixed() {
-            self.structure
-                .rows
-                .first()
-                .map_or(&[][..], |row| &self.structure.cells[row.cells.clone()])
+            self.structure.first_row_cells()
         } else {
             &self.structure.cells
         };
@@ -780,11 +775,12 @@ fn dimension_track(dimension: Dimension) -> TableColumnConstraint {
     }
 }
 
+/// Returns the authored constraint and the inline insets used by width limits.
 fn authored_table_cell_inline_constraint(
     style: &Style<Atom>,
     table_writing_mode: WritingMode,
     mode: TableLayoutMode,
-) -> TableCellInlineConstraint {
+) -> (TableCellInlineConstraint, f32) {
     let padding = style
         .padding
         .resolve_or_zero(None, resolve_stylo_calc_value);
@@ -802,13 +798,16 @@ fn authored_table_cell_inline_constraint(
         } else {
             0.0
         };
-    TableCellInlineConstraint {
-        min_inline_size: 0.0,
-        max_inline_size: preferred.unwrap_or(percent_border_padding),
-        percent,
-        percent_border_padding,
-        is_constrained: preferred.is_some(),
-    }
+    (
+        TableCellInlineConstraint {
+            min_inline_size: 0.0,
+            max_inline_size: preferred.unwrap_or(percent_border_padding),
+            percent,
+            percent_border_padding,
+            is_constrained: preferred.is_some(),
+        },
+        inline_insets,
+    )
 }
 
 fn table_cell_inline_constraint<N>(
@@ -820,17 +819,14 @@ fn table_cell_inline_constraint<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let style = world.boxes[cell.index()].style.taffy.clone();
-    let padding = style
-        .padding
-        .resolve_or_zero(None, resolve_stylo_calc_value);
-    let border = style.border.resolve_or_zero(None, resolve_stylo_calc_value);
-    let inline_insets = physical_inline_sum(table_writing_mode, padding)
-        + physical_inline_sum(table_writing_mode, border);
-    let logical_size = table_writing_mode.to_logical(style.size);
+    let style = &world.boxes[cell.index()].style.taffy;
+    let (mut constraint, inline_insets) =
+        authored_table_cell_inline_constraint(style, table_writing_mode, mode);
+    let preferred = constraint
+        .is_constrained
+        .then_some(constraint.max_inline_size);
     let logical_min_size = table_writing_mode.to_logical(style.min_size);
     let logical_max_size = table_writing_mode.to_logical(style.max_size);
-    let preferred = outer_fixed_size(logical_size.inline_size, inline_insets, style.box_sizing);
     let css_min = outer_fixed_size(
         logical_min_size.inline_size.into(),
         inline_insets,
@@ -841,9 +837,6 @@ where
         inline_insets,
         style.box_sizing,
     );
-    let percent = (logical_size.inline_size.tag() == taffy::CompactLength::PERCENT_TAG)
-        .then(|| logical_size.inline_size.value().max(0.0));
-
     let (content_min, content_max) = if mode.is_fixed() {
         let max = if preferred.is_none() {
             measure_table_cell_intrinsic_inline_size(
@@ -883,22 +876,9 @@ where
         content_max = content_max.min(css_max);
         min_inline_size = min_inline_size.min(css_max);
     }
-    let max_inline_size = min_inline_size.max(content_max);
-    let percent_border_padding =
-        if mode.is_fixed() && percent.is_some() && style.box_sizing == taffy::BoxSizing::ContentBox
-        {
-            inline_insets
-        } else {
-            0.0
-        };
-
-    TableCellInlineConstraint {
-        min_inline_size,
-        max_inline_size,
-        percent,
-        percent_border_padding,
-        is_constrained: preferred.is_some(),
-    }
+    constraint.min_inline_size = min_inline_size;
+    constraint.max_inline_size = min_inline_size.max(content_max);
+    constraint
 }
 
 fn measure_table_cell_intrinsic_inline_size<N>(
