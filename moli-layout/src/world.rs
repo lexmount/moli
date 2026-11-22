@@ -636,6 +636,8 @@ where
     /// Winning collapsed-table edges, computed and consumed in this pass.
     /// Empty slots are not embedded in boxes that do not own a table.
     pub(crate) collapsed_table_borders: HashMap<LayoutBoxId, crate::table::CollapsedTableBorders>,
+    /// Row and column structure stays valid throughout one numeric pass.
+    pub(crate) table_structures: HashMap<LayoutBoxId, std::sync::Arc<crate::table::TableStructure>>,
     /// Used Grid tracks for actual owners. Their canonical result is frozen
     /// for CSSOM before this pass-local map is released.
     pub(crate) resolved_grid_tracks: HashMap<LayoutBoxId, LayoutResolvedGridTracks>,
@@ -670,6 +672,7 @@ where
             boxes: vec![root],
             box_caches: Vec::new(),
             collapsed_table_borders: HashMap::new(),
+            table_structures: HashMap::new(),
             resolved_grid_tracks: HashMap::new(),
             native_grid_details: HashMap::new(),
             source_mapping: HashMap::new(),

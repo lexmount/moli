@@ -9,7 +9,7 @@
 // fixed table layout, producing equal 150px tracks in the pinned differential
 // fixture instead of Blitz/Taffy's 130px/170px split.
 
-use std::{fmt::Debug, hash::Hash};
+use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use style::Atom;
 use taffy::{
@@ -30,6 +30,7 @@ mod cache;
 mod collapsed_borders;
 mod columns;
 mod rows;
+mod structure;
 
 pub(crate) use cache::TableMeasureCache;
 pub(crate) use collapsed_borders::CollapsedTableBorders;
@@ -40,116 +41,24 @@ use columns::{
     compute_grid_inline_min_max, distribute_auto_columns, distribute_fixed_columns,
     fixed_grid_min_inline_size,
 };
+use structure::TableCell;
+pub(crate) use structure::TableStructure;
 
-#[derive(Clone)]
-struct TableCell {
-    id: LayoutBoxId,
+struct TableCellLayout {
     style: Style<Atom>,
-    row: usize,
-    column: usize,
-    row_span: usize,
-    column_span: usize,
     block_layout: Option<block::CellBlockLayout>,
 }
 
-#[derive(Clone, Copy)]
-struct TableRow {
-    id: LayoutBoxId,
-    group: Option<LayoutBoxId>,
-    index: usize,
-    grid_index: usize,
-    start_cell_index: usize,
-    cell_count: usize,
-    section_end: usize,
-}
-
-impl TableRow {
-    fn cells(&self) -> std::ops::Range<usize> {
-        self.start_cell_index..self.start_cell_index + self.cell_count
-    }
-}
-
-#[derive(Clone, Copy)]
-struct TableColumn {
-    id: LayoutBoxId,
-    group: Option<LayoutBoxId>,
-    start: usize,
-    span: usize,
-}
-
-/// Direct table children grouped by their CSS table role.
-///
-/// A table's first header and footer groups have a visual position independent
-/// of tree order. Keeping this grouping as a first-class input ensures row
-/// placement, first-row column constraints, and structural box geometry all
-/// consume the same section order.
-#[derive(Default)]
-struct TableGroupedChildren {
-    captions: Vec<LayoutBoxId>,
-    columns: Vec<LayoutBoxId>,
-    header: Option<LayoutBoxId>,
-    bodies: Vec<LayoutBoxId>,
-    footer: Option<LayoutBoxId>,
-}
-
-impl TableGroupedChildren {
-    fn collect<N>(world: &LayoutWorld<N>, root: LayoutBoxId) -> Self
-    where
-        N: Copy + Debug + Eq + Hash,
-    {
-        let mut grouped = Self::default();
-        for child in world.boxes[root.index()].children.iter().copied() {
-            match world.boxes[child.index()].kind {
-                LayoutBoxKind::TableCaption => grouped.captions.push(child),
-                LayoutBoxKind::TableColumnGroup | LayoutBoxKind::TableColumn => {
-                    grouped.columns.push(child)
-                }
-                LayoutBoxKind::TableHeaderGroup => {
-                    if grouped.header.is_none() {
-                        grouped.header = Some(child);
-                    } else {
-                        grouped.bodies.push(child);
-                    }
-                }
-                LayoutBoxKind::TableRowGroup
-                | LayoutBoxKind::AnonymousTableRowGroup
-                | LayoutBoxKind::TableRow
-                | LayoutBoxKind::AnonymousTableRow => grouped.bodies.push(child),
-                LayoutBoxKind::TableFooterGroup => {
-                    if grouped.footer.is_none() {
-                        grouped.footer = Some(child);
-                    } else {
-                        grouped.bodies.push(child);
-                    }
-                }
-                _ => {}
-            }
-        }
-        grouped
-    }
-
-    fn sections(&self) -> impl Iterator<Item = LayoutBoxId> + '_ {
-        self.header
-            .iter()
-            .copied()
-            .chain(self.bodies.iter().copied())
-            .chain(self.footer.iter().copied())
-    }
-}
-
 struct TableContext {
+    structure: Arc<TableStructure>,
     style: Style<Atom>,
-    cells: Vec<TableCell>,
-    rows: Vec<TableRow>,
-    columns: Vec<TableColumn>,
-    captions: Vec<LayoutBoxId>,
+    cell_layouts: Vec<TableCellLayout>,
+    grid_rows: Vec<usize>,
     detailed: Option<DetailedGridInfo<Atom>>,
     collapsed_borders: bool,
-    column_count: usize,
     column_constraints: Vec<TableColumnConstraint>,
     column_sizes: Vec<f32>,
     sections: Vec<rows::SectionConstraint>,
-    section_boxes: Vec<LayoutBoxId>,
     section_tracks: Vec<std::ops::Range<usize>>,
     measured_baselines: (Option<f32>, Option<f32>),
     caption_inline_min: f32,
@@ -196,45 +105,87 @@ where
 {
     tables.sort_unstable_by_key(|id| id.index());
     for root in tables {
-        if !world.boxes[root.index()].children.iter().any(|child| {
-            let kind = world.boxes[child.index()].kind;
-            kind.is_internal_table_box() || kind == LayoutBoxKind::TableCaption
-        }) {
+        let table = &world.boxes[root.index()];
+        let collapsed = table.style.table_border_is_collapsed();
+        let fixed = table.style.uses_fixed_table_layout();
+        if (!collapsed && !fixed)
+            || !table.children.iter().any(|child| {
+                let kind = world.boxes[child.index()].kind;
+                kind.is_internal_table_box() || kind == LayoutBoxKind::TableCaption
+            })
+        {
             continue;
         }
-        prepare_collapsed_table_borders(world, root);
-        apply_parent_facing_table_inline_constraints(world, root);
+        let structure = table_structure(world, root);
+        if collapsed {
+            prepare_collapsed_table_borders(world, root, &structure);
+        }
+        if fixed {
+            apply_parent_facing_table_inline_constraints(world, root, &structure);
+        }
     }
 }
 
-/// Expose the table grid's minimum inline size to the parent formatting
-/// context. The numeric Grid backend only sees the table after its parent has
-/// resolved the child's used size, so returning an oversized LayoutOutput is
-/// too late to influence that decision.
-///
-/// Blink performs the equivalent work through `ComputeGridInlineMinMax`
-/// before `ComputeUsedInlineSizeForTableFragment`. Moli keeps the same
-/// boundary explicit while adapting the table algorithm to Taffy's parent
-/// sizing contract.
-fn apply_parent_facing_table_inline_constraints<N>(world: &mut LayoutWorld<N>, root: LayoutBoxId)
+fn table_structure<N>(world: &mut LayoutWorld<N>, root: LayoutBoxId) -> Arc<TableStructure>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    if !world.boxes[root.index()].style.uses_fixed_table_layout() {
-        return;
+    if let Some(structure) = world.table_structures.get(&root) {
+        return Arc::clone(structure);
     }
-    let mut context = build_table_context(world, root);
-    context.collect_authored_fixed_cell_constraints(world);
-    let min_border_box_size = context.fixed_grid_min_border_box_size();
+    let structure = Arc::new(TableStructure::collect(world, root));
+    world.table_structures.insert(root, Arc::clone(&structure));
+    structure
+}
+
+/// Expose the fixed table grid's minimum inline size before its parent
+/// formatting context resolves the child's used size.
+fn apply_parent_facing_table_inline_constraints<N>(
+    world: &mut LayoutWorld<N>,
+    root: LayoutBoxId,
+    structure: &TableStructure,
+) where
+    N: Copy + Debug + Eq + Hash,
+{
+    let style = &world.boxes[root.index()].style;
+    let collapsed = style.table_border_is_collapsed();
+    let spacing = table_spacing(style, collapsed);
+    let column_count = structure.column_count;
+    let mut columns = authored_column_constraints(world, structure);
+    let mut cell_constraints = vec![None; column_count];
+    let mut cell_spans = Vec::new();
+    if let Some(first_row) = structure.rows.first() {
+        for cell in &structure.cells[first_row.cells()] {
+            let constraint = authored_table_cell_inline_constraint(
+                &world.boxes[cell.id.index()].style.taffy,
+                style.writing_mode(),
+                TableLayoutMode::Fixed,
+            );
+            collect_cell_constraint(cell, constraint, &mut cell_constraints, &mut cell_spans);
+        }
+    }
+    apply_cell_constraints(
+        &mut columns,
+        &cell_constraints,
+        &mut cell_spans,
+        spacing.width,
+        TableLayoutMode::Fixed,
+    );
 
     let style = &mut world.boxes[root.index()].style.taffy;
-    let percentage_basis = None;
     let padding = style
         .padding
-        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-    let border = style
-        .border
-        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+        .resolve_or_zero(None, resolve_stylo_calc_value);
+    let grid_padding = if collapsed {
+        padding
+    } else {
+        add_table_spacing(padding, spacing)
+    };
+    let border = style.border.resolve_or_zero(None, resolve_stylo_calc_value);
+    let grid_inline_insets = grid_padding.left + grid_padding.right + border.left + border.right;
+    let internal_spacing = spacing.width.max(0.0) * column_count.saturating_sub(1) as f32;
+    let min_border_box_size =
+        fixed_grid_min_inline_size(&columns) + grid_inline_insets + internal_spacing;
     let parent_inline_insets = padding.left + padding.right + border.left + border.right;
     let min_style_size = if style.box_sizing == taffy::BoxSizing::ContentBox {
         (min_border_box_size - parent_inline_insets).max(0.0)
@@ -258,7 +209,8 @@ pub(crate) fn compute_table_layout<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let mut context = build_table_context(world, root);
+    let structure = table_structure(world, root);
+    let mut context = build_table_context(world, root, structure);
     context.collect_cell_inline_constraints(world);
     let mut grid_inputs = context.resolve_column_tracks(inputs);
     let allocated_wrapper = world.boxes[root.index()]
@@ -267,14 +219,17 @@ where
             let display = world.boxes[parent.index()].style.display();
             display.is_flex_container() || display.is_grid_container()
         });
-    if allocated_wrapper && !context.captions.is_empty() && context.writing_mode.is_horizontal() {
+    if allocated_wrapper
+        && !context.structure.captions.is_empty()
+        && context.writing_mode.is_horizontal()
+    {
         let mut space = grid_inputs.constraint_space(context.writing_mode);
         if let Some(block_size) = space.known_size.block_size {
             // Flex/Grid allocate the complete wrapper. Caption space must not
             // be allocated to the table grid a second time.
             let captions = layout_captions(
                 world,
-                &context.captions,
+                &context.structure.captions,
                 space.known_size.inline_size.unwrap_or(0.0),
                 0.0,
                 context.writing_mode,
@@ -349,12 +304,14 @@ where
     {
         let caption_parent_writing_mode = world.boxes[root.index()].style.writing_mode();
         let top_captions = context
+            .structure
             .captions
             .iter()
             .copied()
             .filter(|caption| !world.boxes[caption.index()].style.caption_is_bottom())
             .collect::<Vec<_>>();
         let bottom_captions = context
+            .structure
             .captions
             .iter()
             .copied()
@@ -378,7 +335,7 @@ where
         );
         if inputs.run_mode == RunMode::PerformLayout {
             context.align_row_baselines(world, &mut output);
-            shift_grid_children(world, &context.cells, top_height);
+            shift_grid_children(world, &context.structure.cells, top_height);
             apply_structural_layout(world, root, &context, top_height, output.size);
         }
         if let Some(first_baseline) = &mut output.baselines.first {
@@ -399,94 +356,95 @@ where
     output
 }
 
-fn build_table_context<N>(world: &LayoutWorld<N>, root: LayoutBoxId) -> TableContext
+fn build_table_context<N>(
+    world: &LayoutWorld<N>,
+    root: LayoutBoxId,
+    structure: Arc<TableStructure>,
+) -> TableContext
 where
     N: Copy + Debug + Eq + Hash,
 {
     let root_style = &world.boxes[root.index()].style;
     let collapsed = root_style.table_border_is_collapsed();
-    let spacing = if collapsed {
-        Size::ZERO
-    } else {
-        root_style.table_border_spacing()
-    };
+    let spacing = table_spacing(root_style, collapsed);
+    let writing_mode = root_style.writing_mode();
     let mut style = root_style.taffy.clone();
     style.display = Display::Grid;
     style.item_is_table = true;
     style.grid_auto_flow = GridAutoFlow::RowDense;
     style.grid_auto_columns.clear();
     style.grid_auto_rows.clear();
-
-    let grouped_children = TableGroupedChildren::collect(world, root);
-    let mut cells = Vec::new();
-    let mut rows = Vec::new();
-    let mut columns = Vec::new();
-    let mut max_columns = 0usize;
-    let mut column_tracks = Vec::new();
-    let mut sections = Vec::new();
-    let mut section_boxes = Vec::new();
     let layout_mode = if root_style.uses_fixed_table_layout() {
         TableLayoutMode::Fixed
     } else {
         TableLayoutMode::Automatic
     };
-    let writing_mode = root_style.writing_mode();
-    for column in grouped_children.columns.iter().copied() {
-        collect_columns(world, column, None, &mut columns, &mut column_tracks);
-    }
-    for section in grouped_children.sections() {
-        let start = rows.len();
-        collect_rows(world, section, None, &mut rows, &mut cells);
-        {
+    let column_constraints = authored_column_constraints(world, &structure);
+    let sections = structure
+        .sections
+        .iter()
+        .map(|section| {
+            let layout_box = &world.boxes[section.id.index()];
             let dimension = writing_mode
-                .to_logical(world.boxes[section.index()].style.taffy.size)
+                .to_logical(layout_box.style.taffy.size)
                 .block_size;
             let is_group = matches!(
-                world.boxes[section.index()].kind,
+                layout_box.kind,
                 LayoutBoxKind::TableRowGroup
                     | LayoutBoxKind::TableHeaderGroup
                     | LayoutBoxKind::TableFooterGroup
                     | LayoutBoxKind::AnonymousTableRowGroup
             );
-            sections.push(rows::SectionConstraint {
-                rows: start..rows.len(),
+            rows::SectionConstraint {
+                rows: section.rows.clone(),
                 fixed: (is_group && dimension.tag() == taffy::CompactLength::LENGTH_TAG)
                     .then(|| dimension.value().max(0.0)),
                 percent: (is_group && dimension.tag() == taffy::CompactLength::PERCENT_TAG)
                     .then(|| dimension.value().max(0.0)),
-                is_body: Some(section) != grouped_children.header
-                    && Some(section) != grouped_children.footer,
+                is_body: section.is_body,
                 size: 0.0,
-            });
-            section_boxes.push(section);
-        }
-    }
-    index_row_sections(&mut rows);
-    place_table_cells(&mut cells, &rows, &mut max_columns);
-    max_columns = max_columns.max(column_tracks.len()).max(1);
-    column_tracks.resize(max_columns, TableColumnConstraint::auto());
-    for cell in &mut cells {
-        cell.style.grid_column = Line {
-            start: style_helpers::line((cell.column + 1).min(i16::MAX as usize) as i16),
-            end: style_helpers::span(cell.column_span as u16),
-        };
-        cell.style.grid_row = Line {
-            start: style_helpers::line((cell.row + 1).min(i16::MAX as usize) as i16),
-            end: style_helpers::span(cell.row_span as u16),
-        };
-        clear_table_cell_inline_sizing(&mut cell.style, writing_mode);
-        if writing_mode.is_horizontal() {
-            block::clear_cell_block_sizing(&mut cell.style, writing_mode);
-        }
-    }
+            }
+        })
+        .collect::<Vec<_>>();
+    let cell_layouts = structure
+        .cells
+        .iter()
+        .map(|cell| {
+            let authored = &world.boxes[cell.id.index()].style;
+            let mut style = authored.taffy.clone();
+            style.margin = Rect::ZERO.map(style_helpers::length);
+            if style.align_content.keyword() == taffy::AlignContentKeyword::Normal {
+                style.align_content = match authored.vertical_align().kind {
+                    LayoutInlineAlignment::Middle => taffy::AlignContent::CENTER,
+                    LayoutInlineAlignment::Bottom => taffy::AlignContent::END,
+                    LayoutInlineAlignment::Top => taffy::AlignContent::START,
+                    LayoutInlineAlignment::Baseline
+                    | LayoutInlineAlignment::TextTop
+                    | LayoutInlineAlignment::TextBottom => taffy::AlignContent::NORMAL,
+                };
+            }
+            style.grid_column = Line {
+                start: style_helpers::line((cell.column + 1).min(i16::MAX as usize) as i16),
+                end: style_helpers::span(cell.column_span as u16),
+            };
+            style.grid_row = Line {
+                start: style_helpers::line((cell.row + 1).min(i16::MAX as usize) as i16),
+                end: style_helpers::span(cell.row_span as u16),
+            };
+            clear_table_cell_inline_sizing(&mut style, writing_mode);
+            if writing_mode.is_horizontal() {
+                block::clear_cell_block_sizing(&mut style, writing_mode);
+            }
+            TableCellLayout {
+                style,
+                block_layout: None,
+            }
+        })
+        .collect();
     let placeholder_track: taffy::TrackSizingFunction = style_helpers::auto();
     style.grid_template_columns =
-        std::iter::repeat_n(placeholder_track.into(), max_columns).collect();
-    style.grid_template_rows = if rows.is_empty() {
-        vec![style_helpers::auto()]
-    } else {
-        vec![style_helpers::auto(); rows.len()]
-    };
+        std::iter::repeat_n(placeholder_track.into(), structure.column_count).collect();
+    style.grid_template_rows = vec![style_helpers::auto(); structure.rows.len().max(1)];
     style.gap = Size {
         width: style_helpers::length(spacing.width),
         height: style_helpers::length(spacing.height),
@@ -495,34 +453,27 @@ where
         let padding = style
             .padding
             .resolve_or_zero(None, resolve_stylo_calc_value);
-        style.padding = Rect {
-            left: style_helpers::length(padding.left + spacing.width),
-            right: style_helpers::length(padding.right + spacing.width),
-            top: style_helpers::length(padding.top + spacing.height),
-            bottom: style_helpers::length(padding.bottom + spacing.height),
-        };
+        style.padding = add_table_spacing(padding, spacing).map(style_helpers::length);
     }
     let section_tracks = if writing_mode.is_horizontal() {
         Vec::new()
     } else {
-        sections
+        structure
+            .sections
             .iter()
             .map(|section| section.rows.clone())
             .collect()
     };
     TableContext {
+        structure,
         style,
-        cells,
-        rows,
-        columns,
-        captions: grouped_children.captions,
+        cell_layouts,
+        grid_rows: Vec::new(),
         detailed: None,
         collapsed_borders: collapsed,
-        column_count: max_columns,
-        column_constraints: column_tracks,
+        column_constraints,
         column_sizes: Vec::new(),
         sections,
-        section_boxes,
         section_tracks,
         measured_baselines: (None, None),
         caption_inline_min: 0.0,
@@ -533,35 +484,41 @@ where
     }
 }
 
+fn table_spacing(style: &crate::ResolvedLayoutStyle, collapsed: bool) -> Size<f32> {
+    if collapsed {
+        Size::ZERO
+    } else {
+        style.table_border_spacing()
+    }
+}
+
+fn add_table_spacing(padding: Rect<f32>, spacing: Size<f32>) -> Rect<f32> {
+    Rect {
+        left: padding.left + spacing.width,
+        right: padding.right + spacing.width,
+        top: padding.top + spacing.height,
+        bottom: padding.bottom + spacing.height,
+    }
+}
+
+fn authored_column_constraints<N>(
+    world: &LayoutWorld<N>,
+    structure: &TableStructure,
+) -> Vec<TableColumnConstraint>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let mut tracks = vec![TableColumnConstraint::auto(); structure.column_count];
+    for column in &structure.columns {
+        let authored = world.boxes[column.id.index()].style.taffy.size.width;
+        tracks[column.start..column.start + column.span].fill(dimension_track(authored));
+    }
+    tracks
+}
+
 impl TableContext {
-    /// Gather the fixed-layout first-row widths needed while exposing the
-    /// table's parent-facing minimum before an intrinsic measurement pass can
-    /// borrow the layout world mutably.
-    fn collect_authored_fixed_cell_constraints<N>(&mut self, world: &LayoutWorld<N>)
-    where
-        N: Copy + Debug + Eq + Hash,
-    {
-        let mut cell_constraints = vec![None; self.column_count];
-        let mut cell_spans = Vec::new();
-        let first_row_cells = self
-            .rows
-            .first()
-            .map_or(&[][..], |row| &self.cells[row.cells()]);
-        for cell in first_row_cells {
-            let constraint = authored_table_cell_inline_constraint(
-                &world.boxes[cell.id.index()].style.taffy,
-                self.writing_mode,
-                self.layout_mode,
-            );
-            collect_cell_constraint(cell, constraint, &mut cell_constraints, &mut cell_spans);
-        }
-        apply_cell_constraints(
-            &mut self.column_constraints,
-            &cell_constraints,
-            &mut cell_spans,
-            self.inline_border_spacing,
-            self.layout_mode,
-        );
+    fn grid_row(&self, row: usize) -> usize {
+        self.grid_rows.get(row).copied().unwrap_or(row)
     }
 
     /// Gather cell measures after the table tree is complete. Fixed layout
@@ -570,7 +527,7 @@ impl TableContext {
     where
         N: Copy + Debug + Eq + Hash,
     {
-        for &caption in &self.captions {
+        for &caption in &self.structure.captions {
             let style = &world.boxes[caption.index()].style.taffy;
             let margin = style.margin.resolve_or_zero(None, resolve_stylo_calc_value);
             let output = world.compute_child_size(
@@ -602,14 +559,15 @@ impl TableContext {
                     + physical_inline_sum(self.writing_mode, margin),
             );
         }
-        let mut cell_constraints = vec![None; self.column_count];
+        let mut cell_constraints = vec![None; self.structure.column_count];
         let mut cell_spans = Vec::new();
         let measured_cells = if self.layout_mode.is_fixed() {
-            self.rows
+            self.structure
+                .rows
                 .first()
-                .map_or(&[][..], |row| &self.cells[row.cells()])
+                .map_or(&[][..], |row| &self.structure.cells[row.cells()])
         } else {
-            &self.cells
+            &self.structure.cells
         };
         for cell in measured_cells {
             let constraint =
@@ -640,8 +598,8 @@ impl TableContext {
             .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
         let inline_insets = physical_inline_sum(self.writing_mode, padding)
             + physical_inline_sum(self.writing_mode, border);
-        let internal_spacing =
-            self.inline_border_spacing.max(0.0) * self.column_count.saturating_sub(1) as f32;
+        let internal_spacing = self.inline_border_spacing.max(0.0)
+            * self.structure.column_count.saturating_sub(1) as f32;
         let undistributable_space = inline_insets + internal_spacing;
         let mut grid_min_max = compute_grid_inline_min_max(
             &self.column_constraints,
@@ -788,188 +746,6 @@ impl TableContext {
         }
         used.max(inline_insets).max(self.caption_inline_min)
     }
-
-    fn fixed_grid_min_border_box_size(&self) -> f32 {
-        let padding = self
-            .style
-            .padding
-            .resolve_or_zero(None, resolve_stylo_calc_value);
-        let border = self
-            .style
-            .border
-            .resolve_or_zero(None, resolve_stylo_calc_value);
-        let inline_insets = padding.left + padding.right + border.left + border.right;
-        let internal_spacing =
-            self.inline_border_spacing.max(0.0) * self.column_count.saturating_sub(1) as f32;
-        fixed_grid_min_inline_size(&self.column_constraints) + inline_insets + internal_spacing
-    }
-}
-
-fn collect_columns<N>(
-    world: &LayoutWorld<N>,
-    current: LayoutBoxId,
-    group: Option<LayoutBoxId>,
-    columns: &mut Vec<TableColumn>,
-    tracks: &mut Vec<TableColumnConstraint>,
-) where
-    N: Copy + Debug + Eq + Hash,
-{
-    match world.boxes[current.index()].kind {
-        LayoutBoxKind::TableColumnGroup => {
-            let before = tracks.len();
-            for child in world.boxes[current.index()].children.iter().copied() {
-                collect_columns(world, child, Some(current), columns, tracks);
-            }
-            if tracks.len() == before {
-                let span = table_data(world, current).span.max(1) as usize;
-                let track = dimension_track(world.boxes[current.index()].style.taffy.size.width);
-                tracks.extend(std::iter::repeat_n(track, span));
-                columns.push(TableColumn {
-                    id: current,
-                    group: None,
-                    start: before,
-                    span,
-                });
-            }
-        }
-        LayoutBoxKind::TableColumn => {
-            let span = table_data(world, current).span.max(1) as usize;
-            let start = tracks.len();
-            let track = dimension_track(world.boxes[current.index()].style.taffy.size.width);
-            tracks.extend(std::iter::repeat_n(track, span));
-            columns.push(TableColumn {
-                id: current,
-                group,
-                start,
-                span,
-            });
-        }
-        _ => {}
-    }
-}
-
-fn collect_rows<N>(
-    world: &LayoutWorld<N>,
-    current: LayoutBoxId,
-    group: Option<LayoutBoxId>,
-    rows: &mut Vec<TableRow>,
-    cells: &mut Vec<TableCell>,
-) where
-    N: Copy + Debug + Eq + Hash,
-{
-    match world.boxes[current.index()].kind {
-        LayoutBoxKind::TableRowGroup
-        | LayoutBoxKind::TableHeaderGroup
-        | LayoutBoxKind::TableFooterGroup
-        | LayoutBoxKind::AnonymousTableRowGroup => {
-            for child in world.boxes[current.index()].children.iter().copied() {
-                collect_rows(world, child, Some(current), rows, cells);
-            }
-        }
-        LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow => {
-            let row_index = rows.len();
-            let start_cell_index = cells.len();
-            for cell in world.boxes[current.index()].children.iter().copied() {
-                if !matches!(
-                    world.boxes[cell.index()].kind,
-                    LayoutBoxKind::TableCell | LayoutBoxKind::AnonymousTableCell
-                ) {
-                    continue;
-                }
-                let data = table_data(world, cell);
-                let column_span = usize::from(data.column_span.max(1));
-                let row_span = usize::from(data.row_span);
-                let authored_style = &world.boxes[cell.index()].style;
-                let mut cell_style = authored_style.taffy.clone();
-                cell_style.margin = Rect::ZERO.map(style_helpers::length);
-                if cell_style.align_content.keyword() == taffy::AlignContentKeyword::Normal {
-                    cell_style.align_content = match authored_style.vertical_align().kind {
-                        LayoutInlineAlignment::Middle => taffy::AlignContent::CENTER,
-                        LayoutInlineAlignment::Bottom => taffy::AlignContent::END,
-                        LayoutInlineAlignment::Top => taffy::AlignContent::START,
-                        LayoutInlineAlignment::Baseline
-                        | LayoutInlineAlignment::TextTop
-                        | LayoutInlineAlignment::TextBottom => taffy::AlignContent::NORMAL,
-                    };
-                }
-                cells.push(TableCell {
-                    id: cell,
-                    style: cell_style,
-                    row: row_index,
-                    column: 0,
-                    row_span,
-                    column_span,
-                    block_layout: None,
-                });
-            }
-            rows.push(TableRow {
-                id: current,
-                group,
-                index: row_index,
-                grid_index: row_index,
-                start_cell_index,
-                cell_count: cells.len() - start_cell_index,
-                section_end: 0,
-            });
-        }
-        _ => {}
-    }
-}
-
-/// Cache the end of each contiguous placement group in one reverse pass.
-/// Consecutive ungrouped rows share a boundary, just as grouped rows do.
-fn index_row_sections(rows: &mut [TableRow]) {
-    let mut next_group = None;
-    let mut section_end = rows.len();
-    for row in rows.iter_mut().rev() {
-        if next_group != Some(row.group) {
-            section_end = row.index + 1;
-            next_group = Some(row.group);
-        }
-        row.section_end = section_end;
-    }
-}
-
-fn place_table_cells(cells: &mut [TableCell], rows: &[TableRow], max_columns: &mut usize) {
-    let mut occupied_until = Vec::<usize>::new();
-    let mut active_group = None;
-
-    for row in rows {
-        if active_group != Some(row.group) {
-            occupied_until.clear();
-            active_group = Some(row.group);
-        }
-        let section_end = row.section_end;
-        let mut cursor = 0usize;
-        for cell in &mut cells[row.cells()] {
-            let span = cell.column_span.max(1);
-            loop {
-                let end = cursor.saturating_add(span);
-                if occupied_until.len() < end {
-                    occupied_until.resize(end, 0);
-                }
-                if occupied_until[cursor..end]
-                    .iter()
-                    .all(|occupied| *occupied <= row.index)
-                {
-                    cell.column = cursor;
-                    let row_span = if cell.row_span == 0 {
-                        section_end.saturating_sub(row.index)
-                    } else {
-                        cell.row_span
-                    };
-                    cell.row_span = row_span.min(section_end.saturating_sub(row.index)).max(1);
-                    for occupied in &mut occupied_until[cursor..end] {
-                        *occupied = row.index.saturating_add(cell.row_span);
-                    }
-                    cursor = end;
-                    *max_columns = (*max_columns).max(end);
-                    break;
-                }
-                cursor += 1;
-            }
-        }
-    }
 }
 
 fn collect_cell_constraint(
@@ -994,17 +770,6 @@ fn collect_cell_constraint(
             cell: constraint,
         });
     }
-}
-
-fn table_data<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> crate::LayoutTableData
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    world.boxes[id.index()]
-        .element_semantics
-        .as_ref()
-        .and_then(|semantics| semantics.metadata.table)
-        .unwrap_or_default()
 }
 
 fn dimension_track(dimension: Dimension) -> TableColumnConstraint {
@@ -1324,11 +1089,12 @@ fn apply_structural_layout<N>(
         end: origin.x,
     });
     let content_width = column_bounds.end - column_bounds.start;
-    let empty_inline_spacing = if context.cells.is_empty() && context.columns.is_empty() {
-        context.inline_border_spacing
-    } else {
-        0.0
-    };
+    let empty_inline_spacing =
+        if context.structure.cells.is_empty() && context.structure.columns.is_empty() {
+            context.inline_border_spacing
+        } else {
+            0.0
+        };
     let part_x = column_bounds.start - empty_inline_spacing;
     let part_width = content_width + 2.0 * empty_inline_spacing;
     let occupied_sections = || {
@@ -1358,9 +1124,10 @@ fn apply_structural_layout<N>(
     if context.collapsed_borders {
         // Empty-section tracks occupy space without adding conflict-grid rows.
         let mut row_lines: Vec<_> = context
+            .structure
             .rows
             .iter()
-            .map(|row| row_starts[row.grid_index])
+            .map(|row| row_starts[context.grid_row(row.index)])
             .collect();
         if let Some(first) = row_lines.first_mut() {
             *first = origin.y;
@@ -1381,16 +1148,25 @@ fn apply_structural_layout<N>(
         set_collapsed_border_geometry(world, root, &column_lines, &row_lines);
     }
 
-    for row in &context.rows {
-        let y = row_starts.get(row.grid_index).copied().unwrap_or(origin.y);
+    for row in &context.structure.rows {
+        let y = row_starts
+            .get(context.grid_row(row.index))
+            .copied()
+            .unwrap_or(origin.y);
         let height = detailed
             .rows
             .positions
-            .get(row.grid_index)
+            .get(context.grid_row(row.index))
             .map_or(0.0, |track| track.end - track.start);
         set_table_part_layout(world, row.id, part_x, y, part_width, height);
     }
-    for (&group, tracks) in context.section_boxes.iter().zip(&context.section_tracks) {
+    for (section, tracks) in context
+        .structure
+        .sections
+        .iter()
+        .zip(&context.section_tracks)
+    {
+        let group = section.id;
         if matches!(
             world.boxes[group.index()].kind,
             LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow
@@ -1411,7 +1187,7 @@ fn apply_structural_layout<N>(
             bounds.end - bounds.start,
         );
     }
-    for column in &context.columns {
+    for column in &context.structure.columns {
         let bounds = track_range_bounds(
             &detailed.columns.positions,
             column.start,
@@ -1431,6 +1207,7 @@ fn apply_structural_layout<N>(
         );
     }
     let mut column_groups = context
+        .structure
         .columns
         .iter()
         .filter_map(|column| column.group)
@@ -1439,6 +1216,7 @@ fn apply_structural_layout<N>(
     column_groups.dedup();
     for group in column_groups {
         let grouped = context
+            .structure
             .columns
             .iter()
             .filter(|column| column.group == Some(group));
@@ -1589,11 +1367,11 @@ where
         cell_index: usize,
         operation: impl FnOnce(&mut LayoutWorld<N>, LayoutBoxId) -> R,
     ) -> R {
-        let cell = self.context.cells[cell_index].id;
+        let cell = self.context.structure.cells[cell_index].id;
         self.world.cache_clear(cell.to_taffy());
         let authored_style = std::mem::replace(
             &mut self.world.boxes[cell.index()].style.taffy,
-            self.context.cells[cell_index].style.clone(),
+            self.context.cell_layouts[cell_index].style.clone(),
         );
         let result = operation(self.world, cell);
         self.world.boxes[cell.index()].style.taffy = authored_style;
@@ -1612,11 +1390,11 @@ where
         Self: 'a;
 
     fn child_ids(&self, _parent_node_id: NodeId) -> Self::ChildIter<'_> {
-        VirtualChildIter(0..self.context.cells.len())
+        VirtualChildIter(0..self.context.structure.cells.len())
     }
 
     fn child_count(&self, _parent_node_id: NodeId) -> usize {
-        self.context.cells.len()
+        self.context.structure.cells.len()
     }
 
     fn get_child_id(&self, _parent_node_id: NodeId, child_index: usize) -> NodeId {
@@ -1645,13 +1423,13 @@ where
     }
 
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
-        let cell = self.context.cells[usize::from(node_id)].id;
+        let cell = self.context.structure.cells[usize::from(node_id)].id;
         self.world.boxes[cell.index()].unrounded_layout = *layout;
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
         let cell_index = usize::from(node_id);
-        let layout = self.context.cells[cell_index].block_layout;
+        let layout = self.context.cell_layouts[cell_index].block_layout;
         let mode = self.context.writing_mode;
         // The virtual table grid owns the used grid-item style: margins are
         // zero, column sizing has consumed every applicable inline constraint,
@@ -1660,7 +1438,7 @@ where
             block::layout_cell(world, cell, inputs, mode, layout)
         });
         if inputs.run_mode == RunMode::PerformLayout
-            && let Some(layout) = &mut self.context.cells[cell_index].block_layout
+            && let Some(layout) = &mut self.context.cell_layouts[cell_index].block_layout
             && layout.baseline.is_some()
         {
             layout.baseline = output.baselines.first;
@@ -1692,7 +1470,7 @@ where
     }
 
     fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_> {
-        &self.context.cells[usize::from(child_node_id)].style
+        &self.context.cell_layouts[usize::from(child_node_id)].style
     }
 
     fn set_detailed_grid_info(
@@ -1801,6 +1579,7 @@ mod tests {
             vertical_margins_are_collapsible: Line::FALSE,
         };
         let cold = world.compute_child_layout(root.to_taffy(), inputs);
+        let structure = Arc::clone(&world.table_structures[&root]);
         assert_eq!(
             cold.size,
             Size {
@@ -1848,6 +1627,7 @@ mod tests {
         let changed = world.compute_child_layout(root.to_taffy(), inputs);
         assert_eq!(changed.size.height, 140.0);
         assert_eq!(changed.baselines.first, Some(50.0));
+        assert!(Arc::ptr_eq(&structure, &world.table_structures[&root]));
         assert_eq!(
             world.boxes[root.index()]
                 .table_measure_cache
@@ -1855,55 +1635,6 @@ mod tests {
                 .unwrap()
                 .computations,
             2
-        );
-    }
-
-    #[test]
-    fn indexed_placement_clips_spans_at_group_boundaries_including_ungrouped_rows() {
-        let a = LayoutBoxId::from_index(20);
-        let b = LayoutBoxId::from_index(21);
-        let groups = [Some(a), Some(a), Some(a), None, None, Some(b), None];
-        let counts = [1, 1, 0, 1, 1, 1, 1];
-        let spans = [(2, 0), (1, 99), (1, 0), (1, 1), (1, 99), (1, 0)];
-        let mut rows = Vec::new();
-        let mut cells = Vec::new();
-        for (index, (&group, &cell_count)) in groups.iter().zip(&counts).enumerate() {
-            rows.push(TableRow {
-                id: LayoutBoxId::from_index(index),
-                group,
-                index,
-                grid_index: index,
-                start_cell_index: cells.len(),
-                cell_count,
-                section_end: 0,
-            });
-            for _ in 0..cell_count {
-                let (column_span, row_span) = spans[cells.len()];
-                cells.push(TableCell {
-                    id: LayoutBoxId::from_index(30 + cells.len()),
-                    style: Style::default(),
-                    row: index,
-                    column: 0,
-                    row_span,
-                    column_span,
-                    block_layout: None,
-                });
-            }
-        }
-        index_row_sections(&mut rows);
-        assert_eq!(
-            rows.iter().map(|row| row.section_end).collect::<Vec<_>>(),
-            [3, 3, 3, 5, 5, 6, 7]
-        );
-        let mut columns = 0;
-        place_table_cells(&mut cells, &rows, &mut columns);
-        assert_eq!(columns, 3);
-        assert_eq!(
-            cells
-                .iter()
-                .map(|cell| (cell.column, cell.row_span))
-                .collect::<Vec<_>>(),
-            [(0, 3), (2, 2), (0, 2), (1, 1), (0, 1), (0, 1)]
         );
     }
 
