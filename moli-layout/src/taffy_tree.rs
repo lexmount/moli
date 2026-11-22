@@ -2231,7 +2231,7 @@ where
         let mut inline_context = self.boxes[id.index()]
             .inline_layout
             .take()
-            .unwrap_or_else(empty_inline_context);
+            .unwrap_or_else(|| Box::new(empty_inline_context()));
         let final_layout_requested = inputs.run_mode == RunMode::PerformLayout;
         // Reuse one mutable Parley paragraph throughout the ordinary
         // intrinsic -> final sequence. A later intrinsic probe clones lazily

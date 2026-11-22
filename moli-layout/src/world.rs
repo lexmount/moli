@@ -247,8 +247,8 @@ pub struct LayoutBox<N> {
     pub(crate) style: ResolvedLayoutStyle,
     pub(crate) text: Option<Arc<str>>,
     pub(crate) text_selection: Option<crate::LayoutTextSelection>,
-    /// Shared text/inline layout owned by this formatting-context root.
-    pub(crate) inline_layout: Option<InlineFormattingContext>,
+    /// Only formatting-context roots allocate the pass-local inline layout.
+    pub(crate) inline_layout: Option<Box<InlineFormattingContext>>,
     /// Outermost IFC that consumes this box as a flattened or atomic item.
     pub(crate) inline_context_owner: Option<LayoutBoxId>,
     /// Text, `<br>`, and non-atomic inline boxes are laid out by their owner IFC
