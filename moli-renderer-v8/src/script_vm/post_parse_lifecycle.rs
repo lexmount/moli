@@ -2749,6 +2749,7 @@ impl ScriptVm {
             request_initiator_type,
             result,
             None,
+            false,
         );
     }
 
@@ -2758,6 +2759,7 @@ impl ScriptVm {
         request_url: Url,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
         request_handle: Option<SubresourceNetworkRequestHandle>,
+        render_blocking: bool,
     ) {
         self.record_script_subresource_network_result_with_handle(
             document_url,
@@ -2765,6 +2767,7 @@ impl ScriptVm {
             SubresourceRequestInitiatorType::Parser,
             result,
             request_handle,
+            render_blocking,
         );
     }
 
@@ -2775,6 +2778,7 @@ impl ScriptVm {
         request_initiator_type: SubresourceRequestInitiatorType,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
         request_handle: Option<SubresourceNetworkRequestHandle>,
+        render_blocking: bool,
     ) {
         let mut performance_entry =
             crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
@@ -2782,7 +2786,8 @@ impl ScriptVm {
                 "script",
                 None,
                 result,
-            );
+            )
+            .with_render_blocking(render_blocking);
         if request_initiator_type == SubresourceRequestInitiatorType::Parser
             && let Ok(response) = result
             && let Some(loader) = self.current_main_document_resource_loader()

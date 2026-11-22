@@ -4179,3 +4179,29 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn parser_script_network_timing_exposes_render_blocking_status() {
+    let mut vm = new_storage_test_vm("https://blocking-timing.test/");
+    let page = Url::parse("https://blocking-timing.test/").unwrap();
+    for (name, blocking) in [("blocking.js", true), ("async.js", false)] {
+        let target = page.join(name).unwrap();
+        let response = crate::types::NavigationResponse::from_text_body(
+            target.clone(),
+            200,
+            vec![],
+            "/* script */".into(),
+        );
+        vm.record_parser_script_subresource_network_result(
+            page.clone(),
+            target,
+            &Ok(response),
+            None,
+            blocking,
+        );
+    }
+    assert_eq!(
+        vm.eval("performance.getEntriesByType('resource').map(entry => entry.renderBlockingStatus).join(',')").unwrap(),
+        "blocking,non-blocking",
+    );
+}

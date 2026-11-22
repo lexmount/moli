@@ -257,6 +257,13 @@ impl ResourcePerformanceEntry {
         )
     }
 
+    pub(crate) fn with_render_blocking(mut self, render_blocking: bool) -> Self {
+        if render_blocking {
+            self.render_blocking_status = "blocking".to_owned();
+        }
+        self
+    }
+
     pub(crate) fn with_initiator_url(mut self, initiator_url: String) -> Self {
         self.initiator_url = initiator_url;
         self
