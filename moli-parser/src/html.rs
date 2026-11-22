@@ -499,14 +499,37 @@ impl HtmlParser {
     }
 
     pub fn parse_dom_host(&self, final_url: Url, html: String) -> DomHost {
-        let target =
+        self.parse_html_document(final_url, &html, None)
+    }
+
+    pub fn parse_sanitized_document(
+        &self,
+        final_url: Url,
+        html: &str,
+        sanitizer: crate::HtmlSanitizer,
+    ) -> DomHost {
+        self.parse_html_document(final_url, html, Some(sanitizer))
+    }
+
+    fn parse_html_document(
+        &self,
+        final_url: Url,
+        html: &str,
+        sanitizer: Option<crate::HtmlSanitizer>,
+    ) -> DomHost {
+        let mut target =
             ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots_and_scripting(
                 final_url,
                 true,
                 self.scripting_enabled,
             );
-        let stream = HtmlTreeSinkStream::from_target_with_scripting(target, self.scripting_enabled);
-        for chunk in html_chunks(&html) {
+        let sanitizer = sanitizer.map(|config| (config, target.owned_template_contents_document()));
+        let mut stream =
+            HtmlTreeSinkStream::from_target_with_scripting(target, self.scripting_enabled);
+        if let Some((config, inert_document)) = sanitizer {
+            stream.install_sanitizer(Box::new(config), inert_document);
+        }
+        for chunk in html_chunks(html) {
             stream.feed(chunk);
         }
         stream.finish_dom_host()
@@ -693,9 +716,7 @@ impl HtmlParser {
         );
         if let Some((config, inert_document)) = sanitizer {
             // The temporary wrapper is not part of the input being sanitized.
-            stream
-                .inner
-                .install_fragment_sanitizer(config, inert_document);
+            stream.inner.install_sanitizer(config, inert_document);
         }
         for chunk in html_chunks(html) {
             stream.feed_with_runtime_dom_consumer_without_element_creation(chunk, consumer);
@@ -1749,14 +1770,14 @@ impl DocumentSink {
             .enter_runtime_dom_sinks_parse_step(sinks);
     }
 
-    pub(super) fn install_fragment_sanitizer(
+    pub(super) fn install_sanitizer(
         &self,
         config: Box<crate::HtmlSanitizer>,
         inert_document: NativeNodeId,
     ) {
         self.target
             .borrow_mut()
-            .install_fragment_sanitizer(config, inert_document);
+            .install_sanitizer(config, inert_document);
     }
 
     pub(super) fn clear_runtime_dom_sinks_after_parse_step(&self) {

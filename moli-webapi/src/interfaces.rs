@@ -690,6 +690,7 @@ interfaces! {
     UIEvent: Event;
     URL;
     URLPattern;
+    Sanitizer;
     URLSearchParams;
     URLSearchParamsIterator = "URLSearchParams Iterator";
     UserActivation;

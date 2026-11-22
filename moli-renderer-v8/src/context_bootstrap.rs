@@ -311,6 +311,7 @@ use moli_webapi::touch as touch_runtime;
 mod trusted_types;
 mod url_form;
 use moli_webapi::url_search_params as url_search_params_runtime;
+pub(crate) mod sanitizer;
 mod url_pattern;
 pub(crate) use url_pattern::RoutingPatternInput;
 pub(crate) mod rtc_certificate;

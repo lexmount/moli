@@ -134,6 +134,33 @@ pub(crate) enum HtmlFragmentCustomElementUpgradeTiming {
     AfterInsertion,
 }
 
+pub(crate) enum HtmlInsertionAction {
+    ReplaceAll,
+    InsertBefore(Option<DomHandle>),
+    Replace(DomHandle),
+}
+
+pub(crate) struct HtmlInsertionTarget {
+    pub(crate) parent: DomHandle,
+    pub(crate) context: DomHandle,
+    pub(crate) action: HtmlInsertionAction,
+}
+
+impl HtmlInsertionTarget {
+    pub(crate) fn for_children(host: &DomHost, context: DomHandle) -> Self {
+        let parent = host
+            .node(context)
+            .and_then(Node::as_element)
+            .and_then(|element| element.template_contents())
+            .unwrap_or(context);
+        Self {
+            parent,
+            context,
+            action: HtmlInsertionAction::ReplaceAll,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum DocumentProcessingAction {
     PostParsePageOwnedWork(Box<PostParsePageOwnedWork>),

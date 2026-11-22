@@ -153,6 +153,54 @@ pub(in crate::native_bridge::element) fn is_element_event_handler_content_attrib
         || ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES.contains(&name)
 }
 
+pub(crate) fn event_handler_content_attribute_names() -> impl Iterator<Item = &'static str> {
+    GENERIC_EVENT_HANDLER_PROPERTIES
+        .iter()
+        .chain(ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES)
+        .chain(ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES)
+        .copied()
+        .chain(crate::context_bootstrap::window_event_handler_properties())
+        .chain(["onmessageerror"])
+}
+
+pub(crate) fn element_event_handler_content_attribute_applies(
+    dom_host: &crate::dom::native::DomHost,
+    handle: crate::document_runtime::DomHandle,
+    name: &str,
+) -> bool {
+    let Some(node) = dom_host.node(handle) else {
+        return false;
+    };
+    if !matches!(
+        node.namespace(),
+        Some(
+            "http://www.w3.org/1999/xhtml"
+                | "http://www.w3.org/2000/svg"
+                | "http://www.w3.org/1998/Math/MathML"
+        )
+    ) {
+        return false;
+    }
+    let interface_specific = match name {
+        "onencrypted" | "onwaitingforkey" => {
+            node.is_html_element_named("audio") || node.is_html_element_named("video")
+        }
+        "onbegin" | "onend" | "onrepeat" => {
+            node.namespace() == Some("http://www.w3.org/2000/svg")
+                && matches!(
+                    node.local_name(),
+                    Some("animate" | "animateMotion" | "animateTransform" | "set")
+                )
+        }
+        _ => false,
+    };
+    (name != "onstorage" && GENERIC_EVENT_HANDLER_PROPERTIES.contains(&name))
+        || ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES.contains(&name)
+        || interface_specific
+        || ((node.is_html_element_named("body") || node.is_html_element_named("frameset"))
+            && super::is_body_window_event_handler_attribute(name))
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalEventHandlerOwner {
     Document,

@@ -489,13 +489,12 @@ impl HtmlTreeSinkStream {
         Self::from_session(session)
     }
 
-    pub(super) fn install_fragment_sanitizer(
+    pub(super) fn install_sanitizer(
         &mut self,
         config: Box<crate::HtmlSanitizer>,
         inert_document: NativeNodeId,
     ) {
-        self.parser
-            .install_fragment_sanitizer(config, inert_document);
+        self.parser.install_sanitizer(config, inert_document);
     }
 
     fn parser_script_position(&self, node_id: NativeNodeId) -> usize {

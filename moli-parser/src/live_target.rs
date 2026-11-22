@@ -2197,7 +2197,7 @@ pub(super) struct ParserStreamHtmlTreeSinkTarget {
     next_template_contents_insertion: Option<NativeNodeId>,
     next_content_patch_insertion_parent: Option<NativeNodeId>,
     active_content_patches: Vec<(NativeNodeId, ActiveContentPatch)>,
-    fragment_sanitizer: Option<FragmentSanitizer>,
+    sanitizer: Option<ParserSanitizer>,
     open_template_element_depth: usize,
     pending_open_parser_element: Option<NativeNodeId>,
     open_parser_elements: Vec<OpenParserElement>,
@@ -2207,14 +2207,14 @@ pub(super) struct ParserStreamHtmlTreeSinkTarget {
     state: HtmlTreeSinkState,
 }
 
-struct FragmentSanitizer {
+struct ParserSanitizer {
     config: Box<HtmlSanitizer>,
     inert_document: NativeNodeId,
     omitted: HashMap<NativeNodeId, SanitizerAction>,
     redirects: HashMap<NativeNodeId, ParserInsertionPoint>,
 }
 
-impl FragmentSanitizer {
+impl ParserSanitizer {
     fn new(config: Box<HtmlSanitizer>, inert_document: NativeNodeId) -> Self {
         Self {
             config,
@@ -2291,7 +2291,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_template_contents_insertion: None,
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
-            fragment_sanitizer: None,
+            sanitizer: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2315,7 +2315,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_template_contents_insertion: None,
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
-            fragment_sanitizer: None,
+            sanitizer: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2356,7 +2356,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_template_contents_insertion: None,
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
-            fragment_sanitizer: None,
+            sanitizer: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2384,7 +2384,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_template_contents_insertion: None,
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
-            fragment_sanitizer: None,
+            sanitizer: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -3325,7 +3325,7 @@ impl ParserStreamHtmlTreeSinkTarget {
     }
 
     fn adjusted_sanitizer_location(&self, point: ParserInsertionPoint) -> ParserInsertionPoint {
-        self.fragment_sanitizer
+        self.sanitizer
             .as_ref()
             .and_then(|sanitizer| sanitizer.redirects.get(&point.parent))
             .copied()
@@ -3479,7 +3479,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         let parser_flags = ParserElementFlags::from_html5ever(&flags);
         self.filter_sanitized_attributes(&name, &mut attrs);
         let action = self
-            .fragment_sanitizer
+            .sanitizer
             .as_ref()
             .map_or(SanitizerAction::Keep, |sanitizer| {
                 sanitizer.config.element_action(&name)
@@ -3498,7 +3498,7 @@ impl ParserStreamHtmlTreeSinkTarget {
                 })
                 .parent
             });
-        let document_handle = match &self.fragment_sanitizer {
+        let document_handle = match &self.sanitizer {
             Some(sanitizer) if action != SanitizerAction::Keep => sanitizer.inert_document,
             _ => template_contents_insertion
                 .and_then(|handle| self.read_owner_document(handle))
@@ -3588,7 +3588,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             prefix,
         );
         self.add_attrs_if_missing_for_parser(node_id, attributes);
-        if let Some(sanitizer) = &mut self.fragment_sanitizer {
+        if let Some(sanitizer) = &mut self.sanitizer {
             sanitizer.note_action(node_id, action);
         }
         self.finish_created_element(
@@ -3658,29 +3658,35 @@ impl ParserStreamHtmlTreeSinkTarget {
         ParseHandle::new_element(node_id, element_name, parser_flags)
     }
 
-    pub(super) fn install_fragment_sanitizer(
+    pub(super) fn owned_template_contents_document(&mut self) -> NativeNodeId {
+        let document = self.parser_owner_document_node_id();
+        self.dom_host_mut()
+            .parser_template_contents_owner_document(document)
+    }
+
+    pub(super) fn install_sanitizer(
         &mut self,
         config: Box<HtmlSanitizer>,
         inert_document: NativeNodeId,
     ) {
-        self.fragment_sanitizer = Some(FragmentSanitizer::new(config, inert_document));
+        self.sanitizer = Some(ParserSanitizer::new(config, inert_document));
     }
 
     pub(super) fn sanitizer_action(&self, node: NativeNodeId) -> SanitizerAction {
-        self.fragment_sanitizer
+        self.sanitizer
             .as_ref()
             .and_then(|sanitizer| sanitizer.omitted.get(&node).copied())
             .unwrap_or(SanitizerAction::Keep)
     }
 
     pub(super) fn sanitizer_allows_attribute(&self, element: &QualName, attr: &Attribute) -> bool {
-        self.fragment_sanitizer
+        self.sanitizer
             .as_ref()
             .is_none_or(|sanitizer| sanitizer.config.allows_attribute(element, attr))
     }
 
     pub(super) fn has_sanitizer_redirect(&self, node: NativeNodeId) -> bool {
-        self.fragment_sanitizer
+        self.sanitizer
             .as_ref()
             .is_some_and(|sanitizer| sanitizer.redirects.contains_key(&node))
     }
@@ -3695,7 +3701,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             parent,
             reference_child,
         });
-        if let Some(sanitizer) = &mut self.fragment_sanitizer {
+        if let Some(sanitizer) = &mut self.sanitizer {
             sanitizer.redirects.insert(node, point);
         }
     }
@@ -3705,14 +3711,14 @@ impl ParserStreamHtmlTreeSinkTarget {
         element: &QualName,
         attrs: &mut Vec<Attribute>,
     ) {
-        if let Some(sanitizer) = &self.fragment_sanitizer {
+        if let Some(sanitizer) = &self.sanitizer {
             sanitizer.config.filter_attributes(element, attrs);
         }
     }
 
     pub(super) fn create_comment(&mut self, text: String) -> ParseHandle {
         let node = self.create_comment_node(text);
-        if let Some(sanitizer) = &mut self.fragment_sanitizer
+        if let Some(sanitizer) = &mut self.sanitizer
             && !sanitizer.config.comments
         {
             sanitizer.note_action(node, SanitizerAction::Remove);
@@ -3726,11 +3732,11 @@ impl ParserStreamHtmlTreeSinkTarget {
         data: String,
     ) -> ParseHandle {
         let allowed = self
-            .fragment_sanitizer
+            .sanitizer
             .as_ref()
             .is_none_or(|sanitizer| sanitizer.config.allows_processing_instruction(&target));
         let node = self.create_processing_instruction_node(target, data);
-        if let Some(sanitizer) = &mut self.fragment_sanitizer
+        if let Some(sanitizer) = &mut self.sanitizer
             && !allowed
         {
             sanitizer.note_action(node, SanitizerAction::Remove);
@@ -3787,7 +3793,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         {
             return ParserMutationEffectDelivery::none();
         }
-        if let Some(sanitizer) = &mut self.fragment_sanitizer {
+        if let Some(sanitizer) = &mut self.sanitizer {
             match sanitizer.omitted.get(&child_id) {
                 Some(SanitizerAction::ReplaceWithChildren) => {
                     sanitizer.redirects.insert(child_id, point);

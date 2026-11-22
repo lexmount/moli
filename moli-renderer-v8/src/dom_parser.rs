@@ -357,13 +357,17 @@ pub(crate) fn parse_detached_html_document_from_source_with_encoding<'s>(
     )
 }
 
-pub(crate) fn parse_detached_html_document_from_source_with_declarative_shadow_roots<'s>(
+pub(crate) fn parse_html_document_for_insertion<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: Url,
     source: &str,
+    sanitizer: Option<moli_parser::HtmlSanitizer>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let parsed =
-        HtmlParser::with_scripting_enabled(false).parse_dom_host(document_url, source.to_owned());
+    let parser = HtmlParser::with_scripting_enabled(false);
+    let parsed = match sanitizer {
+        Some(config) => parser.parse_sanitized_document(document_url, source, config),
+        None => parser.parse_dom_host(document_url, source.to_owned()),
+    };
     build_detached_document_from_dom_host(scope, parsed, DetachedDocumentKind::Html, true)
 }
 

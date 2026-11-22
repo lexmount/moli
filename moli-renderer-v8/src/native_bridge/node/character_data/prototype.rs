@@ -1,3 +1,6 @@
+use crate::native_bridge::element::{
+    node_after_html_callback, node_before_html_callback, node_replace_with_html_callback,
+};
 use crate::web_api_interfaces;
 use crate::{
     native_bridge::{document, node::node_runtime_and_handle_from_args_or_detached},
@@ -29,6 +32,12 @@ struct CharacterDataPrototypeDeclaration {
     delete_data: (),
     #[webapi(method, length = 3, callback = character_data_replace_data_callback)]
     replace_data: (),
+    #[webapi(method = "beforeHTML", length = 1, callback = node_before_html_callback)]
+    before_html: (),
+    #[webapi(method = "afterHTML", length = 1, callback = node_after_html_callback)]
+    after_html: (),
+    #[webapi(method = "replaceWithHTML", length = 1, callback = node_replace_with_html_callback)]
+    replace_with_html: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

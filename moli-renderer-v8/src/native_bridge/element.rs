@@ -277,11 +277,13 @@ pub(super) use class_list::{
     output_html_for_setter_function, svg_rel_list_setter_function,
 };
 pub(super) use content::{
+    node_after_html_callback, node_append_html_callback, node_before_html_callback,
     node_direct_text_content, node_get_html_callback, node_inner_html_getter_function,
     node_inner_html_setter_function, node_inner_text_getter_function,
     node_inner_text_setter_function, node_outer_html_getter_function,
     node_outer_html_setter_function, node_outer_text_getter_function,
-    node_outer_text_setter_function, node_set_html_unsafe_callback, rendered_text_fragment,
+    node_outer_text_setter_function, node_prepend_html_callback, node_replace_with_html_callback,
+    node_set_html_callback, node_set_html_unsafe_callback, rendered_text_fragment,
     set_inner_text_in_reaction_scope, title_text_getter_function, title_text_setter_function,
 };
 pub(super) use dataset::{build_dom_string_map_wrapper_template, node_dataset_getter_function};
@@ -303,7 +305,7 @@ use event_handlers::install_node_event_handler_template_bindings;
 pub(crate) use event_handlers::{
     EventAttributeHandlerScope, GlobalEventHandlerOwner, ParserAddedEventHandlers, compile_event_attribute_handler_for_owner,
     compile_node_content_attribute_for_dispatch, compile_window_body_event_attribute,
-    event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers, initialize_parser_inserted_event_handlers,
+    event_handler_content_attribute_name, event_handler_content_attribute_names, initialize_parser_inserted_body_window_event_handlers, initialize_parser_inserted_event_handlers,
     invalidate_event_handler_content_attribute, is_body_window_event_handler_attribute,
     is_global_event_handler_attribute, node_event_handler_getter_function,
     node_event_handler_setter_function, node_event_handler_value_from_wrapper,

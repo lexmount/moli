@@ -194,6 +194,18 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
     get_html: (),
     #[webapi(method = "setHTMLUnsafe", length = 1, callback = node_set_html_unsafe_callback)]
     set_html_unsafe: (),
+    #[webapi(method = "setHTML", length = 1, enumerable, callback = node_set_html_callback)]
+    set_html: (),
+    #[webapi(method = "appendHTML", length = 1, enumerable, callback = node_append_html_callback)]
+    append_html: (),
+    #[webapi(method = "prependHTML", length = 1, enumerable, callback = node_prepend_html_callback)]
+    prepend_html: (),
+    #[webapi(method = "beforeHTML", length = 1, enumerable, callback = node_before_html_callback)]
+    before_html: (),
+    #[webapi(method = "afterHTML", length = 1, enumerable, callback = node_after_html_callback)]
+    after_html: (),
+    #[webapi(method = "replaceWithHTML", length = 1, enumerable, callback = node_replace_with_html_callback)]
+    replace_with_html: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

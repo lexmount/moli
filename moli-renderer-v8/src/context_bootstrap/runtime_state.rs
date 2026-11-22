@@ -11,6 +11,7 @@ use super::{
     navigation_bootstrap::install_window_location_history_navigation_runtime_state,
     navigator_runtime::{bind_window_navigator_identity_seed, install_navigator_runtime_state},
     performance_runtime::install_default_window_performance_seed,
+    sanitizer::SetHtmlOptions,
     trusted_types::install_trusted_types_runtime_state,
     web_storage::{
         install_storage_runtime_state, window_local_storage_getter, window_session_storage_getter,
@@ -81,6 +82,8 @@ struct DocumentStaticMethodsDeclaration {
         callback = document_parse_html_unsafe_callback
     )]
     parse_html_unsafe: (),
+    #[webapi(method = "parseHTML", length = 1, callback = document_parse_html_callback)]
+    parse_html: (),
 }
 
 #[derive(Default, WebApiObject)]
@@ -1285,17 +1288,46 @@ fn document_parse_html_unsafe_callback<'s>(
             html
         }
     };
-    let Some(document) =
-        crate::dom_parser::parse_detached_html_document_from_source_with_declarative_shadow_roots(
-            scope,
-            url::Url::parse("about:blank").expect("static about:blank URL parses"),
-            &html,
-        )
-    else {
+    let Some(document) = crate::dom_parser::parse_html_document_for_insertion(
+        scope,
+        url::Url::parse("about:blank").expect("static about:blank URL parses"),
+        &html,
+        None,
+    ) else {
         rv.set(v8::null(scope).into());
         return;
     };
     rv.set(document.into());
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Document.parseHTML")]
+struct DocumentParseHtmlArgs<'s> {
+    #[webidl(required, converter = "dom_string16")]
+    html: Vec<u16>,
+    #[webidl(dictionary)]
+    options: SetHtmlOptions<'s>,
+}
+
+fn document_parse_html_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<DocumentParseHtmlArgs>(scope, &args) else {
+        return;
+    };
+    let Some(config) = parsed.options.prepare(scope) else {
+        return;
+    };
+    if let Some(document) = crate::dom_parser::parse_html_document_for_insertion(
+        scope,
+        url::Url::parse("about:blank").expect("static about:blank URL parses"),
+        &String::from_utf16_lossy(&parsed.html),
+        Some(config),
+    ) {
+        rv.set(document.into());
+    }
 }
 
 fn install_document_static_methods<'s>(

@@ -16,9 +16,9 @@ use crate::stylesheet_blocking::DocumentBlockingStylesheetSignature;
 use crate::types::{ScriptKind, ScriptMode};
 use html5ever::tree_builder::QuirksMode;
 use moli_parser::{
-    HtmlFragmentContext, ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,
-    ParserElementCreationConsumer, ParserElementCreationRequest, ParserMutationEffectConsumer,
-    ParserPumpOutcome, XmlFragmentParseError, XmlParser,
+    HtmlFragmentContext, HtmlSanitizer, ParserDomMutation, ParserDomMutationConsumer,
+    ParserDomReadConsumer, ParserElementCreationConsumer, ParserElementCreationRequest,
+    ParserMutationEffectConsumer, ParserPumpOutcome, XmlFragmentParseError, XmlParser,
 };
 use std::collections::HashSet;
 use tracing::debug;
@@ -686,6 +686,7 @@ impl DocumentRuntime {
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
         scripting_enabled: bool,
         allow_declarative_shadow_roots: bool,
+        sanitizer: Option<HtmlSanitizer>,
     ) -> Option<DomHandle> {
         let first_node_index = self.dom_host().dom().len();
         let parser = HtmlParser::with_scripting_enabled(scripting_enabled);
@@ -702,8 +703,11 @@ impl DocumentRuntime {
             .and_then(Node::local_name)
             .unwrap_or("body")
             .to_owned();
-        let context =
+        let mut context =
             HtmlFragmentContext::new(parsing_context, &context_namespace, &context_local_name);
+        if let Some(sanitizer) = sanitizer {
+            context = context.with_sanitizer(sanitizer);
+        }
         let is_frameset_context = context_namespace == "http://www.w3.org/1999/xhtml"
             && context_local_name.eq_ignore_ascii_case("frameset");
         let registry_association = match context_handle {
@@ -849,6 +853,7 @@ impl DocumentRuntime {
             HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
             scripting_enabled,
             false,
+            None,
         )?;
         // Drop document-level metadata from pasted content before connecting
         // the fragment to the editing host.
@@ -913,6 +918,7 @@ impl DocumentRuntime {
             custom_element_upgrade_timing,
             scripting_enabled,
             false,
+            None,
         ))
     }
 
@@ -967,14 +973,14 @@ impl DocumentRuntime {
         ))
     }
 
-    pub(crate) fn build_unsafe_fragment_from_html(
+    fn build_html_insertion_fragment(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         context_handle: DomHandle,
         html: &str,
-        custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
+        sanitizer: Option<HtmlSanitizer>,
     ) -> Option<DomHandle> {
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
         self.build_html_fragment(
@@ -984,9 +990,10 @@ impl DocumentRuntime {
             Some(context_handle),
             html,
             true,
-            custom_element_upgrade_timing,
+            HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
             scripting_enabled,
             true,
+            sanitizer,
         )
     }
 
@@ -1073,62 +1080,78 @@ impl DocumentRuntime {
         else {
             return Ok(false);
         };
-        Ok(self.replace_children_with_parsed_fragment(scope, host_ptr, target, fragment))
+        Ok(self.apply_parsed_html(
+            scope,
+            host_ptr,
+            target,
+            fragment,
+            HtmlInsertionAction::ReplaceAll,
+        ))
     }
 
-    pub(crate) fn set_html_unsafe(
+    pub(crate) fn set_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         html: &str,
     ) -> bool {
-        let context = handle;
-        let target = self
-            .dom_host()
-            .node(handle)
-            .and_then(Node::as_element)
-            .and_then(|element| element.template_contents())
-            .unwrap_or(handle);
-        let Some(document_handle) = self.inner_html_document_handle(target) else {
-            return false;
-        };
-        let Some(fragment) = self.build_unsafe_fragment_from_html(
-            scope,
-            host_ptr,
-            document_handle,
-            context,
-            html,
-            HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
-        ) else {
-            return false;
-        };
-        self.replace_children_with_parsed_fragment(scope, host_ptr, target, fragment)
+        let target = HtmlInsertionTarget::for_children(self.dom_host(), handle);
+        self.insert_parsed_html(scope, host_ptr, target, html, None)
     }
 
-    /// The fragment is complete before any existing children are removed.
-    /// Keep the HTML fragment insertion policy (inert scripts and deferred
-    /// upgrades), while treating removal and observer delivery as replace-all.
-    fn replace_children_with_parsed_fragment(
+    pub(crate) fn insert_parsed_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
-        target: DomHandle,
-        fragment: DomHandle,
+        target: HtmlInsertionTarget,
+        html: &str,
+        sanitizer: Option<HtmlSanitizer>,
     ) -> bool {
-        let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
-        if added_children.is_empty() && self.dom_host().child_handles(target).next().is_none() {
+        let Some(document_handle) = self.inner_html_document_handle(target.parent) else {
             return false;
-        }
-        if !self.replace_all_children_with_html_fragment(scope, host_ptr, target, fragment) {
-            return false;
-        }
-        self.upgrade_inserted_html_fragment_custom_elements(
+        };
+        let Some(fragment) = self.build_html_insertion_fragment(
             scope,
             host_ptr,
-            target,
-            &added_children,
-        )
+            document_handle,
+            target.context,
+            html,
+            sanitizer,
+        ) else {
+            return false;
+        };
+        self.apply_parsed_html(scope, host_ptr, target.parent, fragment, target.action)
+    }
+
+    /// The fragment is complete before any existing children are removed.
+    /// Keep scripts inert and defer upgrades until insertion has completed.
+    fn apply_parsed_html(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        parent: DomHandle,
+        fragment: DomHandle,
+        action: HtmlInsertionAction,
+    ) -> bool {
+        let roots = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
+        let changed = match action {
+            HtmlInsertionAction::ReplaceAll => {
+                (!roots.is_empty() || self.dom_host().child_handles(parent).next().is_some())
+                    && self
+                        .replace_all_children_with_html_fragment(scope, host_ptr, parent, fragment)
+            }
+            HtmlInsertionAction::InsertBefore(reference) => self
+                .insert_html_fragment_child_appending_to_current_reaction_queue(
+                    scope, host_ptr, parent, fragment, reference,
+                ),
+            HtmlInsertionAction::Replace(old_child) => self
+                .replace_child_appending_to_current_reaction_queue(
+                    scope, host_ptr, parent, fragment, old_child,
+                ),
+        };
+        changed
+            && self.upgrade_inserted_html_fragment_custom_elements(scope, host_ptr, parent, &roots)
     }
 
     pub(crate) fn set_outer_html(

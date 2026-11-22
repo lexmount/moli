@@ -3922,6 +3922,34 @@ fn set_html_unsafe_preserves_declarative_shadow_roots() {
 }
 
 #[test]
+fn set_html_on_an_xml_document_shadow_root_uses_html_filtering() {
+    let mut vm = new_storage_test_vm("https://set-html-xml-shadow.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const doc = document.implementation.createDocument(null, "root");
+  const host = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+  doc.documentElement.appendChild(host);
+  const root = host.attachShadow({mode: "open"});
+  root.setHTML("<br><aside>discard</aside><p>keep</p>", {
+    sanitizer: {removeElements: ["aside"]}
+  });
+  return [
+    root.ownerDocument === doc,
+    root.firstElementChild.localName,
+    root.firstElementChild.namespaceURI,
+    root.children.length,
+    root.lastElementChild.textContent
+  ].join("|");
+})()
+"#,
+        )
+        .expect("setHTML should parse and filter a valid ShadowRoot in an XML document");
+    assert_eq!(result, "true|br|http://www.w3.org/1999/xhtml|2|keep");
+}
+
+#[test]
 fn set_html_unsafe_in_xml_documents_uses_xml_fragment_serialization() {
     let mut vm = new_storage_test_vm("https://set-html-unsafe-xml.test/");
 

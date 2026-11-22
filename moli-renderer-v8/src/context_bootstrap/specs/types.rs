@@ -258,6 +258,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     StaticRange,
     Url,
     UrlPattern,
+    Sanitizer,
     UrlSearchParams,
     FormData,
     IndexedDb,

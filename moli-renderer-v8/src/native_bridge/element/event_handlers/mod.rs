@@ -19,7 +19,7 @@ pub(super) use generic::install_node_event_handler_template_bindings;
 pub(super) use generic::is_element_event_handler_content_attribute_name;
 pub(crate) use generic::{
     GlobalEventHandlerOwner, compile_node_content_attribute_for_dispatch,
-    event_handler_content_attribute_name, install_global_event_handler_template_bindings,
+    element_event_handler_content_attribute_applies, event_handler_content_attribute_name, event_handler_content_attribute_names, install_global_event_handler_template_bindings,
     is_global_event_handler_attribute, node_event_handler_getter_function,
     node_event_handler_setter_function, node_event_handler_value_from_wrapper,
 };
