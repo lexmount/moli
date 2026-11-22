@@ -87,8 +87,7 @@ pub(super) fn initialize(
     inspector: &mut DocumentInspectorBinding,
     pending: &PendingMainWorld,
 ) -> Result<(WindowRealmRuntime, ScriptGlobalsBaseline)> {
-    // An interrupted bootstrap can retain the proxy while the main world is
-    // still Pending. Derive reuse from the live environment on every attempt.
+    // A navigation may already have a page-owned proxy while the new main world is pending.
     let reuse_main_window_proxy = environment
         .as_ref()
         .is_some_and(RendererPageScriptEnvironment::has_main_window_proxy);
@@ -96,7 +95,7 @@ pub(super) fn initialize(
     let failure = environment
         .as_ref()
         .and_then(|environment| MainWorldBootstrapFailureForTest::take(environment.page_id()));
-    let runtime = isolate
+    let mut runtime = isolate
         .with_entered_renderer_document_isolate_and_bootstrap(|isolate, assets| {
             ScriptVmContextBootstrap::new_main_default(
                 isolate,
@@ -187,6 +186,7 @@ pub(super) fn initialize(
             environment.install_initial_main_window_proxy(v8::Global::new(scope, proxy))
         })?;
     }
+    runtime.mark_main_world_published();
     Ok((runtime, baseline))
 }
 
@@ -197,7 +197,7 @@ impl ScriptVm {
 
     pub(crate) fn ensure_main_world(&mut self) -> Result<&WindowRealmRuntime> {
         if let Some(pending) = self.main_world.pending() {
-            let (runtime, baseline_globals) = initialize(
+            let initialization = initialize(
                 &self.renderer_document_isolate,
                 &self._context_host,
                 self.resource_owner_id,
@@ -208,7 +208,13 @@ impl ScriptVm {
                 self.root_frame_id.as_deref(),
                 &mut self.page_inspector,
                 pending,
-            )?;
+            );
+            let (runtime, baseline_globals) = initialization.inspect_err(|_| {
+                // A dropped bootstrap queues its Realm teardown. Finish it
+                // before another command can retry with the same native DOM.
+                self.renderer_document_isolate
+                    .with_renderer_document_isolate_mut(|_| {});
+            })?;
             self.renderer_document_isolate
                 .with_renderer_document_isolate_mut(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));

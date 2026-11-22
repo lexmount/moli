@@ -22,6 +22,7 @@ pub(crate) struct WindowRealmRuntimeState {
     pub(crate) bridge_ref: Option<PageScriptHostBridgeRef>,
     host: Weak<RefCell<PageScriptHost>>,
     isolated: bool,
+    unpublished_initial_main_world: bool,
 }
 
 impl std::fmt::Debug for WindowRealmRuntimeState {
@@ -41,6 +42,7 @@ impl WindowRealmRuntime {
         runtime_observable_context_token: RuntimeObservableContextToken,
         deferred_releases: RendererDeferredContextHostReleaseQueue,
         isolated: bool,
+        unpublished_initial_main_world: bool,
     ) -> Self {
         Self {
             state: ManuallyDrop::new(WindowRealmRuntimeState {
@@ -49,6 +51,7 @@ impl WindowRealmRuntime {
                 bridge_ref: None,
                 host,
                 isolated,
+                unpublished_initial_main_world,
             }),
             deferred_releases,
             closed: false,
@@ -65,6 +68,10 @@ impl WindowRealmRuntime {
 
     pub(crate) fn mark_closed(&mut self) {
         self.closed = true;
+    }
+
+    pub(super) fn mark_main_world_published(&mut self) {
+        self.state.unpublished_initial_main_world = false;
     }
 
     pub(super) fn release_bridge_ref(&mut self) {
@@ -131,6 +138,14 @@ impl WindowRealmRuntimeState {
                 unsafe { &*host_ptr }.deferred_context_host_release_queue(),
             );
             crate::native_bridge::clear_context_wrapper_cache_for_teardown(scope, false);
+        }
+        if self.unpublished_initial_main_world {
+            // A retry wraps the same native Document in a fresh Realm. Evict
+            // this attempt's entries after the usual teardown preserved them.
+            crate::native_bridge::discard_context_wrappers_for_realm(
+                context,
+                self.runtime_observable_context_token,
+            );
         }
         {
             let host = &mut *host.borrow_mut();

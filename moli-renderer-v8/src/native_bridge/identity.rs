@@ -600,6 +600,22 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
     );
 }
 
+pub(crate) fn discard_context_wrappers_for_realm(
+    context: v8::Local<'_, v8::Context>,
+    realm_token: RuntimeObservableContextToken,
+) {
+    if let Some(cache) = context.get_slot::<RefCell<BridgeContextWrapperCache>>() {
+        let mut cache = cache.borrow_mut();
+        let keep = |entry: &BridgeCachedWrapper| {
+            entry.creation_realm.map(NonZeroU64::get) != Some(realm_token.as_u64())
+        };
+        cache.wrappers.retain(|_, entry| keep(entry));
+        cache
+            .live_collection_wrappers
+            .retain(|_, entry| keep(entry));
+    }
+}
+
 #[derive(Debug, Default)]
 pub(super) struct BridgeIdentityStore {
     reflector_handles: IndexSet<BridgeHandle>,

@@ -265,6 +265,7 @@ impl ScriptVmContextBootstrap {
             runtime_observable_context_token,
             unsafe { &*host_ptr }.deferred_context_host_release_queue(),
             matches!(mode, WindowContextBootstrapMode::Isolated { .. }),
+            matches!(mode, WindowContextBootstrapMode::MainDefault) && !reuse_main_window_proxy,
         );
         if reusable_window_proxy.is_some()
             && let WindowContextBootstrapMode::Isolated {

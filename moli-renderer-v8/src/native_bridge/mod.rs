@@ -45,7 +45,7 @@ use identity::{BridgeHandle, BridgeIdentityStore, DomTokenListKind, ReflectorId}
 use identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind};
 pub(crate) use identity::{
     ComputedStyleDescriptor, ComputedStylePseudoKey, ComputedStyleTargetKey,
-    clear_context_wrapper_cache_for_teardown,
+    clear_context_wrapper_cache_for_teardown, discard_context_wrappers_for_realm,
 };
 
 pub(crate) use active_child_window::{
