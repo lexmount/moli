@@ -1914,7 +1914,6 @@ domparsing/tentative/all-stream-methods-with-trusted-types-no-policy.html
 domparsing/tentative/positional-methods-with-trusted-types.html
 domparsing/tentative/positional-methods.html
 domparsing/tentative/stream-append-html-unsafe.html
-domparsing/tentative/stream-append-html.html
 domparsing/tentative/stream-html-custom-element.html
 domparsing/tentative/stream-html-defer-async-script.html
 domparsing/tentative/stream-html-run-scripts-option.html
@@ -1929,7 +1928,6 @@ domparsing/tentative/stream-html-with-trusted-types-pass-trusted.html
 domparsing/tentative/stream-html-with-trusted-types-runScripts-cannot-be-turned-on.html
 domparsing/tentative/stream-html-with-trusted-types-runScripts-off.html
 domparsing/tentative/stream-html-with-trusted-types-sanitizer.html
-domparsing/tentative/stream-html.html
 domparsing/tentative/stream-insertion-logic.html
 domparsing/tentative/stream-positional.html
 editing/event.html

@@ -5225,6 +5225,8 @@ domparsing/insert_adjacent_html.html
 domparsing/outerhtml-01.html
 domparsing/outerhtml-02.html
 domparsing/style_attribute_html.html
+domparsing/tentative/stream-append-html.html
+domparsing/tentative/stream-html.html
 domparsing/xml-parse-serialize-roundtrip.html
 domparsing/xmldomparser.html
 domxpath/booleans.html
