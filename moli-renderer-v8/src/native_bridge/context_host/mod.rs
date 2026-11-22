@@ -884,7 +884,6 @@ pub(crate) struct PageScriptHost {
     page_default_context: Option<v8::Weak<v8::Context>>,
     pub(crate) common: Rc<crate::common_runtime::CommonRuntimeState>,
     pub(super) bridge: NativeDomBridge,
-    pub(super) input_pattern_cache: super::element::InputPatternCache,
     backend_node_registry: SharedRendererBackendNodeRegistry,
     dom_agent_state: crate::runtime::RendererDomAgentState,
     dom_debugger_state: dom_debugger::DomDebuggerState,
@@ -1405,7 +1404,6 @@ impl PageScriptHost {
         self.child_default_context_bootstrap = None;
         self.command_turn_output = None;
         self.lightweight_popup_browsing_contexts.clear();
-        self.input_pattern_cache.clear();
         self.internal_inspector_value_references.clear();
     }
 }
