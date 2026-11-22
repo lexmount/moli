@@ -529,13 +529,10 @@ impl<'a> QueryElement<'a> {
 pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirection {
     let mut current = Some(handle);
     while let Some(handle) = current {
-        if let Some(element) = host.node(handle).and_then(Node::as_element) {
-            if let Some(direction) = directionality_hint(host, handle, element) {
-                return direction;
-            }
-            if element.is_html_input() && element.input_type() == InputType::Tel {
-                return CssDirection::Ltr;
-            }
+        if let Some(element) = host.node(handle).and_then(Node::as_element)
+            && let Some(direction) = directionality_hint(host, handle, element)
+        {
+            return direction;
         }
         current = host
             .node(handle)
@@ -571,6 +568,11 @@ fn directionality_hint(host: &DomHost, handle: NodeId, element: &Element) -> Opt
         SpecifiedDirectionality::Fixed(direction) => Some(direction),
         SpecifiedDirectionality::Auto => {
             Some(auto_direction_for_element(host, handle).unwrap_or(CssDirection::Ltr))
+        }
+        SpecifiedDirectionality::Inherited
+            if element.is_html_input() && element.input_type() == InputType::Tel =>
+        {
+            Some(CssDirection::Ltr)
         }
         SpecifiedDirectionality::Inherited => None,
     }
