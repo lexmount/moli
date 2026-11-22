@@ -10,7 +10,7 @@ use std::{fmt::Debug, hash::Hash};
 use taffy::{Rect, ResolveOrZero, style_helpers};
 
 use super::TableStructure;
-use super::structure::{TableCell, TableColumn, TableRow};
+use super::structure::{TableCell, TableRow};
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutRect, LayoutWorld, PaintBorderStyle, PaintColor,
     PaintEdgeSizes, ResolvedLayoutStyle, style::resolve_stylo_calc_value,
@@ -434,12 +434,12 @@ pub(super) fn prepare_collapsed_table_borders<N>(
     }
     box_order += 1;
     let column_group_box_order = box_order;
-    for (group, start, span) in column_groups(world, &structure.columns) {
+    for (group, tracks) in structure.column_groups() {
         borders.merge_box(
             0,
-            start,
+            tracks.start,
             structure.rows.len(),
-            span,
+            tracks.len(),
             &world.boxes[group.index()].style,
             column_group_box_order,
         );
@@ -629,38 +629,6 @@ fn row_groups(rows: &[TableRow]) -> Vec<(LayoutBoxId, usize, usize)> {
             }
         } else {
             groups.push((group, row.index, 1));
-        }
-    }
-    groups
-}
-
-fn column_groups<N>(
-    world: &LayoutWorld<N>,
-    columns: &[TableColumn],
-) -> Vec<(LayoutBoxId, usize, usize)>
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let mut groups = Vec::<(LayoutBoxId, usize, usize)>::new();
-    for column in columns {
-        let group = if world.boxes[column.id.index()].kind == LayoutBoxKind::TableColumnGroup {
-            Some(column.id)
-        } else {
-            column.group
-        };
-        let Some(group) = group else {
-            continue;
-        };
-        if let Some(existing) = groups.iter_mut().find(|(id, _, _)| *id == group) {
-            existing.1 = existing.1.min(column.start);
-            existing.2 = existing.2.max(
-                column
-                    .start
-                    .saturating_add(column.span)
-                    .saturating_sub(existing.1),
-            );
-        } else {
-            groups.push((group, column.start, column.span));
         }
     }
     groups

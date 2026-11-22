@@ -37,6 +37,12 @@ pub(super) struct TableColumn {
     pub(super) span: usize,
 }
 
+impl TableColumn {
+    pub(super) fn tracks(&self) -> Range<usize> {
+        self.start..self.start.saturating_add(self.span)
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct TableSection {
     pub(super) id: LayoutBoxId,
@@ -57,6 +63,16 @@ pub(crate) struct TableStructure {
 }
 
 impl TableStructure {
+    pub(super) fn column_groups(&self) -> impl Iterator<Item = (LayoutBoxId, Range<usize>)> + '_ {
+        // Each column group is collected as one contiguous run.
+        self.columns
+            .chunk_by(|left, right| left.group == right.group)
+            .filter_map(|columns| {
+                let first = columns.first()?;
+                Some((first.group?, first.start..columns.last()?.tracks().end))
+            })
+    }
+
     pub(super) fn collect<N>(world: &LayoutWorld<N>, root: LayoutBoxId) -> Self
     where
         N: Copy + Debug + Eq + Hash,
@@ -170,7 +186,7 @@ fn collect_columns<N>(
             if *column_count != before {
                 return;
             }
-            None
+            Some(current)
         }
         LayoutBoxKind::TableColumn => group,
         _ => return,
@@ -307,6 +323,35 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn column_group_ranges_include_span_only_groups() {
+        let id = LayoutBoxId::from_index;
+        let column = |index, group: Option<usize>, start, span| TableColumn {
+            id: id(index),
+            group: group.map(id),
+            start,
+            span,
+        };
+        let structure = TableStructure {
+            cells: Vec::new(),
+            rows: Vec::new(),
+            columns: vec![
+                column(1, None, 0, 1),
+                column(2, Some(2), 1, 3),
+                column(4, Some(3), 4, 2),
+                column(5, Some(3), 6, 1),
+                column(6, None, 7, 2),
+            ],
+            captions: Vec::new(),
+            sections: Vec::new(),
+            column_count: 9,
+        };
+        assert_eq!(
+            structure.column_groups().collect::<Vec<_>>(),
+            [(id(2), 1..4), (id(3), 4..7)]
+        );
+    }
 
     #[test]
     fn indexed_placement_clips_spans_at_group_boundaries_including_ungrouped_rows() {
