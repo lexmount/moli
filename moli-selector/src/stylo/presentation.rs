@@ -161,7 +161,7 @@ impl QueryElement<'_> {
                 );
             }
         } else if element.namespace() == HTML_NAMESPACE {
-            append_html_direction_declaration(element, &mut block);
+            append_html_direction_declaration(*self, &mut block);
             if element.local_name() == "object" {
                 append_html_object_dimension_declarations(element, &mut block);
             }
@@ -184,20 +184,33 @@ impl QueryElement<'_> {
     }
 }
 
-fn append_html_direction_declaration(element: &Element, block: &mut PropertyDeclarationBlock) {
+fn append_html_direction_declaration(
+    query_element: QueryElement<'_>,
+    block: &mut PropertyDeclarationBlock,
+) {
+    use crate::CssDirection;
     use style::properties::generated::longhands::direction::computed_value::T as Direction;
 
+    let element = query_element.element();
     // The HTML direction hint participates below author CSS. The UA's bidi
     // isolation rule is separate, and layout consumes both computed values.
-    let direction = element.attribute("dir").and_then(|value| {
-        if value.eq_ignore_ascii_case("ltr") {
-            Some(Direction::Ltr)
-        } else if value.eq_ignore_ascii_case("rtl") {
-            Some(Direction::Rtl)
-        } else {
-            None
+    // Per WHATWG HTML §15.3.5, dir="auto" and <bdi> without valid dir="ltr|rtl"
+    // resolve their directionality from first-strong text direction.
+    let direction = match element.attribute("dir") {
+        Some(value) if value.eq_ignore_ascii_case("ltr") => Some(Direction::Ltr),
+        Some(value) if value.eq_ignore_ascii_case("rtl") => Some(Direction::Rtl),
+        Some(value) if value.eq_ignore_ascii_case("auto") => {
+            Some(match query_element.resolved_direction() {
+                CssDirection::Ltr => Direction::Ltr,
+                CssDirection::Rtl => Direction::Rtl,
+            })
         }
-    });
+        _ if element.local_name() == "bdi" => Some(match query_element.resolved_direction() {
+            CssDirection::Ltr => Direction::Ltr,
+            CssDirection::Rtl => Direction::Rtl,
+        }),
+        _ => None,
+    };
     if let Some(direction) = direction {
         block.push(
             PropertyDeclaration::Direction(direction),

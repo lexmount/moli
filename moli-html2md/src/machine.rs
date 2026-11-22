@@ -25,6 +25,7 @@ enum Task<'a, Id, Children> {
     EndRawBlock,
     EndCode,
     EndPre(Option<&'a str>),
+    EndBidiIsolate,
     TableCell,
     EndTableCell,
 }
@@ -191,6 +192,7 @@ impl<'a, D: Dom + ?Sized, Children: Iterator<Item = D::NodeId>> Machine<'a, D, C
                     self.writer().code_with_edges(&text, preformatted);
                 }
                 Task::EndPre(language) => self.end_pre(language),
+                Task::EndBidiIsolate => self.writer().text("\u{2069}"),
                 Task::TableCell => self.table_cell(),
                 Task::EndTableCell => {
                     let content = self.take_writer();
@@ -339,6 +341,23 @@ impl<'a, D: Dom + ?Sized, Children: Iterator<Item = D::NodeId>> Machine<'a, D, C
             "del" | "s" | "strike" => self.style(Style::Strike),
             "sup" => self.style(Style::Superscript),
             "sub" => self.style(Style::Subscript),
+            "bdi" | "bdo" => {
+                if let Some(dir) = self.dom.attribute(node, "dir").map(str::trim) {
+                    let prefix = if dir.eq_ignore_ascii_case("ltr") {
+                        Some("\u{2066}")
+                    } else if dir.eq_ignore_ascii_case("rtl") {
+                        Some("\u{2067}")
+                    } else if dir.eq_ignore_ascii_case("auto") {
+                        Some("\u{2068}")
+                    } else {
+                        None
+                    };
+                    if let Some(p) = prefix {
+                        self.writer().text(p);
+                        self.tasks.push(Task::EndBidiIsolate);
+                    }
+                }
+            }
             "a" => {
                 if let Some(href) = crate::media::link_href(self.dom, node) {
                     self.serial += 1;
