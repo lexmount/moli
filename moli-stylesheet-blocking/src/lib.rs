@@ -32,7 +32,8 @@ pub use discovery::{
 pub use fetcher::{
     PreparedStylesheetFetch, StylesheetFetch, StylesheetFetchIdentity,
     StylesheetFetchNetworkResult, StylesheetFetchOptions, StylesheetFetchTerminal,
-    StylesheetFetcher, StylesheetPhysicalOutcome, StylesheetResourceKey, StylesheetUsability,
+    StylesheetFetchTiming, StylesheetFetcher, StylesheetPhysicalOutcome, StylesheetResourceKey,
+    StylesheetUsability,
 };
 pub use state::StylesheetBlockingState;
 pub use types::{

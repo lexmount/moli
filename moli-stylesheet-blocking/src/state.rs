@@ -440,7 +440,7 @@ impl StylesheetBlockingState {
         );
         let response = match prepared.response {
             crate::fetcher::PreparedStylesheetResponse::Reused(terminal) => {
-                fetch.finish(Arc::new(terminal));
+                fetch.finish(terminal);
                 return fetch;
             }
             crate::fetcher::PreparedStylesheetResponse::Pending(response) => response,

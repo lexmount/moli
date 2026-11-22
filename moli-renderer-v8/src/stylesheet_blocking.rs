@@ -334,6 +334,13 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
             .csp_context
             .as_ref()
             .map(|context| context.for_request(options.nonce()));
+        let started = std::time::Instant::now();
+        let start_unix_millis = moli_time::unix_epoch_millis();
+        let request_mode = options.request_mode_and_credentials().0;
+        let request_origin_serialized = request_origin.ascii_serialization().to_owned();
+        let web_security_disabled = loader.web_security_disabled();
+        let initiator_url = options.referrer_url().unwrap_or(&document_url).clone();
+        let cancel = moli_fetch::FetchCancelHandle::new();
         Box::pin(async move {
             fetch_stylesheet_readiness_with_service_worker(
                 loader,
@@ -350,8 +357,18 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                 interception,
                 frame_id,
                 request_initiator_type,
+                cancel.clone(),
             )
             .await
+            .with_timing(moli_stylesheet_blocking::StylesheetFetchTiming {
+                started,
+                start_unix_millis,
+                request_mode,
+                request_origin: request_origin_serialized,
+                web_security_disabled,
+                initiator_url,
+                native: cancel.response_timing(),
+            })
         })
     }
 
@@ -380,6 +397,62 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
     }
 }
 
+pub(crate) fn stylesheet_resource_timing(
+    terminal: &StylesheetFetchTerminal,
+    request_url: &Url,
+    initiator_type: &'static str,
+    initiator_url: Option<&str>,
+) -> Option<crate::context_bootstrap::ResourcePerformanceEntry> {
+    if terminal.is_consumed_preload_error() {
+        return None;
+    }
+    let fetch = terminal.timing()?;
+    let timing = crate::context_bootstrap::FetchResourceTiming::from_start(
+        initiator_type,
+        fetch.started,
+        fetch.start_unix_millis,
+    );
+    timing.observe_native_timing(fetch.native);
+    let entry = match terminal.physical() {
+        StylesheetPhysicalOutcome::Response(response) => {
+            let head = response.head();
+            let origin = moli_url::WebOrigin::from_ascii_serialization(&fetch.request_origin);
+            let filter = terminal.response_filter().cloned().map(Into::into);
+            let mut entry = timing.completed_for_request(
+                request_url,
+                &origin,
+                fetch.request_mode,
+                &head,
+                response.body_bytes().len(),
+                filter.as_ref(),
+                fetch.web_security_disabled,
+            );
+            if !terminal.from_service_worker() {
+                let source = initiator_url.map(str::to_owned).or_else(|| {
+                    origin
+                        .same_origin_url(&fetch.initiator_url)
+                        .then(|| fetch.initiator_url.to_string())
+                });
+                if let Some(source) = source {
+                    crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(source)
+                        .apply(&mut entry, &head, terminal.origin_clean().unwrap_or(false));
+                }
+            }
+            entry
+        }
+        StylesheetPhysicalOutcome::NetworkError(_) => timing.failed(request_url),
+    };
+    Some(
+        timing.completed_at(
+            entry,
+            fetch
+                .native
+                .response_end_at()
+                .unwrap_or_else(|| terminal.completed_at()),
+        ),
+    )
+}
+
 pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
     loader: ResourceRequestClient,
     request_origin: moli_url::WebOrigin,
@@ -395,6 +468,7 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
     interception: Option<crate::network::interception_output::ResourceInterceptionContext>,
     frame_id: Option<String>,
     request_initiator_type: SubresourceRequestInitiatorType,
+    cancel: moli_fetch::FetchCancelHandle,
 ) -> StylesheetFetchTerminal {
     let mut request = stylesheet_readiness_request(
         &document_url,
@@ -514,7 +588,6 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
                 "stylesheet interception has no protocol output owner",
             );
         };
-        let cancel = moli_fetch::FetchCancelHandle::new();
         let Some(load) = authority.register_load(
             crate::network::loads::ResourceLoadKind::Stylesheet,
             crate::network::loads::ResourceLoadDisposition::Ordinary,
@@ -578,7 +651,7 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
         };
         return terminal.with_observed_network();
     }
-    match loader.fetch_text_stream(request).await {
+    match loader.fetch_text_stream_with_cancel(request, cancel).await {
         Ok(response) => {
             terminal_from_response(response.into(), StylesheetResponseProvenance::Network)
         }

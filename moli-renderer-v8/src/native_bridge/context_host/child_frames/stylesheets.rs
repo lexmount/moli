@@ -134,6 +134,7 @@ impl PageScriptHost {
                 document_url.clone(),
                 signature,
                 load_delay_token,
+                input.render_blocking(),
                 fetcher,
             );
         }
@@ -147,6 +148,7 @@ impl PageScriptHost {
         document_url: url::Url,
         signature: DocumentBlockingStylesheetSignature,
         load_delay_token: DocumentLoadDelayTokenId,
+        render_blocking: bool,
         fetcher: RendererStylesheetFetcher,
     ) {
         let completion_tx = self.resource_completion_tx.clone();
@@ -162,7 +164,8 @@ impl PageScriptHost {
         let csp_context = fetcher.csp_context().cloned();
         let fetch_document_url = document_url.clone();
         let import_options = fetcher.prepare_stylesheet_fetch_options(
-            crate::stylesheet_blocking::StylesheetFetchOptions::default(),
+            crate::stylesheet_blocking::StylesheetFetchOptions::default()
+                .with_render_blocking(render_blocking),
         );
         let graph = match &signature {
             DocumentBlockingStylesheetSignature::Link { url, options } => {
@@ -179,7 +182,8 @@ impl PageScriptHost {
                             request_url,
                             started,
                             root_fetch.await,
-                        ),
+                        )
+                        .with_render_blocking(render_blocking),
                     )
                     .await
                 })
@@ -259,11 +263,29 @@ impl PageScriptHost {
             return;
         };
         let load_delay_token = subscribers.load_delay_token;
-        if let Some((_root_owner, target)) = self.current_main_document_task_owner().zip(
-            self.current_window_document_task_target_for_dispatch_scope(
-                crate::native_bridge::OwnerDispatchScope::Child(completion.child_handle),
-            ),
+        if let Some(target) = self.current_window_document_task_target_for_dispatch_scope(
+            crate::native_bridge::OwnerDispatchScope::Child(completion.child_handle),
         ) {
+            for result in completion.graph.network_results() {
+                let initiator_type = if completion.request_initiator_type(result.request_url())
+                    == crate::types::SubresourceRequestInitiatorType::Css
+                {
+                    "css"
+                } else {
+                    "link"
+                };
+                if let Some(mut entry) = crate::stylesheet_blocking::stylesheet_resource_timing(
+                    result.terminal(),
+                    result.request_url(),
+                    initiator_type,
+                    None,
+                ) {
+                    if result.render_blocking() {
+                        entry.mark_render_blocking();
+                    }
+                    self.queue_document_resource_timing(target, entry);
+                }
+            }
             for violation in &completion.csp_violations {
                 // Use the existing Page task path: no JavaScript may run while
                 // this completion is still installing CSSOM and releasing blockers.

@@ -471,14 +471,25 @@ impl DocumentRuntime {
             .map(|result| {
                 let origin_clean = result.terminal.origin_clean().unwrap_or(false);
                 let physical_result = result.terminal.physical().as_result();
-                ConnectedLoadNetworkResult {
-                    network_observed: result.terminal.network_was_observed(),
-                    resource_timing: None,
-                    render_blocking: result.render_blocking,
-                    resource_timing_initiator_type: result
+                let initiator_type = result
+                    .fetch
+                    .as_ref()
+                    .map_or("css", StylesheetFetch::resource_timing_initiator_type);
+                let resource_timing = crate::stylesheet_blocking::stylesheet_resource_timing(
+                    &result.terminal,
+                    &result.request_url,
+                    initiator_type,
+                    result
                         .fetch
                         .as_ref()
-                        .map_or("css", StylesheetFetch::resource_timing_initiator_type),
+                        .and_then(StylesheetFetch::resource_timing_initiator_url),
+                )
+                .map(Box::new);
+                ConnectedLoadNetworkResult {
+                    network_observed: result.terminal.network_was_observed(),
+                    resource_timing,
+                    render_blocking: result.render_blocking,
+                    resource_timing_initiator_type: initiator_type,
                     import_options: None,
                     consumed_preload_error: result.terminal.is_consumed_preload_error(),
                     document_owner,

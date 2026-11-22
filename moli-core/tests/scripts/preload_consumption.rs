@@ -103,6 +103,19 @@ impl PreloadServer {
                                 "/font-timing-worker.js" => ("text/javascript", include_str!("../fixtures/stylesheet-font-timing-worker.js").to_owned()),
                                 "/timing-style" => ("text/css", css_timing_styles(&token)),
                                 "/timing-import" => ("text/css", format!("@import url('/timing-style?token={token}');")),
+                                "/timing-css-reuse-frame" => ("text/html", "<!doctype html><iframe src='/timing-css-reuse'></iframe>".to_owned()),
+                                "/timing-css-reuse" => ("text/html", r#"
+                                    <!doctype html><head>
+                                    <link rel="stylesheet" href="/timing-css-root?token=no-store&amp;owner=head">
+                                    <script>globalThis.headStylesReady = true;</script>
+                                    </head><body>
+                                    <link rel="stylesheet" href="/timing-css-root?token=no-store&amp;owner=body">
+                                "#.to_owned()),
+                                "/timing-css-root" => ("text/css", format!("@import '/timing-css-leaf?token={token}';")),
+                                "/timing-css-leaf" => {
+                                    asset.count.fetch_add(1, Ordering::AcqRel);
+                                    ("text/css", ".probe { color: red; }".to_owned())
+                                }
                                 "/timing-header" => ("text/html", "<!doctype html><body>Header preload timing".to_owned()),
                                 "/timing-parser-script-preloads-frame" => ("text/html", "<!doctype html><iframe src='/timing-parser-script-preloads'></iframe>".to_owned()),
                                 "/timing-parser-script-preloads" => ("text/html", r#"
@@ -553,6 +566,54 @@ async fn resource_timing_retains_script_render_blocking_at_preparation() -> Resu
                 ("head-dynamic-explicit", "blocking"),
                 ("late-head-dynamic-explicit", "non-blocking"),
             ],
+            "{path}",
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn parser_stylesheet_import_timing_reaches_its_document() -> Result<()> {
+    for path in ["timing-css-reuse", "timing-css-reuse-frame"] {
+        let server = PreloadServer::spawn().await?;
+        let browser = Browser::new(AppConfig::default())?;
+        let mut page = browser.fetch(&format!("{}/{path}", server.origin)).await?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            page.evaluate_runtime_expression_with_await_async(
+                r#"(async () => {
+                    const target = document.querySelector('iframe')?.contentWindow ?? window;
+                    if (target.document.readyState !== 'complete') {
+                        await new Promise(resolve => target.addEventListener('load', resolve, {once: true}));
+                    }
+                    const rows = target.performance.getEntriesByType('resource').flatMap(entry => {
+                        const url = new URL(entry.name);
+                        return url.pathname === '/timing-css-leaf'
+                            ? [[url.searchParams.get('token'), entry.renderBlockingStatus,
+                                entry.initiatorType === 'css' && entry.responseEnd >= entry.startTime && entry.responseEnd > 0]]
+                            : [];
+                    }).sort();
+                    return JSON.stringify(rows);
+                })()"#,
+                true,
+            ),
+        )
+        .await??;
+        let timings: serde_json::Value =
+            serde_json::from_str(result["value"].as_str().context("CSS import timings")?)?;
+        assert_eq!(
+            timings,
+            serde_json::json!([
+                ["no-store", "blocking", true],
+                ["no-store", "non-blocking", true],
+            ]),
+            "{path}",
+        );
+        assert_eq!(
+            server.assets.lock()["no-store"]
+                .count
+                .load(Ordering::Acquire),
+            2,
             "{path}",
         );
     }

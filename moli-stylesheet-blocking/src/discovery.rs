@@ -216,7 +216,7 @@ impl DocumentOwnedStylesheetDiscoveryInput {
         self.blocks_scripts
     }
 
-    pub(crate) fn render_blocking(&self) -> bool {
+    pub fn render_blocking(&self) -> bool {
         self.render_blocking
     }
 

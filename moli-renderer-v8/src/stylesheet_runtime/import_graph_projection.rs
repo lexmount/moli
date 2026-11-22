@@ -36,10 +36,17 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
             let parsed_stylesheet = result.parsed_stylesheet().cloned();
             let import_options = result.import_options().cloned();
             let render_blocking = result.render_blocking();
+            let resource_timing = crate::stylesheet_blocking::stylesheet_resource_timing(
+                terminal,
+                &request_url,
+                "css",
+                None,
+            )
+            .map(Box::new);
             let result = terminal.physical().as_result();
             ConnectedLoadNetworkResult {
                 network_observed: terminal.network_was_observed(),
-                resource_timing: None,
+                resource_timing,
                 resource_timing_initiator_type: "css",
                 render_blocking,
                 import_options,

@@ -300,6 +300,17 @@ struct StylesheetDecoding {
 }
 
 #[derive(Debug, Clone)]
+pub struct StylesheetFetchTiming {
+    pub started: std::time::Instant,
+    pub start_unix_millis: f64,
+    pub request_mode: RequestMode,
+    pub request_origin: String,
+    pub web_security_disabled: bool,
+    pub initiator_url: Url,
+    pub native: moli_fetch::FetchResponseTiming,
+}
+
+#[derive(Debug, Clone)]
 pub struct StylesheetFetchTerminal {
     completed_at: std::time::Instant,
     service_worker_response_url: Option<Url>,
@@ -310,6 +321,7 @@ pub struct StylesheetFetchTerminal {
     from_service_worker: bool,
     response_filter: Option<moli_fetch::PreloadResponseFilter>,
     consumed_preload_error: bool,
+    timing: Option<Arc<StylesheetFetchTiming>>,
     decoding: Arc<StylesheetDecoding>,
 }
 
@@ -337,6 +349,7 @@ impl StylesheetFetchTerminal {
             service_worker_response_url: None,
             response_filter: None,
             consumed_preload_error: false,
+            timing: None,
             decoding: Arc::default(),
         }
     }
@@ -371,6 +384,7 @@ impl StylesheetFetchTerminal {
             service_worker_response_url: None,
             response_filter: None,
             consumed_preload_error: false,
+            timing: None,
             decoding: Arc::default(),
         }
     }
@@ -384,6 +398,19 @@ impl StylesheetFetchTerminal {
 
     pub fn is_consumed_preload_error(&self) -> bool {
         self.consumed_preload_error
+    }
+
+    pub fn with_timing(mut self, timing: StylesheetFetchTiming) -> Self {
+        self.timing = Some(Arc::new(timing));
+        self
+    }
+
+    pub fn timing(&self) -> Option<&StylesheetFetchTiming> {
+        self.timing.as_deref()
+    }
+
+    pub fn completed_at(&self) -> std::time::Instant {
+        self.completed_at
     }
 
     pub fn with_service_worker_response(
@@ -498,7 +525,7 @@ type StylesheetResponseFuture =
 type StylesheetPublishedCallback = Box<dyn FnOnce(&StylesheetFetchTerminal) + Send + 'static>;
 
 pub(crate) enum PreparedStylesheetResponse {
-    Reused(StylesheetFetchTerminal),
+    Reused(Arc<StylesheetFetchTerminal>),
     Pending(StylesheetResponseFuture),
 }
 
@@ -524,7 +551,7 @@ impl PreparedStylesheetFetch {
     /// physical observation. A link can install this sheet during admission.
     pub fn reused(terminal: StylesheetFetchTerminal) -> Self {
         Self {
-            response: PreparedStylesheetResponse::Reused(terminal),
+            response: PreparedStylesheetResponse::Reused(Arc::new(terminal)),
             on_published: None,
             render_blocking_timing: None,
         }

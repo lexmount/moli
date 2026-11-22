@@ -124,6 +124,9 @@ impl ScriptVm {
             context_host
                 .borrow_mut()
                 .apply_child_blocking_stylesheet_load_completion(scope, completion);
+            context_host
+                .borrow_mut()
+                .flush_document_resource_timings(scope);
             Ok(())
         })
     }
