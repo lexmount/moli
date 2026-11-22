@@ -1570,6 +1570,45 @@ fn html_direction_hints_and_bidi_contexts_stay_in_the_style_cascade() {
     }
 }
 
+#[test]
+fn html_bidi_contexts_use_ua_defaults_and_allow_author_overrides() {
+    let mut vm = new_parsed_test_vm(
+        "https://html-bidi-ua.test/",
+        r#"<!doctype html>
+        <style>#override { unicode-bidi: normal; }</style>
+        <bdi id="bdi">ת</bdi>
+        <bdo id="bdo">abc</bdo>
+        <bdo id="bdo-rtl" dir="RTL">abc</bdo>
+        <bdo id="override" dir="rtl">abc</bdo>
+        <span id="auto" dir="AUTO">ת</span>
+        <pre id="pre" dir="auto">ת</pre>
+        <textarea id="textarea" dir="auto">ת</textarea>
+        <input id="search" type="SEARCH" dir="auto">
+        <input id="tel" type="tel" dir="auto">
+        <input id="url" type="url" dir="auto">
+        <input id="email" type="email" dir="auto">
+        <input id="text" type="text" dir="auto">
+        <span id="dynamic">ת</span>"#,
+    );
+    let read = r#"Array.from(document.querySelectorAll('[id]'), element =>
+        getComputedStyle(element).unicodeBidi).join('|')"#;
+    let expected = "isolate|isolate-override|isolate-override|normal|isolate|plaintext|plaintext|plaintext|plaintext|plaintext|plaintext|isolate|normal";
+    assert_eq!(vm.eval(read).unwrap(), expected);
+    publish_layout_for_test(&mut vm);
+    assert_eq!(vm.eval(read).unwrap(), expected);
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+                const dynamic = document.getElementById('dynamic');
+                dynamic.dir = 'auto';
+                return getComputedStyle(dynamic).unicodeBidi;
+            })()"#,
+        )
+        .unwrap(),
+        "isolate"
+    );
+}
+
 // Expected scrollWidth values rechecked in Chromium 145.0.7632.116 with the same
 // markup and the bundled Ahem face (0.6em advance). RTL inline overflow toward
 // the inline start is not yet part of scrollable overflow here, so only LTR
