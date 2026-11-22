@@ -516,6 +516,13 @@ impl HtmlParserSession {
         }
     }
 
+    /// End the tree builder without running the tokenizer's EOF algorithm.
+    /// Already inserted elements still finish parsing their children.
+    pub(super) fn abort_fragment(&self) {
+        self.tokenizer.sink.end();
+        self.sink().finish_construction();
+    }
+
     fn discard_parser_side_embedder_yield(&self) {
         self.tokenizer
             .sink

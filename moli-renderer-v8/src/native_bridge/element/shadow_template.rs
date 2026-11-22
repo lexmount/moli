@@ -83,6 +83,12 @@ pub(super) struct ShadowRootPrototypeReflectionDeclaration {
     set_html_unsafe: (),
     #[webapi(method = "setHTML", length = 1, callback = node_set_html_callback)]
     set_html: (),
+    #[webapi(method = "streamHTML", length = 0, enumerable, callback = stream_html)]
+    stream_html: (),
+    #[webapi(method = "streamAppendHTML", length = 0, enumerable, callback = stream_append_html)]
+    stream_append_html: (),
+    #[webapi(method = "streamPrependHTML", length = 0, enumerable, callback = stream_prepend_html)]
+    stream_prepend_html: (),
     #[webapi(method = "appendHTML", length = 1, callback = node_append_html_callback)]
     append_html: (),
     #[webapi(

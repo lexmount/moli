@@ -23,10 +23,11 @@ use moli_stylesheet_blocking::{
 
 use super::live_target::new_live_fragment_root_html_tree_sink_stream;
 use super::live_target::{
-    ParserDomMutationConsumer, ParserDomReadConsumer, ParserElementCreationConsumer,
-    ParserMutationEffectConsumer, ParserMutationEffectDelivery, ParserRuntimeDomSinks,
-    ParserStreamHtmlTreeSinkTarget, new_live_document_root_html_tree_sink_stream,
-    new_parser_stream_html_tree_sink_stream, new_parser_stream_html_tree_sink_target,
+    FragmentInsertion, ParserDomMutationConsumer, ParserDomReadConsumer,
+    ParserElementCreationConsumer, ParserInsertionPoint, ParserMutationEffectConsumer,
+    ParserMutationEffectDelivery, ParserRuntimeDomSinks, ParserStreamHtmlTreeSinkTarget,
+    new_live_document_root_html_tree_sink_stream, new_parser_stream_html_tree_sink_stream,
+    new_parser_stream_html_tree_sink_target,
 };
 use super::{
     ParserSourcePosition, html_chunks,
@@ -686,11 +687,37 @@ impl HtmlParser {
         final_url: Url,
         fragment_handle: NativeNodeId,
         owner_document_handle: NativeNodeId,
-        mut context: HtmlFragmentContext,
+        context: HtmlFragmentContext,
         html: &str,
         consumer: &mut T,
         allow_declarative_shadow_roots: bool,
     ) -> ParserFinishDiscoverySignals
+    where
+        T: ParserDomReadConsumer + ParserDomMutationConsumer + ParserMutationEffectConsumer,
+    {
+        let stream = self.start_fragment(
+            final_url,
+            fragment_handle,
+            owner_document_handle,
+            context,
+            consumer,
+            allow_declarative_shadow_roots,
+        );
+        for chunk in html_chunks(html) {
+            stream.feed_with_runtime_dom_consumer_without_element_creation(chunk, consumer);
+        }
+        stream.finish_with_runtime_dom_consumer_without_element_creation(consumer)
+    }
+
+    fn start_fragment<T>(
+        &self,
+        final_url: Url,
+        fragment_handle: NativeNodeId,
+        owner_document_handle: NativeNodeId,
+        mut context: HtmlFragmentContext,
+        consumer: &mut T,
+        allow_declarative_shadow_roots: bool,
+    ) -> DocumentStream
     where
         T: ParserDomReadConsumer + ParserDomMutationConsumer + ParserMutationEffectConsumer,
     {
@@ -718,10 +745,129 @@ impl HtmlParser {
             // The temporary wrapper is not part of the input being sanitized.
             stream.inner.install_sanitizer(config, inert_document);
         }
-        for chunk in html_chunks(html) {
-            stream.feed_with_runtime_dom_consumer_without_element_creation(chunk, consumer);
+        stream
+    }
+
+    /// Initializes the fragment parser with a private root, then redirects
+    /// insertions below that root to the caller's live insertion location.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_fragment_stream<T>(
+        &self,
+        final_url: Url,
+        fragment_handle: NativeNodeId,
+        owner_document_handle: NativeNodeId,
+        context: HtmlFragmentContext,
+        target: NativeNodeId,
+        reference_child: Option<NativeNodeId>,
+        consumer: &mut T,
+    ) -> HtmlFragmentStream
+    where
+        T: ParserDomReadConsumer + ParserDomMutationConsumer + ParserMutationEffectConsumer,
+    {
+        let stream = self.start_fragment(
+            final_url,
+            fragment_handle,
+            owner_document_handle,
+            context,
+            consumer,
+            true,
+        );
+        let root = consumer
+            .last_child(fragment_handle)
+            .expect("HTML fragment parser creates a root on initialization");
+        let target = ParserInsertionPoint {
+            parent: target,
+            reference_child,
+        };
+        let invalid_reference = Rc::new(Cell::new(false));
+        stream.inner.set_fragment_insertion(FragmentInsertion {
+            root,
+            target,
+            invalid_reference: Rc::clone(&invalid_reference),
+        });
+        HtmlFragmentStream {
+            stream,
+            target,
+            invalid_reference,
         }
-        stream.finish_with_runtime_dom_consumer_without_element_creation(consumer)
+    }
+}
+
+pub struct HtmlFragmentStream {
+    stream: DocumentStream,
+    target: ParserInsertionPoint,
+    invalid_reference: Rc<Cell<bool>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidFragmentStreamReference;
+
+impl HtmlFragmentStream {
+    pub fn abort<T>(self, consumer: &mut T) -> Vec<ParserCustomElementRegistryAssociation>
+    where
+        T: ParserDomReadConsumer
+            + ParserDomMutationConsumer
+            + ParserMutationEffectConsumer
+            + ParserElementCreationConsumer,
+    {
+        // SAFETY: The parser-step guard clears the callbacks before the
+        // exclusively borrowed consumer leaves this call.
+        let sinks = unsafe { ParserRuntimeDomSinks::from_consumer(consumer) };
+        self.stream.inner.enter_runtime_dom_sinks_parse_step(sinks);
+        let step = RuntimeDomSinksParserStep {
+            stream: &self.stream,
+        };
+        step.stream.inner.abort_fragment();
+        self.take_registry_associations()
+    }
+
+    pub fn take_registry_associations(&self) -> Vec<ParserCustomElementRegistryAssociation> {
+        self.stream
+            .take_parser_stream_custom_element_registry_associations()
+    }
+
+    pub fn write<T>(
+        &self,
+        chunk: &str,
+        consumer: &mut T,
+    ) -> Result<(), InvalidFragmentStreamReference>
+    where
+        T: ParserDomReadConsumer
+            + ParserDomMutationConsumer
+            + ParserMutationEffectConsumer
+            + ParserElementCreationConsumer,
+    {
+        if self
+            .target
+            .reference_child
+            .is_some_and(|child| consumer.parent_node(child) != Some(self.target.parent))
+        {
+            self.invalid_reference.set(true);
+        }
+        if !self.invalid_reference.get() {
+            self.stream.feed_with_runtime_dom_consumer(chunk, consumer);
+        }
+        if self.invalid_reference.get() {
+            return Err(InvalidFragmentStreamReference);
+        }
+        Ok(())
+    }
+
+    pub fn close<T>(
+        self,
+        consumer: &mut T,
+    ) -> Result<ParserFinishDiscoverySignals, InvalidFragmentStreamReference>
+    where
+        T: ParserDomReadConsumer
+            + ParserDomMutationConsumer
+            + ParserMutationEffectConsumer
+            + ParserElementCreationConsumer,
+    {
+        let signals = self.stream.finish_with_runtime_dom_consumer(consumer);
+        if self.invalid_reference.get() {
+            return Err(InvalidFragmentStreamReference);
+        }
+        Ok(signals)
     }
 }
 
@@ -1712,7 +1858,11 @@ impl DocumentSink {
         // builder calls this after updating its open-element stack, so nested
         // document.write() sees the completed token's insertion state.
         let finish = self.target.borrow().mutation_finisher();
-        finish.map_or(std::ops::ControlFlow::Continue(()), |finish| finish())
+        finish.map_or(std::ops::ControlFlow::Continue(()), |finish| finish())?;
+        if self.target.borrow().fragment_reference_is_invalid() {
+            return std::ops::ControlFlow::Break(());
+        }
+        std::ops::ControlFlow::Continue(())
     }
 
     pub(super) fn take_committed_dom_mutations(&self) -> bool {
@@ -1778,6 +1928,10 @@ impl DocumentSink {
         self.target
             .borrow_mut()
             .install_sanitizer(config, inert_document);
+    }
+
+    pub(super) fn set_fragment_insertion(&self, insertion: FragmentInsertion) {
+        self.target.borrow_mut().set_fragment_insertion(insertion);
     }
 
     pub(super) fn clear_runtime_dom_sinks_after_parse_step(&self) {

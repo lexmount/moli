@@ -16,9 +16,10 @@ use crate::stylesheet_blocking::DocumentBlockingStylesheetSignature;
 use crate::types::{ScriptKind, ScriptMode};
 use html5ever::tree_builder::QuirksMode;
 use moli_parser::{
-    HtmlFragmentContext, HtmlSanitizer, ParserDomMutation, ParserDomMutationConsumer,
-    ParserDomReadConsumer, ParserElementCreationConsumer, ParserElementCreationRequest,
-    ParserMutationEffectConsumer, ParserPumpOutcome, XmlFragmentParseError, XmlParser,
+    HtmlFragmentContext, HtmlFragmentStream, HtmlSanitizer, InvalidFragmentStreamReference,
+    ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,
+    ParserElementCreationConsumer, ParserElementCreationRequest, ParserMutationEffectConsumer,
+    ParserPumpOutcome, XmlFragmentParseError, XmlParser,
 };
 use std::collections::HashSet;
 use tracing::debug;
@@ -46,6 +47,7 @@ struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
 #[derive(Clone, Copy)]
 enum DocumentWriteParserMutationTarget {
     LiveDocument,
+    LiveFragment,
     WindowlessDocument { owner_document: DomHandle },
     DetachedFragment,
 }
@@ -74,7 +76,11 @@ impl ParserMutationEffectConsumer for DocumentWriteParserMutationOwner<'_, '_, '
             );
     }
     fn finish_parser_dom_mutations(&mut self) -> std::ops::ControlFlow<()> {
-        if self.targets_live_document() {
+        if matches!(
+            self.target,
+            DocumentWriteParserMutationTarget::LiveDocument
+                | DocumentWriteParserMutationTarget::LiveFragment
+        ) {
             self.runtime
                 .run_pending_parser_post_step_runtime_work(self.scope, self.host_ptr);
         }
@@ -1084,6 +1090,112 @@ impl DocumentRuntime {
             fragment,
             HtmlInsertionAction::ReplaceAll,
         ))
+    }
+
+    pub(crate) fn start_html_fragment_stream(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        target: &HtmlInsertionTarget,
+        reference_child: Option<DomHandle>,
+        sanitizer: HtmlSanitizer,
+    ) -> Option<HtmlFragmentStream> {
+        let document_handle = self.inner_html_document_handle(target.parent)?;
+        let parsing_context = self
+            .dom_host()
+            .shadow_root_host(target.context)
+            .unwrap_or(target.context);
+        let context_node = self.dom_host().node(parsing_context)?;
+        let context = HtmlFragmentContext::new(
+            Some(parsing_context),
+            context_node.namespace()?,
+            context_node.local_name()?,
+        )
+        .with_sanitizer(sanitizer);
+        let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
+        let parser = HtmlParser::with_scripting_enabled(scripting_enabled);
+        let final_url = self.document_url().clone();
+        let fragment = self.create_document_fragment_for_document(document_handle);
+        Some(self.with_dom_host_parse_step(|runtime| {
+            let mut owner = DocumentWriteParserMutationOwner {
+                runtime,
+                scope,
+                host_ptr,
+                target: DocumentWriteParserMutationTarget::DetachedFragment,
+            };
+            parser.start_fragment_stream(
+                final_url,
+                fragment,
+                document_handle,
+                context,
+                target.parent,
+                reference_child,
+                &mut owner,
+            )
+        }))
+    }
+
+    pub(crate) fn write_html_fragment_stream(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        stream: &HtmlFragmentStream,
+        chunk: &str,
+    ) -> Result<(), InvalidFragmentStreamReference> {
+        let result = self.with_dom_host_parse_step(|runtime| {
+            let mut owner = DocumentWriteParserMutationOwner {
+                runtime,
+                scope,
+                host_ptr,
+                target: DocumentWriteParserMutationTarget::LiveFragment,
+            };
+            stream.write(chunk, &mut owner)
+        });
+        custom_elements::apply_parser_created_registry_associations(
+            host_ptr,
+            &stream.take_registry_associations(),
+        );
+        result
+    }
+
+    pub(crate) fn close_html_fragment_stream(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        stream: HtmlFragmentStream,
+    ) -> Result<(), InvalidFragmentStreamReference> {
+        let signals = self.with_dom_host_parse_step(|runtime| {
+            let mut owner = DocumentWriteParserMutationOwner {
+                runtime,
+                scope,
+                host_ptr,
+                target: DocumentWriteParserMutationTarget::LiveFragment,
+            };
+            stream.close(&mut owner)
+        })?;
+        custom_elements::apply_parser_created_registry_associations(
+            host_ptr,
+            &signals.parser_created_registry_associations,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn abort_html_fragment_stream(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        stream: HtmlFragmentStream,
+    ) {
+        let associations = self.with_dom_host_parse_step(|runtime| {
+            let mut owner = DocumentWriteParserMutationOwner {
+                runtime,
+                scope,
+                host_ptr,
+                target: DocumentWriteParserMutationTarget::LiveFragment,
+            };
+            stream.abort(&mut owner)
+        });
+        custom_elements::apply_parser_created_registry_associations(host_ptr, &associations);
     }
 
     pub(crate) fn insert_parsed_html(

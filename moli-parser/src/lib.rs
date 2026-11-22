@@ -26,7 +26,8 @@ use moli_stylesheet_blocking::{
 };
 
 pub use html::{
-    DocumentStream, HtmlFragmentContext, HtmlParser, ParserBlockingStylesheetPause,
+    DocumentStream, HtmlFragmentContext, HtmlFragmentStream, HtmlParser,
+    InvalidFragmentStreamReference, ParserBlockingStylesheetPause,
     ParserCustomElementConstructionHandoff, ParserCustomElementRegistryAssociation,
     ParserFinishDiscoverySignals, ParserInputContext, ParserInputQueue, ParserInputSession,
     ParserPumpOutcome, ParserPumpStep, ParserScriptElementStateTransition, ParserScriptHandoff,

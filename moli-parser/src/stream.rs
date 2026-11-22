@@ -30,7 +30,7 @@ use super::{
         ParserScriptNoExecutionOutcome, ParserScriptPreparationFailure,
         ParserScriptPreparationRequest, ParserYield,
     },
-    live_target::{ParserRuntimeDomSinks, ParserStreamHtmlTreeSinkTarget},
+    live_target::{FragmentInsertion, ParserRuntimeDomSinks, ParserStreamHtmlTreeSinkTarget},
     session::{
         HtmlParserSession, HtmlParserSessionResult, HtmlTreeSinkSession,
         new_fragment_html_tree_sink_session, new_html_tree_sink_session,
@@ -495,6 +495,14 @@ impl HtmlTreeSinkStream {
         inert_document: NativeNodeId,
     ) {
         self.parser.install_sanitizer(config, inert_document);
+    }
+
+    pub(super) fn set_fragment_insertion(&self, insertion: FragmentInsertion) {
+        self.parser.sink().set_fragment_insertion(insertion);
+    }
+
+    pub(super) fn abort_fragment(&self) {
+        self.parser.abort_fragment();
     }
 
     fn parser_script_position(&self, node_id: NativeNodeId) -> usize {

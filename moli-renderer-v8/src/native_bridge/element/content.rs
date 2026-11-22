@@ -1024,7 +1024,7 @@ pub(in crate::native_bridge) fn node_inner_html_setter_function<'s>(
     });
 }
 
-enum HtmlInsertionPosition {
+pub(super) enum HtmlInsertionPosition {
     Set,
     Append,
     Prepend,
@@ -1068,7 +1068,11 @@ impl HtmlInsertionPosition {
         }
     }
 
-    fn target(self, host: &DomHost, handle: DomHandle) -> Result<Option<HtmlInsertionTarget>, ()> {
+    pub(super) fn target(
+        self,
+        host: &DomHost,
+        handle: DomHandle,
+    ) -> Result<Option<HtmlInsertionTarget>, ()> {
         if matches!(self, Self::Set | Self::Append | Self::Prepend) {
             let mut target = HtmlInsertionTarget::for_children(host, handle);
             if !matches!(self, Self::Set)

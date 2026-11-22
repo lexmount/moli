@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ptr::NonNull, rc::Rc};
+use std::{cell::Cell, collections::HashMap, ptr::NonNull, rc::Rc};
 
 use crate::{HtmlSanitizer, ParserCustomElementRegistryAssociation};
 
@@ -2198,6 +2198,7 @@ pub(super) struct ParserStreamHtmlTreeSinkTarget {
     next_content_patch_insertion_parent: Option<NativeNodeId>,
     active_content_patches: Vec<(NativeNodeId, ActiveContentPatch)>,
     sanitizer: Option<ParserSanitizer>,
+    fragment_insertion: Option<FragmentInsertion>,
     open_template_element_depth: usize,
     pending_open_parser_element: Option<NativeNodeId>,
     open_parser_elements: Vec<OpenParserElement>,
@@ -2205,6 +2206,12 @@ pub(super) struct ParserStreamHtmlTreeSinkTarget {
     allow_declarative_shadow_roots: bool,
     pending_custom_element_registry_associations: Vec<ParserCustomElementRegistryAssociation>,
     state: HtmlTreeSinkState,
+}
+
+pub(super) struct FragmentInsertion {
+    pub(super) root: NativeNodeId,
+    pub(super) target: ParserInsertionPoint,
+    pub(super) invalid_reference: Rc<Cell<bool>>,
 }
 
 struct ParserSanitizer {
@@ -2292,6 +2299,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
             sanitizer: None,
+            fragment_insertion: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2316,6 +2324,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
             sanitizer: None,
+            fragment_insertion: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2357,6 +2366,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
             sanitizer: None,
+            fragment_insertion: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2385,6 +2395,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
             sanitizer: None,
+            fragment_insertion: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -3324,17 +3335,50 @@ impl ParserStreamHtmlTreeSinkTarget {
         self.insert_buffered_text(point, text)
     }
 
-    fn adjusted_sanitizer_location(&self, point: ParserInsertionPoint) -> ParserInsertionPoint {
-        self.sanitizer
+    pub(super) fn set_fragment_insertion(&mut self, insertion: FragmentInsertion) {
+        self.fragment_insertion = Some(insertion);
+    }
+
+    pub(super) fn fragment_reference_is_invalid(&self) -> bool {
+        self.fragment_insertion
+            .as_ref()
+            .is_some_and(|insertion| insertion.invalid_reference.get())
+    }
+
+    fn adjusted_insertion_location(&self, point: ParserInsertionPoint) -> ParserInsertionPoint {
+        let point = self
+            .sanitizer
             .as_ref()
             .and_then(|sanitizer| sanitizer.redirects.get(&point.parent))
             .copied()
-            .unwrap_or(point)
+            .unwrap_or(point);
+        match &self.fragment_insertion {
+            Some(insertion) if point.parent == insertion.root => insertion.target,
+            _ => point,
+        }
+    }
+
+    fn can_insert_at(&self, point: ParserInsertionPoint) -> bool {
+        if self.fragment_reference_is_invalid() {
+            return false;
+        }
+        if point
+            .reference_child
+            .is_some_and(|child| self.read_parent_node(child) != Some(point.parent))
+        {
+            if let Some(insertion) = &self.fragment_insertion
+                && point == insertion.target
+            {
+                insertion.invalid_reference.set(true);
+            }
+            return false;
+        }
+        true
     }
 
     pub(super) fn text_insertion_point(&mut self, parent: NativeNodeId) -> ParserInsertionPoint {
         self.clear_template_insertion_hints();
-        self.adjusted_sanitizer_location(ParserInsertionPoint {
+        self.adjusted_insertion_location(ParserInsertionPoint {
             parent,
             reference_child: None,
         })
@@ -3370,10 +3414,7 @@ impl ParserStreamHtmlTreeSinkTarget {
     ) -> ParserMutationEffectDelivery {
         // An embedder callback may have detached the insertion anchor. Do not
         // replay text into a different parent after a reentrant DOM change.
-        if point
-            .reference_child
-            .is_some_and(|child| self.read_parent_node(child) != Some(point.parent))
-        {
+        if !self.can_insert_at(point) {
             return ParserMutationEffectDelivery::none();
         }
         self.insert_text_node(point.parent, point.reference_child, text)
@@ -3390,7 +3431,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         }
 
         if let Some(reference_child) = reference_child {
-            if self.read_is_text_node(reference_child) {
+            if self.fragment_insertion.is_none() && self.read_is_text_node(reference_child) {
                 let effects = self.prepend_text_to_text_node(reference_child, text);
                 return self.mutation_effect_delivery(effects);
             }
@@ -3492,7 +3533,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             .take()
             .or_else(|| self.intended_parent_for_next_parser_element())
             .map(|parent| {
-                self.adjusted_sanitizer_location(ParserInsertionPoint {
+                self.adjusted_insertion_location(ParserInsertionPoint {
                     parent,
                     reference_child: None,
                 })
@@ -3697,7 +3738,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         parent: NativeNodeId,
         reference_child: Option<NativeNodeId>,
     ) {
-        let point = self.adjusted_sanitizer_location(ParserInsertionPoint {
+        let point = self.adjusted_insertion_location(ParserInsertionPoint {
             parent,
             reference_child,
         });
@@ -3785,12 +3826,9 @@ impl ParserStreamHtmlTreeSinkTarget {
         point: ParserInsertionPoint,
         child: &ParseHandle,
     ) -> ParserMutationEffectDelivery {
-        let point = self.adjusted_sanitizer_location(point);
+        let point = self.adjusted_insertion_location(point);
         let child_id = child.node_id();
-        if point
-            .reference_child
-            .is_some_and(|reference| self.read_parent_node(reference) != Some(point.parent))
-        {
+        if !self.can_insert_at(point) {
             return ParserMutationEffectDelivery::none();
         }
         if let Some(sanitizer) = &mut self.sanitizer {
@@ -3898,7 +3936,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             return None;
         }
         scope = self
-            .adjusted_sanitizer_location(ParserInsertionPoint {
+            .adjusted_insertion_location(ParserInsertionPoint {
                 parent: scope,
                 reference_child: None,
             })
