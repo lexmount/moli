@@ -45,6 +45,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ToolCancelEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::TrustedHTMLParserOptions::DESCRIPTOR,
+        kind: ConstructorKind::TrustedHtmlParserOptions,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::TrustedTypePolicy::DESCRIPTOR,
         kind: ConstructorKind::TrustedTypePolicy,
     },

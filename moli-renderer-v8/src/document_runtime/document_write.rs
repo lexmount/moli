@@ -981,6 +981,7 @@ impl DocumentRuntime {
         context_handle: DomHandle,
         html: &str,
         sanitizer: Option<HtmlSanitizer>,
+        run_scripts: bool,
     ) -> Option<DomHandle> {
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
         self.build_html_fragment(
@@ -989,7 +990,7 @@ impl DocumentRuntime {
             document_handle,
             Some(context_handle),
             html,
-            true,
+            !run_scripts,
             HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
             scripting_enabled,
             true,
@@ -1089,17 +1090,6 @@ impl DocumentRuntime {
         ))
     }
 
-    pub(crate) fn set_html(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut PageScriptHost,
-        handle: DomHandle,
-        html: &str,
-    ) -> bool {
-        let target = HtmlInsertionTarget::for_children(self.dom_host(), handle);
-        self.insert_parsed_html(scope, host_ptr, target, html, None)
-    }
-
     pub(crate) fn insert_parsed_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -1107,6 +1097,7 @@ impl DocumentRuntime {
         target: HtmlInsertionTarget,
         html: &str,
         sanitizer: Option<HtmlSanitizer>,
+        run_scripts: bool,
     ) -> bool {
         let Some(document_handle) = self.inner_html_document_handle(target.parent) else {
             return false;
@@ -1118,6 +1109,7 @@ impl DocumentRuntime {
             target.context,
             html,
             sanitizer,
+            run_scripts,
         ) else {
             return false;
         };

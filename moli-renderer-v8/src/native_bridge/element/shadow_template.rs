@@ -85,8 +85,20 @@ pub(super) struct ShadowRootPrototypeReflectionDeclaration {
     set_html: (),
     #[webapi(method = "appendHTML", length = 1, callback = node_append_html_callback)]
     append_html: (),
+    #[webapi(
+        method = "appendHTMLUnsafe",
+        length = 1,
+        enumerable, callback = node_append_html_unsafe_callback
+    )]
+    append_html_unsafe: (),
     #[webapi(method = "prependHTML", length = 1, callback = node_prepend_html_callback)]
     prepend_html: (),
+    #[webapi(
+        method = "prependHTMLUnsafe",
+        length = 1,
+        enumerable, callback = node_prepend_html_unsafe_callback
+    )]
+    prepend_html_unsafe: (),
     #[webapi(
         method = "elementFromPoint",
         length = 2,

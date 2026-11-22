@@ -198,14 +198,44 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
     set_html: (),
     #[webapi(method = "appendHTML", length = 1, enumerable, callback = node_append_html_callback)]
     append_html: (),
+    #[webapi(
+        method = "appendHTMLUnsafe",
+        length = 1,
+        enumerable, callback = node_append_html_unsafe_callback
+    )]
+    append_html_unsafe: (),
     #[webapi(method = "prependHTML", length = 1, enumerable, callback = node_prepend_html_callback)]
     prepend_html: (),
+    #[webapi(
+        method = "prependHTMLUnsafe",
+        length = 1,
+        enumerable, callback = node_prepend_html_unsafe_callback
+    )]
+    prepend_html_unsafe: (),
     #[webapi(method = "beforeHTML", length = 1, enumerable, callback = node_before_html_callback)]
     before_html: (),
+    #[webapi(
+        method = "beforeHTMLUnsafe",
+        length = 1,
+        enumerable, callback = node_before_html_unsafe_callback
+    )]
+    before_html_unsafe: (),
     #[webapi(method = "afterHTML", length = 1, enumerable, callback = node_after_html_callback)]
     after_html: (),
+    #[webapi(
+        method = "afterHTMLUnsafe",
+        length = 1,
+        enumerable, callback = node_after_html_unsafe_callback
+    )]
+    after_html_unsafe: (),
     #[webapi(method = "replaceWithHTML", length = 1, enumerable, callback = node_replace_with_html_callback)]
     replace_with_html: (),
+    #[webapi(
+        method = "replaceWithHTMLUnsafe",
+        length = 1,
+        enumerable, callback = node_replace_with_html_unsafe_callback
+    )]
+    replace_with_html_unsafe: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

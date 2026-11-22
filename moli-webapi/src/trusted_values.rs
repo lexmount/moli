@@ -262,6 +262,8 @@ fn trusted_type_to_string_callback<'s>(
 pub struct TrustedTypePolicyOptionsMembers {
     #[webidl(name = "createHTML", converter = "callback_function")]
     pub create_html: Option<webidl::WebIdlCallbackFunction>,
+    #[webidl(name = "createParserOptions", converter = "callback_function")]
+    pub create_parser_options: Option<webidl::WebIdlCallbackFunction>,
     #[webidl(name = "createScript", converter = "callback_function")]
     pub create_script: Option<webidl::WebIdlCallbackFunction>,
     #[webidl(name = "createScriptURL", converter = "callback_function")]

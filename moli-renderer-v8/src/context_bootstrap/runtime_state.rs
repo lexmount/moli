@@ -12,7 +12,7 @@ use super::{
     navigator_runtime::{bind_window_navigator_identity_seed, install_navigator_runtime_state},
     performance_runtime::install_default_window_performance_seed,
     sanitizer::SetHtmlOptions,
-    trusted_types::install_trusted_types_runtime_state,
+    trusted_types::{UnsafeHtmlDocumentArgs, install_trusted_types_runtime_state},
     web_storage::{
         install_storage_runtime_state, window_local_storage_getter, window_session_storage_getter,
     },
@@ -1222,77 +1222,32 @@ fn document_cookie_runtime_setter<'s>(
     let _ = set_document_cookie_for_receiver(scope, receiver, &value.to_rust_string_lossy(scope));
 }
 
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Document.parseHTMLUnsafe")]
-struct DocumentParseHtmlUnsafeArgs {
-    #[webidl(required, with = document_parse_html_unsafe_source_arg)]
-    html: DocumentParseHtmlUnsafeSource,
-}
-
-enum DocumentParseHtmlUnsafeSource {
-    TrustedHtml(String),
-    String(String),
-}
-
-fn document_parse_html_unsafe_source_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<DocumentParseHtmlUnsafeSource, webidl::WebIdlError> {
-    if args.length() <= index {
-        return Err(webidl::WebIdlError::custom_message(
-            "Failed to execute 'parseHTMLUnsafe' on 'Document': 1 argument required, but only 0 present.",
-        ));
-    }
-    let value = args.get(index);
-    if let Some(value) = crate::context_bootstrap::trusted_html_value_string(scope, value) {
-        return Ok(DocumentParseHtmlUnsafeSource::TrustedHtml(value));
-    }
-    webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::argument("Document.parseHTMLUnsafe", (index + 1) as usize),
-    )
-    .map(|value| DocumentParseHtmlUnsafeSource::String(value.0))
-}
-
 fn document_parse_html_unsafe_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<DocumentParseHtmlUnsafeArgs>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<UnsafeHtmlDocumentArgs>(scope, &args) else {
         return;
     };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set(v8::null(scope).into());
         return;
     };
-    let runtime = unsafe { &*host_ptr };
-    let html = match parsed.html {
-        DocumentParseHtmlUnsafeSource::TrustedHtml(html) => html,
-        DocumentParseHtmlUnsafeSource::String(html) => {
-            let Some(value) = v8_string(scope, &html) else {
-                return;
-            };
-            let requirements = runtime.trusted_types_for_script_requirements(scope);
-            let Some(html) = crate::context_bootstrap::trusted_html_string_or_throw(
-                scope,
-                value.into(),
-                requirements,
-                "Document parseHTMLUnsafe",
-                "parseHTMLUnsafe",
-            ) else {
-                return;
-            };
-            html
-        }
+    let global = scope.get_current_context().global(scope);
+    let requirements =
+        unsafe { &*host_ptr }.trusted_types_for_script_requirements_for_global(scope, global);
+    let Some(parsed) = parsed.prepare(scope, global, requirements) else {
+        return;
+    };
+    let Some((html, sanitizer, _)) = parsed.into_parser_input(scope) else {
+        return;
     };
     let Some(document) = crate::dom_parser::parse_html_document_for_insertion(
         scope,
         url::Url::parse("about:blank").expect("static about:blank URL parses"),
         &html,
-        None,
+        sanitizer,
     ) else {
         rv.set(v8::null(scope).into());
         return;

@@ -20,6 +20,8 @@ use crate::{
 };
 use moli_webapi::trusted_values::TrustedTypePolicyOptionsMembers;
 
+pub(super) const CREATE_PARSER_OPTIONS_SLOT: &str = "moli.TrustedTypePolicy.createParserOptions";
+
 /// Retains the converted callbacks on their policy with the resource initiator.
 pub(super) fn install_policy_callbacks<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -28,6 +30,7 @@ pub(super) fn install_policy_callbacks<'s>(
 ) {
     for (slot, callback) in [
         (TRUSTED_TYPES_CREATE_HTML_SLOT, callbacks.create_html),
+        (CREATE_PARSER_OPTIONS_SLOT, callbacks.create_parser_options),
         (TRUSTED_TYPES_CREATE_SCRIPT_SLOT, callbacks.create_script),
         (
             TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT,
@@ -41,9 +44,9 @@ pub(super) fn install_policy_callbacks<'s>(
     }
 }
 
-pub(super) enum TrustedTypePolicyCallbackOutcome {
+pub(super) enum TrustedTypePolicyCallbackOutcome<T> {
     Missing,
-    Returned(Option<DomStringValue>),
+    Returned(Option<T>),
     Abrupt,
 }
 
@@ -58,12 +61,29 @@ pub(super) fn invoke_policy_callback<'s>(
     policy: v8::Local<'s, v8::Object>,
     kind: TrustedTypeKind,
     arguments: &[v8::Local<'s, v8::Value>],
-) -> TrustedTypePolicyCallbackOutcome {
-    let Some(carrier) = get_private_value(scope, policy, kind.callback_slot())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
+) -> TrustedTypePolicyCallbackOutcome<DomStringValue> {
+    let Some(carrier) = policy_callback(scope, policy, kind.callback_slot()) else {
         return TrustedTypePolicyCallbackOutcome::Missing;
     };
+    invoke_callback(scope, carrier, arguments, |scope, value| {
+        convert_string(scope, value, kind)
+    })
+}
+
+pub(super) fn policy_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    policy: v8::Local<'s, v8::Object>,
+    slot: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    get_private_value(scope, policy, slot).and_then(|value| v8::Local::try_from(value).ok())
+}
+
+pub(super) fn invoke_callback<'s, T>(
+    scope: &mut v8::PinScope<'s, '_>,
+    carrier: v8::Local<'s, v8::Object>,
+    arguments: &[v8::Local<'s, v8::Value>],
+    convert: impl FnOnce(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Value>) -> Result<T, ()>,
+) -> TrustedTypePolicyCallbackOutcome<T> {
     let receiver = v8::undefined(scope).into();
 
     let Some(callback) = PreparedWebIdlCallbackExecution::from_traced(scope, carrier) else {
@@ -75,7 +95,11 @@ pub(super) fn invoke_policy_callback<'s>(
         receiver,
         arguments,
         |scope, callback, receiver, arguments| {
-            invoke_and_convert_policy_callback(scope, callback, receiver, arguments, kind)
+            let value = callback.call(scope, receiver, arguments).ok_or(())?;
+            if value.is_null_or_undefined() {
+                return Ok(None);
+            }
+            convert(scope, value).map(Some)
         },
     ) {
         WebIdlCallbackExecutionOutcome::Returned(value) => {
@@ -89,17 +113,11 @@ pub(super) fn invoke_policy_callback<'s>(
     }
 }
 
-fn invoke_and_convert_policy_callback<'s>(
+fn convert_string<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    callback: v8::Local<'s, v8::Function>,
-    receiver: v8::Local<'s, v8::Value>,
-    arguments: &[v8::Local<'s, v8::Value>],
+    result: v8::Local<'s, v8::Value>,
     kind: TrustedTypeKind,
-) -> Result<Option<DomStringValue>, ()> {
-    let result = callback.call(scope, receiver, arguments).ok_or(())?;
-    if result.is_null() || result.is_undefined() {
-        return Ok(None);
-    }
+) -> Result<DomStringValue, ()> {
     let context = webidl::Context::member("TrustedTypePolicy callback", "return value");
     let converted = match kind {
         TrustedTypeKind::Html | TrustedTypeKind::Script => {
@@ -109,7 +127,7 @@ fn invoke_and_convert_policy_callback<'s>(
         TrustedTypeKind::ScriptUrl => webidl::convert::<webidl::UsvString>(scope, result, context)
             .map(|value| DomStringValue::from(value.0)),
     };
-    converted.map(Some).map_err(|error| {
+    converted.map_err(|error| {
         webidl::throw_error(scope, &error);
     })
 }

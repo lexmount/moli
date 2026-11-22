@@ -5,6 +5,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     Shell {
         length: u8,
     },
+    TrustedHtmlParserOptions,
     TrustedTypePolicy,
     TrustedTypePolicyFactory,
     Event,

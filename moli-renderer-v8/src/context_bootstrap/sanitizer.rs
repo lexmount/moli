@@ -87,6 +87,16 @@ fn constructor<'s>(
     let Some(configuration) = new_configuration(scope, args_value.configuration, true) else {
         return;
     };
+    if let Some(owner) = bind_configuration(scope, Some(args.this()), configuration) {
+        rv.set(owner.into());
+    }
+}
+
+fn bind_configuration<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: Option<v8::Local<'s, v8::Object>>,
+    configuration: Configuration,
+) -> Option<v8::Local<'s, v8::Object>> {
     let store = scope.get_slot::<Store>().cloned().unwrap_or_else(|| {
         let store = Store::default();
         scope.set_slot(store.clone());
@@ -101,10 +111,14 @@ fn constructor<'s>(
         store.next_id
     };
     let value = v8::BigInt::new_from_u64(scope, id);
-    let owner = args.this();
-    if SanitizerSlots::new(value).initialize(scope, owner).is_err() {
-        return;
-    }
+    let slots = SanitizerSlots::new(value);
+    let owner = match owner {
+        Some(owner) => {
+            slots.initialize(scope, owner).ok()?;
+            owner
+        }
+        None => slots.bind(scope).ok()?,
+    };
     let weak_store = Rc::downgrade(&store);
     let weak = v8::Weak::with_finalizer(
         scope,
@@ -119,7 +133,7 @@ fn constructor<'s>(
         .borrow_mut()
         .entries
         .insert(id, (weak, Rc::new(RefCell::new(configuration))));
-    rv.set(owner.into());
+    Some(owner)
 }
 
 fn state<'s>(scope: &mut v8::PinScope<'s, '_>, owner: v8::Local<'s, v8::Object>) -> Option<State> {
@@ -275,24 +289,84 @@ modifier!(
     }
 );
 
+#[derive(Clone)]
+pub(super) struct SanitizerArgument<'s>(SanitizerInput<'s>);
+
+impl<'s> webidl::WebIdlConverter<'s> for SanitizerArgument<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        webidl::convert::<SanitizerInput<'s>>(scope, value, context).map(Self)
+    }
+}
+
+impl<'s> SanitizerArgument<'s> {
+    pub(super) fn is_empty_dictionary(&self) -> bool {
+        matches!(&self.0, SanitizerInput::New(ConstructorInput::Dictionary(input)) if input.is_empty())
+    }
+
+    fn configuration(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        permissive: bool,
+    ) -> Option<Configuration> {
+        match self.0 {
+            SanitizerInput::Existing(owner) => snapshot_configuration(scope, owner),
+            SanitizerInput::New(input) => new_configuration(scope, input, permissive),
+        }
+    }
+
+    pub(super) fn snapshot(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        let configuration = self.configuration(scope, true)?;
+        bind_configuration(scope, None, configuration)
+    }
+
+    pub(super) fn prepare_for_unsafe_html(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<HtmlSanitizer> {
+        Some(self.configuration(scope, true)?.to_parser_config())
+    }
+}
+
+fn snapshot_configuration<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> Option<Configuration> {
+    let Some(state) = state(scope, owner) else {
+        webidl::throw_type_error(scope, "The Sanitizer has no configuration.");
+        return None;
+    };
+    let configuration = state.borrow().clone();
+    Some(configuration)
+}
+
+pub(super) fn prepare_sanitizer_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> Option<HtmlSanitizer> {
+    Some(snapshot_configuration(scope, owner)?.to_parser_config())
+}
+
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "SetHTMLOptions")]
 pub(crate) struct SetHtmlOptions<'s> {
     #[webidl(converter = "raw")]
-    sanitizer: Option<SanitizerInput<'s>>,
+    sanitizer: Option<SanitizerArgument<'s>>,
 }
 
 impl<'s> SetHtmlOptions<'s> {
     pub(crate) fn prepare(self, scope: &mut v8::PinScope<'s, '_>) -> Option<HtmlSanitizer> {
         let mut configuration = match self.sanitizer {
-            Some(SanitizerInput::Existing(owner)) => {
-                let Some(state) = state(scope, owner) else {
-                    webidl::throw_type_error(scope, "The Sanitizer has no configuration.");
-                    return None;
-                };
-                state.borrow().clone()
-            }
-            Some(SanitizerInput::New(input)) => new_configuration(scope, input, false)?,
+            Some(input) => input.configuration(scope, false)?,
             None => defaults::DEFAULT_CONFIGURATION.clone(),
         };
         configuration.remove_unsafe();

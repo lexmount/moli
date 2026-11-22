@@ -117,6 +117,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
                 .length(i32::from(length))
                 .build(scope)
         }
+        ConstructorKind::TrustedHtmlParserOptions => {
+            super::super::trusted_types::build_parser_options_constructor_template(scope)
+        }
         ConstructorKind::TrustedTypePolicy => {
             super::super::trusted_types::build_policy_constructor_template(scope)
         }

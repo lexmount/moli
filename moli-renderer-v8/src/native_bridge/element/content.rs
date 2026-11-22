@@ -3,8 +3,7 @@ use moli_webapi::dom_options::GetHtmlOptions;
 use std::collections::HashSet;
 
 use crate::{
-    context_bootstrap,
-    context_bootstrap::sanitizer::SetHtmlOptions,
+    context_bootstrap::{self, UnsafeHtmlFragmentArgs, sanitizer::SetHtmlOptions},
     custom_elements,
     document_runtime::{DomHandle, HtmlInsertionAction, HtmlInsertionTarget},
     dom::native::{DomHost, Element, Node, NodeType},
@@ -27,7 +26,7 @@ use super::{
         rendered_child_participates_in_flat_tree,
     },
     styles::StyleObservation,
-    trusted_types::{TrustedHtmlSink, trusted_html_sink_dom_string, trusted_html_sink_string},
+    trusted_types::{TrustedHtmlSink, trusted_html_sink_dom_string},
 };
 
 #[derive(webidl::WebIdlArgs)]
@@ -1025,42 +1024,6 @@ pub(in crate::native_bridge) fn node_inner_html_setter_function<'s>(
     });
 }
 
-pub(in crate::native_bridge) fn node_set_html_unsafe_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        crate::webidl::throw_type_error(
-            scope,
-            "Failed to execute 'setHTMLUnsafe' on 'Element': Illegal invocation.",
-        );
-        return;
-    };
-    let runtime = unsafe { &*runtime_ptr };
-    if !is_element_or_shadow_root_receiver(runtime, handle) {
-        crate::webidl::throw_type_error(
-            scope,
-            "Failed to execute 'setHTMLUnsafe' on 'Element': Illegal invocation.",
-        );
-        return;
-    }
-    let sink = if runtime.dom_host().is_shadow_root(handle) {
-        TrustedHtmlSink::ShadowRootSetHtmlUnsafe
-    } else {
-        TrustedHtmlSink::ElementSetHtmlUnsafe
-    };
-    let Some(html) = trusted_html_sink_string(scope, runtime_ptr, args.get(0), sink) else {
-        return;
-    };
-    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let runtime = unsafe { &mut *runtime_ptr };
-        let _ = runtime.set_html(scope, runtime_ptr, handle, &html);
-    });
-}
-
 enum HtmlInsertionPosition {
     Set,
     Append,
@@ -1071,6 +1034,40 @@ enum HtmlInsertionPosition {
 }
 
 impl HtmlInsertionPosition {
+    fn unsafe_sink(&self, shadow_root: bool) -> (&'static str, &'static str) {
+        match (self, shadow_root) {
+            (Self::Set, true) => ("ShadowRoot setHTMLUnsafe", "setHTMLUnsafe"),
+            (Self::Set, false) => ("Element setHTMLUnsafe", "setHTMLUnsafe"),
+            (Self::Append, true) => ("ShadowRoot appendHTMLUnsafe", "appendHTMLUnsafe"),
+            (Self::Append, false) => ("Element appendHTMLUnsafe", "appendHTMLUnsafe"),
+            (Self::Prepend, true) => ("ShadowRoot prependHTMLUnsafe", "prependHTMLUnsafe"),
+            (Self::Prepend, false) => ("Element prependHTMLUnsafe", "prependHTMLUnsafe"),
+            (Self::Before, _) => ("Node beforeHTMLUnsafe", "beforeHTMLUnsafe"),
+            (Self::After, _) => ("Node afterHTMLUnsafe", "afterHTMLUnsafe"),
+            (Self::Replace, _) => ("Node replaceWithHTMLUnsafe", "replaceWithHTMLUnsafe"),
+        }
+    }
+
+    fn target_or_throw(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host: &DomHost,
+        handle: DomHandle,
+    ) -> Option<HtmlInsertionTarget> {
+        match self.target(host, handle) {
+            Ok(target) => target,
+            Err(()) => {
+                throw_dom_exception(
+                    scope,
+                    "HierarchyRequestError",
+                    3,
+                    "The target cannot accept HTML insertion.",
+                );
+                None
+            }
+        }
+    }
+
     fn target(self, host: &DomHost, handle: DomHandle) -> Result<Option<HtmlInsertionTarget>, ()> {
         if matches!(self, Self::Set | Self::Append | Self::Prepend) {
             let mut target = HtmlInsertionTarget::for_children(host, handle);
@@ -1130,18 +1127,8 @@ fn insert_safe_html<'s>(
         return;
     };
     let host = unsafe { &*runtime_ptr }.dom_host();
-    let target = match position.target(host, handle) {
-        Ok(Some(target)) => target,
-        Ok(None) => return,
-        Err(()) => {
-            throw_dom_exception(
-                scope,
-                "HierarchyRequestError",
-                3,
-                "The target cannot accept HTML insertion.",
-            );
-            return;
-        }
+    let Some(target) = position.target_or_throw(scope, host, handle) else {
+        return;
     };
     let context = host
         .shadow_root_host(target.context)
@@ -1163,28 +1150,88 @@ fn insert_safe_html<'s>(
     let html = String::from_utf16_lossy(&parsed.html);
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let runtime = unsafe { &mut *runtime_ptr };
-        let _ = runtime.insert_parsed_html(scope, runtime_ptr, target, &html, Some(sanitizer));
+        let _ =
+            runtime.insert_parsed_html(scope, runtime_ptr, target, &html, Some(sanitizer), false);
+    });
+}
+
+fn insert_unsafe_html<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    position: HtmlInsertionPosition,
+) {
+    let Some(parsed) = webidl::parse_args::<UnsafeHtmlFragmentArgs>(scope, &args) else {
+        return;
+    };
+    let receiver = args.this();
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, receiver)
+    else {
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let (sink, api_name) = position.unsafe_sink(runtime.dom_host().is_shadow_root(handle));
+    let context = receiver
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let global = context.global(scope);
+    let requirements = runtime.trusted_types_for_script_requirements_for_global(scope, global);
+    let Some(parsed) = parsed.prepare(scope, global, requirements, sink, api_name) else {
+        return;
+    };
+
+    // A default policy may move the receiver before the insertion target is resolved.
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, receiver)
+    else {
+        return;
+    };
+    let host = unsafe { &*runtime_ptr }.dom_host();
+    let Some(target) = position.target_or_throw(scope, host, handle) else {
+        return;
+    };
+    let Some((html, sanitizer, run_scripts)) = parsed.into_parser_input(scope) else {
+        return;
+    };
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let runtime = unsafe { &mut *runtime_ptr };
+        let _ =
+            runtime.insert_parsed_html(scope, runtime_ptr, target, &html, sanitizer, run_scripts);
     });
 }
 
 macro_rules! html_insertion_callback {
-    ($name:ident, $position:ident) => {
+    ($name:ident, $insert:ident, $position:ident) => {
         pub(in crate::native_bridge) fn $name<'s>(
             scope: &mut v8::PinScope<'s, '_>,
             args: v8::FunctionCallbackArguments<'s>,
             _rv: v8::ReturnValue<'_, v8::Value>,
         ) {
-            insert_safe_html(scope, args, HtmlInsertionPosition::$position);
+            $insert(scope, args, HtmlInsertionPosition::$position);
         }
     };
 }
 
-html_insertion_callback!(node_set_html_callback, Set);
-html_insertion_callback!(node_append_html_callback, Append);
-html_insertion_callback!(node_prepend_html_callback, Prepend);
-html_insertion_callback!(node_before_html_callback, Before);
-html_insertion_callback!(node_after_html_callback, After);
-html_insertion_callback!(node_replace_with_html_callback, Replace);
+html_insertion_callback!(node_set_html_callback, insert_safe_html, Set);
+html_insertion_callback!(node_append_html_callback, insert_safe_html, Append);
+html_insertion_callback!(node_prepend_html_callback, insert_safe_html, Prepend);
+html_insertion_callback!(node_before_html_callback, insert_safe_html, Before);
+html_insertion_callback!(node_after_html_callback, insert_safe_html, After);
+html_insertion_callback!(node_replace_with_html_callback, insert_safe_html, Replace);
+html_insertion_callback!(node_set_html_unsafe_callback, insert_unsafe_html, Set);
+html_insertion_callback!(node_append_html_unsafe_callback, insert_unsafe_html, Append);
+html_insertion_callback!(
+    node_prepend_html_unsafe_callback,
+    insert_unsafe_html,
+    Prepend
+);
+html_insertion_callback!(node_before_html_unsafe_callback, insert_unsafe_html, Before);
+html_insertion_callback!(node_after_html_unsafe_callback, insert_unsafe_html, After);
+html_insertion_callback!(
+    node_replace_with_html_unsafe_callback,
+    insert_unsafe_html,
+    Replace
+);
 
 pub(in crate::native_bridge) fn node_get_html_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,

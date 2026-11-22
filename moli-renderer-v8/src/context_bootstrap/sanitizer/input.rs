@@ -80,6 +80,7 @@ impl<'s> WebIdlConverter<'s> for Name {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct ElementName(pub(super) Name);
 
 impl<'s> WebIdlConverter<'s> for ElementName {
@@ -106,6 +107,7 @@ struct ElementDictionary {
     remove_attributes: Option<Vec<Name>>,
 }
 
+#[derive(Clone)]
 pub(super) struct ElementInput {
     name: Name,
     attributes: Option<Vec<Name>>,
@@ -170,6 +172,7 @@ struct ProcessingInstructionDictionary {
     target: Vec<u16>,
 }
 
+#[derive(Clone)]
 pub(super) struct ProcessingInstruction(pub(super) Vec<u16>);
 
 impl<'s> WebIdlConverter<'s> for ProcessingInstruction {
@@ -191,7 +194,7 @@ impl<'s> WebIdlConverter<'s> for ProcessingInstruction {
     }
 }
 
-#[derive(Default, webidl::WebIdlDictionary)]
+#[derive(Clone, Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "SanitizerConfig")]
 pub(super) struct ConfigurationInput {
     #[webidl(sequence, converter = "raw")]
@@ -214,6 +217,7 @@ pub(super) struct ConfigurationInput {
     replace_with_children_elements: Option<Vec<ElementName>>,
 }
 
+#[derive(Clone)]
 pub(super) enum ConstructorInput {
     Default,
     Dictionary(Box<ConfigurationInput>),
@@ -245,6 +249,7 @@ impl<'s> WebIdlConverter<'s> for ConstructorInput {
     }
 }
 
+#[derive(Clone)]
 pub(super) enum SanitizerInput<'s> {
     New(ConstructorInput),
     Existing(v8::Local<'s, v8::Object>),
@@ -297,6 +302,19 @@ fn attribute_and_pi_filter<T: Ord>(
 }
 
 impl ConfigurationInput {
+    pub(super) fn is_empty(&self) -> bool {
+        self.attributes.is_none()
+            && self.comments.is_none()
+            && self.data_attributes.is_none()
+            && self.elements.is_none()
+            && self.javascript_urls.is_none()
+            && self.processing_instructions.is_none()
+            && self.remove_attributes.is_none()
+            && self.remove_elements.is_none()
+            && self.remove_processing_instructions.is_none()
+            && self.replace_with_children_elements.is_none()
+    }
+
     pub(super) fn canonicalize(self, permissive: bool) -> Result<Configuration, &'static str> {
         let replacements = unique_list(
             self.replace_with_children_elements

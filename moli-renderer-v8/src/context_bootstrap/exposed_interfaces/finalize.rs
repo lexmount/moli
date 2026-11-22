@@ -6,6 +6,7 @@ use crate::context_bootstrap::{
     navigator_runtime::finalize_navigator_credentials_realm_bindings,
     notification_runtime::finalize_notification_realm_bindings,
     performance_runtime::finalize_performance_observer_realm_bindings,
+    trusted_types::finalize_policy_window_bindings,
     web_audio_runtime::finalize_base_audio_context_realm_bindings,
 };
 
@@ -21,6 +22,7 @@ enum RealmDependentFinalizer {
     NotificationPermission,
     PointerEventSecureContextSurface,
     PerformanceWindowAccessors,
+    TrustedTypePolicyWindowMethods,
     PerformanceObserverSupportedEntryTypes,
 }
 
@@ -62,6 +64,10 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
     (
         "Notification",
         RealmDependentFinalizer::NotificationPermission,
+    ),
+    (
+        "TrustedTypePolicy",
+        RealmDependentFinalizer::TrustedTypePolicyWindowMethods,
     ),
     (
         "PointerEvent",
@@ -157,6 +163,13 @@ pub(super) fn finalize_materialized_interface<'s>(
                 Ok(())
             }
         }
+        RealmDependentFinalizer::TrustedTypePolicyWindowMethods => {
+            if realm_kind == RealmKind::Window {
+                finalize_policy_window_bindings(scope, prototype)
+            } else {
+                Ok(())
+            }
+        }
         RealmDependentFinalizer::PerformanceObserverSupportedEntryTypes => {
             let supported_entry_types = if realm_kind == RealmKind::Window {
                 crate::context_bootstrap::performance_runtime::WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES
@@ -208,6 +221,7 @@ mod tests {
                 "HTMLMediaElement",
                 "Crypto",
                 "Notification",
+                "TrustedTypePolicy",
                 "PointerEvent",
                 "HTMLElement",
                 "SVGElement",

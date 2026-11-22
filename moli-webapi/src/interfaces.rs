@@ -683,6 +683,7 @@ interfaces! {
     TransformStreamDefaultController;
     TreeWalker;
     TrustedHTML;
+    TrustedHTMLParserOptions;
     TrustedScript;
     TrustedScriptURL;
     TrustedTypePolicy;

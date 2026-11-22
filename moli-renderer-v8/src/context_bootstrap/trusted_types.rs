@@ -11,8 +11,14 @@ pub(crate) use moli_webapi::trusted_values::{
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod function_constructors;
+mod parser_options;
 mod policy_callbacks;
 mod realm_state;
+pub(super) use parser_options::UnsafeHtmlDocumentArgs;
+pub(crate) use parser_options::UnsafeHtmlFragmentArgs;
+pub(super) use parser_options::{
+    build_template as build_parser_options_constructor_template, finalize_policy_window_bindings,
+};
 pub(in crate::context_bootstrap) use realm_state::ensure_trusted_types_state;
 
 use policy_callbacks::{

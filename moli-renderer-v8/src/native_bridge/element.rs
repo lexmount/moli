@@ -277,12 +277,14 @@ pub(super) use class_list::{
     output_html_for_setter_function, svg_rel_list_setter_function,
 };
 pub(super) use content::{
-    node_after_html_callback, node_append_html_callback, node_before_html_callback,
+    node_after_html_callback, node_after_html_unsafe_callback, node_append_html_callback,
+    node_append_html_unsafe_callback, node_before_html_callback, node_before_html_unsafe_callback,
     node_direct_text_content, node_get_html_callback, node_inner_html_getter_function,
     node_inner_html_setter_function, node_inner_text_getter_function,
     node_inner_text_setter_function, node_outer_html_getter_function,
     node_outer_html_setter_function, node_outer_text_getter_function,
-    node_outer_text_setter_function, node_prepend_html_callback, node_replace_with_html_callback,
+    node_outer_text_setter_function, node_prepend_html_callback, node_prepend_html_unsafe_callback,
+    node_replace_with_html_callback, node_replace_with_html_unsafe_callback,
     node_set_html_callback, node_set_html_unsafe_callback, rendered_text_fragment,
     set_inner_text_in_reaction_scope, title_text_getter_function, title_text_setter_function,
 };
