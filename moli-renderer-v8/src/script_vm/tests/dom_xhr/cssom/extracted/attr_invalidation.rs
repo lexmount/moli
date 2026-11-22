@@ -121,3 +121,33 @@ fn attr_attribute_mutations_refresh_computed_values() {
     assert_eq!(result["checks"], 43, "{result}");
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
 }
+
+#[test]
+fn dir_mutation_refreshes_auto_ancestor_and_attr_dependent_pseudo() {
+    let mut vm = new_parsed_test_vm(
+        "https://attr-dir-invalidation.test/",
+        r#"<!doctype html>
+        <style>#subject::before { content: "marker"; --authored-dir: attr(dir, "unset"); }</style>
+        <div id="parent" dir="auto"><span id="subject">ת</span>abc</div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parent = document.getElementById('parent');
+  const subject = document.getElementById('subject');
+  const read = () => [
+    getComputedStyle(parent).direction,
+    getComputedStyle(subject, '::before').getPropertyValue('--authored-dir'),
+  ].join(':');
+  const initial = read();
+  subject.dir = 'ltr';
+  const updated = read();
+  subject.removeAttribute('dir');
+  return [initial, updated, read()].join('|');
+})()
+"#,
+        )
+        .expect("dir mutation should update both style dependencies");
+    assert_eq!(result, r#"rtl:"unset"|ltr:"ltr"|rtl:"unset""#);
+}

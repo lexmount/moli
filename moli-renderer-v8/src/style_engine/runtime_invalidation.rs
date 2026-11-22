@@ -1,7 +1,6 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use dom::ElementState as StyloElementState;
-use indexmap::IndexSet;
 use moli_selector::{
     CssDirection, StyloStyleSourceScope as StyleSourceScope, html_auto_directionality_root,
     html_directionality,
@@ -93,7 +92,6 @@ impl MoliStyleEngine {
             no_cached_style_us += no_cached_style_started
                 .map(|started| started.elapsed().as_micros())
                 .unwrap_or_default();
-            self.invalidate_attribute_references_for_mutations(host, document_effects, &world);
             if should_defer_structural_mutations(document_effects) {
                 let deferred_started = profile_enabled.then(std::time::Instant::now);
                 world.document_state.note_style_input_change();
@@ -105,6 +103,7 @@ impl MoliStyleEngine {
                     .unwrap_or_default();
                 continue;
             }
+            self.invalidate_mutation_dependent_subtrees(&world, host, document_effects);
             let detached_cleanup_started = profile_enabled.then(std::time::Instant::now);
             self.invalidate_detached_style_subtrees_for_mutations(host, document_effects);
             detached_cleanup_us += detached_cleanup_started
@@ -141,36 +140,6 @@ impl MoliStyleEngine {
         }
     }
 
-    fn invalidate_attribute_references_for_mutations(
-        &self,
-        host: &DomHost,
-        effects: &[StyleMutationEffect],
-        world: &DocumentStyleWorld,
-    ) {
-        let roots = effects
-            .iter()
-            .filter_map(|effect| {
-                let StyleMutationEffect::Attribute { element, name, .. } = effect else {
-                    return None;
-                };
-                let uses_attribute = self
-                    .dom_adapter
-                    .element_styles_reference_attribute(host, *element, name)
-                    || world
-                        .pseudo_style_cache
-                        .references_attribute(*element, name);
-                uses_attribute.then_some(*element)
-            })
-            .collect::<IndexSet<_>>();
-        if !roots.is_empty() {
-            // Selector dependency maps do not cover attr() in declarations.
-            // Include descendants because computed custom properties and
-            // inherited values can depend on this originating element.
-            self.invalidation_cleanup_for_world(world)
-                .invalidate_subtrees(host, roots);
-        }
-    }
-
     fn style_invalidation_without_cached_styles_is_complete(
         &self,
         effects: &[StyleMutationEffect],
@@ -193,7 +162,6 @@ impl MoliStyleEngine {
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
     ) {
-        self.invalidate_direction_hint_subtrees_for_mutations(world, host, effects);
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(std::time::Instant::now);
         let source_scope_started = profile_enabled.then(std::time::Instant::now);
@@ -248,7 +216,7 @@ impl MoliStyleEngine {
             // Exhausted fragments can still contribute detached roots and source
             // ownership. Resolve these against the full history before pruning.
             self.invalidate_detached_style_subtrees_for_mutations(host, &effects);
-            self.invalidate_direction_hint_subtrees_for_mutations(world, host, &effects);
+            self.invalidate_mutation_dependent_subtrees(world, host, &effects);
             let source_scope = source_scope_for_mutations(host, &effects);
             let merged_count = effects.len();
             retain_live_structural_mutation_effects(host, &mut effects);
@@ -285,7 +253,7 @@ impl MoliStyleEngine {
         }
     }
 
-    fn invalidate_direction_hint_subtrees_for_mutations(
+    fn invalidate_mutation_dependent_subtrees(
         &self,
         world: &DocumentStyleWorld,
         host: &DomHost,
@@ -293,30 +261,38 @@ impl MoliStyleEngine {
     ) {
         let mut roots = effects
             .iter()
-            .filter_map(|effect| {
-                let parent = match effect {
-                    StyleMutationEffect::CharacterData { node } => {
-                        let node = host.node(*node)?;
-                        node.as_text()?;
-                        node.parent_node()?
-                    }
-                    StyleMutationEffect::ChildList { parent, .. } => *parent,
-                    StyleMutationEffect::Attribute { element, name, .. } if name == "dir" => {
-                        // A dir change can also admit or exclude this subtree's
-                        // text from the enclosing element's auto-direction scan.
-                        let root = host
-                            .parent_node(*element)
-                            .and_then(|parent| html_auto_directionality_root(host, parent));
-                        return Some(root.unwrap_or(*element));
-                    }
-                    _ => return None,
-                };
-                html_auto_directionality_root(host, parent)
+            .filter_map(|effect| match effect {
+                StyleMutationEffect::CharacterData { node } => {
+                    let node = host.node(*node)?;
+                    node.as_text()?;
+                    html_auto_directionality_root(host, node.parent_node()?)
+                }
+                StyleMutationEffect::ChildList { parent, .. } => {
+                    html_auto_directionality_root(host, *parent)
+                }
+                StyleMutationEffect::Attribute { element, name, .. } if name == "dir" => {
+                    // The enclosing auto-direction root also covers attr(dir)
+                    // dependencies on the element whose boundary changed.
+                    let root = host
+                        .parent_node(*element)
+                        .and_then(|parent| html_auto_directionality_root(host, parent));
+                    Some(root.unwrap_or(*element))
+                }
+                StyleMutationEffect::Attribute { element, name, .. } => {
+                    let uses_attribute = self
+                        .dom_adapter
+                        .element_styles_reference_attribute(host, *element, name)
+                        || world
+                            .pseudo_style_cache
+                            .references_attribute(*element, name);
+                    uses_attribute.then_some(*element)
+                }
+                _ => None,
             })
             .peekable();
         if roots.peek().is_some() {
-            // The hint contributes to inherited computed style even when no
-            // stylesheet selector depends on direction.
+            // Direction hints and attr() can affect inherited styles without
+            // a dependency in the stylesheet selector maps.
             self.invalidation_cleanup_for_world(world)
                 .invalidate_subtrees(host, roots);
         }

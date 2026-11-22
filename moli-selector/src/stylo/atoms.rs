@@ -1,17 +1,6 @@
 use std::{cell::RefCell, collections::HashMap};
 
-use crate::CssDirection;
 use style::{Atom, LocalName, Namespace, values::AtomIdent};
-
-pub(super) fn normalized_direction(value: &str) -> Option<CssDirection> {
-    if value.eq_ignore_ascii_case("ltr") {
-        Some(CssDirection::Ltr)
-    } else if value.eq_ignore_ascii_case("rtl") {
-        Some(CssDirection::Rtl)
-    } else {
-        None
-    }
-}
 
 pub(super) fn lang_matches(actual: &str, expected: &str) -> bool {
     style::servo::selector_parser::extended_filtering(actual, expected)
