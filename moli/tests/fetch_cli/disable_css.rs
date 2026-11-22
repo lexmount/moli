@@ -1,4 +1,4 @@
-use super::{Output, clean_output, run_fetch_cli_with_args};
+use super::{Output, clean_output, run_fetch_cli_with_args, timing::TIMEOUT_MS};
 use anyhow::Result;
 use axum::{
     Router,
@@ -317,7 +317,7 @@ fn disables_all_author_style_surfaces_without_disabling_scripts() -> Result<()> 
             "--disable-css",
             "--with-frames",
             "--timeout",
-            "5000",
+            TIMEOUT_MS,
             "--wait-script",
             DISABLED_READY_SCRIPT,
         ],
@@ -362,7 +362,7 @@ fn survives_http_redirect_without_losing_the_page_policy() -> Result<()> {
             "--disable-css",
             "--with-frames",
             "--timeout",
-            "5000",
+            TIMEOUT_MS,
             "--wait-script",
             DISABLED_READY_SCRIPT,
         ],
@@ -387,7 +387,7 @@ fn blocked_stylesheet_links_dispatch_error_and_preserve_cssom() -> Result<()> {
         &[
             "--disable-css",
             "--timeout",
-            "5000",
+            TIMEOUT_MS,
             "--wait-script",
             LINK_EVENT_READY_SCRIPT,
         ],
@@ -427,7 +427,7 @@ fn survives_document_open_replacement() -> Result<()> {
         &[
             "--disable-css",
             "--timeout",
-            "5000",
+            TIMEOUT_MS,
             "--wait-script",
             READY_SCRIPT,
         ],
@@ -458,7 +458,7 @@ fn author_styles_remain_enabled_by_default() -> Result<()> {
     let server = runtime.block_on(DisableCssFixtureServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/baseline.html"),
-        &["--timeout", "5000", "--wait-script", READY_SCRIPT],
+        &["--timeout", TIMEOUT_MS, "--wait-script", READY_SCRIPT],
     )?;
     let stdout = assert_success(
         &output,
