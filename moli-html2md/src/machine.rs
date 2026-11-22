@@ -25,7 +25,7 @@ enum Task<'a, Id, Children> {
     EndRawBlock,
     EndCode,
     EndPre(Option<&'a str>),
-    EndBidiIsolate,
+    EndBidi(&'static str),
     TableCell,
     EndTableCell,
 }
@@ -192,7 +192,7 @@ impl<'a, D: Dom + ?Sized, Children: Iterator<Item = D::NodeId>> Machine<'a, D, C
                     self.writer().code_with_edges(&text, preformatted);
                 }
                 Task::EndPre(language) => self.end_pre(language),
-                Task::EndBidiIsolate => self.writer().text("\u{2069}"),
+                Task::EndBidi(controls) => self.writer().bidi_controls(controls),
                 Task::TableCell => self.table_cell(),
                 Task::EndTableCell => {
                     let content = self.take_writer();
@@ -342,20 +342,30 @@ impl<'a, D: Dom + ?Sized, Children: Iterator<Item = D::NodeId>> Machine<'a, D, C
             "sup" => self.style(Style::Superscript),
             "sub" => self.style(Style::Subscript),
             "bdi" | "bdo" => {
-                if let Some(dir) = self.dom.attribute(node, "dir").map(str::trim) {
-                    let prefix = if dir.eq_ignore_ascii_case("ltr") {
-                        Some("\u{2066}")
-                    } else if dir.eq_ignore_ascii_case("rtl") {
-                        Some("\u{2067}")
-                    } else if dir.eq_ignore_ascii_case("auto") {
-                        Some("\u{2068}")
-                    } else {
-                        None
-                    };
-                    if let Some(p) = prefix {
-                        self.writer().text(p);
-                        self.tasks.push(Task::EndBidiIsolate);
+                let dir = self.dom.attribute(node, "dir").map(str::trim);
+                let controls = match (tag, dir) {
+                    ("bdi", Some(dir)) if dir.eq_ignore_ascii_case("ltr") => {
+                        Some(("\u{2066}", "\u{2069}"))
                     }
+                    ("bdi", Some(dir)) if dir.eq_ignore_ascii_case("rtl") => {
+                        Some(("\u{2067}", "\u{2069}"))
+                    }
+                    ("bdi", Some(dir)) if dir.eq_ignore_ascii_case("auto") => {
+                        Some(("\u{2068}", "\u{2069}"))
+                    }
+                    // BDO starts an isolate and an override. PDF ends the
+                    // override before PDI ends the isolate.
+                    ("bdo", Some(dir)) if dir.eq_ignore_ascii_case("ltr") => {
+                        Some(("\u{2068}\u{202d}", "\u{202c}\u{2069}"))
+                    }
+                    ("bdo", Some(dir)) if dir.eq_ignore_ascii_case("rtl") => {
+                        Some(("\u{2068}\u{202e}", "\u{202c}\u{2069}"))
+                    }
+                    _ => None,
+                };
+                if let Some((start, end)) = controls {
+                    self.writer().bidi_controls(start);
+                    self.tasks.push(Task::EndBidi(end));
                 }
             }
             "a" => {

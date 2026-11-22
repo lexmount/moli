@@ -528,6 +528,73 @@ fn computed_direction_tracks_input_html_directionality() {
 }
 
 #[test]
+fn computed_auto_direction_tracks_text_edits_and_child_list_changes() {
+    let mut vm = new_parsed_test_vm(
+        "https://auto-direction-text.test/",
+        "<!doctype html><div dir=auto><span>ת</span><em></em></div><bdi><span>ת</span><em></em></bdi>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const results = [];
+  for (const root of document.querySelectorAll('[dir=auto], bdi')) {
+    const span = root.firstElementChild;
+    const inherited = root.lastElementChild;
+    const read = () => [
+      root.matches(':dir(rtl)'),
+      getComputedStyle(root).direction,
+      getComputedStyle(inherited).direction,
+    ].join(':');
+    results.push(read());
+    span.firstChild.data = 'abc';
+    results.push(read());
+    span.textContent = '\u05ea';
+    results.push(read());
+    span.dir = 'ltr';
+    results.push(read());
+    span.removeAttribute('dir');
+    results.push(read());
+    span.firstChild.remove();
+    results.push(read());
+  }
+  return results.join('|');
+})()
+"#,
+        )
+        .expect("computed direction should update after text mutations");
+    let expected =
+        "true:rtl:rtl|false:ltr:ltr|true:rtl:rtl|false:ltr:ltr|true:rtl:rtl|false:ltr:ltr";
+    assert_eq!(result, format!("{expected}|{expected}"));
+}
+
+#[test]
+fn computed_auto_direction_tracks_control_value_changes() {
+    let mut vm = new_parsed_test_vm(
+        "https://auto-direction-controls.test/",
+        "<!doctype html><input dir=auto value=ת><textarea dir=auto>ת</textarea>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const results = [];
+  for (const control of document.querySelectorAll('[dir=auto]')) {
+    results.push(getComputedStyle(control).direction);
+    control.value = 'abc';
+    results.push(getComputedStyle(control).direction);
+    control.value = '\u05ea';
+    results.push(getComputedStyle(control).direction);
+  }
+  return results.join('|');
+})()
+"#,
+        )
+        .expect("computed direction should update after control value changes");
+    assert_eq!(result, "rtl|ltr|rtl|rtl|ltr|rtl");
+}
+
+#[test]
 fn has_pseudo_class_computed_style_updates_after_dom_mutation() {
     let mut vm = new_storage_test_vm("https://has-pseudo-computed-style.test/");
 

@@ -211,6 +211,8 @@ fn empty_targets_and_formatting_do_not_hide_accessible_names() {
         "<i class='fa fa-search'></i>",
         "<em><strong></strong></em>",
         "<sub></sub>",
+        "<bdi dir='ltr'></bdi>",
+        "<bdo dir='rtl'> </bdo>",
         "<span>&nbsp;</span>",
     ] {
         for control in ["button", "a href='/search'"] {
@@ -1306,9 +1308,19 @@ fn expanded_anchors_preserve_inherited_author_link_context() {
 #[test]
 fn preserves_explicit_bidi_isolation_for_arabic_rtl_and_ltr_tokens() {
     let source =
-        r#"<p dir="rtl">السعر هو <bdi dir="ltr">100 USD</bdi> مع <bdo dir="rtl">ضمان</bdo></p>"#;
+        r#"<p dir="rtl">السعر هو <bdi dir="ltr">100 USD</bdi> مع <bdi dir="rtl">ضمان</bdi></p>"#;
     let input = Tree::parse(source);
     let markdown = convert(&input, input.root);
     assert!(markdown.contains("\u{2066}100 USD\u{2069}"), "{markdown:?}");
     assert!(markdown.contains("\u{2067}ضمان\u{2069}"), "{markdown:?}");
+}
+
+#[test]
+fn preserves_bdo_overrides_of_opposite_direction_text() {
+    let input = Tree::parse(r#"<bdo dir="rtl">abc</bdo> <bdo dir="ltr">אבג</bdo>"#);
+    let markdown = convert(&input, input.root);
+    assert_eq!(
+        markdown,
+        "\u{2068}\u{202e}abc\u{202c}\u{2069} \u{2068}\u{202d}אבג\u{202c}\u{2069}"
+    );
 }

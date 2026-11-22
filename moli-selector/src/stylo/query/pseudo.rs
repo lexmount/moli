@@ -532,11 +532,7 @@ pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirectio
             {
                 return direction;
             }
-            if element
-                .attribute_ns("", "dir")
-                .is_some_and(|value| value.eq_ignore_ascii_case("auto"))
-                || element.is_html_element("bdi")
-            {
+            if element_uses_auto_directionality(element) {
                 return auto_direction_for_element(host, handle).unwrap_or(CssDirection::Ltr);
             }
             if element.is_html_input() && element.input_type() == InputType::Tel {
@@ -549,6 +545,31 @@ pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirectio
             .or_else(|| host.shadow_root_host(handle));
     }
     CssDirection::Ltr
+}
+
+pub(in crate::stylo) fn element_uses_auto_directionality(element: &Element) -> bool {
+    let dir = element.attribute_ns("", "dir");
+    dir.is_some_and(|value| value.eq_ignore_ascii_case("auto"))
+        || (element.is_html_element("bdi") && dir.and_then(normalized_direction).is_none())
+}
+
+/// Finds the closest auto-direction element whose text scan can include
+/// content inside `start`, including `start` itself.
+pub fn html_auto_directionality_root(host: &DomHost, start: NodeId) -> Option<NodeId> {
+    let mut current = Some(start);
+    while let Some(handle) = current {
+        let node = host.node(handle)?;
+        if let Some(element) = node.as_element() {
+            if element_uses_auto_directionality(element) {
+                return Some(handle);
+            }
+            if descendant_is_directionally_isolated_for_auto(element) {
+                return None;
+            }
+        }
+        current = node.parent_node();
+    }
+    None
 }
 
 fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirection> {

@@ -19,6 +19,7 @@ pub use detached_stylo::{
 };
 pub use error::{SelectorError, SelectorErrorKind};
 pub use moli_dom as dom;
+pub use stylo::html_auto_directionality_root;
 pub use stylo::{
     MoliInvalidationResult, MoliInvalidationResultBuilder, MoliInvalidationSourceResultsSink,
     MoliStyleMutationElementSnapshot, MoliStyleMutationSnapshot,
