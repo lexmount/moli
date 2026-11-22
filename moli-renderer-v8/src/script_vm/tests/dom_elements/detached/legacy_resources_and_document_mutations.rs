@@ -978,7 +978,7 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
     style.disabled = true;
     assert(style.type === "text/less" && style.getAttribute("type") === "text/less", "style type");
     assert(style.media === "print" && style.getAttribute("media") === "print", "style media");
-    assert(style.blocking === "render" && style.getAttribute("blocking") === "render", "style blocking");
+    assert(style.blocking.value === "render" && style.getAttribute("blocking") === "render", "style blocking");
     assert(typeof style.disabled === "boolean", "style disabled boolean");
     for (const name of ["type", "media", "blocking", "disabled"]) {
       assert(!own(style, name), `style.${name} should stay inherited after set`);
@@ -987,7 +987,7 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
     }
     assert(style.type === "text/less", "style type after delete");
     assert(style.media === "print", "style media after delete");
-    assert(style.blocking === "render", "style blocking after delete");
+    assert(style.blocking.value === "render", "style blocking after delete");
   }
 
   for (const link of linkElements) {

@@ -349,7 +349,10 @@ pub(super) fn class_list_supports_callback<'s>(
         rv.set_bool(false);
         return;
     };
-    match kind {
+    let supported = match kind {
+        DomTokenListKind::Blocking => {
+            token_matches_ascii_case_insensitively(&parsed.token, "render")
+        }
         DomTokenListKind::Class
         | DomTokenListKind::Part
         | DomTokenListKind::HtmlFor
@@ -357,15 +360,10 @@ pub(super) fn class_list_supports_callback<'s>(
             throw_type_error(scope, "DOMTokenList has no supported tokens.");
             return;
         }
-        DomTokenListKind::Rel => {}
-        DomTokenListKind::Sandbox => {
-            rv.set_bool(sandbox_supports_token(&parsed.token));
-            return;
+        DomTokenListKind::Rel => {
+            rel_list_supports_token(unsafe { &*runtime_ptr }, handle, &parsed.token)
         }
-    }
-    rv.set_bool(rel_list_supports_token(
-        unsafe { &*runtime_ptr },
-        handle,
-        &parsed.token,
-    ));
+        DomTokenListKind::Sandbox => sandbox_supports_token(&parsed.token),
+    };
+    rv.set_bool(supported);
 }

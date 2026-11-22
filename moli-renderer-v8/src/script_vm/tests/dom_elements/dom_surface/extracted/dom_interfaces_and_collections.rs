@@ -2833,6 +2833,9 @@ fn reflected_dom_token_list_attributes_are_live_same_object_and_owner_scoped() {
               const descriptors = [
                 [HTMLIFrameElement.prototype, "sandbox"],
                 [HTMLLinkElement.prototype, "sizes"],
+                [HTMLLinkElement.prototype, "blocking"],
+                [HTMLScriptElement.prototype, "blocking"],
+                [HTMLStyleElement.prototype, "blocking"],
                 [HTMLOutputElement.prototype, "htmlFor"],
                 [SVGAElement.prototype, "relList"]
               ];
@@ -2885,6 +2888,20 @@ fn reflected_dom_token_list_attributes_are_live_same_object_and_owner_scoped() {
                 assert(link.getAttribute("sizes") === "32x32", "sizes mutation reflects");
                 assert(noSupportedTokens(sizes), "sizes has no supported tokens");
 
+                for (const tag of ["link", "script", "style"]) {
+                  const element = ownerDocument.createElement(tag);
+                  const blocking = element.blocking;
+                  assert(Object.prototype.toString.call(blocking) === "[object DOMTokenList]", `${tag} blocking type`);
+                  assert(blocking === element.blocking, `${tag} blocking SameObject`);
+                  assert(blocking.supports("ReNdEr") && !blocking.supports("extra"), `${tag} supported tokens`);
+                  element.blocking = "render extra render";
+                  assert(blocking.value === "render extra render" && blocking.length === 2, `${tag} PutForwards`);
+                  blocking.remove("extra");
+                  assert(element.getAttribute("blocking") === "render", `${tag} mutation reflects`);
+                  element.removeAttribute("blocking");
+                  assert(blocking.length === 0 && blocking.value === "", `${tag} attribute removal updates list`);
+                }
+
                 const anchor = ownerDocument.createElementNS(svg, "a");
                 const relList = anchor.relList;
                 assert(Object.prototype.toString.call(relList) === "[object DOMTokenList]", "SVG relList type");
@@ -2898,8 +2915,29 @@ fn reflected_dom_token_list_attributes_are_live_same_object_and_owner_scoped() {
               exercise(document);
               exercise(detached);
 
+              const script = detached.createElement("script");
+              const blocking = script.blocking;
+              document.adoptNode(script);
+              assert(script.blocking === blocking, "blocking identity survives adoption");
+              blocking.value = "render";
+              assert(script.getAttribute("blocking") === "render", "adopted blocking reflects");
+
+              const setter = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, "blocking").set;
+              const raw = {toString() { throw new Error("unexpected coercion"); }};
+              let observed;
+              let reads = 0;
+              const target = {set value(value) { observed = value; }};
+              Object.defineProperty(script, "blocking", {get() { ++reads; return target; }});
+              setter.call(script, raw);
+              assert(reads === 1 && observed === raw, "PutForwards reads the getter and passes the original value");
+              assert(blocking.value === "render", "PutForwards respects the overridden target");
+              const unbranded = {get blocking() { ++reads; return target; }};
+              let error;
+              try { setter.call(unbranded, raw); } catch (caught) { error = caught; }
+              assert(error instanceof TypeError && reads === 1, "receiver check precedes PutForwards");
+
               const div = document.createElement("div");
-              for (const name of ["htmlFor", "sandbox", "sizes", "relList"]) {
+              for (const name of ["htmlFor", "sandbox", "sizes", "relList", "blocking"]) {
                 assert(div[name] === undefined, `div.${name} should be undefined`);
               }
               assert(document.createElementNS(svg, "link").sizes === undefined, "SVG link.sizes");

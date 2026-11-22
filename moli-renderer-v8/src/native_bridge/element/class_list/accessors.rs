@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::{throw_type_error, v8str};
 
 fn token_list_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -64,6 +65,30 @@ fn set_token_list_for_receiver<'s>(
         attribute,
         units,
     );
+}
+
+pub(in crate::native_bridge) fn blocking_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    token_list_getter(scope, args, rv, DomTokenListKind::Blocking);
+}
+
+pub(in crate::native_bridge) fn blocking_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(target) = args.this().get(scope, v8str(scope, "blocking").into()) else {
+        return;
+    };
+    let Ok(target) = v8::Local::<v8::Object>::try_from(target) else {
+        throw_type_error(scope, "The blocking getter did not return an object.");
+        return;
+    };
+    // [PutForwards=value] passes the original value to the property setter.
+    let _ = target.set(scope, v8str(scope, "value").into(), args.get(0));
 }
 
 pub(in crate::native_bridge) fn html_rel_list_getter_function<'s>(

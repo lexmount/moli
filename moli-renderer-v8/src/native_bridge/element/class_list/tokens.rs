@@ -40,6 +40,7 @@ pub(super) fn set_class_list_tokens(
 
 pub(super) fn token_list_attribute_name(kind: DomTokenListKind) -> &'static str {
     match kind {
+        DomTokenListKind::Blocking => "blocking",
         DomTokenListKind::Class => "class",
         DomTokenListKind::Part => "part",
         DomTokenListKind::Rel => "rel",
