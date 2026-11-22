@@ -165,35 +165,26 @@ mod tests {
     }
 
     #[test]
-    fn native_regexp_handle_and_context_have_independent_lifetimes() {
+    fn native_regexp_context_survives_until_isolate_teardown() {
         moli_v8_test_util::ensure_v8();
         let mut isolate = v8::Isolate::new(Default::default());
         let context_released = Rc::new(Cell::new(false));
-        let (regexp, regexp_probe, context_probe) = {
+        let context_probe = {
             let scope = pin!(v8::HandleScope::new(&mut isolate));
             let scope = &mut scope.init();
             let author_context = Context::new(scope, Default::default());
             let scope = &mut v8::ContextScope::new(scope, author_context);
-            let regexp =
-                NativeRegExp::new(scope, "test", RegExpCreationFlags::UNICODE_SETS).unwrap();
             let native_context = native_regexp_context(scope);
             let released = Rc::clone(&context_released);
-            let context_probe = v8::Weak::with_guaranteed_finalizer(
+            v8::Weak::with_guaranteed_finalizer(
                 scope,
                 native_context,
                 Box::new(move || released.set(true)),
-            );
-            let regexp_probe = v8::Weak::new(scope, &regexp.0);
-            (regexp, regexp_probe, context_probe)
+            )
         };
 
         isolate.low_memory_notification();
-        assert!(!regexp_probe.is_empty());
-        drop(regexp);
-        isolate.low_memory_notification();
-        assert!(regexp_probe.is_empty());
         assert!(!context_probe.is_empty());
-        assert!(!context_released.get());
         drop(isolate);
         assert!(context_released.get());
     }

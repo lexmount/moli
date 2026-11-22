@@ -605,9 +605,9 @@ fn control_suffers_pattern_mismatch(
         return false;
     };
     if element.input_type() == InputType::Email && element.has_attribute("multiple") {
+        // Value sanitization already stripped ASCII whitespace from each address.
         return value
             .split(',')
-            .map(str::trim)
             .any(|part| pattern_mismatches_value(scope, &pattern, part));
     }
     pattern_mismatches_value(scope, &pattern, &value)

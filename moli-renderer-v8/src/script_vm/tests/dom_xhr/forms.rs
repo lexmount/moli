@@ -593,6 +593,45 @@ fn live_input_pattern_uses_native_regexp_after_global_mutation() {
 }
 
 #[test]
+fn live_input_pattern_preserves_non_ascii_whitespace_in_email_values() {
+    let mut vm = new_storage_test_vm("https://email-pattern-whitespace.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const input = document.createElement('input');
+  input.type = 'email';
+  input.multiple = true;
+  input.pattern = '[ab]@site\\.test';
+  function probe(value) {
+    input.value = value;
+    const {patternMismatch, typeMismatch} = input.validity;
+    return [input.value, patternMismatch, typeMismatch];
+  }
+  const results = [
+    probe('\t a@site.test , \f b@site.test '),
+    probe('\u00a0a@site.test'),
+    probe('a@site.test,\u00a0b@site.test')
+  ];
+  input.multiple = false;
+  results.push(probe('\u00a0a@site.test'));
+  return JSON.stringify(results);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!([
+            ["a@site.test,b@site.test", false, false],
+            ["\u{a0}a@site.test", true, true],
+            ["a@site.test,\u{a0}b@site.test", true, true],
+            ["\u{a0}a@site.test", true, true],
+        ])
+    );
+}
+
+#[test]
 fn live_input_pattern_shares_valid_and_invalid_patterns_between_controls() {
     let mut vm = new_storage_test_vm("https://input-pattern-cache.test/");
     let host = vm.context_host_weak_for_test().upgrade().unwrap();
