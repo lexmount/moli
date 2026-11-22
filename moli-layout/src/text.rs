@@ -1531,13 +1531,36 @@ fn validate_registered_font(
     .ok_or(WebFontRegistrationError::UnsupportedPayload)
 }
 
+fn validate_woff1_table_lengths(bytes: &[u8]) -> Option<()> {
+    const HEADER_LEN: usize = 44;
+    const ENTRY_LEN: usize = 20;
+    let header = bytes.get(..HEADER_LEN)?;
+    let table_count = u16::from_be_bytes(header[12..14].try_into().ok()?);
+    let declared_sfnt_size = u32::from_be_bytes(header[16..20].try_into().ok()?);
+    let directory = bytes.get(HEADER_LEN..HEADER_LEN + usize::from(table_count) * ENTRY_LEN)?;
+    let (entries, _) = directory.as_chunks::<ENTRY_LEN>();
+    // The reconstructed SFNT uses a 12-byte header, 16-byte directory
+    // entries, and tables padded to their next four-byte boundary.
+    let mut sfnt_size = 12 + u32::from(table_count) * 16;
+    for entry in entries {
+        let stored = u32::from_be_bytes(entry[8..12].try_into().ok()?);
+        let original = u32::from_be_bytes(entry[12..16].try_into().ok()?);
+        if stored > original {
+            return None;
+        }
+        sfnt_size = sfnt_size.checked_add(original.checked_next_multiple_of(4)?)?;
+    }
+    (sfnt_size == declared_sfnt_size).then_some(())
+}
+
 fn decode_web_font_bytes<'a>(
     bytes: impl Into<Cow<'a, [u8]>>,
 ) -> Result<Blob<u8>, WebFontRegistrationError> {
     let bytes = bytes.into();
     let decoded = match bytes.get(..4) {
-        Some(b"wOFF") => wuff::decompress_woff1(&bytes)
-            .map_err(|_| WebFontRegistrationError::DecodeFailed { format: "WOFF" })?,
+        Some(b"wOFF") => validate_woff1_table_lengths(&bytes)
+            .and_then(|()| wuff::decompress_woff1(&bytes).ok())
+            .ok_or(WebFontRegistrationError::DecodeFailed { format: "WOFF" })?,
         Some(b"wOF2") => {
             wuff::decompress_woff2_with_custom_brotli(&bytes, &mut decompress_woff2_brotli)
                 .map_err(|_| WebFontRegistrationError::DecodeFailed { format: "WOFF2" })?
@@ -1595,6 +1618,36 @@ mod tests {
 
     fn validate_test_font_bytes(bytes: &[u8]) -> Result<(), WebFontRegistrationError> {
         validate_registered_font(&WebFontFace::new("FontFace"), decode_web_font_bytes(bytes)?)
+    }
+
+    #[test]
+    fn woff1_rejects_incorrect_total_sfnt_size() {
+        validate_web_font_bytes(TEST_WOFF).unwrap();
+        let mut bytes = TEST_WOFF.to_vec();
+        let size = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+        bytes[16..20].copy_from_slice(&(size + 4).to_be_bytes());
+        assert_eq!(
+            validate_web_font_bytes(bytes),
+            Err(WebFontRegistrationError::DecodeFailed { format: "WOFF" })
+        );
+    }
+
+    #[test]
+    fn woff1_rejects_stored_tables_longer_than_the_original() {
+        let mut bytes = TEST_WOFF.to_vec();
+        let count = usize::from(u16::from_be_bytes(bytes[12..14].try_into().unwrap()));
+        let (entries, _) = bytes[44..44 + count * 20].as_chunks_mut::<20>();
+        let table = entries
+            .iter_mut()
+            .find(|table| table[8..12] == table[12..16] && !table[15].is_multiple_of(4))
+            .expect("fixture has an uncompressed table followed by padding");
+        let size = u32::from_be_bytes(table[12..16].try_into().unwrap());
+        // Count one existing padding byte as stored table data.
+        table[8..12].copy_from_slice(&(size + 1).to_be_bytes());
+        assert_eq!(
+            validate_web_font_bytes(bytes),
+            Err(WebFontRegistrationError::DecodeFailed { format: "WOFF" })
+        );
     }
 
     #[test]
