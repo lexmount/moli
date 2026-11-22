@@ -1302,3 +1302,12 @@ fn expanded_anchors_preserve_inherited_author_link_context() {
         }
     }
 }
+
+#[test]
+fn preserves_explicit_bidi_isolation_for_arabic_rtl_and_ltr_tokens() {
+    let source = r#"<p dir="rtl">السعر هو <bdi dir="ltr">100 USD</bdi> مع <bdo dir="rtl">ضمان</bdo></p>"#;
+    let input = Tree::parse(source);
+    let markdown = convert(&input, input.root);
+    assert!(markdown.contains("\u{2066}100 USD\u{2069}"), "{markdown:?}");
+    assert!(markdown.contains("\u{2067}ضمان\u{2069}"), "{markdown:?}");
+}
