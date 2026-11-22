@@ -38,6 +38,49 @@ fn protocol_server_constructor_preserves_subframe_loading_policy() {
 }
 
 #[test]
+fn serve_preserves_the_complete_runtime_config() {
+    let partition = Arc::new(StoragePartitionState::open(None).unwrap());
+    let mask = OptionalResourceFetchMask::FONT | OptionalResourceFetchMask::IMAGE;
+    let mut fetch = FetchConfig::default();
+    fetch.set_user_agent("Moli realtime runtime configuration test");
+    fetch.set_tls_verify_host(false);
+    let config = NavigationRuntimeConfig::new(fetch, mask, false, LayoutPolicy::Realtime)
+        .with_scrollbars_hidden(true);
+    let server = ProtocolServer::new_with_storage_partition_and_runtime_config(
+        ServerConfig::default(),
+        partition.clone(),
+        config,
+    );
+    let server_clone = server.clone();
+    let state = AppState::new_with_storage_partition_and_runtime_config(
+        "127.0.0.1:9222".parse().unwrap(),
+        partition,
+        server_clone.navigation_runtime_config.clone(),
+        crate::config::DEFAULT_SCREENCAST_INTERVAL_MS,
+        BrowserInstanceControl::new(),
+    )
+    .unwrap();
+    let state_clone = state.clone();
+
+    for config in [
+        &server.navigation_runtime_config,
+        &server_clone.navigation_runtime_config,
+        &state.navigation_runtime_config,
+        &state_clone.navigation_runtime_config,
+    ] {
+        assert_eq!(
+            config.fetch_config().user_agent(),
+            "Moli realtime runtime configuration test"
+        );
+        assert!(!config.fetch_config().tls_verify_host());
+        assert_eq!(config.optional_resource_fetch_mask(), mask);
+        assert!(!config.subframe_loading_enabled());
+        assert_eq!(config.layout_policy(), LayoutPolicy::Realtime);
+        assert!(config.scrollbars_hidden());
+    }
+}
+
+#[test]
 fn app_state_storage_partition_backing_derives_initial_partition_from_owner() -> anyhow::Result<()>
 {
     let partition = Arc::new(StoragePartitionState::open(None)?);
