@@ -956,71 +956,48 @@ where
         parent_style: &ResolvedLayoutStyle,
         children: Vec<LayoutBoxId>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        let mut output = Vec::new();
-        for (index, child) in children.iter().copied().enumerate() {
-            // Chromium keeps table parts separated only by collapsible
-            // whitespace in the same anonymous table wrapper. A real text run
-            // still terminates that wrapper. This mirrors LayoutObject's
-            // anonymous-table reuse after whitespace suppression.
-            if self.is_ignorable_whitespace_text(world, child)
-                && output.last().copied().is_some_and(|last| {
-                    world.box_by_id(last).is_some_and(|layout_box| {
-                        layout_box.kind == LayoutBoxKind::AnonymousTableWrapper
-                            && layout_box.anonymous_reason
-                                == Some(LayoutAnonymousReason::MissingTableParent)
-                    })
-                })
-            {
-                let next_table_part = children[index + 1..]
-                    .iter()
-                    .copied()
-                    .find(|next| !self.is_ignorable_whitespace_text(world, *next))
-                    .map(|next| self.table_role(world, next))
-                    .transpose()?
-                    .flatten()
-                    .is_some_and(TableBoxRole::requires_parent);
-                if next_table_part {
-                    continue;
-                }
-            }
-            self.insert_flow_child(world, owner, parent_style, &mut output, child)?;
-        }
-        Ok(output)
-    }
-
-    fn insert_flow_child(
-        &mut self,
-        world: &mut LayoutWorld<S::NodeId>,
-        owner: S::NodeId,
-        parent_style: &ResolvedLayoutStyle,
-        output: &mut Vec<LayoutBoxId>,
-        child: LayoutBoxId,
-    ) -> Result<(), LayoutError> {
-        let child_role = self.table_role(world, child)?;
-        if !child_role.is_some_and(TableBoxRole::requires_parent) {
-            output.push(child);
-            return Ok(());
-        }
-
-        // Blink only creates an inline anonymous table when the actual parent
-        // is a LayoutInline. Atomic inline-level containers (inline-block,
-        // inline-flex/grid/table) establish their own inner formatting
-        // context and therefore receive a block-level anonymous table.
-        let display = if parent_style.display().is_inline_flow() {
+        let table_display = if parent_style.display().is_inline_flow() {
             LayoutDisplay::InlineTable
         } else {
             LayoutDisplay::Table
         };
-        let table = self.ensure_anonymous_wrapper(
-            world,
-            owner,
-            parent_style,
-            output,
-            LayoutBoxKind::AnonymousTableWrapper,
-            LayoutAnonymousReason::MissingTableParent,
-            display,
-        )?;
-        self.insert_into_existing_table_parent(world, owner, table, child)
+        let mut output = Vec::new();
+        let mut next = 0;
+        while let Some(&child) = children.get(next) {
+            next += 1;
+            if !self
+                .table_role(world, child)?
+                .is_some_and(TableBoxRole::requires_parent)
+            {
+                output.push(child);
+                continue;
+            }
+
+            // Table parts separated only by collapsible whitespace share an
+            // anonymous table. Leave any trailing whitespace to normal flow.
+            let mut run = vec![child];
+            for (index, candidate) in children.iter().copied().enumerate().skip(next) {
+                if self.is_ignorable_whitespace_text(world, candidate) {
+                    continue;
+                }
+                if !self
+                    .table_role(world, candidate)?
+                    .is_some_and(TableBoxRole::requires_parent)
+                {
+                    break;
+                }
+                run.push(candidate);
+                next = index + 1;
+            }
+            output.push(self.build_anonymous_table_box(
+                world,
+                owner,
+                parent_style,
+                table_display,
+                run,
+            )?);
+        }
+        Ok(output)
     }
 
     fn normalize_structural_table_children(
@@ -1031,12 +1008,46 @@ where
         parent_role: TableBoxRole,
         children: Vec<LayoutBoxId>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let wrapper = match parent_role {
+            TableBoxRole::Root => LayoutDisplay::TableRowGroup,
+            TableBoxRole::RowGroup => LayoutDisplay::TableRow,
+            TableBoxRole::Row => LayoutDisplay::TableCell,
+            _ => unreachable!("only structural table containers need anonymous children"),
+        };
+        let fits = |role: Option<TableBoxRole>| match parent_role {
+            TableBoxRole::Root => role.is_some_and(TableBoxRole::is_direct_table_child),
+            TableBoxRole::RowGroup => role == Some(TableBoxRole::Row),
+            TableBoxRole::Row => role == Some(TableBoxRole::Cell),
+            _ => unreachable!("only structural table containers need anonymous children"),
+        };
         let mut output = Vec::new();
-        for child in children {
+        let mut children = children.into_iter().peekable();
+        while let Some(child) = children.next() {
             if self.is_ignorable_whitespace_text(world, child) {
                 continue;
             }
-            self.insert_table_child(world, owner, parent_style, parent_role, &mut output, child)?;
+            if fits(self.table_role(world, child)?) {
+                output.push(child);
+                continue;
+            }
+            let mut run = vec![child];
+            while let Some(&candidate) = children.peek() {
+                if self.is_ignorable_whitespace_text(world, candidate) {
+                    children.next();
+                } else if fits(self.table_role(world, candidate)?) {
+                    break;
+                } else {
+                    children.next();
+                    run.push(candidate);
+                }
+            }
+            output.push(self.build_anonymous_table_box(
+                world,
+                owner,
+                parent_style,
+                wrapper,
+                run,
+            )?);
         }
         Ok(output)
     }
@@ -1056,138 +1067,37 @@ where
             .collect()
     }
 
-    fn insert_into_existing_table_parent(
-        &mut self,
-        world: &mut LayoutWorld<S::NodeId>,
-        owner: S::NodeId,
-        parent: LayoutBoxId,
-        child: LayoutBoxId,
-    ) -> Result<(), LayoutError> {
-        let (parent_style, mut children) = {
-            let parent_box = world
-                .box_by_id(parent)
-                .ok_or(LayoutError::InvalidBoxReference {
-                    index: parent.index(),
-                })?;
-            (parent_box.style.clone(), parent_box.children.clone())
-        };
-        let parent_role = self.table_role(world, parent)?.ok_or_else(|| {
-            LayoutError::source_contract(
-                self.source.label(owner),
-                "non-table box cannot own structural table children",
-            )
-        })?;
-        self.insert_table_child(
-            world,
-            owner,
-            &parent_style,
-            parent_role,
-            &mut children,
-            child,
-        )?;
-        world.replace_children(parent, children)
-    }
-
-    fn insert_table_child(
+    fn build_anonymous_table_box(
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         owner: S::NodeId,
         parent_style: &ResolvedLayoutStyle,
-        parent_role: TableBoxRole,
-        output: &mut Vec<LayoutBoxId>,
-        child: LayoutBoxId,
-    ) -> Result<(), LayoutError> {
-        let child_role = self.table_role(world, child)?;
-        if parent_role == TableBoxRole::Root {
-            if child_role.is_some_and(TableBoxRole::is_direct_table_child) {
-                output.push(child);
-                return Ok(());
-            }
-            let row_group = self.ensure_anonymous_wrapper(
-                world,
-                owner,
-                parent_style,
-                output,
+        display: LayoutDisplay,
+        children: Vec<LayoutBoxId>,
+    ) -> Result<LayoutBoxId, LayoutError> {
+        let (kind, reason, role) = match display {
+            LayoutDisplay::Table | LayoutDisplay::InlineTable => (
+                LayoutBoxKind::AnonymousTableWrapper,
+                LayoutAnonymousReason::MissingTableParent,
+                TableBoxRole::Root,
+            ),
+            LayoutDisplay::TableRowGroup => (
                 LayoutBoxKind::AnonymousTableRowGroup,
                 LayoutAnonymousReason::MissingTableRowGroup,
-                LayoutDisplay::TableRowGroup,
-            )?;
-            return self.insert_into_existing_table_parent(world, owner, row_group, child);
-        }
-
-        if parent_role == TableBoxRole::RowGroup {
-            if child_role == Some(TableBoxRole::Row) {
-                output.push(child);
-                return Ok(());
-            }
-            let row = self.ensure_anonymous_wrapper(
-                world,
-                owner,
-                parent_style,
-                output,
+                TableBoxRole::RowGroup,
+            ),
+            LayoutDisplay::TableRow => (
                 LayoutBoxKind::AnonymousTableRow,
                 LayoutAnonymousReason::MissingTableRow,
-                LayoutDisplay::TableRow,
-            )?;
-            return self.insert_into_existing_table_parent(world, owner, row, child);
-        }
-
-        if parent_role == TableBoxRole::Row {
-            if child_role == Some(TableBoxRole::Cell) {
-                output.push(child);
-                return Ok(());
-            }
-            let cell = self.ensure_anonymous_wrapper(
-                world,
-                owner,
-                parent_style,
-                output,
+                TableBoxRole::Row,
+            ),
+            LayoutDisplay::TableCell => (
                 LayoutBoxKind::AnonymousTableCell,
                 LayoutAnonymousReason::MissingTableCell,
-                LayoutDisplay::TableCell,
-            )?;
-            let (cell_style, mut cell_children) = {
-                let cell_box = world
-                    .box_by_id(cell)
-                    .ok_or(LayoutError::InvalidBoxReference {
-                        index: cell.index(),
-                    })?;
-                (cell_box.style.clone(), cell_box.children.clone())
-            };
-            self.insert_flow_child(world, owner, &cell_style, &mut cell_children, child)?;
-            let cell_children =
-                self.normalize_flow_children(world, owner, &cell_style, cell_children)?;
-            return self.replace_children_and_mark_context(world, cell, cell_children);
-        }
-
-        Err(LayoutError::source_contract(
-            self.source.label(owner),
-            format!(
-                "box kind {} cannot own structural table children",
-                parent_role.debug_name()
+                TableBoxRole::Cell,
             ),
-        ))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn ensure_anonymous_wrapper(
-        &mut self,
-        world: &mut LayoutWorld<S::NodeId>,
-        owner: S::NodeId,
-        parent_style: &ResolvedLayoutStyle,
-        output: &mut Vec<LayoutBoxId>,
-        kind: LayoutBoxKind,
-        reason: LayoutAnonymousReason,
-        display: LayoutDisplay,
-    ) -> Result<LayoutBoxId, LayoutError> {
-        if let Some(last) = output.last().copied()
-            && world.box_by_id(last).is_some_and(|layout_box| {
-                layout_box.kind == kind && layout_box.anonymous_reason == Some(reason)
-            })
-        {
-            return Ok(last);
-        }
-
+            _ => unreachable!("an anonymous table box must have a table display"),
+        };
         let style = self.styles.anonymous_style(
             LayoutAnonymousStyleContext::new(owner, parent_style),
             display,
@@ -1201,10 +1111,18 @@ where
             None,
             Some(reason),
             kind,
-            style,
+            style.clone(),
             None,
         ));
-        output.push(id);
+        if role == TableBoxRole::Cell {
+            let children = self.normalize_missing_table_parents(world, owner, &style, children)?;
+            let children = self.normalize_flow_children(world, owner, &style, children)?;
+            self.replace_children_and_mark_context(world, id, children)?;
+        } else {
+            let children =
+                self.normalize_structural_table_children(world, owner, &style, role, children)?;
+            world.replace_children(id, children)?;
+        }
         Ok(id)
     }
 

@@ -1022,6 +1022,39 @@ fn missing_table_parents_form_a_well_typed_anonymous_chain() {
 }
 
 #[test]
+fn an_anonymous_table_cell_lays_out_adjacent_inline_children_as_one_run() {
+    let source = TestSource {
+        root: 0,
+        nodes: vec![
+            TestNode::element("table", vec![1]),
+            TestNode::element("row", vec![2, 3, 4]),
+            TestNode::element("block", Vec::new()),
+            TestNode::text("first", "A"),
+            TestNode::text("second", "B"),
+        ],
+    };
+    let mut styles = TestStyles::default();
+    styles.primary.insert(0, style(LayoutDisplay::Table));
+    styles.primary.insert(1, style(LayoutDisplay::TableRow));
+    styles.primary.insert(2, style(LayoutDisplay::Block));
+
+    let world = build_layout_world(&source, &mut styles).unwrap();
+    let row = world.box_by_id(world.source_box(1).unwrap()).unwrap();
+    let cell = world.box_by_id(row.children()[0]).unwrap();
+    assert_eq!(cell.kind(), LayoutBoxKind::AnonymousTableCell);
+    let [block, inline_run] = cell.children() else {
+        panic!("the block and both adjacent text children form two formatting boxes");
+    };
+    assert_eq!(world.box_by_id(*block).unwrap().source(), Some(2));
+    let inline_run = world.box_by_id(*inline_run).unwrap();
+    assert_eq!(inline_run.kind(), LayoutBoxKind::AnonymousBlock);
+    assert_eq!(
+        inline_run.children(),
+        [world.source_box(3).unwrap(), world.source_box(4).unwrap()]
+    );
+}
+
+#[test]
 fn every_internal_table_role_gets_the_minimal_missing_parent_chain() {
     let cases: &[(LayoutDisplay, &[LayoutDisplay])] = &[
         (
