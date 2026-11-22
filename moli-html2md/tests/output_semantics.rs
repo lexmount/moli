@@ -211,6 +211,7 @@ fn empty_targets_and_formatting_do_not_hide_accessible_names() {
         "<i class='fa fa-search'></i>",
         "<em><strong></strong></em>",
         "<sub></sub>",
+        "<bdi></bdi>",
         "<bdi dir='ltr'></bdi>",
         "<bdo dir='rtl'> </bdo>",
         "<span>&nbsp;</span>",
@@ -1313,6 +1314,18 @@ fn preserves_explicit_bidi_isolation_for_arabic_rtl_and_ltr_tokens() {
     let markdown = convert(&input, input.root);
     assert!(markdown.contains("\u{2066}100 USD\u{2069}"), "{markdown:?}");
     assert!(markdown.contains("\u{2067}ضمان\u{2069}"), "{markdown:?}");
+}
+
+#[test]
+fn bdi_uses_auto_direction_for_missing_or_invalid_dir() {
+    for dir in ["", r#" dir="auto""#, r#" dir="invalid""#] {
+        let input = Tree::parse(&format!("<p>User <bdi{dir}>إيان</bdi> has posted</p>"));
+        assert_eq!(
+            convert(&input, input.root),
+            "User \u{2068}إيان\u{2069} has posted",
+            "{dir:?}"
+        );
+    }
 }
 
 #[test]

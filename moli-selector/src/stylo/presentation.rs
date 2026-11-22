@@ -26,11 +26,7 @@ use style_traits::{ParsingMode, ToCss};
 
 use crate::dom::native::Element;
 
-use super::{
-    atoms::normalized_direction,
-    presentational_hints::synthesize_hidden_presentational_hint,
-    query::{QueryElement, element_uses_auto_directionality},
-};
+use super::{presentational_hints::synthesize_hidden_presentational_hint, query::QueryElement};
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
@@ -195,18 +191,11 @@ fn append_html_direction_declaration(
     use crate::CssDirection;
     use style::properties::generated::longhands::direction::computed_value::T as Direction;
 
-    let element = query_element.element();
     // The HTML direction hint participates below author CSS. The UA's bidi
     // isolation rule is separate, and layout consumes both computed values.
     // Per WHATWG HTML §15.3.5, dir="auto" and <bdi> without valid dir="ltr|rtl"
     // resolve their directionality from first-strong text direction.
-    let direction = element
-        .attribute_ns("", "dir")
-        .and_then(normalized_direction)
-        .or_else(|| {
-            element_uses_auto_directionality(element).then(|| query_element.resolved_direction())
-        });
-    if let Some(direction) = direction {
+    if let Some(direction) = query_element.directionality_hint() {
         let direction = match direction {
             CssDirection::Ltr => Direction::Ltr,
             CssDirection::Rtl => Direction::Rtl,

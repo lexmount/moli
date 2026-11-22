@@ -342,28 +342,7 @@ impl<'a, D: Dom + ?Sized, Children: Iterator<Item = D::NodeId>> Machine<'a, D, C
             "sup" => self.style(Style::Superscript),
             "sub" => self.style(Style::Subscript),
             "bdi" | "bdo" => {
-                let dir = self.dom.attribute(node, "dir").map(str::trim);
-                let controls = match (tag, dir) {
-                    ("bdi", Some(dir)) if dir.eq_ignore_ascii_case("ltr") => {
-                        Some(("\u{2066}", "\u{2069}"))
-                    }
-                    ("bdi", Some(dir)) if dir.eq_ignore_ascii_case("rtl") => {
-                        Some(("\u{2067}", "\u{2069}"))
-                    }
-                    ("bdi", Some(dir)) if dir.eq_ignore_ascii_case("auto") => {
-                        Some(("\u{2068}", "\u{2069}"))
-                    }
-                    // BDO starts an isolate and an override. PDF ends the
-                    // override before PDI ends the isolate.
-                    ("bdo", Some(dir)) if dir.eq_ignore_ascii_case("ltr") => {
-                        Some(("\u{2068}\u{202d}", "\u{202c}\u{2069}"))
-                    }
-                    ("bdo", Some(dir)) if dir.eq_ignore_ascii_case("rtl") => {
-                        Some(("\u{2068}\u{202e}", "\u{202c}\u{2069}"))
-                    }
-                    _ => None,
-                };
-                if let Some((start, end)) = controls {
+                if let Some((start, end)) = bidi_controls(tag, self.dom.attribute(node, "dir")) {
                     self.writer().bidi_controls(start);
                     self.tasks.push(Task::EndBidi(end));
                 }
@@ -763,6 +742,31 @@ impl<'a, D: Dom + ?Sized, Children: Iterator<Item = D::NodeId>> Machine<'a, D, C
         }
         block.push_str(&fence);
         self.writer().block(block.into(), 2, 2);
+    }
+}
+
+fn bidi_controls(tag: &str, dir: Option<&str>) -> Option<(&'static str, &'static str)> {
+    let dir = dir.map(str::trim);
+    match tag {
+        "bdi" => Some((
+            match dir {
+                Some(dir) if dir.eq_ignore_ascii_case("ltr") => "\u{2066}",
+                Some(dir) if dir.eq_ignore_ascii_case("rtl") => "\u{2067}",
+                _ => "\u{2068}",
+            },
+            "\u{2069}",
+        )),
+        // PDF ends BDO's override before PDI ends the isolate.
+        "bdo" => match dir {
+            Some(dir) if dir.eq_ignore_ascii_case("ltr") => {
+                Some(("\u{2068}\u{202d}", "\u{202c}\u{2069}"))
+            }
+            Some(dir) if dir.eq_ignore_ascii_case("rtl") => {
+                Some(("\u{2068}\u{202e}", "\u{202c}\u{2069}"))
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 

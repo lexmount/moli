@@ -10,7 +10,7 @@ use crate::{
         },
         native::{DomHost, Element, Node},
     },
-    stylo::{atoms::normalized_direction, query::QueryElement},
+    stylo::query::QueryElement,
 };
 
 impl<'a> QueryElement<'a> {
@@ -126,6 +126,10 @@ impl<'a> QueryElement<'a> {
 
     pub(in crate::stylo) fn resolved_direction(self) -> CssDirection {
         html_directionality(self.host, self.handle)
+    }
+
+    pub(in crate::stylo) fn directionality_hint(self) -> Option<CssDirection> {
+        directionality_hint(self.host, self.handle, self.element())
     }
 
     pub(super) fn matches_target_pseudo(self) -> bool {
@@ -526,14 +530,8 @@ pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirectio
     let mut current = Some(handle);
     while let Some(handle) = current {
         if let Some(element) = host.node(handle).and_then(Node::as_element) {
-            if let Some(direction) = element
-                .attribute_ns("", "dir")
-                .and_then(normalized_direction)
-            {
+            if let Some(direction) = directionality_hint(host, handle, element) {
                 return direction;
-            }
-            if element_uses_auto_directionality(element) {
-                return auto_direction_for_element(host, handle).unwrap_or(CssDirection::Ltr);
             }
             if element.is_html_input() && element.input_type() == InputType::Tel {
                 return CssDirection::Ltr;
@@ -547,10 +545,35 @@ pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirectio
     CssDirection::Ltr
 }
 
-pub(in crate::stylo) fn element_uses_auto_directionality(element: &Element) -> bool {
-    let dir = element.attribute_ns("", "dir");
-    dir.is_some_and(|value| value.eq_ignore_ascii_case("auto"))
-        || (element.is_html_element("bdi") && dir.and_then(normalized_direction).is_none())
+#[derive(PartialEq, Eq)]
+enum SpecifiedDirectionality {
+    Fixed(CssDirection),
+    Auto,
+    Inherited,
+}
+
+fn specified_directionality(element: &Element) -> SpecifiedDirectionality {
+    match element.attribute_ns("", "dir") {
+        Some(dir) if dir.eq_ignore_ascii_case("ltr") => {
+            SpecifiedDirectionality::Fixed(CssDirection::Ltr)
+        }
+        Some(dir) if dir.eq_ignore_ascii_case("rtl") => {
+            SpecifiedDirectionality::Fixed(CssDirection::Rtl)
+        }
+        Some(dir) if dir.eq_ignore_ascii_case("auto") => SpecifiedDirectionality::Auto,
+        _ if element.is_html_element("bdi") => SpecifiedDirectionality::Auto,
+        _ => SpecifiedDirectionality::Inherited,
+    }
+}
+
+fn directionality_hint(host: &DomHost, handle: NodeId, element: &Element) -> Option<CssDirection> {
+    match specified_directionality(element) {
+        SpecifiedDirectionality::Fixed(direction) => Some(direction),
+        SpecifiedDirectionality::Auto => {
+            Some(auto_direction_for_element(host, handle).unwrap_or(CssDirection::Ltr))
+        }
+        SpecifiedDirectionality::Inherited => None,
+    }
 }
 
 /// Finds the closest auto-direction element whose text scan can include
@@ -560,10 +583,11 @@ pub fn html_auto_directionality_root(host: &DomHost, start: NodeId) -> Option<No
     while let Some(handle) = current {
         let node = host.node(handle)?;
         if let Some(element) = node.as_element() {
-            if element_uses_auto_directionality(element) {
+            let directionality = specified_directionality(element);
+            if directionality == SpecifiedDirectionality::Auto {
                 return Some(handle);
             }
-            if descendant_is_directionally_isolated_for_auto(element) {
+            if descendant_is_directionally_isolated_for_auto(element, directionality) {
                 return None;
             }
         }
@@ -602,7 +626,8 @@ fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirecti
         let Some(element) = node.as_element() else {
             continue;
         };
-        if descendant_is_directionally_isolated_for_auto(element) {
+        if descendant_is_directionally_isolated_for_auto(element, specified_directionality(element))
+        {
             continue;
         }
         let mut children = host.child_handles(handle).collect::<Vec<_>>();
@@ -612,17 +637,13 @@ fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirecti
     None
 }
 
-fn descendant_is_directionally_isolated_for_auto(element: &Element) -> bool {
-    if matches!(
-        element.local_name(),
-        "bdi" | "script" | "style" | "textarea"
-    ) && element.namespace() == "http://www.w3.org/1999/xhtml"
-    {
-        return true;
-    }
-    element.attribute_ns("", "dir").is_some_and(|value| {
-        normalized_direction(value).is_some() || value.eq_ignore_ascii_case("auto")
-    })
+fn descendant_is_directionally_isolated_for_auto(
+    element: &Element,
+    directionality: SpecifiedDirectionality,
+) -> bool {
+    directionality != SpecifiedDirectionality::Inherited
+        || (matches!(element.local_name(), "script" | "style" | "textarea")
+            && element.namespace() == "http://www.w3.org/1999/xhtml")
 }
 
 fn input_auto_direction(element: &Element) -> Option<CssDirection> {
