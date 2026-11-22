@@ -264,10 +264,17 @@ impl ScriptVm {
                     let Some(mut pass) = pass else {
                         return Ok(None);
                     };
-                    let css_images = if requests_paint {
-                        pass.css_image_references().to_vec()
-                    } else {
-                        Vec::new()
+                    let css_images = match (requests_paint, request.includes_backgrounds()) {
+                        (false, _) => Vec::new(),
+                        (true, true) => pass.css_image_references().to_vec(),
+                        (true, false) => pass
+                            .css_image_references()
+                            .iter()
+                            .filter(|image| {
+                                image.purpose != moli_layout::LayoutCssImagePurpose::Background
+                            })
+                            .cloned()
+                            .collect(),
                     };
                     let value = consume(&mut pass)?;
                     context_host.finish_layout_publication(publication, pass)?;

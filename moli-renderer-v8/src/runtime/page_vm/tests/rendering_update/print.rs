@@ -6,6 +6,70 @@ use crate::runtime::{
 use moli_page_types::LayoutPolicy;
 
 #[tokio::test(flavor = "current_thread")]
+async fn native_pdf_only_admits_css_images_used_by_the_capture() {
+    run_page_vm_async_test(async move {
+        let image = "data:image/webp;base64,UklGRhwAAABXRUJQVlA4TA8AAAAvAUAAAAcQ/Y/+ByKi/wEA";
+        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+            for (print_background, uses_mask) in [(false, false), (true, false), (false, true)] {
+                let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+                loader.set_optional_resource_fetch_mask(
+                    crate::protocol_types::OptionalResourceFetchMask::IMAGE,
+                );
+                let mut page = test_page_vm_with_loader_and_document_url(
+                    &loader,
+                    Vec::new(),
+                    Url::parse("https://print-css-image-admission.test/")?,
+                );
+                page.layout_configuration.policy = policy;
+                page.vm_mut().set_layout_policy(policy);
+
+                let mask = if uses_mask {
+                    format!("mask-image: url('{image}');")
+                } else {
+                    String::new()
+                };
+                let css =
+                    format!("@media print {{ p {{ background-image: url('{image}'); {mask} }} }}");
+                page.vm_mut().eval(&format!(
+                    "document.head.innerHTML='<style></style>';\
+                     document.querySelector('style').textContent={};\
+                     document.body.innerHTML='<p>Print CSS images</p>';",
+                    serde_json::to_string(&css)?,
+                ))?;
+                assert!(
+                    page.vm()
+                        .css_image_resource_observability_for_test()
+                        .4
+                        .is_empty()
+                );
+
+                let request = RendererPrintToPdfRequest {
+                    print_background,
+                    ..Default::default()
+                };
+                assert!(matches!(
+                    page.print_to_pdf(request)?,
+                    RendererPrintToPdfReply::Printed(_)
+                ));
+                let admitted = page.vm().css_image_resource_observability_for_test().4;
+                let expected = if print_background || uses_mask {
+                    vec![image.to_owned()]
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(
+                    admitted, expected,
+                    "{policy:?}, print_background={print_background}, uses_mask={uses_mask}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("PDF capture admits its background and mask resources according to their use");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn native_pdf_embeds_a_loaded_font_under_its_print_declaration() {
     run_page_vm_async_test(async move {
         use base64::Engine;
