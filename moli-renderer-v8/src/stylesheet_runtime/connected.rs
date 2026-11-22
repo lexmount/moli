@@ -1540,7 +1540,7 @@ impl DocumentRuntime {
                         resource_timing_initiator_type: "link",
                         render_blocking: false,
                         import_options: None,
-                        consumed_preload_error: false,
+                        skip_resource_timing: false,
                         document_owner,
                         stylesheet_fetch: None,
                         blocking_operation: None,

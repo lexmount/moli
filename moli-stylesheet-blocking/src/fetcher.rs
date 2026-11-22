@@ -321,6 +321,7 @@ pub struct StylesheetFetchTerminal {
     from_service_worker: bool,
     response_filter: Option<moli_fetch::PreloadResponseFilter>,
     consumed_preload_error: bool,
+    reused_stylesheet_in_document: bool,
     timing: Option<Arc<StylesheetFetchTiming>>,
     decoding: Arc<StylesheetDecoding>,
 }
@@ -349,6 +350,7 @@ impl StylesheetFetchTerminal {
             service_worker_response_url: None,
             response_filter: None,
             consumed_preload_error: false,
+            reused_stylesheet_in_document: false,
             timing: None,
             decoding: Arc::default(),
         }
@@ -384,6 +386,7 @@ impl StylesheetFetchTerminal {
             service_worker_response_url: None,
             response_filter: None,
             consumed_preload_error: false,
+            reused_stylesheet_in_document: false,
             timing: None,
             decoding: Arc::default(),
         }
@@ -398,6 +401,15 @@ impl StylesheetFetchTerminal {
 
     pub fn is_consumed_preload_error(&self) -> bool {
         self.consumed_preload_error
+    }
+
+    pub fn with_reused_stylesheet_in_document(mut self, reused: bool) -> Self {
+        self.reused_stylesheet_in_document = reused;
+        self
+    }
+
+    pub fn records_resource_timing(&self) -> bool {
+        !self.reused_stylesheet_in_document && !self.consumed_preload_error
     }
 
     pub fn with_timing(mut self, timing: StylesheetFetchTiming) -> Self {

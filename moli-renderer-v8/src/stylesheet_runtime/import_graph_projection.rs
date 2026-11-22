@@ -50,7 +50,7 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
                 resource_timing_initiator_type: "css",
                 render_blocking,
                 import_options,
-                consumed_preload_error: terminal.is_consumed_preload_error(),
+                skip_resource_timing: !terminal.records_resource_timing(),
                 document_owner: None,
                 stylesheet_fetch: None,
                 blocking_operation: None,

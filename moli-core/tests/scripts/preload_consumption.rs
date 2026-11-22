@@ -106,15 +106,31 @@ impl PreloadServer {
                                 "/timing-css-reuse-frame" => ("text/html", "<!doctype html><iframe src='/timing-css-reuse'></iframe>".to_owned()),
                                 "/timing-css-reuse" => ("text/html", r#"
                                     <!doctype html><head>
+                                    <link rel="stylesheet" href="/timing-css-root?token=cacheable&amp;owner=head">
+                                    <link rel="stylesheet" href="/timing-css-root?token=implicit&amp;owner=head">
                                     <link rel="stylesheet" href="/timing-css-root?token=no-store&amp;owner=head">
+                                    <link id="vary-head" rel="stylesheet" href="/timing-css-root?token=vary&amp;owner=head">
+                                    <style>@import "/timing-css-leaf?token=inline";</style>
                                     <script>globalThis.headStylesReady = true;</script>
                                     </head><body>
+                                    <link rel="stylesheet" href="/timing-css-root?token=cacheable&amp;owner=body">
+                                    <link rel="stylesheet" href="/timing-css-root?token=implicit&amp;owner=body">
                                     <link rel="stylesheet" href="/timing-css-root?token=no-store&amp;owner=body">
+                                    <link id="vary-body" rel="stylesheet" href="/timing-css-root?token=vary&amp;owner=body">
+                                    <style>@import "/timing-css-leaf?token=inline";</style>
                                 "#.to_owned()),
                                 "/timing-css-root" => ("text/css", format!("@import '/timing-css-leaf?token={token}';")),
                                 "/timing-css-leaf" => {
                                     asset.count.fetch_add(1, Ordering::AcqRel);
-                                    ("text/css", ".probe { color: red; }".to_owned())
+                                    if token == "implicit" {
+                                        cache.clear();
+                                    } else if token != "no-store" {
+                                        cache = "max-age=600".to_owned();
+                                    }
+                                    let owner = if request.lines().any(|line| {
+                                        line.to_ascii_lowercase().starts_with("referer:") && line.ends_with("owner=body")
+                                    }) { "body" } else { "head" };
+                                    ("text/css", format!(".{owner} {{ color: red; }}"))
                                 }
                                 "/timing-header" => ("text/html", "<!doctype html><body>Header preload timing".to_owned()),
                                 "/timing-parser-script-preloads-frame" => ("text/html", "<!doctype html><iframe src='/timing-parser-script-preloads'></iframe>".to_owned()),
@@ -299,7 +315,17 @@ impl PreloadServer {
                             } else if url.path() == "/timing-render-blocking" {
                                 "Link: </probe-asset?token=header&as=style>; rel=preload; as=style\r\n".to_owned()
                             } else { String::new() };
-                            let response = format!("HTTP/1.1 {status} OK\r\nContent-Type: {mime}\r\nCache-Control: {cache}\r\n{cors}{location}{policy}{link}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                            let vary = if url.path() == "/timing-css-leaf" && token == "vary" {
+                                "Vary: Referer\r\n"
+                            } else {
+                                ""
+                            };
+                            let cache_header = if cache.is_empty() {
+                                String::new()
+                            } else {
+                                format!("Cache-Control: {cache}\r\n")
+                            };
+                            let response = format!("HTTP/1.1 {status} OK\r\nContent-Type: {mime}\r\n{cache_header}{cors}{location}{policy}{link}{vary}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
                             let _ = stream.write_all(response.as_bytes()).await;
                             let _ = stream.write_all(&body).await;
                         });
@@ -573,7 +599,7 @@ async fn resource_timing_retains_script_render_blocking_at_preparation() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn parser_stylesheet_import_timing_reaches_its_document() -> Result<()> {
+async fn stylesheet_import_timing_reuses_same_document_cache_variants() -> Result<()> {
     for path in ["timing-css-reuse", "timing-css-reuse-frame"] {
         let server = PreloadServer::spawn().await?;
         let browser = Browser::new(AppConfig::default())?;
@@ -593,29 +619,48 @@ async fn parser_stylesheet_import_timing_reaches_its_document() -> Result<()> {
                                 entry.initiatorType === 'css' && entry.responseEnd >= entry.startTime && entry.responseEnd > 0]]
                             : [];
                     }).sort();
-                    return JSON.stringify(rows);
+                    const variants = ['vary-head', 'vary-body'].map(id =>
+                        target.document.getElementById(id).sheet.cssRules[0].styleSheet.cssRules[0].selectorText);
+                    return JSON.stringify({rows, variants});
                 })()"#,
                 true,
             ),
         )
         .await??;
-        let timings: serde_json::Value =
+        let report: serde_json::Value =
             serde_json::from_str(result["value"].as_str().context("CSS import timings")?)?;
         assert_eq!(
-            timings,
+            report["rows"],
             serde_json::json!([
+                ["cacheable", "blocking", true],
+                ["implicit", "blocking", true],
+                ["inline", "blocking", true],
                 ["no-store", "blocking", true],
                 ["no-store", "non-blocking", true],
+                ["vary", "blocking", true],
+                ["vary", "non-blocking", true],
             ]),
-            "{path}",
+            "{path}: {report}",
         );
         assert_eq!(
-            server.assets.lock()["no-store"]
-                .count
-                .load(Ordering::Acquire),
-            2,
-            "{path}",
+            report["variants"],
+            serde_json::json!([".head", ".body"]),
+            "{path}"
         );
+        let assets = server.assets.lock();
+        for (token, count) in [
+            ("cacheable", 1),
+            ("implicit", 1),
+            ("inline", 1),
+            ("no-store", 2),
+            ("vary", 2),
+        ] {
+            assert_eq!(
+                assets[token].count.load(Ordering::Acquire),
+                count,
+                "{path} {token}"
+            );
+        }
     }
     Ok(())
 }

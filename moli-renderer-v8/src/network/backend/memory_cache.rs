@@ -81,10 +81,17 @@ pub(in crate::network) struct RawSubresourceCacheKey {
     has_cross_origin_url: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::network) enum RawSubresourceCacheLifetime {
+    Http(u64),
+    DocumentStylesheet,
+}
+
 pub(in crate::network) enum RawSubresourceCacheLookup {
     Local {
         response: Box<RawResponse>,
-        expires_at_unix_ms: u64,
+        expires_at_unix_ms: Option<u64>,
+        reused_stylesheet_in_document: bool,
     },
     Revalidate(Box<RawResponse>),
 }
@@ -129,21 +136,63 @@ enum MemoryCacheEntry {
 struct RawSubresourceVariant {
     response: Box<RawResponse>,
     stored_at_unix_ms: u64,
-    expires_at_unix_ms: u64,
+    lifetime: RawSubresourceCacheLifetime,
     response_time: std::time::SystemTime,
     vary_headers: Vec<(String, Option<Vec<u8>>)>,
+    stylesheet_documents: Vec<Weak<()>>,
 }
 
 impl RawSubresourceVariant {
-    fn matches(&self, request_headers: &RequestHeaders) -> bool {
-        self.vary_headers
-            .iter()
-            .all(|(name, value)| *value == combined_request_header_value(request_headers, name))
+    fn note_stylesheet_use(&mut self, document: Option<&Weak<()>>) -> bool {
+        let Some(document) = document else {
+            return false;
+        };
+        self.stylesheet_documents
+            .retain(|owner| owner.strong_count() > 0);
+        if self.has_stylesheet_user(Some(document)) {
+            return true;
+        }
+        self.stylesheet_documents.push(document.clone());
+        false
+    }
+
+    fn has_stylesheet_user(&self, document: Option<&Weak<()>>) -> bool {
+        document.is_some_and(|document| {
+            self.stylesheet_documents
+                .iter()
+                .any(|owner| owner.ptr_eq(document))
+        })
+    }
+
+    fn belongs_to(&self, document: Option<&Weak<()>>) -> bool {
+        matches!(self.lifetime, RawSubresourceCacheLifetime::Http(_))
+            || self.has_stylesheet_user(document)
+    }
+
+    fn has_live_owner(&self) -> bool {
+        matches!(self.lifetime, RawSubresourceCacheLifetime::Http(_))
+            || self
+                .stylesheet_documents
+                .iter()
+                .any(|owner| owner.strong_count() > 0)
+    }
+
+    fn matches(&self, request_headers: &RequestHeaders, document: Option<&Weak<()>>) -> bool {
+        self.belongs_to(document)
+            && self
+                .vary_headers
+                .iter()
+                .all(|(name, value)| *value == combined_request_header_value(request_headers, name))
     }
 
     fn retained_bytes(&self) -> usize {
         response_head_retained_bytes(self.response.final_url.as_str(), &self.response.headers)
             .saturating_add(self.response.body_bytes().len())
+            .saturating_add(
+                self.stylesheet_documents
+                    .len()
+                    .saturating_mul(std::mem::size_of::<Weak<()>>()),
+            )
             .saturating_add(
                 self.vary_headers
                     .iter()
@@ -182,9 +231,10 @@ impl MemoryCacheEntry {
             } => {
                 load.is_closed() || expires_at_unix_ms.is_some_and(|expires| expires <= now_unix_ms)
             }
-            // Stale raw representations retain validators for the next
-            // request. They remain subject to the same byte budget and LRU.
-            Self::RawSubresource { .. } => false,
+            // Stale HTTP representations retain validators for the next request.
+            Self::RawSubresource { variants, .. } => {
+                !variants.iter().any(RawSubresourceVariant::has_live_owner)
+            }
         }
     }
 }
@@ -671,6 +721,7 @@ impl SharedMemoryResourceCache {
         key: &RawSubresourceCacheKey,
         request: &Request,
         request_headers: &RequestHeaders,
+        stylesheet_document: Option<&Weak<()>>,
     ) -> Option<RawSubresourceCacheLookup> {
         if !request.effective_cache_mode().allows_http_cache_lookup() {
             return None;
@@ -680,31 +731,47 @@ impl SharedMemoryResourceCache {
         else {
             unreachable!("raw cache key must map to a raw cache entry");
         };
-        // Prefer a matching Vary representation to an older default response,
-        // then the most recent response Date, as required by RFC 9111. A
-        // response without a usable Date uses its receipt time. Hits must not
-        // rewrite the generation time or receipt order.
+        // A Document can reuse its own stylesheet even after another
+        // Document fetched the same URL. For shared HTTP representations,
+        // prefer a matching Vary response and then the most recent Date.
+        // Without a usable Date, compare receipt times.
+        let policy = HttpCacheRequestPolicy::from_headers(request_headers);
+        let allow_document_stylesheets = request.effective_cache_mode()
+            == moli_fetch::RequestCacheMode::Default
+            && policy == HttpCacheRequestPolicy::default();
         let index = variants
             .iter()
             .enumerate()
-            .filter(|(_, variant)| variant.matches(request_headers))
+            .filter(|(_, variant)| {
+                variant.matches(request_headers, stylesheet_document)
+                    && (allow_document_stylesheets
+                        || matches!(variant.lifetime, RawSubresourceCacheLifetime::Http(_)))
+            })
             .max_by_key(|(index, variant)| {
                 (
+                    matches!(
+                        variant.lifetime,
+                        RawSubresourceCacheLifetime::DocumentStylesheet
+                    ),
                     !variant.vary_headers.is_empty(),
                     variant.response_time,
                     *index,
                 )
             })
             .map(|(index, _)| index)?;
-        let policy = HttpCacheRequestPolicy::from_headers(request_headers);
         let variant = &variants[index];
-        let reusable = request
-            .effective_cache_mode()
-            .allows_stale_http_cache_response()
+        let expires_at_unix_ms = match variant.lifetime {
+            RawSubresourceCacheLifetime::Http(expiry) => Some(expiry),
+            RawSubresourceCacheLifetime::DocumentStylesheet => None,
+        };
+        let reusable = expires_at_unix_ms.is_none()
+            || request
+                .effective_cache_mode()
+                .allows_stale_http_cache_response()
             || policy.allows_reuse_at(
                 &variant.response.headers,
                 variant.stored_at_unix_ms,
-                Some(variant.expires_at_unix_ms),
+                expires_at_unix_ms,
                 request
                     .effective_cache_mode()
                     .requires_http_cache_validation(),
@@ -728,17 +795,22 @@ impl SharedMemoryResourceCache {
                 .response
                 .final_url
                 .set_fragment(request.url.fragment());
-            variants.retain(|other| !other.matches(request_headers));
+            variants.retain(|other| !other.matches(request_headers, stylesheet_document));
             self.insert_raw_subresource_variants(key.clone(), variants);
             return Some(RawSubresourceCacheLookup::Revalidate(variant.response));
         }
-        let mut hit = variants[index].response.clone();
-        let expires_at_unix_ms = variants[index].expires_at_unix_ms;
+        let variant = &mut variants[index];
+        let reused_stylesheet_in_document = variant.note_stylesheet_use(stylesheet_document);
+        let mut hit = variant.response.clone();
         hit.final_url.set_fragment(request.url.fragment());
         self.insert_raw_subresource_variants(key.clone(), variants);
+        if self.retained_bytes > self.retained_bytes_limit {
+            self.evict_to_budget();
+        }
         Some(RawSubresourceCacheLookup::Local {
             response: hit,
             expires_at_unix_ms,
+            reused_stylesheet_in_document,
         })
     }
 
@@ -746,9 +818,10 @@ impl SharedMemoryResourceCache {
         &mut self,
         key: &RawSubresourceCacheKey,
         request_headers: &RequestHeaders,
+        stylesheet_document: Option<&Weak<()>>,
     ) {
         let mut variants = self.take_raw_subresource_variants(key);
-        variants.retain(|variant| !variant.matches(request_headers));
+        variants.retain(|variant| !variant.matches(request_headers, stylesheet_document));
         self.insert_raw_subresource_variants(key.clone(), variants);
     }
 
@@ -756,10 +829,11 @@ impl SharedMemoryResourceCache {
         &mut self,
         key: RawSubresourceCacheKey,
         response: RawResponse,
-        expires_at_unix_ms: u64,
+        lifetime: RawSubresourceCacheLifetime,
         request_headers: &RequestHeaders,
+        stylesheet_document: Option<Weak<()>>,
     ) {
-        self.remove_raw_subresource(&key, request_headers);
+        self.remove_raw_subresource(&key, request_headers, stylesheet_document.as_ref());
         if response.body_bytes().len() > self.resource_body_bytes_limit {
             return;
         }
@@ -773,7 +847,8 @@ impl SharedMemoryResourceCache {
             response_time: response_date(&response.headers)
                 .unwrap_or_else(std::time::SystemTime::now),
             response: Box::new(response),
-            expires_at_unix_ms,
+            lifetime,
+            stylesheet_documents: stylesheet_document.into_iter().collect(),
             vary_headers: vary_names
                 .into_iter()
                 .map(|name| {
@@ -807,8 +882,9 @@ impl SharedMemoryResourceCache {
     fn insert_raw_subresource_variants(
         &mut self,
         key: RawSubresourceCacheKey,
-        variants: Vec<RawSubresourceVariant>,
+        mut variants: Vec<RawSubresourceVariant>,
     ) {
+        variants.retain(RawSubresourceVariant::has_live_owner);
         if variants.is_empty() {
             return;
         }
@@ -1016,9 +1092,11 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
             .request_origin()
             .map(|origin| origin.ascii_serialization().to_owned()),
         request_mode: request_mode.as_ref().to_owned(),
-        // Policies and explicit Fetch referrers can select different headers
-        // without changing the origin or cookie initiator in this cache key.
-        referrer: if navigation_prefetch {
+        // Ordinary stylesheets share HTTP representations across importing
+        // sheets. Vary still matches their actual request headers.
+        referrer: if navigation_prefetch
+            || request.browser_request_metadata() == Some(BrowserRequestMetadata::Style)
+        {
             None
         } else {
             request.referrer_header_value(&request.url)
@@ -1181,10 +1259,11 @@ fn combined_request_header_value(headers: &RequestHeaders, name: &str) -> Option
     Some(combined)
 }
 
-pub(in crate::network) fn raw_subresource_memory_cache_expiry(
+pub(in crate::network) fn raw_subresource_memory_cache_lifetime(
     request: &Request,
     response: &RawResponse,
-) -> Option<u64> {
+    has_stylesheet_document: bool,
+) -> Option<RawSubresourceCacheLifetime> {
     // The shared document-prefetch namespace contains final representations,
     // never a manual redirect that an automatic navigation might commit.
     if same_origin_navigation_prefetch(request)
@@ -1227,9 +1306,24 @@ pub(in crate::network) fn raw_subresource_memory_cache_expiry(
         &response.headers,
         response.redirected,
     )?;
-    policy
-        .expires_at_unix_ms
-        .or_else(|| (!validation_headers_from_headers(&response.headers).is_empty()).then_some(0))
+    if let Some(expires) = policy.expires_at_unix_ms {
+        return Some(RawSubresourceCacheLifetime::Http(expires));
+    }
+    if !validation_headers_from_headers(&response.headers).is_empty() {
+        return Some(RawSubresourceCacheLifetime::Http(0));
+    }
+    // A loaded stylesheet may be reused in its Document when the server gave
+    // no freshness or validation instructions. Later Documents must fetch it.
+    (has_stylesheet_document
+        && request.browser_request_metadata() == Some(BrowserRequestMetadata::Style)
+        && request.effective_cache_mode() == moli_fetch::RequestCacheMode::Default
+        && response.status == 200
+        && !response.headers.iter().any(|(name, _)| {
+            name.eq_ignore_ascii_case("cache-control")
+                || name.eq_ignore_ascii_case("expires")
+                || name.eq_ignore_ascii_case("age")
+        }))
+    .then_some(RawSubresourceCacheLifetime::DocumentStylesheet)
 }
 
 fn script_text_memory_cache_expiry(request: &Request, response: &Response) -> Option<u64> {
@@ -1609,14 +1703,20 @@ mod tests {
             .headers
             .push(("vary".to_owned(), b"Sec-Fetch-Mode".to_vec()));
         let mut cache = SharedMemoryResourceCache::default();
-        cache.insert_raw_subresource(key.clone(), response, u64::MAX, &prefetch.request_headers);
+        cache.insert_raw_subresource(
+            key.clone(),
+            response,
+            RawSubresourceCacheLifetime::Http(u64::MAX),
+            &prefetch.request_headers,
+            None,
+        );
         assert!(
             cache
-                .lookup_raw_subresource(&key, &navigation, &navigation.request_headers)
+                .lookup_raw_subresource(&key, &navigation, &navigation.request_headers, None)
                 .is_none()
         );
         assert!(matches!(
-            cache.lookup_raw_subresource(&key, &prefetch, &prefetch.request_headers),
+            cache.lookup_raw_subresource(&key, &prefetch, &prefetch.request_headers, None),
             Some(RawSubresourceCacheLookup::Local { .. })
         ));
     }
@@ -1704,12 +1804,13 @@ mod tests {
         cache.insert_raw_subresource(
             key.clone(),
             raw_response(per_hop.url.as_str(), b"cached"),
-            u64::MAX,
+            RawSubresourceCacheLifetime::Http(u64::MAX),
             &per_hop.request_headers,
+            None,
         );
         assert!(
             cache
-                .lookup_raw_subresource(&key, &per_hop, &per_hop.request_headers)
+                .lookup_raw_subresource(&key, &per_hop, &per_hop.request_headers, None)
                 .is_some()
         );
         for isolated in [
@@ -1722,7 +1823,12 @@ mod tests {
                 raw_subresource_memory_cache_key(&isolated, &isolated.request_headers).unwrap();
             assert!(
                 cache
-                    .lookup_raw_subresource(&isolated_key, &isolated, &isolated.request_headers)
+                    .lookup_raw_subresource(
+                        &isolated_key,
+                        &isolated,
+                        &isolated.request_headers,
+                        None
+                    )
                     .is_none(),
                 "a cached hop cannot replace an automatic redirect or another client's response"
             );
@@ -2091,8 +2197,9 @@ mod tests {
         cache.insert_raw_subresource(
             raw_key.clone(),
             raw_response,
-            u64::MAX,
+            RawSubresourceCacheLifetime::Http(u64::MAX),
             &raw_request.request_headers,
+            None,
         );
 
         assert!(!cache.contains_script_text(&script_key));
@@ -2150,8 +2257,9 @@ mod tests {
         cache.insert_raw_subresource(
             raw_key,
             raw_response,
-            u64::MAX,
+            RawSubresourceCacheLifetime::Http(u64::MAX),
             &raw_request.request_headers,
+            None,
         );
 
         let diagnostics = cache.diagnostics();
@@ -2218,10 +2326,16 @@ mod tests {
         let mut response = raw_response(request.url.as_str(), b"body");
         response.headers.push(("vary".into(), b"X-Mode".to_vec()));
         let mut cache = SharedMemoryResourceCache::with_limits(4096, 4096);
-        cache.insert_raw_subresource(key.clone(), response, u64::MAX, &request.request_headers);
+        cache.insert_raw_subresource(
+            key.clone(),
+            response,
+            RawSubresourceCacheLifetime::Http(u64::MAX),
+            &request.request_headers,
+            None,
+        );
         assert!(
             cache
-                .lookup_raw_subresource(&key, &request, &request.request_headers)
+                .lookup_raw_subresource(&key, &request, &request.request_headers, None)
                 .is_none()
         );
         assert_eq!(cache.diagnostics().retained_bytes, 0);
@@ -2240,7 +2354,13 @@ mod tests {
                 RequestHeaders::from_bytes(vec![("X-Mode".into(), value.as_bytes().to_vec())]);
             let mut response = raw_response(request.url.as_str(), &vec![b'x'; 1800]);
             response.headers.push(("vary".into(), b"X-Mode".to_vec()));
-            cache.insert_raw_subresource(key.clone(), response, u64::MAX, &request.request_headers);
+            cache.insert_raw_subresource(
+                key.clone(),
+                response,
+                RawSubresourceCacheLifetime::Http(u64::MAX),
+                &request.request_headers,
+                None,
+            );
             let diagnostics = cache.diagnostics();
             assert!(diagnostics.retained_bytes <= 5000);
             if index < 2 {

@@ -2557,7 +2557,7 @@ impl ScriptVm {
                 resource_timing_initiator_type,
                 render_blocking,
                 import_options,
-                consumed_preload_error,
+                skip_resource_timing,
                 document_owner,
                 stylesheet_fetch,
                 blocking_operation: _,
@@ -2586,7 +2586,7 @@ impl ScriptVm {
             } else {
                 !source_owners.is_empty()
             };
-            if !consumed_preload_error {
+            if !skip_resource_timing {
                 let has_connected_link_timing = resource_timing.is_some();
                 let mut entry = resource_timing.map(|entry| *entry).unwrap_or_else(|| {
                     crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(

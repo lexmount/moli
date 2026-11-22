@@ -264,7 +264,8 @@ impl DocumentResourceLoader {
             .with_script_request_origin(moli_url::WebOrigin::from_ascii_serialization(
                 context.origin(),
             ))
-            .with_document_preloads(preloads.clone());
+            .with_document_preloads(preloads.clone())
+            .with_new_stylesheet_cache_scope();
         let creation_url = Arc::new(context.document_url().clone());
         let client_security_policy = Arc::new(RwLock::new(SubresourcePolicyContext::default()));
         let authority = Arc::new(DocumentResourceLoaderAuthority {

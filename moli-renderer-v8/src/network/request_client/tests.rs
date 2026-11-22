@@ -405,6 +405,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
         request,
         cache_key,
         inner,
+        None,
         Some(body_eof_tx),
     );
 

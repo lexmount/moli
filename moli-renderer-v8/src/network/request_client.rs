@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    sync::{Arc, mpsc},
+    sync::{Arc, Weak, mpsc},
     thread,
     time::Instant,
 };
@@ -29,7 +29,7 @@ use super::{
         BrowserResourceRuntimeOwnerRoot, RawSubresourceCacheKey, RawSubresourceCacheLookup,
         ScriptResponseStartCallback, ScriptTextCacheKey, ScriptTextCacheLookup,
         SharedMemoryResourceCacheDiagnostics, SharedScriptTextLoad,
-        raw_subresource_memory_cache_expiry, raw_subresource_memory_cache_key,
+        raw_subresource_memory_cache_key, raw_subresource_memory_cache_lifetime,
         script_text_cache_key, script_text_request_is_memory_cacheable,
     },
     loads,
@@ -71,6 +71,7 @@ struct DocumentRequestContext {
     navigation_timing_seed: Option<super::navigation::NavigationTiming>,
     previous_document_unload_seed: Option<super::context::DocumentUnloadTiming>,
     preloads: super::preloads::DocumentPreloads,
+    stylesheet_cache_scope: Option<Arc<()>>,
     response_links: Option<super::context::DocumentResponseLinkObserver>,
     client_security_policy: ClientSecurityPolicy,
 }
@@ -286,6 +287,11 @@ impl ResourceRequestClient {
         preloads: super::preloads::DocumentPreloads,
     ) -> Self {
         self.document_request_context_mut().preloads = preloads;
+        self
+    }
+
+    pub(crate) fn with_new_stylesheet_cache_scope(mut self) -> Self {
+        self.document_request_context_mut().stylesheet_cache_scope = Some(Arc::new(()));
         self
     }
 
@@ -681,6 +687,21 @@ impl ResourceRequestClient {
     ) -> Result<Response> {
         let request = self.apply_network_policy(request)?;
         self.fetch_text_stream_with_cancel_after_policy(request, cancel_handle)
+            .await
+    }
+
+    pub(crate) async fn fetch_stylesheet_text_stream(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<(Response, bool)> {
+        let request = self.apply_network_policy(request)?;
+        let document = self
+            .document_requests
+            .as_ref()
+            .and_then(|context| context.stylesheet_cache_scope.as_ref())
+            .map(Arc::downgrade);
+        self.fetch_text_stream_with_stylesheet_scope(request, cancel_handle, document)
             .await
     }
 
@@ -1272,6 +1293,17 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<Response> {
+        self.fetch_text_stream_with_stylesheet_scope(request, cancel_handle, None)
+            .await
+            .map(|(response, _)| response)
+    }
+
+    async fn fetch_text_stream_with_stylesheet_scope(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+        stylesheet_document: Option<Weak<()>>,
+    ) -> Result<(Response, bool)> {
         if request.auth_requires_buffered_transport()
             || (!request.transport_follows_redirects()
                 && request.redirect_mode() != moli_fetch::RequestRedirectMode::Error)
@@ -1288,13 +1320,14 @@ impl ResourceRequestClient {
                 .fetch_with_cancel(request.clone(), cancel_handle)
                 .await?;
             self.observe_buffered_text_response_links(&request, &response);
-            return Ok(response);
+            return Ok((response, false));
         }
 
-        let response = self
-            .fetch_raw_stream_with_cancel_after_policy(request, cancel_handle)
+        let (observed, reused_stylesheet) = self
+            .fetch_raw_stream_after_policy(request, cancel_handle, false, stylesheet_document)
             .await?;
-        collect_streaming_raw_response_as_text(response).await
+        let response = collect_streaming_raw_response_as_text(observed.into_response()).await?;
+        Ok((response, reused_stylesheet))
     }
 
     fn fetch_text_callback_with_cancel_after_policy<F>(
@@ -1353,9 +1386,9 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<StreamingRawResponse> {
-        self.fetch_raw_stream_after_policy(request, cancel_handle, false)
+        self.fetch_raw_stream_after_policy(request, cancel_handle, false, None)
             .await
-            .map(NetworkFetchResult::into_response)
+            .map(|(observed, _)| observed.into_response())
     }
 
     async fn fetch_raw_stream_with_cancel_after_policy_and_network_metadata(
@@ -1363,8 +1396,9 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
-        self.fetch_raw_stream_after_policy(request, cancel_handle, true)
+        self.fetch_raw_stream_after_policy(request, cancel_handle, true, None)
             .await
+            .map(|(observed, _)| observed)
     }
 
     async fn fetch_raw_stream_after_policy(
@@ -1372,10 +1406,13 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
         observe_network: bool,
-    ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
+        stylesheet_document: Option<Weak<()>>,
+    ) -> Result<(NetworkFetchResult<StreamingRawResponse>, bool)> {
         if let Some(response) = local_text_response(&request) {
-            return Ok(NetworkFetchResult::without_request_observation(
-                streaming_raw_response_from_local_response(response?)?,
+            let response = streaming_raw_response_from_local_response(response?)?;
+            return Ok((
+                NetworkFetchResult::without_request_observation(response),
+                false,
             ));
         }
 
@@ -1393,22 +1430,31 @@ impl ResourceRequestClient {
             self.resource_runtime
                 .memory_cache()
                 .lock()
-                .lookup_raw_subresource(cache_key, &request, &cache_request_headers)
+                .lookup_raw_subresource(
+                    cache_key,
+                    &request,
+                    &cache_request_headers,
+                    stylesheet_document.as_ref(),
+                )
         });
         let mut network_request = request.clone();
         let cached = match lookup {
             Some(RawSubresourceCacheLookup::Local {
                 response: cached,
                 expires_at_unix_ms,
+                reused_stylesheet_in_document,
             }) => {
-                self.resource_runtime.client().observe_cached_response(
-                    &request,
-                    &cached,
-                    expires_at_unix_ms,
-                );
+                if let Some(expires_at) = expires_at_unix_ms {
+                    self.resource_runtime
+                        .client()
+                        .observe_cached_response(&request, &cached, expires_at);
+                }
                 let response = streaming_raw_response_from_cached_subresource(*cached)?;
                 response.share_response_progress(&cancel_handle);
-                return Ok(NetworkFetchResult::without_request_observation(response));
+                return Ok((
+                    NetworkFetchResult::without_request_observation(response),
+                    reused_stylesheet_in_document,
+                ));
             }
             Some(RawSubresourceCacheLookup::Revalidate(cached)) => {
                 let validators = validation_headers_from_headers(&cached.headers);
@@ -1447,9 +1493,9 @@ impl ResourceRequestClient {
         if cache_only && response.status == 504 {
             // The transport checked its disk cache before producing this
             // local miss. It must not evict any retained memory variant.
-            return Ok(NetworkFetchResult::with_observation_journal(
-                response,
-                observation_journal,
+            return Ok((
+                NetworkFetchResult::with_observation_journal(response, observation_journal),
+                false,
             ));
         }
         if response.status == 304
@@ -1474,12 +1520,22 @@ impl ResourceRequestClient {
             let merged = RawResponse::from_head_and_body(head.clone(), cached.clone_body_bytes())
                 .with_body_sizes(cached.body_sizes());
             if let Some(cache_key) = cache_key
-                && let Some(expires_at) = raw_subresource_memory_cache_expiry(&request, &merged)
+                && let Some(lifetime) = raw_subresource_memory_cache_lifetime(
+                    &request,
+                    &merged,
+                    stylesheet_document.is_some(),
+                )
             {
                 self.resource_runtime
                     .memory_cache()
                     .lock()
-                    .insert_raw_subresource(cache_key, merged, expires_at, &cache_request_headers);
+                    .insert_raw_subresource(
+                        cache_key,
+                        merged,
+                        lifetime,
+                        &cache_request_headers,
+                        stylesheet_document,
+                    );
             }
             let completed = streaming_raw_response_from_head_and_body(
                 head,
@@ -1489,9 +1545,9 @@ impl ResourceRequestClient {
             .with_network_request_extra_info(response.network_request_extra_info().cloned());
             response.share_response_progress(&completed.cancellation_handle());
             let completed = self.observe_streaming_response_links(&request, completed);
-            return Ok(NetworkFetchResult::with_observation_journal(
-                completed,
-                observation_journal,
+            return Ok((
+                NetworkFetchResult::with_observation_journal(completed, observation_journal),
+                false,
             ));
         }
         let response = self.observe_streaming_response_links(&request, response);
@@ -1500,13 +1556,18 @@ impl ResourceRequestClient {
         // miss. In particular, standalone navigation keeps its streaming owner.
         let cache_key = cache_key.filter(|key| key.allows_response_store(&request));
         let response = if let Some(cache_key) = cache_key {
-            self.tee_raw_subresource_response_for_memory_cache(request, cache_key, response)
+            self.tee_raw_subresource_response_for_memory_cache(
+                request,
+                cache_key,
+                response,
+                stylesheet_document,
+            )
         } else {
             response
         };
-        Ok(NetworkFetchResult::with_observation_journal(
-            response,
-            observation_journal,
+        Ok((
+            NetworkFetchResult::with_observation_journal(response, observation_journal),
+            false,
         ))
     }
 
@@ -1525,9 +1586,14 @@ impl ResourceRequestClient {
         request: Request,
         cache_key: RawSubresourceCacheKey,
         response: StreamingRawResponse,
+        stylesheet_document: Option<Weak<()>>,
     ) -> StreamingRawResponse {
         self.tee_raw_subresource_response_for_memory_cache_with_body_eof_observer(
-            request, cache_key, response, None,
+            request,
+            cache_key,
+            response,
+            stylesheet_document,
+            None,
         )
     }
 
@@ -1536,6 +1602,7 @@ impl ResourceRequestClient {
         request: Request,
         cache_key: RawSubresourceCacheKey,
         mut response: StreamingRawResponse,
+        stylesheet_document: Option<Weak<()>>,
         mut body_eof_observer: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> StreamingRawResponse {
         let head = response.head();
@@ -1591,17 +1658,26 @@ impl ResourceRequestClient {
                     materialized.redirected = false;
                     materialized.redirect_chain.clear();
                 }
-                let expires_at = raw_subresource_memory_cache_expiry(&request, &materialized);
+                let lifetime = raw_subresource_memory_cache_lifetime(
+                    &request,
+                    &materialized,
+                    stylesheet_document.is_some(),
+                );
                 let mut cache = resource_runtime.memory_cache().lock();
-                if let Some(expires_at) = expires_at {
+                if let Some(lifetime) = lifetime {
                     cache.insert_raw_subresource(
                         cache_key,
                         materialized,
-                        expires_at,
+                        lifetime,
                         &cache_request_headers,
+                        stylesheet_document,
                     );
                 } else {
-                    cache.remove_raw_subresource(&cache_key, &cache_request_headers);
+                    cache.remove_raw_subresource(
+                        &cache_key,
+                        &cache_request_headers,
+                        stylesheet_document.as_ref(),
+                    );
                 }
             }
 

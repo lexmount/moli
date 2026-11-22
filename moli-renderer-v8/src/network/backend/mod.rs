@@ -24,6 +24,6 @@ pub(crate) use runtime::{BrowserResourceRuntimeBinding, BrowserResourceRuntimeOw
 pub(in crate::network) use memory_cache::{
     RawSubresourceCacheKey, RawSubresourceCacheLookup, ScriptResponseStartCallback,
     ScriptTextCacheKey, ScriptTextCacheLookup, SharedScriptTextLoad,
-    raw_subresource_memory_cache_expiry, raw_subresource_memory_cache_key, script_text_cache_key,
+    raw_subresource_memory_cache_key, raw_subresource_memory_cache_lifetime, script_text_cache_key,
     script_text_request_is_memory_cacheable,
 };

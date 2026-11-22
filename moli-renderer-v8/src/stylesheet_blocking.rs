@@ -403,7 +403,7 @@ pub(crate) fn stylesheet_resource_timing(
     initiator_type: &'static str,
     initiator_url: Option<&str>,
 ) -> Option<crate::context_bootstrap::ResourcePerformanceEntry> {
-    if terminal.is_consumed_preload_error() {
+    if !terminal.records_resource_timing() {
         return None;
     }
     let fetch = terminal.timing()?;
@@ -651,9 +651,23 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
         };
         return terminal.with_observed_network();
     }
-    match loader.fetch_text_stream_with_cancel(request, cancel).await {
-        Ok(response) => {
+    // The scanner uses the preload map to start parser-discovered imports.
+    // They belong to the Document's stylesheet loads. Author preloads and
+    // requests with integrity metadata keep independent Fetch timing.
+    let reuse_in_document = options.integrity().is_none()
+        && (!link_preload || request_initiator_type == SubresourceRequestInitiatorType::Css);
+    let fetched = if reuse_in_document {
+        loader.fetch_stylesheet_text_stream(request, cancel).await
+    } else {
+        loader
+            .fetch_text_stream_with_cancel(request, cancel)
+            .await
+            .map(|response| (response, false))
+    };
+    match fetched {
+        Ok((response, reused)) => {
             terminal_from_response(response.into(), StylesheetResponseProvenance::Network)
+                .with_reused_stylesheet_in_document(reused)
         }
         Err(error) => StylesheetFetchTerminal::network_error(format!(
             "failed to fetch stylesheet `{url}`: {error}"

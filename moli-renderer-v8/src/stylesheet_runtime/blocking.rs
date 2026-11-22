@@ -491,7 +491,7 @@ impl DocumentRuntime {
                     render_blocking: result.render_blocking,
                     resource_timing_initiator_type: initiator_type,
                     import_options: None,
-                    consumed_preload_error: result.terminal.is_consumed_preload_error(),
+                    skip_resource_timing: !result.terminal.records_resource_timing(),
                     document_owner,
                     stylesheet_fetch: result.fetch,
                     blocking_operation: result.blocking_operation,
