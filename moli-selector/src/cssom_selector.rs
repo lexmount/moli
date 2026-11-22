@@ -1,4 +1,5 @@
 use cssparser::{ParseError, Parser, Token, parse_nth, serialize_identifier, serialize_string};
+use icu_properties::{CodePointMapData, props::BidiClass};
 
 use moli_css_parse::serialize_component_values_single_line;
 
@@ -22,24 +23,12 @@ impl CssDirection {
 }
 
 pub fn first_strong_text_direction(value: &str) -> Option<CssDirection> {
-    value.chars().find_map(strong_char_direction)
-}
-
-fn strong_char_direction(ch: char) -> Option<CssDirection> {
-    if is_rtl_strong_char(ch) {
-        Some(CssDirection::Rtl)
-    } else if ch.is_alphabetic() {
-        Some(CssDirection::Ltr)
-    } else {
-        None
-    }
-}
-
-fn is_rtl_strong_char(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x0590..=0x08ff | 0xfb1d..=0xfdff | 0xfe70..=0xfefc | 0x10800..=0x10fff
-    )
+    let bidi_classes = CodePointMapData::<BidiClass>::new();
+    value.chars().find_map(|ch| match bidi_classes.get(ch) {
+        BidiClass::LeftToRight => Some(CssDirection::Ltr),
+        BidiClass::RightToLeft | BidiClass::ArabicLetter => Some(CssDirection::Rtl),
+        _ => None,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -892,6 +881,21 @@ fn consume_component_values<'i>(input: &mut Parser<'i>) -> Result<(), cssparser:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_strong_text_direction_uses_unicode_bidi_classes() {
+        for (text, expected) in [
+            ("١٢٣ abc", Some(CssDirection::Ltr)),
+            ("،abc", Some(CssDirection::Ltr)),
+            ("\u{05b0}abc", Some(CssDirection::Ltr)),
+            ("תabc", Some(CssDirection::Rtl)),
+            ("عabc", Some(CssDirection::Rtl)),
+            ("\u{200e}ת", Some(CssDirection::Ltr)),
+            ("١٢٣،\u{05b0}", None),
+        ] {
+            assert_eq!(first_strong_text_direction(text), expected, "{text:?}");
+        }
+    }
 
     #[test]
     fn parses_simple_attribute_selectors_with_cssparser_tokens() {

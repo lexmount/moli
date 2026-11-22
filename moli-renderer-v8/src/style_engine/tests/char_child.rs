@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn auto_direction_list_items_use_first_strong_bidi_class_in_computed_style() {
+    let mut host = test_host();
+    let list = host.create_element("ul");
+    assert!(host.append_child(host.document_handle(), list));
+    let cases = [("١٢٣ abc", "ltr"), ("،abc", "ltr"), ("תabc", "rtl")].map(|(text, expected)| {
+        let item = host.create_element("li");
+        let content = host.create_text_node(text);
+        assert!(host.set_attribute(item, "dir", "auto"));
+        assert!(host.append_child(item, content));
+        assert!(host.append_child(list, item));
+        (item, text, expected)
+    });
+
+    let engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let inputs = FullStyleWorldSnapshot::default();
+    for (item, text, expected) in cases {
+        let direction = engine.computed_style_property_value(
+            &host,
+            &document_url,
+            item,
+            "direction",
+            None,
+            &inputs,
+            None,
+        );
+        assert_eq!(direction.as_deref(), Some(expected), "{text:?}");
+    }
+}
+
+#[test]
 fn character_data_without_structural_selector_preserves_cache_entries() {
     let mut host = test_host();
     let document = host.document_handle();
