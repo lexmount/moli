@@ -2351,41 +2351,13 @@ async fn fetch_connected_link_readiness_with_request(
     options: &ConnectedLinkReadinessFetchOptions,
     request: moli_fetch::Request,
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
-    let cors_preload =
-        options.link_preload && options.request_mode == moli_fetch::RequestMode::Cors;
-    let origin = cors_preload
-        .then(|| request.request_origin().cloned())
-        .flatten();
-    let validate = |head: &moli_fetch::ResponseHead| -> anyhow::Result<()> {
-        if let Some(origin) = &origin {
-            crate::network_host::validate_cors_response_chain(
-                origin,
-                head,
-                options.credentials_mode,
-                loader.web_security_disabled(),
-            )
-            .map_err(anyhow::Error::msg)?;
-        }
-        Ok(())
-    };
-    let response = async {
-        if options.resource_type == SubresourceResourceType::Script {
-            let response = loader.fetch_cacheable_script_text_stream(request).await?;
-            validate(&response.head())?;
-            return Ok(response);
-        }
-        if cors_preload {
-            let response = loader
-                .fetch_raw_stream_with_cancel(request, moli_fetch::FetchCancelHandle::new())
-                .await?;
-            // The transport validates redirects. Check the final response
-            // before the caller publishes a successful preload.
-            validate(&response.head())?;
-            return response.into_lossy_materialized_text_response().await;
-        }
+    let response = if options.link_preload {
+        loader.fetch_browser_resource_text(request).await
+    } else if options.resource_type == SubresourceResourceType::Script {
+        loader.fetch_cacheable_script_text_stream(request).await
+    } else {
         loader.fetch_text_stream(request).await
-    }
-    .await;
+    };
     response
         .map(crate::protocol_types::NavigationResponse::from)
         .map_err(|error| format!("failed to fetch preload-like link `{url}`: {error}"))

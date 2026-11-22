@@ -11,8 +11,9 @@ use moli_cookie_jar::{
 };
 use moli_disk_pool::DiskPool;
 use moli_fetch::{
-    FetchCancelHandle, FetchConfig, NetworkFetchResult, RawResponse, Request, Response,
-    ResponseHead, StreamingRawResponse,
+    BrowserRequestMetadata, FetchCancelHandle, FetchConfig, NetworkFetchResult, RawResponse,
+    Request, RequestMode, Response, ResponseHead, StreamingRawResponse,
+    validate_cors_response_chain,
 };
 use moli_parkable_image::ParkableImageManager;
 
@@ -268,6 +269,43 @@ impl ResourceRequestClient {
     pub async fn fetch_text_stream(&self, request: Request) -> Result<Response> {
         self.fetch_text_stream_with_cancel(request, FetchCancelHandle::new())
             .await
+    }
+
+    /// Fetches a browser resource for a consumer that requires a CORS-accepted
+    /// response. Checks streaming responses before collecting the body and
+    /// checks shared script responses for every consumer, including cache hits.
+    pub(crate) async fn fetch_browser_resource_text(&self, request: Request) -> Result<Response> {
+        let origin = request.browser_origin()?;
+        let cors_origin = (request.request_mode == RequestMode::Cors
+            && !self.web_security_disabled())
+        .then(|| origin.clone());
+        let credentials_mode = request.credentials_mode;
+        let use_script_cache =
+            request.browser_request_metadata() == Some(BrowserRequestMetadata::Script);
+
+        if !use_script_cache
+            && let Some(origin) = &cors_origin
+            && request.transport_follows_redirects()
+            && !request.auth_requires_buffered_transport()
+        {
+            let response = self
+                .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+                .await?;
+            validate_cors_response_chain(origin, &response.head(), credentials_mode, false)
+                .map_err(anyhow::Error::msg)?;
+            return collect_streaming_raw_response_as_text(response).await;
+        }
+
+        let response = if use_script_cache {
+            self.fetch_cacheable_script_text_stream(request).await?
+        } else {
+            self.fetch_text_stream(request).await?
+        };
+        if let Some(origin) = &cors_origin {
+            validate_cors_response_chain(origin, &response.head(), credentials_mode, false)
+                .map_err(anyhow::Error::msg)?;
+        }
+        Ok(response)
     }
 
     pub async fn fetch_text_stream_with_cancel(

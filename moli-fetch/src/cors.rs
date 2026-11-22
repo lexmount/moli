@@ -1,6 +1,44 @@
+use moli_url::WebOrigin;
 use moli_web_mime::response_header_values;
 
-use crate::RequestCredentialsMode;
+use crate::{FetchUrlList, RedirectSource, RequestCredentialsMode, ResponseHead};
+
+/// Validates a network response using the request's origin, credentials and
+/// redirect history. Synthetic redirects affect the origin used by later hops.
+pub fn validate_cors_response_chain(
+    request_origin: impl Into<WebOrigin>,
+    head: &ResponseHead,
+    credentials_mode: RequestCredentialsMode,
+    web_security_disabled: bool,
+) -> Result<(), String> {
+    if web_security_disabled {
+        return Ok(());
+    }
+    let request_origin = request_origin.into();
+    for (index, redirect) in head.redirect_chain.iter().enumerate() {
+        // This response sees the origin established by earlier hops.
+        let urls = FetchUrlList::new(&redirect.from_url, &head.redirect_chain[..index]);
+        if redirect.source == RedirectSource::Network && urls.has_cross_origin_url(&request_origin)
+        {
+            validate_cors_response_for_origin(
+                &urls.serialized_origin(&request_origin),
+                &redirect.headers,
+                credentials_mode,
+            )?;
+        }
+    }
+    let urls = head.url_list();
+    if matches!(head.final_url.scheme(), "http" | "https")
+        && urls.has_cross_origin_url(&request_origin)
+    {
+        validate_cors_response_for_origin(
+            &urls.serialized_origin(&request_origin),
+            &head.headers,
+            credentials_mode,
+        )?;
+    }
+    Ok(())
+}
 
 fn combined_cors_response_header_value(
     headers: &[(String, Vec<u8>)],

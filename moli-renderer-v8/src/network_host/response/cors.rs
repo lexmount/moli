@@ -1,6 +1,9 @@
+pub(crate) use moli_fetch::validate_cors_response_chain;
 use moli_fetch::validate_cors_response_for_origin;
 
-use moli_fetch::{RedirectSource, RequestCredentialsMode, RequestMode};
+#[cfg(test)]
+use moli_fetch::RedirectSource;
+use moli_fetch::{RequestCredentialsMode, RequestMode};
 use moli_url::WebOrigin;
 use moli_web_mime::{
     response_header_values, should_opaque_response_be_blocked_by_orb,
@@ -35,47 +38,6 @@ impl FetchResponseSecurityViolation {
 
 pub(crate) fn is_cors_policy_failure_message(message: &str) -> bool {
     message.contains("CORS check failed:") || message.contains("CORS preflight failed:")
-}
-
-/// Validates an already fetched network response and its network redirects.
-/// Service worker and browser-generated redirects still contribute to taint,
-/// but their synthetic response headers are not subject to the CORS check.
-/// Once CORS-tainted, a redirect across origins changes the request origin to
-/// null, even when the final URL returns to the initiating document's origin.
-pub(crate) fn validate_cors_response_chain(
-    request_origin: impl Into<WebOrigin>,
-    head: &moli_fetch::ResponseHead,
-    credentials_mode: RequestCredentialsMode,
-    web_security_disabled: bool,
-) -> Result<(), String> {
-    if web_security_disabled {
-        return Ok(());
-    }
-    let request_origin = request_origin.into();
-    for (index, redirect) in head.redirect_chain.iter().enumerate() {
-        // This response precedes the redirect: only earlier hops contribute to
-        // the Origin that was sent for it.
-        let urls = moli_fetch::FetchUrlList::new(&redirect.from_url, &head.redirect_chain[..index]);
-        if redirect.source == RedirectSource::Network && urls.has_cross_origin_url(&request_origin)
-        {
-            validate_cors_response_for_origin(
-                &urls.serialized_origin(&request_origin),
-                &redirect.headers,
-                credentials_mode,
-            )?;
-        }
-    }
-    let urls = head.url_list();
-    if matches!(head.final_url.scheme(), "http" | "https")
-        && urls.has_cross_origin_url(&request_origin)
-    {
-        validate_cors_response_for_origin(
-            &urls.serialized_origin(&request_origin),
-            &head.headers,
-            credentials_mode,
-        )?;
-    }
-    Ok(())
 }
 
 pub(crate) fn validate_fetch_response_security_policy(

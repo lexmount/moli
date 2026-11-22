@@ -43,7 +43,7 @@ pub use blocking::{
 pub use cancellation::{FetchCancelHandle, FetchResponseTiming};
 pub use client::{FetchClient, FetchClientHandle};
 pub use config::FetchConfig;
-pub use cors::validate_cors_response_for_origin;
+pub use cors::{validate_cors_response_chain, validate_cors_response_for_origin};
 pub use cross_origin_resource_policy::CrossOriginResourcePolicy;
 pub use error::{
     FetchCacheMiss, FetchCancelled, NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success,
