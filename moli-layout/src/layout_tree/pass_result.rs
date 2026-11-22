@@ -9,12 +9,21 @@ use super::{
     tree::{FrozenLayoutTree, LayoutTreeRetentionMetrics},
 };
 
+/// The output use of one computed CSS image. Capture consumers decide
+/// whether that use participates in the requested output before preparing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LayoutCssImagePurpose {
+    Background,
+    Mask,
+}
+
 /// One direct computed CSS image URL observed while constructing a box.
 ///
 /// The source node keeps the owning `Document` recoverable at the renderer
 /// boundary without teaching this crate about browsing contexts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutCssImageReference<N> {
+    pub purpose: LayoutCssImagePurpose,
     pub source: N,
     pub resolved_url: String,
 }
