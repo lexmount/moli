@@ -877,13 +877,12 @@ where
         parent: LayoutBoxId,
         children: Vec<LayoutBoxId>,
     ) -> Result<(), LayoutError> {
-        let Some(parent_box) = self.box_by_id_mut(parent) else {
+        if self.box_by_id(parent).is_none() {
             return Err(LayoutError::InvalidBoxReference {
                 index: parent.index(),
             });
-        };
-        parent_box.children = children.clone();
-        for child in children {
+        }
+        for &child in &children {
             let Some(child_box) = self.box_by_id_mut(child) else {
                 return Err(LayoutError::InvalidBoxReference {
                     index: child.index(),
@@ -895,6 +894,7 @@ where
             child_box.structural_parent.get_or_insert(parent);
             child_box.parent = Some(parent);
         }
+        self.boxes[parent.index()].children = children;
         Ok(())
     }
 
