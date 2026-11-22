@@ -511,7 +511,7 @@ where
     let mut tracks = vec![TableColumnConstraint::auto(); structure.column_count];
     for column in &structure.columns {
         let authored = world.boxes[column.id.index()].style.taffy.size.width;
-        tracks[column.start..column.start + column.span].fill(dimension_track(authored));
+        tracks[column.tracks()].fill(dimension_track(authored));
     }
     tracks
 }
@@ -1187,60 +1187,28 @@ fn apply_structural_layout<N>(
             bounds.end - bounds.start,
         );
     }
-    for column in &context.structure.columns {
-        let bounds = track_range_bounds(
-            &detailed.columns.positions,
-            column.start,
-            column.start.saturating_add(column.span),
-        )
-        .unwrap_or(Line {
-            start: origin.x,
-            end: origin.x,
-        });
+    let columns = context
+        .structure
+        .columns
+        .iter()
+        // A span-only colgroup also contributes a width; project it through
+        // the group range along with colgroups containing explicit columns.
+        .filter(|column| column.group != Some(column.id))
+        .map(|column| (column.id, column.tracks()));
+    for (part, tracks) in columns.chain(context.structure.column_groups()) {
+        let bounds = track_range_bounds(&detailed.columns.positions, tracks.start, tracks.end)
+            .unwrap_or(Line {
+                start: origin.x,
+                end: origin.x,
+            });
         set_table_part_layout(
             world,
-            column.id,
+            part,
             bounds.start,
             content_top,
             bounds.end - bounds.start,
             content_height,
         );
-    }
-    let mut column_groups = context
-        .structure
-        .columns
-        .iter()
-        .filter_map(|column| column.group)
-        .collect::<Vec<_>>();
-    column_groups.sort_by_key(|id| id.index());
-    column_groups.dedup();
-    for group in column_groups {
-        let grouped = context
-            .structure
-            .columns
-            .iter()
-            .filter(|column| column.group == Some(group));
-        let mut start = usize::MAX;
-        let mut end = 0usize;
-        for column in grouped {
-            start = start.min(column.start);
-            end = end.max(column.start.saturating_add(column.span));
-        }
-        if start != usize::MAX {
-            let bounds =
-                track_range_bounds(&detailed.columns.positions, start, end).unwrap_or(Line {
-                    start: origin.x,
-                    end: origin.x,
-                });
-            set_table_part_layout(
-                world,
-                group,
-                bounds.start,
-                content_top,
-                bounds.end - bounds.start,
-                content_height,
-            );
-        }
     }
 }
 
