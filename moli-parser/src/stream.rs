@@ -489,6 +489,15 @@ impl HtmlTreeSinkStream {
         Self::from_session(session)
     }
 
+    pub(super) fn install_fragment_sanitizer(
+        &mut self,
+        config: Box<crate::HtmlSanitizer>,
+        inert_document: NativeNodeId,
+    ) {
+        self.parser
+            .install_fragment_sanitizer(config, inert_document);
+    }
+
     fn parser_script_position(&self, node_id: NativeNodeId) -> usize {
         *self
             .parser_script_positions
@@ -1119,6 +1128,14 @@ mod tests {
     }
 
     impl crate::ParserDomMutationConsumer for TestMutationEffectCollector<'_> {
+        fn parser_template_contents_owner_document(
+            &mut self,
+            document: NativeNodeId,
+        ) -> NativeNodeId {
+            // SAFETY: the test keeps the DomHost alive for this parser pump step.
+            unsafe { &mut *self.host }.parser_template_contents_owner_document(document)
+        }
+
         fn apply_parser_dom_mutation(&mut self, mutation: crate::ParserDomMutation) {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
             let effects = mutation.apply_to_dom_host(unsafe { &mut *self.host });

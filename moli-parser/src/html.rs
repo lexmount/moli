@@ -52,6 +52,7 @@ pub struct HtmlParser {
 pub struct HtmlFragmentContext {
     element: Option<NativeNodeId>,
     name: QualName,
+    sanitizer: Option<Box<crate::HtmlSanitizer>>,
 }
 
 impl HtmlFragmentContext {
@@ -63,7 +64,14 @@ impl HtmlFragmentContext {
                 Namespace::from(namespace),
                 LocalName::from(local_name),
             ),
+            sanitizer: None,
         }
+    }
+
+    /// Apply a validated configuration when parsing this inert fragment.
+    pub fn with_sanitizer(mut self, sanitizer: crate::HtmlSanitizer) -> Self {
+        self.sanitizer = Some(Box::new(sanitizer));
+        self
     }
 
     pub(super) fn into_parse_handle(self) -> ParseHandle {
@@ -655,7 +663,7 @@ impl HtmlParser {
         final_url: Url,
         fragment_handle: NativeNodeId,
         owner_document_handle: NativeNodeId,
-        context: HtmlFragmentContext,
+        mut context: HtmlFragmentContext,
         html: &str,
         consumer: &mut T,
         allow_declarative_shadow_roots: bool,
@@ -663,6 +671,10 @@ impl HtmlParser {
     where
         T: ParserDomReadConsumer + ParserDomMutationConsumer + ParserMutationEffectConsumer,
     {
+        let sanitizer = context.sanitizer.take().map(|config| {
+            let document = consumer.parser_template_contents_owner_document(owner_document_handle);
+            (config, document)
+        });
         // TreeBuilder::new_for_fragment creates its synthetic root eagerly, so
         // construction itself must run under the same scoped runtime sinks as
         // every later feed/finish operation.
@@ -670,7 +682,7 @@ impl HtmlParser {
             // SAFETY: `consumer` remains exclusively borrowed until the
             // constructor clears the sink bundle before returning.
             unsafe { ParserRuntimeDomSinks::from_consumer_without_element_creation(consumer) };
-        let stream = DocumentStream::new_live_fragment_root(
+        let mut stream = DocumentStream::new_live_fragment_root(
             final_url,
             fragment_handle,
             owner_document_handle,
@@ -679,6 +691,12 @@ impl HtmlParser {
             allow_declarative_shadow_roots,
             self.scripting_enabled,
         );
+        if let Some((config, inert_document)) = sanitizer {
+            // The temporary wrapper is not part of the input being sanitized.
+            stream
+                .inner
+                .install_fragment_sanitizer(config, inert_document);
+        }
         for chunk in html_chunks(html) {
             stream.feed_with_runtime_dom_consumer_without_element_creation(chunk, consumer);
         }
@@ -1731,6 +1749,16 @@ impl DocumentSink {
             .enter_runtime_dom_sinks_parse_step(sinks);
     }
 
+    pub(super) fn install_fragment_sanitizer(
+        &self,
+        config: Box<crate::HtmlSanitizer>,
+        inert_document: NativeNodeId,
+    ) {
+        self.target
+            .borrow_mut()
+            .install_fragment_sanitizer(config, inert_document);
+    }
+
     pub(super) fn clear_runtime_dom_sinks_after_parse_step(&self) {
         // A failed pump must not replay uncommitted writes using a later
         // owner's scoped callbacks. Successful pumps flush before returning.
@@ -1868,10 +1896,41 @@ impl DocumentSink {
 }
 
 impl DocumentSink {
+    fn parser_node_parent(&self, node: &ParseHandle) -> Option<ParseHandle> {
+        self.target.borrow().current_parent(node.dom_node_id()?)
+    }
+
+    pub(super) fn sanitization() -> html5ever::tree_builder::Sanitization<ParseHandle, Self> {
+        html5ever::tree_builder::Sanitization {
+            element_action: |sink, element| {
+                sink.target.borrow().sanitizer_action(element.node_id())
+            },
+            allows_attribute: |sink, element, attr| {
+                sink.target
+                    .borrow()
+                    .sanitizer_allows_attribute(element, attr)
+            },
+            parent_node: Self::parser_node_parent,
+            has_redirect: |sink, element| {
+                sink.target
+                    .borrow()
+                    .has_sanitizer_redirect(element.node_id())
+            },
+            redirect: |sink, element, parent, reference| {
+                sink.flush_pending_text();
+                sink.target.borrow_mut().redirect_sanitized_insertions(
+                    element.node_id(),
+                    parent.node_id(),
+                    reference.map(ParseHandle::node_id),
+                );
+            },
+        }
+    }
+
     pub(super) fn content_patching() -> html5ever::tree_builder::ContentPatching<ParseHandle, Self>
     {
         html5ever::tree_builder::ContentPatching {
-            parent_node: |sink, node| sink.target.borrow().current_parent(node.dom_node_id()?),
+            parent_node: Self::parser_node_parent,
             prepare: Self::prepare_content_patch,
             insertion_location: |sink, template| {
                 sink.target
@@ -2116,11 +2175,13 @@ impl TreeSink for DocumentSink {
         attached
     }
 
-    fn add_attrs_if_missing(&self, target: &Self::Handle, attrs: Vec<Attribute>) {
+    fn add_attrs_if_missing(&self, target: &Self::Handle, mut attrs: Vec<Attribute>) {
         if let Some(target_id) = target.dom_node_id() {
-            self.target
-                .borrow_mut()
-                .add_attrs_if_missing(target_id, attrs);
+            let mut sink = self.target.borrow_mut();
+            if let Some(name) = target.element_name.as_deref() {
+                sink.filter_sanitized_attributes(name, &mut attrs);
+            }
+            sink.add_attrs_if_missing(target_id, attrs);
         }
     }
 

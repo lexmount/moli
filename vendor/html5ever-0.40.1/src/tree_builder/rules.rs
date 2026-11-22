@@ -258,7 +258,7 @@ where
 
                     Token::Tag(tag!(</body> | </html> | </br>)) => anything_else(token),
 
-                    Token::Tag(tag @ tag!(<template>)) => {
+                    Token::Tag(mut tag @ tag!(<template>)) => {
                         self.active_formatting
                             .borrow_mut()
                             .push(FormatEntry::Marker);
@@ -268,6 +268,7 @@ where
                             .borrow_mut()
                             .push(InsertionMode::InTemplate);
 
+                        self.filter_template_attributes(&mut tag);
                         if (self.should_attach_declarative_shadow(&tag)) {
                             // Attach shadow path
 
@@ -291,6 +292,8 @@ where
                                 self.pop();
                                 self.insert_element_for(tag);
                             }
+                        } else if self.sanitization.is_some() && Self::template_has_shadow_root_mode(&tag) {
+                            self.insert_element_for(tag);
                         } else {
                             self.insert_template_with_optional_patch(tag);
                         }

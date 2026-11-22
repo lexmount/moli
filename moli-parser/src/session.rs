@@ -453,6 +453,19 @@ impl HtmlParserSession {
         self.tokenizer.sink.sink()
     }
 
+    pub(super) fn install_fragment_sanitizer(
+        &mut self,
+        config: Box<crate::HtmlSanitizer>,
+        inert_document: NativeNodeId,
+    ) {
+        self.tokenizer
+            .sink
+            .inner
+            .set_sanitization(DocumentSink::sanitization());
+        self.sink()
+            .install_fragment_sanitizer(config, inert_document);
+    }
+
     pub(super) fn finish(self) -> ParserStreamHtmlTreeSinkTarget {
         let Self { tokenizer, input } = self;
         let input_buffer = input.into_inner().into_buffer();

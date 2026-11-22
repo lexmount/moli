@@ -1,10 +1,10 @@
-use std::{ptr::NonNull, rc::Rc};
+use std::{collections::HashMap, ptr::NonNull, rc::Rc};
 
-use crate::ParserCustomElementRegistryAssociation;
+use crate::{HtmlSanitizer, ParserCustomElementRegistryAssociation};
 
 use html5ever::{
     Attribute, QualName,
-    tree_builder::{ElementFlags, NodeOrText, QuirksMode},
+    tree_builder::{ElementFlags, NodeOrText, QuirksMode, SanitizerAction},
 };
 use url::Url;
 
@@ -609,6 +609,8 @@ impl ParserDomMutation {
 }
 
 pub trait ParserDomMutationConsumer {
+    fn parser_template_contents_owner_document(&mut self, document: NativeNodeId) -> NativeNodeId;
+
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation);
 
     fn create_element_for_document_without_attributes(
@@ -1282,7 +1284,7 @@ impl ParserElementCreationSink {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ParserTextInsertionPoint {
+pub(super) struct ParserInsertionPoint {
     pub(super) parent: NativeNodeId,
     pub(super) reference_child: Option<NativeNodeId>,
 }
@@ -1534,6 +1536,11 @@ impl ParserDomReadConsumer for TestMutationEffectCollector<'_> {
 
 #[cfg(test)]
 impl ParserDomMutationConsumer for TestMutationEffectCollector<'_> {
+    fn parser_template_contents_owner_document(&mut self, document: NativeNodeId) -> NativeNodeId {
+        // SAFETY: the test keeps the DomHost alive for this parser pump step.
+        unsafe { &mut *self.host }.parser_template_contents_owner_document(document)
+    }
+
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation) {
         if self.panic_on_mutation {
             self.panic_on_mutation = false;
@@ -1935,6 +1942,11 @@ impl ParserDomReadConsumer for TestReadTrackingCollector<'_> {
 
 #[cfg(test)]
 impl ParserDomMutationConsumer for TestReadTrackingCollector<'_> {
+    fn parser_template_contents_owner_document(&mut self, document: NativeNodeId) -> NativeNodeId {
+        // SAFETY: the test keeps the DomHost alive for this parser pump step.
+        unsafe { &mut *self.host }.parser_template_contents_owner_document(document)
+    }
+
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation) {
         // SAFETY: tests keep the borrowed DomHost pointer alive and route the
         // parser pump through this collector for the duration of the step.
@@ -2185,6 +2197,7 @@ pub(super) struct ParserStreamHtmlTreeSinkTarget {
     next_template_contents_insertion: Option<NativeNodeId>,
     next_content_patch_insertion_parent: Option<NativeNodeId>,
     active_content_patches: Vec<(NativeNodeId, ActiveContentPatch)>,
+    fragment_sanitizer: Option<FragmentSanitizer>,
     open_template_element_depth: usize,
     pending_open_parser_element: Option<NativeNodeId>,
     open_parser_elements: Vec<OpenParserElement>,
@@ -2192,6 +2205,30 @@ pub(super) struct ParserStreamHtmlTreeSinkTarget {
     allow_declarative_shadow_roots: bool,
     pending_custom_element_registry_associations: Vec<ParserCustomElementRegistryAssociation>,
     state: HtmlTreeSinkState,
+}
+
+struct FragmentSanitizer {
+    config: Box<HtmlSanitizer>,
+    inert_document: NativeNodeId,
+    omitted: HashMap<NativeNodeId, SanitizerAction>,
+    redirects: HashMap<NativeNodeId, ParserInsertionPoint>,
+}
+
+impl FragmentSanitizer {
+    fn new(config: Box<HtmlSanitizer>, inert_document: NativeNodeId) -> Self {
+        Self {
+            config,
+            inert_document,
+            omitted: HashMap::new(),
+            redirects: HashMap::new(),
+        }
+    }
+
+    fn note_action(&mut self, node: NativeNodeId, action: SanitizerAction) {
+        if action != SanitizerAction::Keep {
+            self.omitted.insert(node, action);
+        }
+    }
 }
 
 struct OpenParserElement {
@@ -2254,6 +2291,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_template_contents_insertion: None,
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
+            fragment_sanitizer: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2277,6 +2315,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_template_contents_insertion: None,
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
+            fragment_sanitizer: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2317,6 +2356,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_template_contents_insertion: None,
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
+            fragment_sanitizer: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -2344,6 +2384,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             next_template_contents_insertion: None,
             next_content_patch_insertion_parent: None,
             active_content_patches: Vec::new(),
+            fragment_sanitizer: None,
             open_template_element_depth: 0,
             pending_open_parser_element: None,
             open_parser_elements: Vec::new(),
@@ -3279,26 +3320,32 @@ impl ParserStreamHtmlTreeSinkTarget {
         parent_id: NativeNodeId,
         text: String,
     ) -> ParserMutationEffectDelivery {
-        self.insert_text_node(parent_id, None, text)
+        let point = self.text_insertion_point(parent_id);
+        self.insert_buffered_text(point, text)
     }
 
-    pub(super) fn text_insertion_point(
-        &mut self,
-        parent: NativeNodeId,
-    ) -> ParserTextInsertionPoint {
+    fn adjusted_sanitizer_location(&self, point: ParserInsertionPoint) -> ParserInsertionPoint {
+        self.fragment_sanitizer
+            .as_ref()
+            .and_then(|sanitizer| sanitizer.redirects.get(&point.parent))
+            .copied()
+            .unwrap_or(point)
+    }
+
+    pub(super) fn text_insertion_point(&mut self, parent: NativeNodeId) -> ParserInsertionPoint {
         self.clear_template_insertion_hints();
-        ParserTextInsertionPoint {
+        self.adjusted_sanitizer_location(ParserInsertionPoint {
             parent,
             reference_child: None,
-        }
+        })
     }
 
     pub(super) fn text_insertion_point_before_sibling(
         &mut self,
         sibling: NativeNodeId,
-    ) -> Option<ParserTextInsertionPoint> {
+    ) -> Option<ParserInsertionPoint> {
         self.clear_template_insertion_hints();
-        Some(ParserTextInsertionPoint {
+        Some(ParserInsertionPoint {
             parent: self.read_parent_node(sibling)?,
             reference_child: Some(sibling),
         })
@@ -3308,7 +3355,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         &mut self,
         element: NativeNodeId,
         previous_element: NativeNodeId,
-    ) -> ParserTextInsertionPoint {
+    ) -> ParserInsertionPoint {
         if let Some(point) = self.text_insertion_point_before_sibling(element) {
             point
         } else {
@@ -3318,7 +3365,7 @@ impl ParserStreamHtmlTreeSinkTarget {
 
     pub(super) fn insert_buffered_text(
         &mut self,
-        point: ParserTextInsertionPoint,
+        point: ParserInsertionPoint,
         text: String,
     ) -> ParserMutationEffectDelivery {
         // An embedder callback may have detached the insertion anchor. Do not
@@ -3425,22 +3472,39 @@ impl ParserStreamHtmlTreeSinkTarget {
     pub(super) fn create_element(
         &mut self,
         name: QualName,
-        attrs: Vec<Attribute>,
+        mut attrs: Vec<Attribute>,
         flags: ElementFlags,
         script_nonceable: Option<bool>,
     ) -> ParseHandle {
         let parser_flags = ParserElementFlags::from_html5ever(&flags);
+        self.filter_sanitized_attributes(&name, &mut attrs);
+        let action = self
+            .fragment_sanitizer
+            .as_ref()
+            .map_or(SanitizerAction::Keep, |sanitizer| {
+                sanitizer.config.element_action(&name)
+            });
         let template_contents_insertion = self.take_template_contents_insertion_hint();
         let insertion_is_template_contents =
             self.open_template_element_depth > 0 || template_contents_insertion.is_some();
         let intended_parent = self
             .next_content_patch_insertion_parent
             .take()
-            .or_else(|| self.intended_parent_for_next_parser_element());
-        let document_handle = template_contents_insertion
-            .and_then(|handle| self.read_owner_document(handle))
-            .or_else(|| intended_parent.and_then(|handle| self.read_owner_document(handle)))
-            .unwrap_or_else(|| self.parser_owner_document_node_id());
+            .or_else(|| self.intended_parent_for_next_parser_element())
+            .map(|parent| {
+                self.adjusted_sanitizer_location(ParserInsertionPoint {
+                    parent,
+                    reference_child: None,
+                })
+                .parent
+            });
+        let document_handle = match &self.fragment_sanitizer {
+            Some(sanitizer) if action != SanitizerAction::Keep => sanitizer.inert_document,
+            _ => template_contents_insertion
+                .and_then(|handle| self.read_owner_document(handle))
+                .or_else(|| intended_parent.and_then(|handle| self.read_owner_document(handle)))
+                .unwrap_or_else(|| self.parser_owner_document_node_id()),
+        };
         let element_name = Rc::new(name.clone());
         let local_name = name.local.to_string();
         let namespace = name.ns.to_string();
@@ -3479,7 +3543,8 @@ impl ParserStreamHtmlTreeSinkTarget {
             self.open_template_element_depth = self.open_template_element_depth.saturating_add(1);
         }
 
-        if !insertion_is_template_contents
+        if action == SanitizerAction::Keep
+            && !insertion_is_template_contents
             && let Some(sink) = self
                 .runtime_dom_sinks
                 .as_ref()
@@ -3523,6 +3588,9 @@ impl ParserStreamHtmlTreeSinkTarget {
             prefix,
         );
         self.add_attrs_if_missing_for_parser(node_id, attributes);
+        if let Some(sanitizer) = &mut self.fragment_sanitizer {
+            sanitizer.note_action(node_id, action);
+        }
         self.finish_created_element(
             node_id,
             is_script,
@@ -3590,8 +3658,66 @@ impl ParserStreamHtmlTreeSinkTarget {
         ParseHandle::new_element(node_id, element_name, parser_flags)
     }
 
+    pub(super) fn install_fragment_sanitizer(
+        &mut self,
+        config: Box<HtmlSanitizer>,
+        inert_document: NativeNodeId,
+    ) {
+        self.fragment_sanitizer = Some(FragmentSanitizer::new(config, inert_document));
+    }
+
+    pub(super) fn sanitizer_action(&self, node: NativeNodeId) -> SanitizerAction {
+        self.fragment_sanitizer
+            .as_ref()
+            .and_then(|sanitizer| sanitizer.omitted.get(&node).copied())
+            .unwrap_or(SanitizerAction::Keep)
+    }
+
+    pub(super) fn sanitizer_allows_attribute(&self, element: &QualName, attr: &Attribute) -> bool {
+        self.fragment_sanitizer
+            .as_ref()
+            .is_none_or(|sanitizer| sanitizer.config.allows_attribute(element, attr))
+    }
+
+    pub(super) fn has_sanitizer_redirect(&self, node: NativeNodeId) -> bool {
+        self.fragment_sanitizer
+            .as_ref()
+            .is_some_and(|sanitizer| sanitizer.redirects.contains_key(&node))
+    }
+
+    pub(super) fn redirect_sanitized_insertions(
+        &mut self,
+        node: NativeNodeId,
+        parent: NativeNodeId,
+        reference_child: Option<NativeNodeId>,
+    ) {
+        let point = self.adjusted_sanitizer_location(ParserInsertionPoint {
+            parent,
+            reference_child,
+        });
+        if let Some(sanitizer) = &mut self.fragment_sanitizer {
+            sanitizer.redirects.insert(node, point);
+        }
+    }
+
+    pub(super) fn filter_sanitized_attributes(
+        &self,
+        element: &QualName,
+        attrs: &mut Vec<Attribute>,
+    ) {
+        if let Some(sanitizer) = &self.fragment_sanitizer {
+            sanitizer.config.filter_attributes(element, attrs);
+        }
+    }
+
     pub(super) fn create_comment(&mut self, text: String) -> ParseHandle {
-        ParseHandle::new(self.create_comment_node(text), None)
+        let node = self.create_comment_node(text);
+        if let Some(sanitizer) = &mut self.fragment_sanitizer
+            && !sanitizer.config.comments
+        {
+            sanitizer.note_action(node, SanitizerAction::Remove);
+        }
+        ParseHandle::new(node, None)
     }
 
     pub(super) fn create_processing_instruction(
@@ -3599,7 +3725,17 @@ impl ParserStreamHtmlTreeSinkTarget {
         target: String,
         data: String,
     ) -> ParseHandle {
-        ParseHandle::new(self.create_processing_instruction_node(target, data), None)
+        let allowed = self
+            .fragment_sanitizer
+            .as_ref()
+            .is_none_or(|sanitizer| sanitizer.config.allows_processing_instruction(&target));
+        let node = self.create_processing_instruction_node(target, data);
+        if let Some(sanitizer) = &mut self.fragment_sanitizer
+            && !allowed
+        {
+            sanitizer.note_action(node, SanitizerAction::Remove);
+        }
+        ParseHandle::new(node, None)
     }
 
     pub(super) fn create_cdata_section(&mut self, data: String) -> ParseHandle {
@@ -3613,15 +3749,13 @@ impl ParserStreamHtmlTreeSinkTarget {
     ) -> ParserMutationEffectDelivery {
         self.clear_template_insertion_hints();
         match child {
-            NodeOrText::AppendNode(handle) => {
-                let child_id = handle.node_id();
-                let delivery = self.record_parser_dom_mutation(ParserDomMutation::AppendChild {
+            NodeOrText::AppendNode(handle) => self.insert_parser_child(
+                ParserInsertionPoint {
                     parent: parent_id,
-                    child: child_id,
-                });
-                self.note_parser_element_appended(&handle);
-                delivery
-            }
+                    reference_child: None,
+                },
+                &handle,
+            ),
             NodeOrText::AppendText(text) => self.append_text(parent_id, text.to_string()),
         }
     }
@@ -3631,26 +3765,56 @@ impl ParserStreamHtmlTreeSinkTarget {
         sibling_id: NativeNodeId,
         child: NodeOrText<ParseHandle>,
     ) -> ParserMutationEffectDelivery {
-        self.clear_template_insertion_hints();
-        let Some(parent_id) = self.read_parent_node(sibling_id) else {
+        let Some(point) = self.text_insertion_point_before_sibling(sibling_id) else {
             return ParserMutationEffectDelivery::none();
         };
-
         match child {
-            NodeOrText::AppendNode(handle) => {
-                let child_id = handle.node_id();
-                let delivery = self.record_parser_dom_mutation(ParserDomMutation::InsertBefore {
-                    parent: parent_id,
-                    child: child_id,
-                    reference_child: Some(sibling_id),
-                });
-                self.note_parser_element_appended(&handle);
-                delivery
-            }
-            NodeOrText::AppendText(text) => {
-                self.insert_text_node(parent_id, Some(sibling_id), text.to_string())
+            NodeOrText::AppendNode(handle) => self.insert_parser_child(point, &handle),
+            NodeOrText::AppendText(text) => self.insert_buffered_text(point, text.to_string()),
+        }
+    }
+
+    fn insert_parser_child(
+        &mut self,
+        point: ParserInsertionPoint,
+        child: &ParseHandle,
+    ) -> ParserMutationEffectDelivery {
+        let point = self.adjusted_sanitizer_location(point);
+        let child_id = child.node_id();
+        if point
+            .reference_child
+            .is_some_and(|reference| self.read_parent_node(reference) != Some(point.parent))
+        {
+            return ParserMutationEffectDelivery::none();
+        }
+        if let Some(sanitizer) = &mut self.fragment_sanitizer {
+            match sanitizer.omitted.get(&child_id) {
+                Some(SanitizerAction::ReplaceWithChildren) => {
+                    sanitizer.redirects.insert(child_id, point);
+                    self.note_parser_element_appended(child);
+                    return ParserMutationEffectDelivery::none();
+                }
+                Some(SanitizerAction::Remove) => {
+                    self.note_parser_element_appended(child);
+                    return ParserMutationEffectDelivery::none();
+                }
+                _ => {}
             }
         }
+        let mutation = match point.reference_child {
+            Some(reference) => ParserDomMutation::InsertBefore {
+                parent: point.parent,
+                child: child_id,
+                reference_child: Some(reference),
+            },
+            None => ParserDomMutation::AppendChild {
+                parent: point.parent,
+                child: child_id,
+            },
+        };
+        let delivery = self.record_parser_dom_mutation(mutation);
+        self.note_parser_element_appended(child);
+        delivery
     }
 
     pub(super) fn append_based_on_parent_node(
@@ -3724,6 +3888,15 @@ impl ParserStreamHtmlTreeSinkTarget {
         scope_is_open: bool,
         name: &str,
     ) -> Option<Vec<NativeNodeId>> {
+        if self.sanitizer_action(template) != SanitizerAction::Keep {
+            return None;
+        }
+        scope = self
+            .adjusted_sanitizer_location(ParserInsertionPoint {
+                parent: scope,
+                reference_child: None,
+            })
+            .parent;
         // The open body element can address markers in the head. A fragment
         // parse always starts from its own temporary tree.
         if scope_is_open && self.read_document_body_handle() == Some(scope) {
@@ -3786,7 +3959,9 @@ impl ParserStreamHtmlTreeSinkTarget {
         template_id: NativeNodeId,
         attrs: &[Attribute],
     ) -> bool {
-        if !self.allow_declarative_shadow_roots {
+        if !self.allow_declarative_shadow_roots
+            || self.sanitizer_action(template_id) != SanitizerAction::Keep
+        {
             return false;
         }
         let attrs = attrs
@@ -4894,6 +5069,184 @@ fn live_fragment_parser_preserves_noscript_when_scripting_is_disabled() {
         dom_host.elements_by_tag_name(fragment, "span", false).len(),
         1
     );
+}
+
+#[test]
+fn sanitized_fragment_filters_before_inserting_and_redirects_children() {
+    use crate::{SanitizerElement, SanitizerFilter, SanitizerName};
+
+    let url = Url::parse("https://example.test/").expect("test url");
+    let mut host = DomHost::from_dom(NativeDom::new_html(url.clone()));
+    let document = host.document_handle();
+    let context = host.create_element("div");
+    let fragment = host.create_document_fragment_for_document(document);
+    let mut effects = DomMutationEffects::default();
+    let mut consumer = TestMutationEffectCollector {
+        host: &mut host,
+        effects: &mut effects,
+        panic_on_mutation: false,
+        finish_texts: None,
+    };
+    let html_namespace = "http://www.w3.org/1999/xhtml";
+    let html_name = |name| SanitizerName::new(name, Some(html_namespace));
+    let sanitizer = HtmlSanitizer {
+        elements: SanitizerFilter::Remove(vec![SanitizerElement {
+            name: html_name("aside"),
+            attributes: None,
+            remove_attributes: Vec::new(),
+        }]),
+        replace_with_children: vec![html_name("section"), html_name("article")],
+        attributes: SanitizerFilter::Remove(vec![
+            SanitizerName::new("hidden", None),
+            SanitizerName::new("shadowrootmode", None),
+        ]),
+        processing_instructions: SanitizerFilter::Allow(vec![
+            "keep".into(),
+            "start".into(),
+            "end".into(),
+        ]),
+        ..HtmlSanitizer::default()
+    };
+    crate::HtmlParser::with_scripting_enabled(true).parse_fragment_into_live_dom(
+        url,
+        fragment,
+        document,
+        HtmlFragmentContext::new(Some(context), html_namespace, "div").with_sanitizer(sanitizer),
+        concat!(
+            "start<!--discard--><aside><span>discard</span></aside>",
+            "<section><article>middle<a hidden href='javascript:0'>link</a>",
+            "</article></section>end<?discard data?><?keep data?>",
+            "<div><template shadowrootmode='open'><em>template</em></template></div>",
+            "<div><?start name=\"patch\">old<?end><template for=patch shadowrootmode=open>new</template></div>",
+            "<table><section>before<span>table</span></section><tr><td>cell</td></tr></table>",
+        ),
+        &mut consumer,
+        true,
+    );
+    let root = host.first_child(fragment).expect("synthetic fragment root");
+    assert_eq!(
+        host.inner_html(root).as_deref(),
+        Some(concat!(
+            "startmiddle<a>link</a>end<?keep data?><div><template><em>template</em></template></div>",
+            "<div>new</div>",
+            "before<span>table</span><table><tbody><tr><td>cell</td></tr></tbody></table>",
+        ))
+    );
+    assert!(host.snapshot_shadow_root_bindings().is_empty());
+}
+
+#[test]
+fn sanitized_foster_parenting_keeps_nodes_in_template_contents() {
+    use crate::{SanitizerElement, SanitizerFilter, SanitizerName};
+
+    let namespace = "http://www.w3.org/1999/xhtml";
+    let table = SanitizerName::new("table", Some(namespace));
+    let cases = [
+        (
+            HtmlSanitizer::default(),
+            "<template>prex<span>fostered</span><table><tbody><tr><td>cell</td></tr></tbody></table>post</template>",
+        ),
+        (
+            HtmlSanitizer {
+                replace_with_children: vec![table.clone()],
+                ..HtmlSanitizer::default()
+            },
+            "<template>prex<span>fostered</span><tbody><tr><td>cell</td></tr></tbody>post</template>",
+        ),
+        (
+            HtmlSanitizer {
+                elements: SanitizerFilter::Remove(vec![SanitizerElement {
+                    name: table,
+                    attributes: None,
+                    remove_attributes: Vec::new(),
+                }]),
+                ..HtmlSanitizer::default()
+            },
+            "<template>prex<span>fostered</span>post</template>",
+        ),
+    ];
+
+    for (sanitizer, expected) in cases {
+        let url = Url::parse("https://example.test/").expect("test url");
+        let mut host = DomHost::from_dom(NativeDom::new_html(url.clone()));
+        let document = host.document_handle();
+        let context = host.create_element("div");
+        let fragment = host.create_document_fragment_for_document(document);
+        let mut effects = DomMutationEffects::default();
+        let mut consumer = TestMutationEffectCollector {
+            host: &mut host,
+            effects: &mut effects,
+            panic_on_mutation: false,
+            finish_texts: None,
+        };
+        crate::HtmlParser::with_scripting_enabled(true).parse_fragment_into_live_dom(
+            url,
+            fragment,
+            document,
+            HtmlFragmentContext::new(Some(context), namespace, "div").with_sanitizer(sanitizer),
+            "<template>pre<table>x<span>fostered</span><tr><td>cell</td></tr></table>post</template>",
+            &mut consumer,
+            false,
+        );
+        let root = host.first_child(fragment).expect("synthetic fragment root");
+        assert_eq!(host.inner_html(root).as_deref(), Some(expected));
+        let template = host.first_child(root).expect("template");
+        assert_eq!(host.first_child(template), None);
+    }
+}
+
+#[test]
+fn sanitized_fragment_applies_element_actions_during_adoption_agency() {
+    use crate::{SanitizerElement, SanitizerFilter, SanitizerName};
+
+    let namespace = "http://www.w3.org/1999/xhtml";
+    let bold = SanitizerName::new("b", Some(namespace));
+    let cases = [
+        (
+            HtmlSanitizer {
+                elements: SanitizerFilter::Remove(vec![SanitizerElement {
+                    name: bold.clone(),
+                    attributes: None,
+                    remove_attributes: Vec::new(),
+                }]),
+                ..HtmlSanitizer::default()
+            },
+            "<p>third</p>",
+        ),
+        (
+            HtmlSanitizer {
+                replace_with_children: vec![bold],
+                ..HtmlSanitizer::default()
+            },
+            "first<p>secondthird</p>",
+        ),
+    ];
+
+    for (sanitizer, expected) in cases {
+        let url = Url::parse("https://example.test/").expect("test url");
+        let mut host = DomHost::from_dom(NativeDom::new_html(url.clone()));
+        let document = host.document_handle();
+        let context = host.create_element("div");
+        let fragment = host.create_document_fragment_for_document(document);
+        let mut effects = DomMutationEffects::default();
+        let mut consumer = TestMutationEffectCollector {
+            host: &mut host,
+            effects: &mut effects,
+            panic_on_mutation: false,
+            finish_texts: None,
+        };
+        crate::HtmlParser::with_scripting_enabled(true).parse_fragment_into_live_dom(
+            url,
+            fragment,
+            document,
+            HtmlFragmentContext::new(Some(context), namespace, "div").with_sanitizer(sanitizer),
+            "<b>first<p>second</b>third",
+            &mut consumer,
+            false,
+        );
+        let root = host.first_child(fragment).expect("synthetic fragment root");
+        assert_eq!(host.inner_html(root).as_deref(), Some(expected));
+    }
 }
 
 #[test]

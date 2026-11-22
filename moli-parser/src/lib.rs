@@ -7,6 +7,7 @@ mod html;
 mod html_input;
 mod input_prefix;
 mod live_target;
+mod sanitizer;
 mod script_planning;
 mod session;
 mod stream;
@@ -36,6 +37,7 @@ pub use live_target::{
     ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,
     ParserElementCreationConsumer, ParserElementCreationRequest, ParserMutationEffectConsumer,
 };
+pub use sanitizer::{HtmlSanitizer, SanitizerElement, SanitizerFilter, SanitizerName};
 pub use script_planning::{
     ParserPlanningReadView, ParserScriptRead, PrepareScriptOutcome, PreparedImportMap,
     PreparedImportMapSource, PreparedScript, ScriptFetchMetadata, ScriptFilterSkipReason,

@@ -247,6 +247,13 @@ impl ParserDomReadConsumer for PhaseOneParserOwner<'_> {
 }
 
 impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
+    fn parser_template_contents_owner_document(&mut self, document: NativeNodeId) -> NativeNodeId {
+        self.vm
+            .document_runtime
+            .dom_host_mut()
+            .parser_template_contents_owner_document(document)
+    }
+
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation) {
         let _ = self
             .vm

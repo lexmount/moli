@@ -41,9 +41,11 @@ mod tag_sets;
 mod content_patching;
 mod data;
 mod rules;
+mod sanitization;
 mod types;
 
 pub use content_patching::ContentPatching;
+pub use sanitization::{Sanitization, SanitizerAction};
 
 /// Tree builder options, with an impl for Default.
 #[derive(Copy, Clone)]
@@ -92,6 +94,7 @@ pub struct TreeBuilder<Handle, Sink> {
     pub sink: Sink,
 
     content_patching: Option<ContentPatching<Handle, Sink>>,
+    sanitization: Option<Sanitization<Handle, Sink>>,
 
     /// Insertion mode.
     mode: Cell<InsertionMode>,
@@ -160,6 +163,7 @@ where
             opts,
             sink,
             content_patching: None,
+            sanitization: None,
             mode: Cell::new(InsertionMode::Initial),
             orig_mode: Cell::new(None),
             template_modes: Default::default(),
@@ -201,6 +205,7 @@ where
             opts,
             sink,
             content_patching: None,
+            sanitization: None,
             mode: Cell::new(InsertionMode::Initial),
             orig_mode: Cell::new(None),
             template_modes,
@@ -446,9 +451,20 @@ where
             if self.html_elem_named(elem, local_name!("template")) {
                 return self.template_insertion_point(elem);
             } else if self.html_elem_named(elem, local_name!("table")) {
+                let prev_element = *iter.peek().unwrap();
+                // A sanitized table can be absent from the DOM. Apply the
+                // template insertion rules to the fallback parent.
+                if self.html_elem_named(prev_element, local_name!("template"))
+                    && self
+                        .sanitization
+                        .as_ref()
+                        .is_some_and(|hooks| (hooks.parent_node)(&self.sink, elem).is_none())
+                {
+                    return self.template_insertion_point(prev_element);
+                }
                 return InsertionPoint::TableFosterParenting {
                     element: elem.clone(),
-                    prev_element: (*iter.peek().unwrap()).clone(),
+                    prev_element: prev_element.clone(),
                 };
             }
         }
@@ -806,7 +822,12 @@ where
             // 13.
             let mut node;
             let mut node_index = furthest_block_index;
-            let mut last_node = furthest_block.clone();
+            let action = self.sanitizer_action(&furthest_block);
+            let mut last_node = (action == SanitizerAction::Keep).then(|| furthest_block.clone());
+            let mut pending_redirects = Vec::new();
+            if action == SanitizerAction::ReplaceWithChildren {
+                pending_redirects.push(furthest_block.clone());
+            }
 
             // 13.1.
             let mut inner_counter = 0;
@@ -859,23 +880,43 @@ where
                 node = new_element;
 
                 // 13.8.
-                if self.sink.same_node(&last_node, &furthest_block) {
+                if matches!(bookmark, Bookmark::Replace(_)) {
                     bookmark = Bookmark::InsertAfter(node.clone());
                 }
 
-                // 13.9.
-                self.sink.remove_from_parent(&last_node);
-                self.sink.append(&node, AppendNode(last_node.clone()));
-
-                // 13.10.
-                last_node = node.clone();
-
-                // 13.11.
+                let action = self.sanitizer_action(&node);
+                if action != SanitizerAction::ReplaceWithChildren {
+                    self.redirect_sanitized_elements(
+                        std::mem::take(&mut pending_redirects),
+                        &InsertionPoint::LastChild(node.clone()),
+                    );
+                    if let Some(previous) = last_node.take() {
+                        self.sink.remove_from_parent(&previous);
+                        if action == SanitizerAction::Keep {
+                            self.sink.append(&node, AppendNode(previous));
+                        }
+                    }
+                }
+                match action {
+                    SanitizerAction::Keep => last_node = Some(node.clone()),
+                    SanitizerAction::Remove => {},
+                    SanitizerAction::ReplaceWithChildren => pending_redirects.push(node.clone()),
+                }
             }
 
             // 14.
-            self.sink.remove_from_parent(&last_node);
-            self.insert_appropriately(AppendNode(last_node.clone()), Some(common_ancestor));
+            let location = self.sanitization.as_ref().map(|_| {
+                let location = self.appropriate_place_for_insertion(Some(common_ancestor.clone()));
+                self.redirect_sanitized_elements(pending_redirects, &location);
+                location
+            });
+            if let Some(last_node) = last_node {
+                self.sink.remove_from_parent(&last_node);
+                let location = location.unwrap_or_else(|| {
+                    self.appropriate_place_for_insertion(Some(common_ancestor))
+                });
+                self.insert_at(location, AppendNode(last_node));
+            }
 
             // 15.
             // FIXME: Is there a way to avoid cloning the attributes twice here (once on their own,
@@ -889,7 +930,9 @@ where
             let new_entry = FormatEntry::Element(new_element.clone(), fmt_elem_tag);
 
             // 16.
-            self.sink.reparent_children(&furthest_block, &new_element);
+            if self.sanitizer_action(&new_element) != SanitizerAction::ReplaceWithChildren {
+                self.sink.reparent_children(&furthest_block, &new_element);
+            }
 
             // 17.
             self.sink
@@ -928,7 +971,8 @@ where
                 .expect("furthest block missing from open element stack");
             self.open_elems
                 .borrow_mut()
-                .insert(new_furthest_block_index + 1, new_element);
+                .insert(new_furthest_block_index + 1, new_element.clone());
+            self.redirect_elements_below(new_furthest_block_index + 2, &new_element);
 
             // 20.
         }
@@ -1419,7 +1463,10 @@ where
             && !(listed(qname.expanded())
                 && attrs
                     .iter()
-                    .any(|a| a.name.expanded() == expanded_name!("", "form")));
+                    .any(|a| {
+                        a.name.expanded() == expanded_name!("", "form")
+                            && self.sanitizer_allows_attribute(&qname, a)
+                    }));
 
         // By checking whether the form is associatable first, then creating the element
         // we can avoid cloning the attributes.
@@ -1504,12 +1551,6 @@ where
             } => (element.clone(), Some(prev_element.clone())),
         };
 
-        // template start tag's shadowrootmode is not in the none state
-        let is_shadow_root_mode = tag.attrs.iter().any(|attr| {
-            attr.name.local == local_name!("shadowrootmode")
-                && (attr.value.as_ref() == "open" || attr.value.as_ref() == "closed")
-        });
-
         // Check if intended_parent's document allows declarative shadow roots
         let allow_declarative_shadow_roots =
             self.sink.allow_declarative_shadow_roots(&intended_parent);
@@ -1528,7 +1569,17 @@ where
             None => true,
         };
 
-        is_shadow_root_mode && allow_declarative_shadow_roots && adjusted_current_node_not_topmost
+        Self::template_has_shadow_root_mode(tag)
+            && allow_declarative_shadow_roots
+            && adjusted_current_node_not_topmost
+            && !self.has_sanitizer_redirect(&self.current_node())
+    }
+
+    fn template_has_shadow_root_mode(tag: &Tag) -> bool {
+        tag.attrs.iter().any(|attr| {
+            attr.name.local == local_name!("shadowrootmode")
+                && (attr.value.as_ref() == "open" || attr.value.as_ref() == "closed")
+        })
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inhead>

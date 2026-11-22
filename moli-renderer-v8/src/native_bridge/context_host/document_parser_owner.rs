@@ -396,6 +396,12 @@ impl ParserDomReadConsumer for ContextDocumentParserOwner<'_, '_, '_> {
 }
 
 impl ParserDomMutationConsumer for ContextDocumentParserOwner<'_, '_, '_> {
+    fn parser_template_contents_owner_document(&mut self, document: DomHandle) -> DomHandle {
+        self.host
+            .dom_host_mut()
+            .parser_template_contents_owner_document(document)
+    }
+
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation) {
         if !self.targets_current_document() {
             return;

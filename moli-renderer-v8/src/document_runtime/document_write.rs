@@ -186,6 +186,12 @@ impl ParserDomReadConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
 }
 
 impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
+    fn parser_template_contents_owner_document(&mut self, document: DomHandle) -> DomHandle {
+        self.runtime
+            .dom_host_mut_for_active_parser_step()
+            .parser_template_contents_owner_document(document)
+    }
+
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation) {
         if matches!(
             self.target,

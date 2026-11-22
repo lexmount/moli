@@ -1,6 +1,11 @@
 use super::*;
 
 impl DomHost {
+    pub fn parser_template_contents_owner_document(&mut self, document: DomHandle) -> DomHandle {
+        self.dom
+            .appropriate_template_contents_owner_document(document)
+    }
+
     pub fn push_parse_error(&mut self, error: String) {
         self.dom.push_parse_error(error);
     }

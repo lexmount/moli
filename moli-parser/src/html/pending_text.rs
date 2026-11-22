@@ -1,14 +1,14 @@
-use crate::live_target::ParserTextInsertionPoint;
+use crate::live_target::ParserInsertionPoint;
 
 use super::DocumentSink;
 
 pub(super) struct PendingText {
-    point: ParserTextInsertionPoint,
+    point: ParserInsertionPoint,
     text: String,
 }
 
 impl DocumentSink {
-    pub(super) fn buffer_text(&self, point: ParserTextInsertionPoint, text: &str) {
+    pub(super) fn buffer_text(&self, point: ParserInsertionPoint, text: &str) {
         if text.is_empty() {
             return;
         }
