@@ -15,8 +15,8 @@ mod devtools;
 pub(crate) use devtools::{
     construct_drag_event_with_related_target, construct_drop_input_event,
     construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target, construct_pointer_event,
-    construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
+    construct_mouse_event_with_related_target_for_target, construct_pointer_event_with_modifiers,
+    construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_wheel_event_for_target,
 };
 
@@ -311,8 +311,8 @@ fn mouse_event_init<'s>(
 #[derive(Clone, Copy)]
 pub(crate) struct TouchEventPoint<'s> {
     pub identifier: i32,
-    pub x: f64,
-    pub y: f64,
+    pub coordinates: InputEventCoordinates,
+    pub page: (f64, f64),
     pub target: v8::Local<'s, v8::Object>,
     pub is_target_touch: bool,
 }
@@ -353,8 +353,8 @@ fn construct_touches<'s>(
                 scope,
                 point.identifier,
                 point.target,
-                point.x,
-                point.y,
+                point.coordinates,
+                point.page,
             )
         })
         .collect()

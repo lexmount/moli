@@ -7,7 +7,6 @@ use crate::types::ScriptErrorConstructorKind;
 pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.pressed_mouse_buttons = 0;
     vm.hovered_mouse_handle = None;
-    vm.hovered_mouse_root_to_frame = moli_layout::LayoutTransform2D::IDENTITY;
     vm._context_host
         .borrow()
         .dom_host()
@@ -18,6 +17,7 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     {
         vm._context_host.borrow_mut().clear_mouse_input_state();
         vm.pending_touch_tap = None;
+        vm.mouse_routed_frame = None;
         // Target views were disabled when their dispatch ended. Retiring the
         // Document must also disable its protected source view without dragend.
         if let Some(session) = vm.active_drag_session.take()

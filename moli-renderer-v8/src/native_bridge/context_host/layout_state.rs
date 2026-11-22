@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use moli_layout::{DocumentLayoutServices, FrozenLayoutTree, LayoutViewport};
 
 use super::layout_snapshot::LatestLayoutTreeCache;
+#[cfg(feature = "devtools")]
+use super::layout_snapshot::PublishedFrameGeometry;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
@@ -209,12 +211,23 @@ impl DocumentLayoutState {
         self.latest_layout.get_for_root(root)
     }
 
+    #[cfg(feature = "devtools")]
+    pub(super) fn frame_geometry(&self) -> Option<&std::rc::Rc<PublishedFrameGeometry>> {
+        self.latest_layout.frame_geometry()
+    }
+
     pub(super) fn publish_latest_layout(
         &mut self,
         document: DomHandle,
         tree: FrozenLayoutTree<DomHandle>,
+        #[cfg(feature = "devtools")] frame_geometry: PublishedFrameGeometry,
     ) {
-        self.latest_layout.publish(document, tree);
+        self.latest_layout.publish(
+            document,
+            tree,
+            #[cfg(feature = "devtools")]
+            frame_geometry,
+        );
     }
 
     pub(super) fn clear_latest_layout(&mut self) {

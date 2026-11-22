@@ -300,6 +300,8 @@ use event_handlers::{
 pub(crate) use events::construct_focus_event;
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use events::construct_keyboard_event;
+#[cfg(feature = "devtools")]
+pub(crate) use events::construct_pointer_event_with_related_target;
 use events::{ClickEventSource, construct_click_event};
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
@@ -316,8 +318,6 @@ pub(crate) use events::{
     construct_mouse_event_with_related_target_for_target, construct_pointer_event_with_modifiers,
     construct_pointer_event_with_related_target_and_modifiers, construct_wheel_event_for_target,
 };
-#[cfg(feature = "devtools")]
-pub(crate) use events::{construct_pointer_event, construct_pointer_event_with_related_target};
 #[cfg(feature = "devtools")]
 pub(crate) use focus::focus_live_element_for_inspector;
 pub(crate) use focus::is_disabled_form_control;
@@ -462,9 +462,9 @@ pub(crate) use geometry::observable_input_hit_test;
 pub(crate) use geometry::observable_scrollbar_hit_test;
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::{
-    InputHit, InputSurfaceHit, apply_scroll_observable_effects, input_frame_projections,
-    input_surface_hit_test, input_target_frame_projection, observable_geometry_query,
-    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
+    InputHit, InputSurfaceHit, apply_scroll_observable_effects, input_surface_hit_test,
+    input_target_in_document, observable_geometry_query, perform_scrollbar_scroll_default_action,
+    perform_wheel_scroll_default_action,
 };
 pub(super) use geometry::{
     node_client_height_getter_function, node_client_left_getter_function,

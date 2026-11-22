@@ -67,6 +67,16 @@ pub struct LayoutHit<N> {
     pub viewport_to_local: LayoutTransform2D,
 }
 
+impl<N> LayoutHit<N> {
+    /// Projects into the embedded viewport when this hit enters its content.
+    pub fn embedded_viewport_hit_transform(&self) -> Option<LayoutTransform2D> {
+        let content = self.local_content_box?;
+        content
+            .contains(self.local_point)
+            .then(|| super::tree::frame_viewport_transform(content, self.viewport_to_local))
+    }
+}
+
 /// Caret geometry resolved from the same text fragments and coordinate spaces
 /// as Range geometry and hit testing.
 #[derive(Clone, Debug, PartialEq)]

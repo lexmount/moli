@@ -4,7 +4,7 @@ pub(super) fn dispatch_drag_source_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     session: &ActiveDragSession,
-    coordinates: InputEventCoordinates,
+    position: InputPosition,
     modifiers: u8,
 ) {
     let Some(source) = session.source else {
@@ -24,7 +24,7 @@ pub(super) fn dispatch_drag_source_event(
         "drag",
         source,
         None,
-        coordinates,
+        position,
         transfer,
         modifiers,
     );

@@ -957,10 +957,8 @@ pub(super) struct ScriptVm {
     page_context_cancel_tx: RendererPageContextCancelSender,
     pressed_mouse_buttons: i32,
     hovered_mouse_handle: Option<DomHandle>,
-    /// Root-frame to local-frame transform for `hovered_mouse_handle`. Blink
-    /// keeps this conversion on LocalFrameView; retaining the last affine map
-    /// lets exit events use the old frame after a new hit enters another one.
-    hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D,
+    #[cfg(feature = "devtools")]
+    mouse_routed_frame: Option<crate::native_bridge::WindowDocumentTaskTarget>,
     active_touch_pointer_handles: BTreeMap<i32, DomHandle>,
     active_touch_points: BTreeMap<i32, ActiveTouchPoint>,
     #[cfg(feature = "devtools")]
@@ -1065,7 +1063,7 @@ pub(super) struct ActiveDragSession {
     /// An enter update already emitted source `drag`; its following over
     /// update must not emit it twice (Blink EventHandler's corresponding bit).
     pub only_drag_over_next: bool,
-    pub coordinates: crate::native_bridge::element::InputEventCoordinates,
+    position: input_dispatch::InputPosition,
     pub modifiers: u8,
 }
 
@@ -1073,6 +1071,7 @@ pub(super) struct ActiveDragSession {
 #[derive(Clone, Copy)]
 pub(super) struct PendingDragGesture {
     pub handle: DomHandle,
+    position: input_dispatch::InputPosition,
     pub x: f64,
     pub y: f64,
     pub root_to_frame: moli_layout::LayoutTransform2D,
@@ -2481,7 +2480,8 @@ impl ScriptVmDefaultWorldBootstrap {
             runtime_observable_source_queue: RendererRuntimeObservableSourceQueue::default(),
             pressed_mouse_buttons: 0,
             hovered_mouse_handle: None,
-            hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D::IDENTITY,
+            #[cfg(feature = "devtools")]
+            mouse_routed_frame: None,
             active_touch_pointer_handles: BTreeMap::new(),
             active_touch_points: BTreeMap::new(),
             #[cfg(feature = "devtools")]

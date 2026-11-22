@@ -25,7 +25,7 @@ pub(super) fn node_set_pointer_capture_callback<'s>(
     if !pointer_capture_receiver_has_frame(scope, runtime, runtime_ptr, handle, args.this()) {
         return;
     }
-    if !runtime.pointer_capture_is_active(pointer_id) {
+    if !runtime.pointer_is_known(pointer_id) {
         throw_dom_exception(
             scope,
             "NotFoundError",
@@ -57,7 +57,7 @@ pub(super) fn node_release_pointer_capture_callback<'s>(
     if !pointer_capture_receiver_has_frame(scope, runtime, runtime_ptr, handle, args.this()) {
         return;
     }
-    if !runtime.pointer_capture_is_active(pointer_id) {
+    if !runtime.pointer_is_known(pointer_id) {
         throw_dom_exception(
             scope,
             "NotFoundError",

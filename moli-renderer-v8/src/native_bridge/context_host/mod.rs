@@ -116,6 +116,8 @@ mod internal_node_refs;
 mod intersection_observer_tasks;
 mod layout;
 mod layout_snapshot;
+#[cfg(feature = "devtools")]
+pub(crate) use layout_snapshot::PublishedFrameGeometry;
 mod layout_state;
 mod live_ranges;
 mod main_document_lifecycle;
@@ -988,9 +990,7 @@ pub(crate) struct PageScriptHost {
     pending_text_track_load_sequences: HashMap<DomHandle, PendingTextTrackLoadSequence>,
     next_text_track_load_sequence_id: u64,
     pending_media_text_track_gates: HashMap<DomHandle, PendingMediaTextTrackGate>,
-    active_pointer_capture_ids: HashSet<i32>,
-    pending_pointer_capture_targets: HashMap<i32, DomHandle>,
-    pointer_capture_targets: HashMap<i32, DomHandle>,
+    pointers: HashMap<i32, pointer_capture::PointerState>,
     #[cfg(feature = "devtools")]
     mouse_input: mouse_click::MouseInputState,
     lazy_media_load_candidates: HashSet<DomHandle>,
@@ -1254,13 +1254,6 @@ fn child_browsing_context_url_inherits_security_origin(url: &url::Url) -> bool {
 }
 
 pub use crate::protocol_types::PendingRuntimeBindingCall;
-
-#[cfg(feature = "devtools")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PointerCaptureDispatchEvent {
-    pub(crate) event_name: &'static str,
-    pub(crate) target: DomHandle,
-}
 
 impl fmt::Debug for PageScriptHost {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

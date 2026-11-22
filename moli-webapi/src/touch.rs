@@ -1,3 +1,4 @@
+use crate::events::subclasses::InputEventCoordinates;
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{callback_data_index_value, get_private_value, v8str};
 use moli_v8_util::{callback_data_item, throw_type_error};
@@ -171,10 +172,19 @@ pub fn construct_native_touch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     identifier: i32,
     target: v8::Local<'s, v8::Object>,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
+    (page_x, page_y): (f64, f64),
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if !x.is_finite() || !y.is_finite() {
+    let InputEventCoordinates {
+        screen_x,
+        screen_y,
+        client_x,
+        client_y,
+    } = coordinates;
+    if ![screen_x, screen_y, client_x, client_y, page_x, page_y]
+        .into_iter()
+        .all(f64::is_finite)
+    {
         return None;
     }
     // Native input is already typed. Avoid public constructors and dictionary
@@ -182,12 +192,12 @@ pub fn construct_native_touch<'s>(
     let init = TouchInitMembers {
         identifier,
         target,
-        screen_x: x,
-        screen_y: y,
-        client_x: x,
-        client_y: y,
-        page_x: x,
-        page_y: y,
+        screen_x,
+        screen_y,
+        client_x,
+        client_y,
+        page_x,
+        page_y,
         radius_x: 0.0,
         radius_y: 0.0,
         rotation_angle: 0.0,

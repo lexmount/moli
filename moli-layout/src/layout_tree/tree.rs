@@ -6,9 +6,16 @@ use crate::LayoutError;
 
 use super::model::{
     FrozenCoordinateSpace, LayoutBoxGeometry, LayoutClipNode, LayoutCoordinateSpaceId,
-    LayoutFragment, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad,
-    LayoutScrollExtent, LayoutSize, LayoutViewport,
+    LayoutFragment, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
+    LayoutScrollExtent, LayoutSize, LayoutTransform2D, LayoutViewport,
 };
+
+pub(super) fn frame_viewport_transform(
+    content: LayoutRect,
+    viewport_to_local: LayoutTransform2D,
+) -> LayoutTransform2D {
+    LayoutTransform2D::translation(-content.x, -content.y).concatenate(viewport_to_local)
+}
 
 /// A source object without a CSS box, expressed in its owner's local space.
 #[derive(Clone, Debug, PartialEq)]
@@ -231,6 +238,18 @@ where
         self.boxes
             .get(id.index())
             .map(|layout_box| &layout_box.geometry)
+    }
+
+    /// Maps this member's viewport into the embedded viewport owned by `id`.
+    /// The transform is independent of the child tree and of hit-test bounds.
+    pub fn frame_viewport_transform(&self, id: LayoutOutputBoxId) -> Option<LayoutTransform2D> {
+        let geometry = self.box_geometry(id)?;
+        let viewport_to_local = self
+            .coordinate_space(geometry.coordinate_space)?
+            .local_to_viewport
+            .inverse()?;
+        let transform = frame_viewport_transform(geometry.content_box, viewport_to_local);
+        transform.is_finite().then_some(transform)
     }
 
     pub fn fragment(&self, id: LayoutFragmentId) -> Option<&LayoutFragment> {

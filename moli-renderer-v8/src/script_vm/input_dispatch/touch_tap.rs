@@ -14,37 +14,22 @@ fn hit_after_callbacks(
     )?)
 }
 
-fn coordinates(
-    hit: crate::native_bridge::element::InputHit,
-    x: f64,
-    y: f64,
-) -> InputEventCoordinates {
-    let point = hit
-        .root_to_frame
-        .map_point(moli_layout::LayoutPoint::new(x as f32, y as f32));
-    InputEventCoordinates::from_root(x, y).with_client(f64::from(point.x), f64::from(point.y))
-}
-
 fn transition(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
-    previous: Option<crate::native_bridge::element::InputHit>,
-    current: Option<crate::native_bridge::element::InputHit>,
-    x: f64,
-    y: f64,
+    runtime_ptr: *mut PageScriptHost,
+    previous: Option<DomHandle>,
+    current: Option<DomHandle>,
+    position: InputPosition,
 ) {
-    unsafe { &mut *runtime_ptr }.set_hovered_element_for_input(current.map(|hit| hit.handle));
+    unsafe { &mut *runtime_ptr }.set_hovered_element_for_input(current);
+    let coordinates = |target| position.for_target(unsafe { &*runtime_ptr }, target, None);
     dispatch_mouse_boundary_events(
         scope,
         runtime_ptr,
-        previous.map(|hit| hit.handle),
-        current.map(|hit| hit.handle),
-        previous.map_or(InputEventCoordinates::from_root(x, y), |hit| {
-            coordinates(hit, x, y)
-        }),
-        current.map_or(InputEventCoordinates::from_root(x, y), |hit| {
-            coordinates(hit, x, y)
-        }),
+        previous,
+        current,
+        previous.map(coordinates).unwrap_or_default(),
+        current.map(coordinates).unwrap_or_default(),
         0,
         0,
         0,
@@ -59,22 +44,24 @@ pub(super) fn dispatch_touch_tap_activation(
     y: f64,
     previous_hover: Option<DomHandle>,
 ) -> Result<(RendererInputDispatchOutcome, Option<DomHandle>)> {
-    let mut hover = previous_hover
-        .filter(|node| unsafe { &*runtime_ptr }.dom_host().is_connected(*node))
-        .and_then(|handle| {
-            let host = unsafe { &*runtime_ptr };
-            let document = host.dom_host().owner_document_handle(handle)?;
-            Some(crate::native_bridge::element::InputHit {
-                handle,
-                root_to_frame: root_to_document_frame(host, document)?,
-            })
-        });
+    let position = InputPosition::headless(x, y);
+    let coordinates = |hit: crate::native_bridge::element::InputHit| {
+        let host = unsafe { &*runtime_ptr };
+        if host.layout_policy().uses_real_layout() {
+            position.for_target(host, hit.handle, None)
+        } else {
+            position.coordinates(Some(hit.root_to_frame))
+        }
+    };
+    let mut hover =
+        previous_hover.filter(|node| unsafe { &*runtime_ptr }.dom_host().is_connected(*node));
     if !touch_tap_is_live(unsafe { &*runtime_ptr }, tap) {
-        return Ok((input_dispatch_outcome(true), hover.map(|hit| hit.handle)));
+        return Ok((input_dispatch_outcome(true), hover));
     }
     let initial = hit_after_callbacks(unsafe { &*runtime_ptr }, x, y)?;
-    transition(scope, runtime_ptr, hover, initial, x, y);
-    hover = initial;
+    let initial_hover = initial.map(|hit| hit.handle);
+    transition(scope, runtime_ptr, hover, initial_hover, position);
+    hover = initial_hover;
     let Some(mut hit) = initial else {
         return Ok((input_dispatch_outcome(true), None));
     };
@@ -91,7 +78,7 @@ pub(super) fn dispatch_touch_tap_activation(
             runtime_ptr,
             hit.handle,
             "mousemove",
-            coordinates(hit, x, y),
+            coordinates(hit),
             0,
             0,
             0,
@@ -103,8 +90,14 @@ pub(super) fn dispatch_touch_tap_activation(
             return Ok((input_dispatch_outcome(true), None));
         }
         let next = hit_after_callbacks(unsafe { &*runtime_ptr }, x, y)?;
-        transition(scope, runtime_ptr, hover, next, x, y);
-        hover = next;
+        transition(
+            scope,
+            runtime_ptr,
+            hover,
+            next.map(|hit| hit.handle),
+            position,
+        );
+        hover = next.map(|hit| hit.handle);
         let Some(next) = next else {
             return Ok((input_dispatch_outcome(true), None));
         };
@@ -120,7 +113,7 @@ pub(super) fn dispatch_touch_tap_activation(
             runtime_ptr,
             hit.handle,
             "mousedown",
-            coordinates(hit, x, y),
+            coordinates(hit),
             1,
             0,
             1,
@@ -136,8 +129,14 @@ pub(super) fn dispatch_touch_tap_activation(
             return Ok((input_dispatch_outcome(true), None));
         }
         let next = hit_after_callbacks(unsafe { &*runtime_ptr }, x, y)?;
-        transition(scope, runtime_ptr, hover, next, x, y);
-        hover = next;
+        transition(
+            scope,
+            runtime_ptr,
+            hover,
+            next.map(|hit| hit.handle),
+            position,
+        );
+        hover = next.map(|hit| hit.handle);
         let Some(next) = next else {
             return Ok((input_dispatch_outcome(true), None));
         };
@@ -150,7 +149,7 @@ pub(super) fn dispatch_touch_tap_activation(
             runtime_ptr,
             hit.handle,
             "mouseup",
-            coordinates(hit, x, y),
+            coordinates(hit),
             1,
             0,
             0,
@@ -167,19 +166,19 @@ pub(super) fn dispatch_touch_tap_activation(
         || host.dom_host().owner_document_handle(pressed) != Some(tap.document)
         || host.dom_host().owner_document_handle(hit.handle) != Some(tap.document)
     {
-        return Ok((input_dispatch_outcome(true), hover.map(|hit| hit.handle)));
+        return Ok((input_dispatch_outcome(true), hover));
     }
     let Some(target) =
         crate::native_bridge::common_flat_tree_ancestor(host.dom_host(), pressed, hit.handle)
     else {
-        return Ok((input_dispatch_outcome(true), hover.map(|hit| hit.handle)));
+        return Ok((input_dispatch_outcome(true), hover));
     };
     let outcome = activate_handle_after_touch_release(
         scope,
         runtime_ptr,
         target,
-        coordinates(hit, x, y),
+        coordinates(hit),
         touch_pointer_id(tap.id),
     );
-    Ok((outcome, hover.map(|hit| hit.handle)))
+    Ok((outcome, hover))
 }

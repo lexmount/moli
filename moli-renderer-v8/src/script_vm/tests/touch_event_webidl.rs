@@ -24,8 +24,10 @@ fn native_touch_events_preserve_coordinates_identity_and_ignore_public_construct
             v8::Local::<v8::Object>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
         let point = crate::native_bridge::element::TouchEventPoint {
             identifier: 7,
-            x: 17.25,
-            y: 29.5,
+            coordinates: crate::native_bridge::element::InputEventCoordinates::from_root(
+                17.25, 29.5,
+            ),
+            page: (17.25, 29.5),
             target,
             is_target_touch: true,
         };

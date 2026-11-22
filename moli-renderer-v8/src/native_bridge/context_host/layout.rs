@@ -1,10 +1,16 @@
+use std::collections::{HashMap, HashSet};
+
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
+#[cfg(feature = "devtools")]
+use moli_layout::LayoutTransform2D;
 use moli_layout::{
     FrozenLayoutTree, GeometryProvider, LayoutAnswers, LayoutError, LayoutPassRequest,
-    LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutViewport,
+    LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutViewport,
 };
 
 use super::PageScriptHost;
+#[cfg(feature = "devtools")]
+use super::layout_snapshot::PublishedFrameGeometry;
 use super::layout_state::InferredFrameStyleViewportCacheKey;
 use crate::{
     css_resource_urls::{
@@ -24,6 +30,77 @@ pub(crate) enum LayoutInputChange {
     StyleEnvironment,
     /// Scrollbar policy and interactions change future geometry/paint output.
     UsedGeometry,
+}
+
+struct FrameLayoutPublication {
+    content_boxes: HashMap<DomHandle, Option<LayoutRect>>,
+    #[cfg(feature = "devtools")]
+    geometry: PublishedFrameGeometry,
+}
+
+impl FrameLayoutPublication {
+    fn collect(
+        &mut self,
+        host: &PageScriptHost,
+        document: DomHandle,
+        tree: &FrozenLayoutTree<DomHandle>,
+        frames_by_document: &HashMap<DomHandle, HashSet<DomHandle>>,
+        #[cfg(feature = "devtools")] root_to_viewport: Option<LayoutTransform2D>,
+    ) {
+        let Some(frames) = frames_by_document.get(&document) else {
+            return;
+        };
+        let owner_boxes: HashMap<_, _> = tree
+            .boxes
+            .iter()
+            .filter_map(|layout_box| {
+                let source = layout_box.principal_source?;
+                frames.contains(&source).then_some((source, layout_box))
+            })
+            .collect();
+        let embedded: HashMap<_, _> = tree
+            .embedded_frames()
+            .map(|frame| (frame.source, frame.tree.as_ref()))
+            .collect();
+        for &frame in frames {
+            let owner_box = owner_boxes.get(&frame);
+            self.content_boxes
+                .insert(frame, owner_box.map(|owner_box| owner_box.content_box));
+            let Some(child_document) = host.child_browsing_context_document_handle(frame) else {
+                continue;
+            };
+            let child_tree = embedded.get(&frame).copied();
+            if child_tree.is_some_and(|child| {
+                host.dom_host()
+                    .dom()
+                    .document_element_handle_for_document(child_document)
+                    != Some(child.source_root())
+            }) {
+                continue;
+            }
+            #[cfg(feature = "devtools")]
+            let child_transform = root_to_viewport
+                .zip(owner_box.and_then(|owner_box| tree.frame_viewport_transform(owner_box.id)))
+                .map(|(parent, child)| child.concatenate(parent))
+                .filter(|transform| transform.is_finite());
+            #[cfg(feature = "devtools")]
+            if let Some(owner) = host.current_window_document_task_target_for_dispatch_scope(
+                super::OwnerDispatchScope::Child(frame),
+            ) {
+                self.geometry.insert(child_document, owner, child_transform);
+            }
+            if let Some(child_tree) = child_tree {
+                self.collect(
+                    host,
+                    child_document,
+                    child_tree,
+                    frames_by_document,
+                    #[cfg(feature = "devtools")]
+                    child_transform,
+                );
+            }
+        }
+    }
 }
 
 /// Resets the entry flag on every return path, including unwinding.
@@ -464,30 +541,44 @@ impl PageScriptHost {
         }
         let metrics = pass.metrics;
         let pass_viewport = pass.viewport;
-        let frame_viewports = self
-            .child_browsing_context_handles_in_document_order()
+        let live_frames = self.child_browsing_context_handles_in_document_order();
+        let mut frames_by_document: HashMap<_, HashSet<_>> = HashMap::new();
+        for &frame in &live_frames {
+            if let Some(parent) = self.dom_host().owner_document_handle(frame) {
+                frames_by_document.entry(parent).or_default().insert(frame);
+            }
+        }
+        let mut frames = FrameLayoutPublication {
+            content_boxes: HashMap::new(),
+            #[cfg(feature = "devtools")]
+            geometry: PublishedFrameGeometry::new(
+                self.current_window_document_task_target_for_dispatch_scope(
+                    super::OwnerDispatchScope::Top,
+                ),
+            ),
+        };
+        frames.collect(
+            self,
+            document,
+            &pass.tree,
+            &frames_by_document,
+            #[cfg(feature = "devtools")]
+            (document == self.document_handle()).then_some(LayoutTransform2D::IDENTITY),
+        );
+        let frame_viewports = live_frames
             .into_iter()
             .filter_map(|frame| {
-                let owner = self.dom_host().owner_document_handle(frame)?;
-                let root = self
-                    .dom_host()
-                    .dom()
-                    .document_element_handle_for_document(owner)?;
-                // A fresh paint publishes nested frame trees too. Publish each
-                // frame's used content viewport from that same projection.
-                let tree = pass.tree.tree_for_root(root);
-                if tree.is_none() && !self.layout_policy.is_realtime() {
+                let content = frames.content_boxes.get(&frame);
+                if content.is_none() && !self.layout_policy.is_realtime() {
                     return None;
                 }
-                let viewport = tree
-                    .and_then(|tree| tree.local_content_box_for_source(frame))
-                    .map(|content| {
-                        LayoutViewport::new(
-                            css_viewport_dimension(f64::from(content.width)),
-                            css_viewport_dimension(f64::from(content.height)),
-                            pass_viewport.device_pixel_ratio,
-                        )
-                    });
+                let viewport = content.and_then(|content| *content).map(|content| {
+                    LayoutViewport::new(
+                        css_viewport_dimension(f64::from(content.width)),
+                        css_viewport_dimension(f64::from(content.height)),
+                        pass_viewport.device_pixel_ratio,
+                    )
+                });
                 let viewport = if self.layout_policy.is_realtime() {
                     // Hiding a live frame removes its geometry, not its last
                     // Window viewport. Initially hidden frames start at zero.
@@ -530,13 +621,43 @@ impl PageScriptHost {
         }
         self.document_layout_state
             .borrow_mut()
-            .publish_latest_layout(document, tree);
+            .publish_latest_layout(
+                document,
+                tree,
+                #[cfg(feature = "devtools")]
+                frames.geometry,
+            );
         for (target, size) in sampled_viewports {
             self.sample_realtime_frame_viewport(target, size);
         }
         self.last_layout_pass_metrics.set(Some(metrics));
         self.layout_snapshot_cache_publishes
             .set(self.layout_snapshot_cache_publishes.get().saturating_add(1));
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn published_frame_geometry(&self) -> Option<std::rc::Rc<PublishedFrameGeometry>> {
+        self.document_layout_state
+            .borrow()
+            .frame_geometry()
+            .cloned()
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn input_frame_transform(
+        &self,
+        document: DomHandle,
+        sampled: Option<&PublishedFrameGeometry>,
+    ) -> Option<LayoutTransform2D> {
+        if document == self.document_handle() || !self.layout_policy().uses_real_layout() {
+            return Some(LayoutTransform2D::IDENTITY);
+        }
+        let state = self.document_layout_state.borrow();
+        state
+            .frame_geometry()
+            .map(std::rc::Rc::as_ref)
+            .or(sampled)?
+            .root_to_viewport(self, document)
     }
 
     pub(crate) fn answer_layout_for_document(
