@@ -20,8 +20,8 @@ use moli_cookie_jar::{
 };
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, RawResponse, RedirectInfo, RequestCredentialsMode,
-    RequestResourceType, ResponseHead, ScriptFetchRequestMetadata, StreamingRawResponse,
-    cookie_header_for_request,
+    RequestMode, RequestResourceType, ResponseHead, ScriptFetchRequestMetadata,
+    StreamingRawResponse, cookie_header_for_request,
 };
 
 use super::{
@@ -930,6 +930,94 @@ async fn dropping_streaming_response_cancels_the_source_transfer() -> Result<()>
     );
 
     server.await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_resource_text_rejects_cors_redirect_destination_before_reading_body() -> Result<()>
+{
+    let source = TcpListener::bind("127.0.0.1:0").await?;
+    let source_url = Url::parse(&format!("http://{}/start", source.local_addr()?))?;
+    let destination = TcpListener::bind("127.0.0.1:0").await?;
+    let destination_url = format!("http://{}/final", destination.local_addr()?);
+    let redirect = tokio::spawn(async move {
+        let (mut stream, _) = source.accept().await?;
+        read_http_request_head(&mut stream).await?;
+        let response = format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: {destination_url}\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(response.as_bytes()).await
+    });
+    let (release_body, body_gate) = oneshot::channel();
+    let final_response = tokio::spawn(async move {
+        let (mut stream, _) = destination.accept().await?;
+        let request = read_http_request_text(&mut stream).await?;
+        assert!(
+            request
+                .lines()
+                .any(|line| line.eq_ignore_ascii_case("Origin: null"))
+        );
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+            .await?;
+        let _ = body_gate.await;
+        Ok::<_, std::io::Error>(())
+    });
+
+    let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    let document_url = Url::parse("http://document.test/page")?;
+    let request = Request::new_browser("GET", source_url, None, Vec::new(), (&document_url).into())
+        .with_initiator_url(&document_url)
+        .with_request_mode(RequestMode::Cors)
+        .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+        .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+    let error = timeout(
+        Duration::from_secs(5),
+        loader.fetch_browser_resource_text(request),
+    )
+    .await?
+    .expect_err("reject the CORS response while its body is still pending");
+    assert_eq!(
+        error.to_string(),
+        "CORS check failed: no Access-Control-Allow-Origin for null"
+    );
+    let _ = release_body.send(());
+    redirect.await??;
+    final_response.await??;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_resource_text_checks_cors_on_a_shared_script_cache_hit() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = Url::parse(&format!("http://{}/app.js", listener.local_addr()?))?;
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        read_http_request_head(&mut stream).await?;
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nCache-Control: max-age=60\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnull").await
+    });
+
+    let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    let document_url = Url::parse("http://document.test/page")?;
+    let request = Request::new_browser("GET", url, None, Vec::new(), (&document_url).into())
+        .with_initiator_url(&document_url)
+        .with_request_mode(RequestMode::Cors)
+        .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+        .with_browser_request_metadata(BrowserRequestMetadata::Script)
+        .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+    loader
+        .fetch_cacheable_script_text_stream(request.clone())
+        .await?;
+    server.await??;
+
+    let error = loader
+        .fetch_browser_resource_text(request)
+        .await
+        .expect_err("a shared transport response must still pass the resource's CORS check");
+    assert_eq!(
+        error.to_string(),
+        "CORS check failed: no Access-Control-Allow-Origin for http://document.test"
+    );
     Ok(())
 }
 
