@@ -153,7 +153,7 @@ pub(crate) use registry_retarget::{
 };
 mod subtree_upgrade;
 pub(crate) use subtree_upgrade::{
-    enqueue_upgrade_reaction_if_defined, enqueue_upgrade_reactions_for_subtree,
+    enqueue_fragment_upgrade_reactions, enqueue_upgrade_reaction_if_defined,
     upgrade_late_defined_connected_tree_after_parser_sync, upgrade_subtree_if_defined,
     upgrade_subtree_if_defined_for_registry,
 };

@@ -64,18 +64,22 @@ pub(crate) fn enqueue_upgrade_reaction_if_defined(
     true
 }
 
-pub(crate) fn enqueue_upgrade_reactions_for_subtree(
+pub(crate) fn enqueue_fragment_upgrade_reactions(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
-    root: DomHandle,
-) -> bool {
-    let mut handles = Vec::new();
-    collect_shadow_including_subtree_handles(host_ptr, root, &mut handles);
-    let mut enqueued = false;
+    fragment: DomHandle,
+) {
+    let mut handles: Vec<_> = unsafe { &*host_ptr }
+        .dom_host()
+        .shadow_including_subtree(fragment)
+        .filter(|&handle| can_upgrade_handle(host_ptr, handle))
+        .collect();
+    // Foster parenting can move a later parser-created element ahead of
+    // earlier ones in the tree. Native node indices retain creation order.
+    handles.sort_unstable_by_key(|handle| handle.index());
     for handle in handles {
-        enqueued |= enqueue_upgrade_reaction_if_defined(scope, host_ptr, handle);
+        enqueue_custom_element_reaction(scope, host_ptr, handle, CustomElementReaction::Upgrade);
     }
-    enqueued
 }
 
 pub(crate) fn upgrade_late_defined_connected_tree_after_parser_sync(

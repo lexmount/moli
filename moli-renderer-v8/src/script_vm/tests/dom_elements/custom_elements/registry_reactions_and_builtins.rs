@@ -457,6 +457,50 @@ fn fragment_html_custom_element_constructor_sees_connected_token_attributes() {
 }
 
 #[test]
+fn fragment_html_upgrades_in_parser_order_before_disconnect_callbacks() {
+    let mut vm = new_parsed_test_vm(
+        "https://fragment-reactions.test/",
+        "<!doctype html><body><div id='target'></div></body>",
+    );
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const target = document.getElementById("target");
+              const events = [];
+              customElements.define("x-fragment-reaction", class extends HTMLElement {
+                constructor() {
+                  super();
+                  events.push("constructor:" + this.getAttribute("data-order"));
+                }
+                connectedCallback() {
+                  events.push("connected:" + this.getAttribute("data-order"));
+                }
+                disconnectedCallback() { events.push("disconnected"); }
+              });
+              target.append(document.createElement("x-fragment-reaction"));
+              events.length = 0;
+              target.innerHTML = "<table><tr><td>" +
+                "<x-fragment-reaction data-order='cell'></x-fragment-reaction>" +
+                "</td></tr>" +
+                "<x-fragment-reaction data-order='fostered'></x-fragment-reaction>" +
+                "</table>";
+              return [
+                target.firstElementChild.getAttribute("data-order"),
+                ...events
+              ].join("|");
+            })()
+            "#,
+        )
+        .expect("fragment upgrade order should be observable before returning");
+
+    assert_eq!(
+        result,
+        "fostered|constructor:cell|connected:cell|constructor:fostered|connected:fostered|disconnected"
+    );
+}
+
+#[test]
 fn fragment_html_custom_element_constructor_sees_disconnected_parent() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
