@@ -45,7 +45,7 @@ fn mouse(
     y: f64,
     intercept: bool,
 ) -> crate::runtime::RendererInputDispatchOutcome {
-    vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+    vm.dispatch_mouse_input(
         20.0,
         y,
         event,
@@ -57,6 +57,7 @@ fn mouse(
         RendererPointerEventProperties::default(),
         0,
         intercept,
+        MouseDispatchCompletion::FinishTurn,
     )
     .unwrap()
 }

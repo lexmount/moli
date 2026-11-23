@@ -167,7 +167,7 @@ fn start_native_drag(
     };
     for (name, x) in [("mousedown", x), ("mousemove", x + step)] {
         let outcome = vm
-            .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+            .dispatch_mouse_input(
                 x,
                 y,
                 name,
@@ -179,6 +179,7 @@ fn start_native_drag(
                 RendererPointerEventProperties::default(),
                 0,
                 true,
+                MouseDispatchCompletion::FinishTurn,
             )
             .unwrap();
         if name == "mousemove" {

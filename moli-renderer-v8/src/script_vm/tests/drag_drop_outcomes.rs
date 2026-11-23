@@ -35,7 +35,7 @@ fn start_drag(vm: &mut ScriptVm) -> RendererDragData {
     vm.publish_layout_for_test().expect("publish drag geometry");
     for (event, y) in [("mousedown", 20.0), ("mousemove", 120.0)] {
         let outcome = vm
-            .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+            .dispatch_mouse_input(
                 20.0,
                 y,
                 event,
@@ -47,6 +47,7 @@ fn start_drag(vm: &mut ScriptVm) -> RendererDragData {
                 RendererPointerEventProperties::default(),
                 0,
                 true,
+                MouseDispatchCompletion::FinishTurn,
             )
             .expect("dispatch native drag gesture");
         if event == "mousemove" {

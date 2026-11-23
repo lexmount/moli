@@ -372,7 +372,7 @@ fn pointer_capture_mouse_events_preserve_modifiers() {
     vm.publish_layout_for_test()
         .expect("publish geometry before coordinate input");
 
-    vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+    vm.dispatch_mouse_input(
         10.0,
         11.0,
         "mousedown",
@@ -384,9 +384,10 @@ fn pointer_capture_mouse_events_preserve_modifiers() {
         crate::runtime::RendererPointerEventProperties::default(),
         10,
         false,
+        MouseDispatchCompletion::FinishTurn,
     )
     .expect("mousedown should dispatch pointerdown with modifiers");
-    vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+    vm.dispatch_mouse_input(
         10.0,
         11.0,
         "mouseup",
@@ -398,6 +399,7 @@ fn pointer_capture_mouse_events_preserve_modifiers() {
         crate::runtime::RendererPointerEventProperties::default(),
         10,
         false,
+        MouseDispatchCompletion::FinishTurn,
     )
     .expect("mouseup should dispatch pointerup and capture release with modifiers");
 
@@ -1137,7 +1139,7 @@ fn dispatch_drag_mouse(
     event_name: &str,
     intercept_drags: bool,
 ) -> crate::runtime::RendererInputDispatchOutcome {
-    vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+    vm.dispatch_mouse_input(
         x,
         y,
         event_name,
@@ -1149,6 +1151,7 @@ fn dispatch_drag_mouse(
         crate::runtime::RendererPointerEventProperties::default(),
         0,
         intercept_drags,
+        MouseDispatchCompletion::FinishTurn,
     )
     .expect("drag mouse event should dispatch")
 }

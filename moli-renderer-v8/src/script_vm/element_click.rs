@@ -1,3 +1,5 @@
+#[cfg(feature = "devtools")]
+use super::MouseDispatchCompletion;
 use super::ScriptVm;
 #[cfg(feature = "devtools")]
 use super::input_helpers::clear_input_dispatch_state;
@@ -197,7 +199,7 @@ impl ScriptVm {
                 clear_input_dispatch_state(self);
                 break;
             }
-            let dispatched = self.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+            let dispatched = self.dispatch_mouse_input(
                 click.root_x,
                 click.root_y,
                 event,
@@ -209,6 +211,7 @@ impl ScriptVm {
                 RendererPointerEventProperties::default(),
                 0,
                 false,
+                MouseDispatchCompletion::FinishTurn,
             );
             let next = match dispatched {
                 Ok(next) => next,

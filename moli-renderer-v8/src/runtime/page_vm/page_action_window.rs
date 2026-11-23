@@ -12,6 +12,7 @@ use crate::{
         RendererDocumentLifecycleIdentity, RendererInputDispatchOutcome,
         RendererPointerEventProperties,
     },
+    script_vm::MouseDispatchCompletion,
 };
 
 use super::PageVm;
@@ -219,21 +220,20 @@ impl PageVm {
                 skipped_events += 1;
                 continue;
             }
-            let result = self
-                .vm_mut()
-                .dispatch_mouse_event_at_point_with_pointer_and_modifiers_without_checkpoint(
-                    event.x,
-                    event.y,
-                    "wheel",
-                    event.button,
-                    event.buttons,
-                    event.click_count,
-                    event.delta_x,
-                    event.delta_y,
-                    event.pointer,
-                    event.modifiers,
-                    false,
-                );
+            let result = self.vm_mut().dispatch_mouse_input(
+                event.x,
+                event.y,
+                "wheel",
+                event.button,
+                event.buttons,
+                event.click_count,
+                event.delta_x,
+                event.delta_y,
+                event.pointer,
+                event.modifiers,
+                false,
+                MouseDispatchCompletion::DeferToBatch,
+            );
             if let Err(error) = result
                 && first_error.is_none()
             {
