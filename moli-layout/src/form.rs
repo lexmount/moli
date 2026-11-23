@@ -285,119 +285,58 @@ fn mask_password(
     text_transform: TextTransform,
     selection: Option<LayoutTextSelection>,
 ) -> (String, Option<LayoutTextSelection>) {
-    let selection = selection.map(|selection| {
-        if !selection.is_caret() || text_transform == TextTransform::None {
-            return selection;
-        }
-        // Case conversion can split a source grapheme across several bullets.
-        // Snap the paint caret to a source boundary before applying that mapping.
-        let mut boundary = 0;
-        for grapheme in value.graphemes(true) {
-            if boundary >= selection.start {
-                break;
-            }
-            boundary += grapheme.encode_utf16().count();
-        }
-        LayoutTextSelection::new(boundary, boundary)
-    });
-    let (value, case_source_lengths) =
-        transform_password(value, text_transform, selection.is_some());
-    let Some(selection) = selection else {
-        return ("\u{2022}".repeat(value.graphemes(true).count()), None);
-    };
-    let grapheme_lengths = value
-        .graphemes(true)
-        .map(|grapheme| grapheme.encode_utf16().count());
-
-    let (bullet_count, selection) = if let Some(case_source_lengths) = case_source_lengths {
-        let mut transformed_offset = 0;
-        let mut bullet_source_lengths = Vec::<usize>::new();
-        for transformed_length in grapheme_lengths {
-            let source_lengths =
-                &case_source_lengths[transformed_offset..transformed_offset + transformed_length];
-            transformed_offset += transformed_length;
-            let source_length = source_lengths.iter().sum();
-            if source_lengths[0] == 0 {
-                // A grapheme starting inside an expansion extends the previous
-                // bullet's source span. Keep both bullets in that mapping.
-                *bullet_source_lengths.last_mut().expect("preceding bullet") += source_length;
-                bullet_source_lengths.push(0);
-            } else {
-                bullet_source_lengths.push(source_length);
-            }
-        }
-        mask_password_selection(selection, bullet_source_lengths.into_iter())
-    } else {
-        mask_password_selection(selection, grapheme_lengths)
-    };
-    ("\u{2022}".repeat(bullet_count), selection)
-}
-
-fn mask_password_selection(
-    selection: LayoutTextSelection,
-    source_lengths: impl Iterator<Item = usize>,
-) -> (usize, Option<LayoutTextSelection>) {
-    let mut source_lengths = source_lengths.peekable();
+    // Project the selection through case conversion and then through the
+    // grapheme boundaries of the displayed text.
+    let (value, transformed_selection) = transform_password(value, text_transform, selection);
+    let mut text = String::with_capacity(value.len());
     let mut source_offset = 0;
-    let mut total_bullets = 0;
     let mut masked_selection = LayoutTextSelection::new(0, 0);
-    while let Some(source_length) = source_lengths.next() {
-        let mut bullet_count = 1;
-        while source_lengths.peek() == Some(&0) {
-            source_lengths.next();
-            bullet_count += 1;
+    for grapheme in value.graphemes(true) {
+        text.push('\u{2022}');
+        if let Some(selection) = transformed_selection {
+            // A UTF-16 offset inside a grapheme maps to the end of its bullet.
+            masked_selection.start += usize::from(source_offset < selection.start);
+            masked_selection.end += usize::from(source_offset < selection.end);
+            source_offset += grapheme.encode_utf16().count();
         }
-        let map_offset = |offset: usize| {
-            let relative = offset.saturating_sub(source_offset);
-            if relative >= source_length {
-                bullet_count
-            } else {
-                relative.min(bullet_count)
-            }
-        };
-        masked_selection.start += map_offset(selection.start);
-        masked_selection.end += map_offset(selection.end);
-        source_offset += source_length;
-        total_bullets += bullet_count;
     }
-    (
-        total_bullets,
-        (selection.is_caret() || !masked_selection.is_caret()).then_some(masked_selection),
-    )
+    let selection = selection
+        .filter(|original| original.is_caret() || !masked_selection.is_caret())
+        .map(|_| masked_selection);
+    (text, selection)
 }
 
 fn transform_password(
     value: &str,
     text_transform: TextTransform,
-    map_selection: bool,
-) -> (Cow<'_, str>, Option<Vec<usize>>) {
+    selection: Option<LayoutTextSelection>,
+) -> (Cow<'_, str>, Option<LayoutTextSelection>) {
     if text_transform == TextTransform::None {
-        return (Cow::Borrowed(value), None);
+        return (Cow::Borrowed(value), selection);
     }
 
     let mut transform = TextTransformState::default();
     let mut transformed = String::with_capacity(value.len());
     let mut source_offset = 0;
-    // Each transformed UTF-16 unit records the number of source units it takes
-    // up. Extra units from an expansion carry zero source length.
-    let mut source_lengths = None;
+    let mut transformed_selection = LayoutTextSelection::new(0, 0);
     for character in value.chars() {
-        let source_units = character.len_utf16();
         let mut transformed_units = 0;
         for converted in transform.transform(character, text_transform) {
             transformed.push(converted);
             transformed_units += converted.len_utf16();
         }
-        if map_selection && (source_units != transformed_units || source_lengths.is_some()) {
-            let lengths = source_lengths.get_or_insert_with(|| vec![1; source_offset]);
-            let shared_units = source_units.min(transformed_units);
-            lengths.extend(std::iter::repeat_n(1, shared_units - 1));
-            lengths.push(source_units - shared_units + 1);
-            lengths.extend(std::iter::repeat_n(0, transformed_units - shared_units));
+        if let Some(selection) = selection {
+            transformed_selection.start +=
+                usize::from(source_offset < selection.start) * transformed_units;
+            transformed_selection.end +=
+                usize::from(source_offset < selection.end) * transformed_units;
+            source_offset += character.len_utf16();
         }
-        source_offset += source_units;
     }
-    (Cow::Owned(transformed), source_lengths)
+    (
+        Cow::Owned(transformed),
+        selection.map(|_| transformed_selection),
+    )
 }
 
 pub(crate) fn select_row_height(font_size: f32, line_height: f32) -> f32 {
