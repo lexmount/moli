@@ -240,6 +240,42 @@ async fn css_media_rule_matches_uses_the_stylesheet_document_after_adoption() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn initial_page_adopts_os_text_scale_changed_after_build() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1");
+    bc.set_target_url("about:blank".into());
+    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+
+    let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
+    let pending = ctx.with_fixture(|conn| {
+        conn.start_initial_document_page_ensure_for_owner(&owner)
+            .unwrap()
+            .expect("initial Page build")
+    });
+    let completed = pending.wait().await.unwrap();
+    expect_session_command_result(
+        &mut ctx,
+        88505,
+        "SID-1",
+        "Emulation.setEmulatedOSTextScale",
+        json!({"scale": 1.5}),
+    )
+    .await;
+    completed
+        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
+        .await
+        .unwrap();
+    let size = evaluate(
+        &mut ctx,
+        "document.head.insertAdjacentHTML('afterbegin', '<meta name=text-scale content=scale>'); getComputedStyle(document.body).fontSize",
+    )
+    .await;
+    assert_eq!(size, "24px");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn detaching_an_untouched_emulation_session_resets_the_target_text_scale() {
     let mut ctx = TestContext::new();
     install_multi_session_page_state(&mut ctx);
