@@ -2,7 +2,7 @@ use moli_layout::LayoutError;
 use style::computed_value_flags::ComputedValueFlags;
 
 use super::declaration::{
-    ComputedStyleRead, style_property_value_for_pseudo_with_context,
+    ComputedStyleRead, StyleComputationContext, style_property_value_for_pseudo_with_context,
     style_property_value_with_context,
 };
 use super::{
@@ -13,16 +13,16 @@ use crate::{css_style::canonical_style_property_name, util::v8_string};
 
 /// Public CSSOM observation boundary. Internal layout style resolution never
 /// enters here: it already owns a pass-specific viewport and style context.
-pub(super) fn prepare_public_style_property(
+pub(super) fn prepare_public_style_read(
     runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
-    property: &str,
+    property: Option<&str>,
 ) -> Result<(), LayoutError> {
     if mode == StyleMode::Computed
         && runtime.layout_policy().is_realtime()
         && style_read_needs_layout(runtime, handle, || {
-            property_may_observe_used_geometry(property)
+            property.is_some_and(property_may_observe_used_geometry)
         })
     {
         runtime.ensure_observable_layout()?;
@@ -110,6 +110,27 @@ pub(super) fn prepare_public_style_batch(
     Ok(())
 }
 
+pub(super) fn live_style_read_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+    mode: StyleMode,
+    property: Option<&str>,
+) -> Option<StyleComputationContext> {
+    if let Err(error) = prepare_public_style_read(runtime, handle, mode, property) {
+        if let Some(message) = v8_string(scope, &format!("Layout failed: {error}")) {
+            let exception = v8::Exception::error(scope, message);
+            scope.throw_exception(exception);
+        }
+        return None;
+    }
+    // A screen layout pass can update the viewport of a child document.
+    Some(style_object_computation_context(
+        scope, style, runtime, handle, mode,
+    ))
+}
+
 pub(super) fn read_live_style_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
@@ -118,15 +139,7 @@ pub(super) fn read_live_style_property<'s>(
     mode: StyleMode,
     property: &str,
 ) -> Option<String> {
-    if let Err(error) = prepare_public_style_property(runtime, handle, mode, property) {
-        if let Some(message) = v8_string(scope, &format!("Layout failed: {error}")) {
-            let exception = v8::Exception::error(scope, message);
-            scope.throw_exception(exception);
-        }
-        return None;
-    }
-    // A screen layout pass can update the viewport of a child document.
-    let context = style_object_computation_context(scope, style, runtime, handle, mode);
+    let context = live_style_read_context(scope, style, runtime, handle, mode, Some(property))?;
     Some(match style_object_pseudo_element(scope, style, mode) {
         Some(pseudo) => style_property_value_for_pseudo_with_context(
             runtime, handle, &pseudo, property, context,
