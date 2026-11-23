@@ -67,7 +67,7 @@ pub(crate) struct PendingLocationNavigation {
     pub(crate) initial_document_environment:
         Option<crate::runtime::RendererCapturedDocumentEnvironment>,
     pub(crate) entry_seed: Option<NavigationHistoryEntrySeed>,
-    /// Applied by the renderer when it owns the followed navigation.
+    /// Resolved history handling for requests without a prebuilt entry seed.
     pub(crate) history_mutation: Option<NavigationHistoryMutation>,
     pub(crate) reserved_service_worker_client: Option<PendingReservedServiceWorkerClient>,
     pub(crate) service_worker_client_navigate:
