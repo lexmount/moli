@@ -106,3 +106,27 @@ fn window_focus_and_blur_validate_the_receiver_in_the_callee_realm() {
         "true"
     );
 }
+
+#[test]
+fn first_input_focus_from_a_child_blurs_the_top_window() {
+    let mut vm = new_storage_html_test_vm("https://first-frame-focus.test/");
+    vm.eval(
+        r#"
+const focusTransitions = [];
+window.addEventListener('blur', () => focusTransitions.push('top blur'));
+const frame = document.createElement('iframe');
+frame.srcdoc = `<input><script>
+    window.addEventListener('focus', () => parent.focusTransitions.push('child focus'));
+    document.querySelector('input').focus();
+</script>`;
+window.focusTransitions = focusTransitions;
+document.body.append(frame);
+"#,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval("focusTransitions.join(',')").unwrap(),
+        "top blur,child focus"
+    );
+}
