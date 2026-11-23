@@ -254,6 +254,33 @@ fn drag_transitions_project_each_document_and_keep_related_targets_local() {
 }
 
 #[test]
+fn source_drag_moving_iframe_keeps_destination_coordinates_for_current_update() {
+    for scale in [1.0, 0.5] {
+        let mut vm = cross_document_drag_vm(scale);
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        vm.eval(
+            r#"
+            document.getElementById('parent').addEventListener('drag',()=>{
+                document.getElementById('frame-a').style.left='320px';
+            }, {once:true});
+        "#,
+        )
+        .unwrap();
+        let data = start_native_drag(&mut vm, "parent", scale);
+        let builds = vm.layout_pass_observability_for_test().1;
+        dispatch_drag(&mut vm, "dragenter", "a", scale, &data);
+
+        let result = drag_log(&mut vm);
+        let events = result["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "dragenter");
+        assert_eq!(events[0]["target"], "a");
+        assert_event_coordinates(&events[0], "a", root_position("a", scale), scale);
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    }
+}
+
+#[test]
 fn drag_cancel_and_drop_reproject_the_source_end_without_reviving_event_views() {
     // Moli projects client coordinates into the receiving Document, including
     // the source's dragend. Chromium currently keeps the destination manager's
