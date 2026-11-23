@@ -9,6 +9,7 @@ pub enum Command {
     Begin {
         transaction: TransactionHandle,
         mode: TransactionMode,
+        durability: TransactionDurability,
         stores: BTreeSet<StoreId>,
         version: Option<u64>,
         admission: Option<TransactionRequestHandle>,

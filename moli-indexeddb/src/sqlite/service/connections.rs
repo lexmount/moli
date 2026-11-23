@@ -359,6 +359,7 @@ impl DatabaseConnection {
         let command = Command::Begin {
             transaction,
             mode: TransactionMode::VersionChange,
+            durability: crate::TransactionDurability::Strict,
             stores: Default::default(),
             version: Some(version),
             admission: None,

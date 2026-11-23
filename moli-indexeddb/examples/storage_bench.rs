@@ -48,6 +48,7 @@ fn begin(
         Command::Begin {
             transaction,
             mode,
+            durability: moli_indexeddb::TransactionDurability::Relaxed,
             stores: admission
                 .as_ref()
                 .map(|request| request.stores().into_iter().collect())
