@@ -162,6 +162,7 @@ impl QueryElement<'_> {
             }
         } else if element.namespace() == HTML_NAMESPACE {
             append_html_direction_declaration(*self, &mut block);
+            append_html_text_alignment_declaration(*self, &mut block);
             if element.local_name() == "object" {
                 append_html_object_dimension_declarations(element, &mut block);
             }
@@ -205,6 +206,31 @@ fn append_html_direction_declaration(
             Importance::Normal,
         );
     }
+}
+
+fn append_html_text_alignment_declaration(
+    element: QueryElement<'_>,
+    block: &mut PropertyDeclarationBlock,
+) {
+    let native = element.element();
+    let legacy_block_alignment = match native.local_name() {
+        "div" | "p" => true,
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => false,
+        _ => return,
+    };
+    let Some(value) = native.attribute_ns("", "align") else {
+        return;
+    };
+
+    // The legacy values on div and p also align block descendants.
+    let alignment = match (legacy_block_alignment, value.to_ascii_lowercase().as_str()) {
+        (true, "center" | "middle") => "-moz-center",
+        (true, "left") => "-moz-left",
+        (true, "right") => "-moz-right",
+        (false, "middle") => "center",
+        _ => value,
+    };
+    append_parsed_presentation_declaration(element, "text-align", alignment, block);
 }
 
 fn append_html_table_presentation_declarations(

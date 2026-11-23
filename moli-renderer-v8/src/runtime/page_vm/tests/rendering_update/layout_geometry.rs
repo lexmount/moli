@@ -601,6 +601,89 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn html_align_attribute_positions_heading_and_paragraph_text() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/legacy-text-alignment.html")?,
+        );
+        page_vm
+            .vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+#readme { width: 400px; }
+#override { text-align: right; }
+</style>`;
+document.body.innerHTML = `<article id=readme>
+  <div><h1 id=heading align=CeNtEr>Moli</h1></div>
+  <p id=paragraph align=middle>Community</p>
+  <div id=group align=center>Links</div>
+  <h2 id=override align=center>Author style</h2>
+</article>`;
+globalThis.measureAlignment = id => {
+  const element = document.getElementById(id);
+  const box = element.getBoundingClientRect();
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const text = range.getBoundingClientRect();
+  return [getComputedStyle(element).textAlign, text.left - box.left, box.right - text.right];
+};
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().publish_layout_for_test()?;
+
+        for (id, expected_alignment) in [
+            ("heading", "center"),
+            ("paragraph", "-moz-center"),
+            ("group", "-moz-center"),
+            ("override", "right"),
+        ] {
+            let geometry = page_vm
+                .vm_mut()
+                .eval(&format!("JSON.stringify(measureAlignment('{id}'))"))?;
+            let (alignment, left, right): (String, f64, f64) = serde_json::from_str(&geometry)?;
+            assert_eq!(alignment, expected_alignment, "{id}");
+            let offset = if expected_alignment == "right" {
+                right
+            } else {
+                left - right
+            };
+            assert!(
+                offset.abs() < 0.05,
+                "{id} has incorrect alignment: {geometry}"
+            );
+        }
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"
+const heading = document.getElementById('heading');
+heading.setAttribute('align', 'right');
+const right = measureAlignment('heading');
+heading.removeAttribute('align');
+JSON.stringify([right, measureAlignment('heading')]);
+"#,
+        )?;
+        let [
+            (right_alignment, _, right_gap),
+            (default_alignment, left_gap, _),
+        ]: [(String, f64, f64); 2] = serde_json::from_str(&geometry)?;
+        assert_eq!(right_alignment, "right");
+        assert!(right_gap.abs() < 0.05, "{geometry}");
+        assert_eq!(default_alignment, "start");
+        assert!(left_gap.abs() < 0.05, "{geometry}");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("HTML align presentation hint fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn center_user_agent_alignment_centers_atomic_inline_children() {
     run_page_vm_async_test(async move {
         let loader =
