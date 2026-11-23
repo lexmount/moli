@@ -61,6 +61,12 @@ pub enum BrowserAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
+pub enum SchemaAction {
+    GetDomains,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
+#[strum(serialize_all = "camelCase")]
 pub enum ConsoleAction {
     Enable,
     Disable,

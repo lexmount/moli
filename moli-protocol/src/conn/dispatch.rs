@@ -1171,6 +1171,10 @@ impl CdpConnection {
                 let plan = crate::domains::inspector::command_output_plan(self, &cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
+            "Schema" => {
+                let plan = crate::domains::schema::command_output_plan(self, &cmd);
+                Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
+            }
             "Log" => {
                 let plan = crate::domains::log::command_output_plan(self, &cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))

@@ -1,5 +1,27 @@
 use super::*;
 
+#[test]
+fn schema_get_domains_discover_page_handlers() {
+    let mut conn = CdpConnection::new();
+    let mut context = BrowserContext::new("BID-schema".into());
+    context.set_active_target_id("TID-schema");
+    context.attach_active_session("SID-schema");
+    conn.install_browser_context_fixture_for_test(context);
+
+    let page = conn.start_command_dispatch(
+        r#"{"id":1,"method":"Schema.getDomains","sessionId":"SID-schema"}"#,
+    );
+    let messages = complete_messages(page);
+    let domains = messages[0]["result"]["domains"].as_array().unwrap();
+    for name in ["Page", "Runtime", "Debugger", "Schema"] {
+        assert!(domains.iter().any(|domain| domain["name"] == name));
+    }
+    assert!(!domains.iter().any(|domain| domain["name"] == "Browser"));
+
+    let browser = conn.start_command_dispatch(r#"{"id":2,"method":"Schema.getDomains"}"#);
+    assert_eq!(complete_messages(browser)[0]["error"]["code"], -32601);
+}
+
 #[tokio::test]
 async fn page_subscription_changes_apply_before_initial_adoption_and_are_not_replayed() {
     use futures_util::FutureExt as _;
