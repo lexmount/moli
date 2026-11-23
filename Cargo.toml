@@ -6,6 +6,7 @@ members = [
     "moli-bounded-buffer",
     "moli-bounded-json",
     "moli-broadcast-channel",
+    "molio",
     "moli-browser-profile",
     "moli-canvas",
     "moli-charset-parser",

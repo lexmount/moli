@@ -16,6 +16,7 @@
 __pycache__
 *.pyc
 /moli-playground/chatgpt/.profile/
+.DS_Store
 
 # Accidental nested benchmark output when moli-benchmark is run from its
 # own directory with a repo-relative output path.
