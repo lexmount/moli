@@ -55,17 +55,17 @@ pub use form::{form_control_text, select_control_texts};
 pub use layout_tree::{
     FrozenCoordinateSpace, FrozenEmbeddedFrame, FrozenLayoutBox, FrozenLayoutTree,
     GeometryProvider, LayoutAnswers, LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition,
-    LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImagePurpose,
-    LayoutCssImageReference, LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason,
-    LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
-    LayoutIntersectionGeometry, LayoutNodeOutput, LayoutObjectGeometry, LayoutOutputBoxId,
-    LayoutPaintedSurfaceHit, LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad,
-    LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics,
-    LayoutResizeObserverSize, LayoutResolvedGridTrackList, LayoutResolvedGridTracks,
-    LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize,
-    LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport,
-    MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
-    ScrollProjectionRefresh,
+    LayoutClipChainId, LayoutClipKind, LayoutClipNode, LayoutCoordinateSpaceId,
+    LayoutCssImagePurpose, LayoutCssImageReference, LayoutDocumentMetrics, LayoutElementMetrics,
+    LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId,
+    LayoutFragmentKind, LayoutHit, LayoutIntersectionClip, LayoutIntersectionGeometry,
+    LayoutNodeOutput, LayoutObjectGeometry, LayoutOutputBoxId, LayoutPaintedSurfaceHit,
+    LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
+    LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics, LayoutResizeObserverSize,
+    LayoutResolvedGridTrackList, LayoutResolvedGridTracks, LayoutScrollContainerMetrics,
+    LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D,
+    LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
+    MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES, ScrollProjectionRefresh,
 };
 pub use list::{ListCounter, list_marker_text};
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};

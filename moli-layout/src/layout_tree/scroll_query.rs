@@ -4,11 +4,12 @@ use std::{collections::HashSet, fmt::Debug, hash::Hash};
 
 use super::{
     model::{
-        LayoutClipChainId, LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId, LayoutQuad,
-        LayoutRect, LayoutTransform2D,
+        LayoutClipChainId, LayoutClipKind, LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId,
+        LayoutQuad, LayoutRect, LayoutTransform2D,
     },
     query::{
-        LayoutIntersectionGeometry, LayoutScrollContainerMetrics, LayoutScrollIntoViewGeometry,
+        LayoutIntersectionClip, LayoutIntersectionGeometry, LayoutScrollContainerMetrics,
+        LayoutScrollIntoViewGeometry,
     },
     tree::FrozenLayoutTree,
 };
@@ -133,9 +134,13 @@ where
             }
             _ => false,
         };
-        let root_clips_overflow = root_box
+        let root_clip = root_box
+            .and_then(|root_box| self.box_geometry(root_box))
+            .and_then(|geometry| geometry.clip_chain);
+        let root_is_scroll_container = root_box
+            .or_else(|| root.is_none().then_some(self.root_box))
             .and_then(|root_box| self.scroll_extent(root_box))
-            .is_some_and(|extent| extent.clips_overflow);
+            .is_some_and(|extent| extent.is_scroll_container);
         let root_rect = if root.is_none() {
             LayoutTransform2D::IDENTITY.map_rect(LayoutRect::new(
                 0.0,
@@ -168,13 +173,28 @@ where
                 let Some(node) = self.clip_chain.get(id.index()) else {
                     break;
                 };
-                if node.is_viewport() || node.owner.is_some_and(|owner| Some(owner) == root_box) {
+                // The root rectangle handles its own overflow. Its border-box
+                // clip chain also marks where clips on the root and its
+                // ancestors stop contributing to the observation.
+                if node.kind == LayoutClipKind::Viewport
+                    || Some(id) == root_clip
+                    || (root_box.is_some() && node.kind.owner() == root_box)
+                {
                     break;
                 }
                 if clip_ids.insert(id)
                     && let Some(space) = self.coordinate_space(node.coordinate_space)
                 {
-                    ancestor_clips.push(space.local_to_viewport.map_rect(node.rect));
+                    let is_scrollport = match node.kind {
+                        LayoutClipKind::Overflow(owner) => self
+                            .scroll_extent(owner)
+                            .is_some_and(|extent| extent.is_scroll_container),
+                        _ => false,
+                    };
+                    ancestor_clips.push(LayoutIntersectionClip {
+                        rect: space.local_to_viewport.map_rect(node.rect),
+                        is_scrollport,
+                    });
                 }
                 clip = node.parent;
             }
@@ -205,7 +225,7 @@ where
             ancestor_clips,
             target_has_layout: target_box.is_some(),
             target_visible,
-            root_clips_overflow,
+            root_is_scroll_container,
             root_is_layout_ancestor,
         })
     }

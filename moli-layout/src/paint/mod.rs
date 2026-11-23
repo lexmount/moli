@@ -31,9 +31,10 @@ use text::{
 };
 
 use crate::{
-    LayoutBox, LayoutBoxId, LayoutClipChainId, LayoutElementCategory, LayoutFormControlKind,
-    LayoutInputControlKind, LayoutReplacedKind, LayoutWorld, PaintColor, PaintDiagnostic,
-    PaintDiagnosticSeverity, PaintEdgeSizes, PaintFragment, PaintShape, PaintSnapshot,
+    LayoutBox, LayoutBoxId, LayoutClipChainId, LayoutClipKind, LayoutElementCategory,
+    LayoutFormControlKind, LayoutInputControlKind, LayoutReplacedKind, LayoutWorld, PaintColor,
+    PaintDiagnostic, PaintDiagnosticSeverity, PaintEdgeSizes, PaintFragment, PaintShape,
+    PaintSnapshot,
     capture::ResolvedPaintCapture,
     projection::{OutputProjection, PaintSpace},
     stacking::PaintOrderEvent,
@@ -616,7 +617,7 @@ where
         let node = &projection.clip_chain[id.index()];
         // The capture applies its own viewport clip. Include rectangular CSS
         // clips as well as rounded clips owned by overflow boxes.
-        if !node.is_viewport() {
+        if node.kind != LayoutClipKind::Viewport {
             chain.push(id);
         }
         current = node.parent;
@@ -635,7 +636,11 @@ fn push_clip_node<N>(
     let node = &projection.clip_chain[id.index()];
     let paint_space = projection.coordinate_spaces[node.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
-    let shape = node.owner.map_or(PaintShape::Rect(node.rect), |owner| {
+    let overflow_owner = match node.kind {
+        LayoutClipKind::Overflow(owner) => Some(owner),
+        _ => None,
+    };
+    let shape = overflow_owner.map_or(PaintShape::Rect(node.rect), |owner| {
         let layout_box = &projection.world.boxes[owner.index()];
         let border_radii = layout_box.style.border_radii(
             layout_box.final_layout.size.width,
@@ -657,9 +662,7 @@ fn push_clip_node<N>(
     // Overflow edges share the box's snapped paint geometry. Fractional clips
     // otherwise blend an edge differently when atomic paint ordering keeps a
     // background and its text in one clip layer instead of reopening it.
-    let snapped = node
-        .owner
-        .and_then(|_| paint_space.pixel_snapped_box_shape(shape.clone()));
+    let snapped = overflow_owner.and_then(|_| paint_space.pixel_snapped_box_shape(shape.clone()));
     let (shape, transform) = match snapped {
         Some(shape) => (shape, paint_space.property_transform()),
         None => (shape, paint_space.local_transform()),

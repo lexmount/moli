@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use moli_layout::{
-    DocumentLayoutServices, LayoutControlSurfaceHit, LayoutDisplay, LayoutElementCategory,
-    LayoutElementSemantics, LayoutEnvironment, LayoutError, LayoutFlushReason, LayoutFragmentKind,
-    LayoutNamespace, LayoutPaintedSurfaceHit, LayoutPassRequest, LayoutPassResult, LayoutPoint,
-    LayoutPosition, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect,
-    LayoutScrollbarColors, LayoutScrollbarGutter, LayoutScrollbarPart, LayoutScrollbarWidth,
-    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTransform2D, LayoutViewport,
-    PaintBrush, PaintCaptureRequest, PaintColor, PaintFragment, PaintShape,
-    ResolvedLayoutElementStyles, ResolvedLayoutStyle, build_layout_pass,
+    DocumentLayoutServices, LayoutClipKind, LayoutControlSurfaceHit, LayoutDisplay,
+    LayoutElementCategory, LayoutElementSemantics, LayoutEnvironment, LayoutError,
+    LayoutFlushReason, LayoutFragmentKind, LayoutNamespace, LayoutPaintedSurfaceHit,
+    LayoutPassRequest, LayoutPassResult, LayoutPoint, LayoutPosition, LayoutQuery,
+    LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutScrollbarColors, LayoutScrollbarGutter,
+    LayoutScrollbarPart, LayoutScrollbarWidth, LayoutSource, LayoutSourceKind, LayoutStyleResolver,
+    LayoutTransform2D, LayoutViewport, PaintBrush, PaintCaptureRequest, PaintColor, PaintFragment,
+    PaintShape, ResolvedLayoutElementStyles, ResolvedLayoutStyle, build_layout_pass,
 };
 use style::Atom;
 use taffy::{
@@ -4442,7 +4442,10 @@ fn viewport_fixed_box_escapes_intermediate_overflow_clip_for_paint_and_hit_test(
     let fixed_clip = output.boxes[fixed_box.index()]
         .clip_chain
         .expect("viewport clip");
-    assert_eq!(output.clip_chain[fixed_clip.index()].owner, None);
+    assert_eq!(
+        output.clip_chain[fixed_clip.index()].kind,
+        LayoutClipKind::Viewport
+    );
     assert_rect(
         output
             .box_model_for_source(2)
@@ -4519,7 +4522,10 @@ fn absolute_box_escapes_overflow_clip_between_it_and_its_containing_block() {
     let absolute_clip = output.boxes[absolute_box.index()]
         .clip_chain
         .expect("root clip");
-    assert_eq!(output.clip_chain[absolute_clip.index()].owner, None);
+    assert_eq!(
+        output.clip_chain[absolute_clip.index()].kind,
+        LayoutClipKind::Viewport
+    );
     assert_eq!(
         output
             .hit_test(LayoutPoint::new(130.0, 90.0), false)
@@ -4590,8 +4596,8 @@ fn transformed_fixed_containing_block_still_clips_its_fixed_descendant() {
         .and_then(|source| source.principal_box)
         .expect("fixed principal box");
     assert_eq!(
-        output.clip_chain[output.boxes[fixed_box.index()].clip_chain.unwrap().index()].owner,
-        Some(containing_block)
+        output.clip_chain[output.boxes[fixed_box.index()].clip_chain.unwrap().index()].kind,
+        LayoutClipKind::Overflow(containing_block)
     );
     assert_eq!(
         output

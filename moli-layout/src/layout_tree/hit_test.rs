@@ -589,7 +589,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PointClipQuery<'a, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FrozenCoordinateSpace, LayoutSize, LayoutViewport};
+    use crate::{FrozenCoordinateSpace, LayoutClipKind, LayoutSize, LayoutViewport};
 
     #[test]
     fn shared_clip_results_are_scoped_to_one_point() {
@@ -615,7 +615,9 @@ mod tests {
                 .into_iter()
                 .map(|(parent, size)| LayoutClipNode {
                     parent,
-                    owner: None,
+                    kind: parent.map_or(LayoutClipKind::Viewport, |_| {
+                        LayoutClipKind::CssRect(LayoutOutputBoxId::from_index(0))
+                    }),
                     coordinate_space: LayoutCoordinateSpaceId::from_index(0),
                     rect: LayoutRect::new(0.0, 0.0, size, size),
                 })
