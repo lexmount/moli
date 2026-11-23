@@ -50,22 +50,30 @@ impl PageVm {
         delta_x: f64,
         delta_y: f64,
         cancelable: bool,
+        intercept_drags: bool,
         gesture: crate::runtime::RendererSyntheticWheelGesture,
     ) -> Result<RendererInputDispatchOutcome> {
-        let surface = self
+        let (width, height) = self
             .vm()
             .document_runtime
             .viewport_surface()
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .visible_size();
+        // CDP inputs reach this path in root viewport coordinates. The
+        // presentation-only scales for capture do not transform input.
         anyhow::ensure!(
-            x >= 0.0
-                && y >= 0.0
-                && x < f64::from(surface.inner_width)
-                && y < f64::from(surface.inner_height),
+            x >= 0.0 && y >= 0.0 && x < f64::from(width) && y < f64::from(height),
             "Position out of bounds",
         );
-        self.vm_mut()
-            .dispatch_gesture_wheel(x, y, delta_x, delta_y, cancelable, &gesture)
+        self.vm_mut().dispatch_gesture_wheel(
+            x,
+            y,
+            delta_x,
+            delta_y,
+            cancelable,
+            intercept_drags,
+            &gesture,
+        )
     }
 
     pub(crate) fn dispatch_touch_event_at_points(

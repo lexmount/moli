@@ -187,6 +187,7 @@ impl SyntheticWheel {
         {
             return Ok(None);
         }
+        let intercept_drags = drag::intercept_drags_enabled(conn, &self.owner);
         start_page_input_command(
             conn,
             None,
@@ -199,6 +200,7 @@ impl SyntheticWheel {
                     self.delta_x,
                     self.delta_y,
                     self.cancelable,
+                    intercept_drags,
                     self.gesture,
                 )
             },
