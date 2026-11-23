@@ -1615,8 +1615,6 @@ async def _run_async(
         result.shutdown_info = driver.shutdown(handle)
         return result
 
-    relaunch_count = 0
-    max_relaunches = 10
     consecutive_relaunch_failures = 0
     reference_cache: dict[str, CapturedScreenshot] = {}
 
@@ -1658,7 +1656,6 @@ async def _run_async(
                         break
                     continue
                 consecutive_relaunch_failures = 0
-                relaunch_count += 1
                 # Swap in a fresh engine and the isolated page for its next case.
                 if page.native_input is not None:
                     await page.native_input.close()
@@ -1716,19 +1713,8 @@ async def _run_async(
                         test_type=_case_test_type(case),
                     )
                 result.cases.append(case_result)
-                if relaunch_count >= max_relaunches:
-                    for remaining in cases[case_index + 1:]:
-                        rp, ru, _ = _case_parts(remaining, case_timeout_seconds)
-                        result.cases.append(
-                            CaseResult(
-                                case_path=rp, url=ru, status="crash",
-                                duration_ms=None,
-                                error=f"exceeded max relaunches ({max_relaunches})",
-                                test_type=_case_test_type(remaining),
-                            )
-                        )
-                    break
-                # Tear down current connection + engine, relaunch fresh.
+                # Recover for the next case. The consecutive launch failure
+                # guard bounds recovery when a fresh engine cannot start.
                 if page.native_input is not None:
                     await page.native_input.close()
                 try:
@@ -1774,7 +1760,6 @@ async def _run_async(
                     reference_cache.clear()
                 else:
                     consecutive_relaunch_failures = 0
-                relaunch_count += 1
                 if relaunched is not None:
                     handle, client, page = relaunched
                     reference_cache.clear()
@@ -1801,7 +1786,6 @@ async def _run_async(
                         launch_timeout_seconds=launch_timeout_seconds,
                         viewport=effective_viewport,
                     )
-                    relaunch_count += 1
                     if relaunched is None:
                         for remaining in cases[case_index + 1:]:
                             rp, ru, _ = _case_parts(

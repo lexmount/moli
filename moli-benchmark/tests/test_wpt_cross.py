@@ -433,7 +433,7 @@ class WptCrossTests(WptCrossTestCase):
             client.commands,
         )
         self.assertNotIn("Target.closeTarget", [method for method, _ in client.commands])
-    def test_unusable_page_session_preserves_case_result_and_relaunches(self) -> None:
+    def test_successful_relaunches_keep_running_later_cases(self) -> None:
         def handle(name: str) -> SimpleNamespace:
             return SimpleNamespace(
                 process=SimpleNamespace(poll=lambda: None),
@@ -453,19 +453,23 @@ class WptCrossTests(WptCrossTestCase):
             launch=Mock(return_value=first_handle),
             shutdown=Mock(return_value={"stopped": True}),
         )
-        failed_case = CaseResult(
-            case_path="first.html",
-            url="http://localhost/first.html",
-            status="error",
-            duration_ms=5.0,
-            error="evaluate failed: timed out",
-        )
+        failed_cases = [
+            CaseResult(
+                case_path=f"failed-{index}.html",
+                url=f"http://localhost/failed-{index}.html",
+                status="error",
+                duration_ms=5.0,
+                error="evaluate failed: timed out",
+            )
+            for index in range(11)
+        ]
         passed_case = CaseResult(
-            case_path="second.html",
-            url="http://localhost/second.html",
+            case_path="last.html",
+            url="http://localhost/last.html",
             status="pass",
             duration_ms=1.0,
         )
+        expected_cases = [*failed_cases, passed_case]
 
         first_page = _AttachedPage("CONTEXT-1", "TARGET-1", "SESSION-1", frozenset())
         second_page = _AttachedPage("CONTEXT-2", "TARGET-2", "SESSION-2", frozenset())
@@ -482,7 +486,7 @@ class WptCrossTests(WptCrossTestCase):
             patch(
                 "moli_benchmark.wpt_cross.runner._run_one_case",
                 new=AsyncMock(
-                    side_effect=[_PageSessionUnusable(failed_case), passed_case]
+                    side_effect=[*map(_PageSessionUnusable, failed_cases), passed_case]
                 ),
             ),
             patch(
@@ -500,10 +504,7 @@ class WptCrossTests(WptCrossTestCase):
                 _run_async(
                     driver=driver,  # type: ignore[arg-type]
                     binary_override=None,
-                    cases=[
-                        ("first.html", "http://localhost/first.html"),
-                        ("second.html", "http://localhost/second.html"),
-                    ],
+                    cases=[(case.case_path, case.url) for case in expected_cases],
                     case_timeout_seconds=1.0,
                     launch_timeout_seconds=1.0,
                     viewport=None,
@@ -511,9 +512,9 @@ class WptCrossTests(WptCrossTestCase):
                 )
             )
 
-        self.assertIs(result.cases[0], failed_case)
-        self.assertIs(result.cases[1], passed_case)
-        self.assertEqual(driver.shutdown.call_count, 2)
+        for actual, expected in zip(result.cases, expected_cases, strict=True):
+            self.assertIs(actual, expected)
+        self.assertEqual(driver.shutdown.call_count, len(expected_cases))
     def test_successful_cases_rotate_isolated_page_contexts(self) -> None:
         handle = SimpleNamespace(
             process=SimpleNamespace(poll=lambda: None),
