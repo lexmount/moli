@@ -1254,6 +1254,30 @@ async fn blurred_vision_uses_the_full_raster_scale_and_clip_neighborhood() {
     assert!(boundary[0] > 0 && boundary[0] < 255, "{boundary:?}");
     assert_eq!(decode_png_pixel(half_clip, 0, 200), boundary);
     assert_eq!(decode_png_pixel(half_clip, 199, 200), [0, 0, 0, 255]);
+
+    ctx.process_async(json!({
+        "id": 155, "sessionId": session, "method": "Emulation.setDeviceMetricsOverride",
+        "params": {
+            "width": 200, "height": 200, "deviceScaleFactor": 1, "mobile": false,
+            "viewport": {"x": 100, "y": 0, "width": 100, "height": 200, "scale": 1}
+        }
+    }))
+    .await;
+    ctx.expect_result(155, json!({}), Some(session));
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 156, "sessionId": session, "method": "Page.captureScreenshot"
+    }))
+    .await;
+    let transformed = screenshot_png_bytes(&take_response_by_id(&mut ctx, 156));
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 157, "sessionId": session, "method": "Page.captureScreenshot",
+        "params": {"clip": {"x": 100, "y": 0, "width": 100, "height": 200, "scale": 1}}
+    }))
+    .await;
+    let half_clip = screenshot_png_bytes(&take_response_by_id(&mut ctx, 157));
+    let boundary = decode_png_pixel(&half_clip, 0, 100);
+    assert!(boundary[0] > 0 && boundary[0] < 255, "{boundary:?}");
+    assert_eq!(decode_png_pixel(&transformed, 0, 100), boundary);
 }
 
 async fn install_active_screenshot_page(
