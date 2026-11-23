@@ -2625,7 +2625,7 @@ where
         // exceed the containing block. Clamp both known and measured widths:
         // the float slots are nonnegative, and Parley requires each line's
         // available width to be no greater than the paragraph's width.
-        let width = known_dimensions
+        let mut width = known_dimensions
             .width
             .unwrap_or_else(|| match available_space.width {
                 AvailableSpace::MinContent => content_widths.min.max(float_min_width),
@@ -2642,6 +2642,33 @@ where
                 AvailableSpace::Definite(limit) => limit,
             })
             .max(0.0);
+        let owner_style = &self.boxes[owner.index()].style.taffy;
+        if shrink_to_fit
+            && inputs.sizing_mode == SizingMode::InherentSize
+            && let Some(mut minimum) = owner_style
+                .min_size
+                .width
+                .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value)
+        {
+            // The leaf adapter constrains the outer box after measuring. Its
+            // minimum must also constrain the paragraph before line alignment.
+            if owner_style.box_sizing == BoxSizing::BorderBox {
+                let basis = inputs
+                    .constraint_space(parent_writing_mode)
+                    .margin_padding_percentage_basis();
+                let padding = owner_style
+                    .padding
+                    .resolve_or_zero(basis, resolve_stylo_calc_value);
+                let border = owner_style
+                    .border
+                    .resolve_or_zero(basis, resolve_stylo_calc_value);
+                minimum -= padding.horizontal_axis_sum() + border.horizontal_axis_sum();
+            }
+            minimum -= self
+                .get_scrollbar_insets(owner.to_taffy())
+                .horizontal_axis_sum();
+            width = width.max(minimum.max(0.0));
+        }
         // Taffy may feed an intrinsic inline size back through a quantized
         // definite flex/grid constraint, while Parley's content-width and
         // line-breaking passes can accumulate the same glyph advances in a

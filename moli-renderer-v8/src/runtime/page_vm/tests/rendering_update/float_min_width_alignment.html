@@ -1,0 +1,31 @@
+<!doctype html>
+<style>
+html,body{margin:0;background:white;overflow:hidden;font:14px Arial,sans-serif}
+.row{display:flow-root;width:200px;height:70px}
+a{float:right;display:inline-block;box-sizing:border-box;min-height:40px;padding:10px 12px;border-radius:100px;background:#0b57d0;color:white;font:500 14px/18px Arial,sans-serif;text-align:center;text-decoration:none}
+.minimum{min-width:85px}
+.right{text-align:right}
+.float-left{float:left}
+.content-box{box-sizing:content-box;border:2px solid #0b57d0}
+.percentage{min-width:50%}
+.calculated{min-width:calc(50% + 5px)}
+.asymmetric{padding-left:20px;padding-right:4px}
+.rtl{direction:rtl}
+.start{text-align:start}
+.end{text-align:end}
+.plaintext{unicode-bidi:plaintext}
+.fixed{width:85px}
+</style>
+<div class=row><a id=min-center class=minimum data-width=85 data-align=center><span>Sign in</span></a></div>
+<div class=row><a class="minimum right" data-width=85 data-align=right><span>Sign in</span></a></div>
+<div class=row><a class="minimum float-left" data-width=85 data-align=center><span>Sign in</span></a></div>
+<div class=row><a class="minimum content-box" data-width=113 data-align=center><span>Sign in</span></a></div>
+<div class=row><a class=percentage data-width=100 data-align=center><span>Sign in</span></a></div>
+<div class=row><a class=calculated data-width=105 data-align=center><span>Sign in</span></a></div>
+<div class=row><a class="minimum asymmetric" data-width=85 data-align=center><span>Sign in</span></a></div>
+<div class=row><a class="minimum rtl start" data-width=85 data-align=right><span>Sign in</span></a></div>
+<div class=row><a class="minimum rtl end" data-width=85 data-align=left><span>Sign in</span></a></div>
+<div class=row><a class=minimum data-width=85 data-align=center><span>Sign<br>in</span></a></div>
+<div class=row><a class="minimum start" data-width=85 data-align=left><span>אב</span></a></div>
+<div class=row><a class="minimum rtl start plaintext" data-width=85 data-align=left><span>Sign in</span></a></div>
+<div class=row><a id=fixed-center class=fixed data-width=85 data-align=center><span>Sign in</span></a></div>
