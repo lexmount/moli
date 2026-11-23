@@ -399,10 +399,10 @@ pub(super) fn is_live_hit_source(
 pub(in crate::native_bridge) fn live_interaction_target(
     runtime: &PageScriptHost,
     source: DomHandle,
-    ignore_pointer_events_none: bool,
+    ignore_inert: bool,
 ) -> Option<DomHandle> {
     // Slotted text can be inside a modal dialog while its DOM parent is inert.
-    if !is_live_hit_source(runtime, source, ignore_pointer_events_none) {
+    if !is_live_hit_source(runtime, source, ignore_inert) {
         return None;
     }
     element_for_hit_source(runtime, source)

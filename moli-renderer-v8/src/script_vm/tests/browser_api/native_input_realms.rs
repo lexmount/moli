@@ -1,6 +1,101 @@
 use super::*;
 
 #[test]
+fn input_hit_test_policy_can_bypass_css_or_inert_separately() {
+    use crate::native_bridge::element::{
+        InputHitTestMode, InputHitTestPolicy, input_surface_hit_test,
+    };
+    use moli_layout::LayoutPoint;
+
+    let vm = new_rendered_test_vm(
+        "https://hit-test-policy.test/",
+        r#"<!doctype html><style>
+        .box { position: absolute; inset: 0; width: 100px; height: 100px; }
+        </style>
+        <div id="bottom" class="box"></div>
+        <div id="css" class="box" style="z-index: 1; pointer-events: none"></div>
+        <div id="inert" class="box" style="z-index: 2" inert></div>"#,
+    );
+    for (ignore_pointer_events_none, ignore_inert, expected) in [
+        (false, false, "bottom"),
+        (true, false, "css"),
+        (false, true, "inert"),
+        (true, true, "inert"),
+    ] {
+        let expected_handle = vm.element_handle_by_id_for_test(expected).unwrap();
+        let host = vm._context_host.borrow();
+        for mode in [InputHitTestMode::Dom, InputHitTestMode::Mouse] {
+            let hit = input_surface_hit_test(
+                &host,
+                host.document_handle(),
+                LayoutPoint::new(25.0, 25.0),
+                InputHitTestPolicy {
+                    ignore_pointer_events_none,
+                    ignore_inert,
+                    ..InputHitTestPolicy::INTERACTIVE
+                },
+                mode,
+            )
+            .unwrap();
+            assert_eq!(hit.target, Some(expected_handle), "expected {expected}");
+        }
+    }
+}
+
+#[test]
+fn input_hit_test_policy_keeps_viewport_clipping_independent_of_fallback() {
+    use crate::native_bridge::element::{
+        InputHitTestMode, InputHitTestPolicy, input_surface_hit_test,
+    };
+    use moli_layout::LayoutPoint;
+    use moli_page_types::LayoutPolicy;
+
+    for layout_policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+        let mut vm = new_parsed_test_vm(
+            "https://hit-test-viewport-policy.test/",
+            "<!doctype html><html id='root'><body><button>Target</button></body></html>",
+        );
+        vm.set_layout_policy(layout_policy);
+        vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 64,
+            inner_height: 64,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))
+        .unwrap();
+        if layout_policy.uses_real_layout() {
+            publish_layout_for_test(&mut vm);
+        }
+        let root = vm.element_handle_by_id_for_test("root").unwrap();
+        for (inert, x, use_viewport_fallback, expected) in [
+            (false, 64.0, false, None),
+            (true, 10.0, false, None),
+            (true, 10.0, true, Some(root)),
+            (true, 64.0, true, None),
+        ] {
+            vm.eval(&format!("document.documentElement.inert = {inert}"))
+                .unwrap();
+            let host = vm._context_host.borrow();
+            let hit = input_surface_hit_test(
+                &host,
+                host.document_handle(),
+                LayoutPoint::new(x, 10.0),
+                InputHitTestPolicy {
+                    use_viewport_fallback,
+                    ..InputHitTestPolicy::INTERACTIVE
+                },
+                InputHitTestMode::Dom,
+            )
+            .unwrap();
+            assert_eq!(
+                hit.target, expected,
+                "{layout_policy:?}, inert={inert}, x={x}, fallback={use_viewport_fallback}"
+            );
+        }
+    }
+}
+
+#[test]
 fn mouse_release_over_inert_document_clears_capture_and_compatibility_state() {
     use moli_page_types::LayoutPolicy;
 

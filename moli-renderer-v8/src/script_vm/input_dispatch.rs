@@ -31,11 +31,12 @@ use crate::dom::{
     native::{Node, SelectedFile},
 };
 use crate::native_bridge::element::{
-    InputEventCoordinates, InputHitTestMode, TextEditInputType, TextInputSource, TouchEventPoint,
-    activate_handle_after_pointer_release, activate_handle_after_touch_release,
-    activate_handle_via_keyboard, cache_input_files_from_selected_files,
-    construct_drag_event_with_related_target, construct_keyboard_event,
-    construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
+    InputEventCoordinates, InputHitTestMode, InputHitTestPolicy, TextEditInputType,
+    TextInputSource, TouchEventPoint, activate_handle_after_pointer_release,
+    activate_handle_after_touch_release, activate_handle_via_keyboard,
+    cache_input_files_from_selected_files, construct_drag_event_with_related_target,
+    construct_keyboard_event, construct_mouse_event_for_target,
+    construct_mouse_event_with_detail_for_target,
     construct_mouse_event_with_related_target_for_target, construct_pointer_event,
     construct_simple_event, construct_touch_event_with_points, construct_wheel_event_for_target,
     contenteditable_editing_host, dispatch_public_event, input_surface_hit_test,
@@ -1114,7 +1115,7 @@ impl ScriptVm {
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
             moli_layout::LayoutPoint::new(x as f32, y as f32),
-            false,
+            InputHitTestPolicy::INTERACTIVE,
             mode,
         )?)
     }
