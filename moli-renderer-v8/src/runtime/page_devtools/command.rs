@@ -140,7 +140,7 @@ pub enum RendererDevToolsPageCommand {
     },
     SetOverlayHighlight {
         inspector_session_id: Option<String>,
-        highlight: Option<RendererOverlayHighlight>,
+        highlight: Result<Option<RendererOverlayHighlight>, String>,
     },
     DocumentHitTest {
         inspector_session_id: Option<String>,

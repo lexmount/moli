@@ -24,6 +24,8 @@ pub use item::{
     RendererProtocolObservation,
 };
 #[cfg(feature = "devtools")]
+pub(crate) use native_response::NestedNativeInspectorRequest;
+#[cfg(feature = "devtools")]
 pub use native_response::{
     RendererCdpCall, RendererNativeCommandAdmission, RendererNativeCommandReadyResponse,
     RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,

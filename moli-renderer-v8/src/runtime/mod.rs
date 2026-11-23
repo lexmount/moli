@@ -481,6 +481,8 @@ use self::phase_one::PendingPhaseOneResidence;
 pub(in crate::runtime) use self::phase_one::{
     PhaseOneResidenceAdmission, PhaseOneRestoreRequirement,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use self::protocol_output::NestedNativeInspectorRequest;
 pub(crate) use self::protocol_output::{PendingRendererOutputRecord, RendererTurnOutputJournal};
 #[cfg(feature = "devtools")]
 pub use self::protocol_output::{

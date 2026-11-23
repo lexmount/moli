@@ -2537,7 +2537,7 @@ impl PageScriptHost {
     }
 
     pub(crate) fn renderer_backend_node_id_for_live_handle(
-        &mut self,
+        &self,
         handle: DomHandle,
     ) -> Option<u32> {
         let identity_handle = self.dom_host().document_identity_handle(handle)?;

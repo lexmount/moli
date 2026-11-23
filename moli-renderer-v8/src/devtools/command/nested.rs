@@ -121,6 +121,10 @@ impl RendererDevToolsPageCommand {
             }
             Self::Inspector(envelope) if envelope.is_runtime_binding_removal_commit() => PageAgent,
             Self::Inspector(_) => OwnerOnly,
+            Self::SetOverlayHighlight {
+                highlight: Ok(Some(highlight)),
+                ..
+            } if highlight.runtime_object_id().is_some() => OwnerOnly,
             Self::DomDebuggerConfigureEventListenerBreakpoint { .. }
             | Self::DomDebuggerConfigureXhrBreakpoint { .. }
             | Self::DomDebuggerConfigureDomBreakpoint { .. }
@@ -168,9 +172,9 @@ impl RendererDevToolsPageCommand {
             | Self::DocumentFrontendNodeIdsForBackendNodeIds { .. }
             | Self::ChildFrameOwnerNodeReference { .. }
             | Self::ChildFrameDocumentRootNodeReference { .. }
-            | Self::SetFetchSubresourceInterception { .. } => PageAgent,
+            | Self::SetFetchSubresourceInterception { .. }
+            | Self::SetOverlayHighlight { .. } => PageAgent,
             Self::WebMcp { .. }
-            | Self::SetOverlayHighlight { .. }
             | Self::DispatchPreparedElementClick(..)
             | Self::DispatchMouseEventAtPoint { .. }
             | Self::DispatchTouchEvent { .. }

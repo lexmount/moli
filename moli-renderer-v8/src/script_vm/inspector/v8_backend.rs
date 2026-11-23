@@ -31,13 +31,14 @@ use crate::inspector_session::InspectorSessionOutput;
 use crate::runtime::dispatch_nested_main_page_command;
 #[cfg(feature = "devtools")]
 use crate::runtime::{
-    RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
-    RendererDevToolsMainNestedDispatch,
+    NestedNativeInspectorRequest, RendererOwnerReply, RendererPageCommand,
+    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
+    RendererRuntimeInspectorResponseSender,
 };
 #[cfg(feature = "devtools")]
 use crate::runtime::{
-    RendererOwnerReply, RendererPageCommand, RendererRuntimeCommandOutput,
-    RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender,
+    RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
+    RendererDevToolsMainNestedDispatch,
 };
 pub(crate) use interrupt::dispatch_inspector_io_owner_wake;
 #[cfg(feature = "devtools")]
@@ -375,47 +376,83 @@ impl RendererInspectorSessionExecutorLocal {
             unreachable!("native Inspector dispatch must retain its native terminal")
         };
         first_dispatch.release();
-        let output = (|| {
-            const INTERNAL_REMOVE_BINDING_ID: i32 = 900_006;
-            let session = session.ok_or("Inspector session is not available")?;
-            let v8_session = session
-                .session
-                .upgrade()
-                .ok_or("Inspector session has been detached")?;
-            let raw_json = json!({
-                "id": INTERNAL_REMOVE_BINDING_ID,
-                "method": "Runtime.removeBinding",
-                "params": {"name": call.runtime_binding_removal_name()},
-            })
-            .to_string();
-            // Enter the already live V8 Inspector session, just like ordinary
-            // nested protocol dispatch. Do not borrow the suspended Page's
-            // isolate or report this V8 handler as a native Page agent.
-            let response = session
-                .outbound
-                .capture_internal_response(INTERNAL_REMOVE_BINDING_ID, || {
-                    v8_session.dispatch_protocol_message(v8::inspector::StringView::from(
-                        raw_json.as_bytes(),
-                    ));
-                })
-                .ok_or("Runtime binding command did not complete")?;
-            let messages = if response.get("error").is_some() {
-                vec![RendererRuntimeInspectorMessage::protocol(response)]
-            } else {
-                Vec::new()
-            };
-            let mut output = RendererRuntimeCommandOutput::from_messages(messages);
-            output.set_v8_state_update(V8InspectorSessionState::from_bytes(v8_session.state()));
-            Ok(output)
-        })()
-        .map_err(str::to_owned);
-        // Only the remaining Rust metadata mutation uses the Page-agent
-        // boundary. Its original NativeTerminal still commits state and the
-        // single frontend response through ordered journal ingress.
-        let command = call.into_runtime_binding_removal_commit(output);
+        let session = session
+            .as_ref()
+            .ok_or("Inspector session is not available")
+            .and_then(|route| {
+                route
+                    .session
+                    .upgrade()
+                    .map(|session| (route, session))
+                    .ok_or("Inspector session has been detached")
+            });
+        let command = match call.nested_inspector_request() {
+            NestedNativeInspectorRequest::RemoveRuntimeBinding(name) => {
+                let output = session
+                    .and_then(|(route, v8_session)| {
+                        const INTERNAL_REMOVE_BINDING_ID: i32 = 900_006;
+                        let raw_json = json!({
+                            "id": INTERNAL_REMOVE_BINDING_ID,
+                            "method": "Runtime.removeBinding",
+                            "params": {"name": name},
+                        })
+                        .to_string();
+                        let response = route
+                            .outbound
+                            .capture_internal_response(INTERNAL_REMOVE_BINDING_ID, || {
+                                v8_session.dispatch_protocol_message(
+                                    v8::inspector::StringView::from(raw_json.as_bytes()),
+                                )
+                            })
+                            .ok_or("Runtime binding command did not complete")?;
+                        let messages = if response.get("error").is_some() {
+                            vec![RendererRuntimeInspectorMessage::protocol(response)]
+                        } else {
+                            Vec::new()
+                        };
+                        let mut output = RendererRuntimeCommandOutput::from_messages(messages);
+                        output.set_v8_state_update(V8InspectorSessionState::from_bytes(
+                            v8_session.state(),
+                        ));
+                        Ok(output)
+                    })
+                    .map_err(str::to_owned);
+                call.into_runtime_binding_removal_commit(output)
+            }
+            NestedNativeInspectorRequest::ResolveOverlayNode(object_id) => {
+                let node = session
+                    .and_then(|(_, v8_session)| {
+                        self.overlay_node_for_runtime_object(&v8_session, object_id)
+                            .ok_or("Could not find node with given id")
+                    })
+                    .map_err(str::to_owned);
+                call.into_overlay_node_commit(node)
+            }
+        };
+        // The Inspector stage uses the live session. Only the resolved command
+        // and its original terminal cross back to the native Page agent.
         let result = dispatch_nested_main_page_command(command, first_dispatch)
             .map(|output| RendererOwnerReply::AsyncPageCommandRan(Box::new(output)));
         let _ = reply_tx.send(result);
+    }
+
+    #[cfg(feature = "devtools")]
+    fn overlay_node_for_runtime_object(
+        &self,
+        session: &v8::inspector::V8InspectorSession,
+        object_id: &str,
+    ) -> Option<u32> {
+        // The pause callback already runs inside this isolate on its owner thread.
+        let isolate =
+            unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut *self.isolate.get()) };
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let context = v8::Global::new(&*scope, scope.try_get_entered_or_microtask_context()?);
+        let context = v8::Local::new(scope, &context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let (runtime, handle) =
+            super::super::unwrap_live_inspector_node(scope, session, object_id)?;
+        unsafe { &*runtime }.renderer_backend_node_id_for_live_handle(handle)
     }
 
     #[cfg(feature = "devtools")]

@@ -1097,6 +1097,23 @@ pub(super) struct ScriptVmRendererDocumentIsolateOps<'a> {
     vm: &'a mut ScriptVm,
 }
 
+#[cfg(feature = "devtools")]
+fn unwrap_live_inspector_node(
+    scope: &mut v8::PinScope<'_, '_>,
+    session: &v8::inspector::V8InspectorSession,
+    object_id: &str,
+) -> Option<(*mut PageScriptHost, DomHandle)> {
+    let (value, context, _) = session
+        .unwrap_object(scope, v8::inspector::StringView::from(object_id.as_bytes()))
+        .ok()?;
+    let expected_runtime = crate::util::context_host_ptr_from_context_slot(context)?;
+    let object = v8::Local::<v8::Object>::try_from(value).ok()?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let (runtime, handle) = node_runtime_and_handle_from_object(scope, object).ok()?;
+    (runtime == expected_runtime && unsafe { &*runtime }.dom_host().node(handle).is_some())
+        .then_some((runtime, handle))
+}
+
 impl ScriptVm {
     pub(crate) fn page_window_identity(&self) -> crate::runtime::RendererPageWindowIdentity {
         self._context_host.borrow().window_identity().clone()
@@ -1108,6 +1125,10 @@ impl ScriptVm {
 
     pub(crate) fn devtools_target(&self) -> crate::devtools::target::RendererDevToolsTargetHandle {
         self.page_inspector.devtools_target()
+    }
+
+    pub(crate) fn is_debugger_paused(&self) -> bool {
+        self.devtools_target().pause_ref().is_pause_active()
     }
 
     pub(super) fn set_root_document_lifecycle(
@@ -1321,27 +1342,9 @@ impl ScriptVm {
                     inspector,
                     PageInspectorSessionTarget::Frontend(inspector_session_id),
                     |session, _, _| -> Result<Option<DomHandle>> {
-                        let Ok((value, context, _object_group)) = session.unwrap_object(
-                            scope,
-                            v8::inspector::StringView::from(object_id.as_bytes()),
-                        ) else {
-                            return Ok(None);
-                        };
-                        let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-                            return Ok(None);
-                        };
-                        let scope = &mut v8::ContextScope::new(scope, context);
-                        let Ok((runtime_ptr, handle)) =
-                            node_runtime_and_handle_from_object(scope, object)
-                        else {
-                            return Ok(None);
-                        };
-                        if runtime_ptr != expected_runtime_ptr
-                            || unsafe { &*runtime_ptr }.dom_host().node(handle).is_none()
-                        {
-                            return Ok(None);
-                        }
-                        Ok(Some(handle))
+                        Ok(unwrap_live_inspector_node(scope, session, object_id)
+                            .filter(|(runtime, _)| *runtime == expected_runtime_ptr)
+                            .map(|(_, handle)| handle))
                     },
                 )
             },

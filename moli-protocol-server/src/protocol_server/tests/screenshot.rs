@@ -457,3 +457,162 @@ async fn websocket_cdp_capture_screenshot_preserves_default_mock_boundary() {
     .await;
     abort_test_cdp_server(protocol_server).await;
 }
+
+#[tokio::test]
+async fn websocket_cdp_highlights_and_following_queries_complete_while_paused() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let html = "<!doctype html><style>body{margin:0;background:white} #target{position:absolute;left:8px;top:8px;width:12px;height:12px}</style><div id=target></div>";
+    let url = format!(
+        "data:text/html,{}",
+        percent_encoding::utf8_percent_encode(html, percent_encoding::NON_ALPHANUMERIC),
+    );
+    let target = open_screenshot_target(&mut socket, &url).await;
+    let session = target.session_id.as_str();
+    for (id, method) in [
+        (7, "Runtime.enable"),
+        (8, "Debugger.enable"),
+        (9, "DOM.enable"),
+        (10, "Overlay.enable"),
+    ] {
+        assert_cdp_success(
+            &send_cdp_command(&mut socket, id, method, Some(session), json!({})).await,
+            id,
+        );
+    }
+    let evaluated = send_cdp_command(
+        &mut socket,
+        11,
+        "Runtime.evaluate",
+        Some(session),
+        json!({"expression":"document.getElementById('target')"}),
+    )
+    .await;
+    let object_id = response_by_id(&evaluated, 11)["result"]["result"]["objectId"]
+        .as_str()
+        .expect("Runtime object id");
+    let described = send_cdp_command(
+        &mut socket,
+        12,
+        "DOM.describeNode",
+        Some(session),
+        json!({"objectId":object_id}),
+    )
+    .await;
+    let backend_node_id = response_by_id(&described, 12)["result"]["node"]["backendNodeId"]
+        .as_u64()
+        .expect("backend node id");
+    send_cdp_command_without_wait(
+        &mut socket,
+        13,
+        "Runtime.evaluate",
+        Some(session),
+        json!({"expression":"debugger; 42","returnByValue":true}),
+    )
+    .await;
+    recv_until_match(&mut socket, |message| {
+        message["sessionId"] == session && message["method"] == "Debugger.paused"
+    })
+    .await;
+
+    let clip = json!({"clip":{"x":0,"y":0,"width":32,"height":32,"scale":1}});
+    let node_colors = json!({"contentColor":{"r":0,"g":0,"b":255}});
+    let commands = [
+        (
+            14,
+            "Overlay.highlightRect",
+            json!({"x":2,"y":2,"width":4,"height":4,"color":{"r":255,"g":0,"b":0}}),
+        ),
+        (
+            15,
+            "DOM.getBoxModel",
+            json!({"backendNodeId":backend_node_id}),
+        ),
+        (
+            16,
+            "Overlay.highlightNode",
+            json!({"backendNodeId":backend_node_id,"highlightConfig":node_colors}),
+        ),
+        (
+            17,
+            "Overlay.highlightNode",
+            json!({"objectId":object_id,"highlightConfig":node_colors}),
+        ),
+        (
+            18,
+            "Overlay.highlightNode",
+            json!({"objectId":"invalid","highlightConfig":node_colors}),
+        ),
+        (19, "Page.captureScreenshot", clip.clone()),
+        (
+            20,
+            "Runtime.getProperties",
+            json!({"objectId":object_id,"ownProperties":true}),
+        ),
+        (21, "Overlay.hideHighlight", json!({})),
+        (22, "Page.captureScreenshot", clip),
+        (23, "Overlay.disable", json!({})),
+        (
+            24,
+            "DOM.getBoxModel",
+            json!({"backendNodeId":backend_node_id}),
+        ),
+    ];
+    let paused = timeout(Duration::from_secs(10), async {
+        let mut remaining = commands
+            .iter()
+            .map(|(id, _, _)| *id)
+            .collect::<std::collections::BTreeSet<_>>();
+        // Pipeline the requests to exercise the same-session Main queue.
+        for (id, method, params) in commands {
+            send_cdp_command_without_wait(&mut socket, id, method, Some(session), params).await;
+        }
+        recv_until_match(&mut socket, |message| {
+            if message["sessionId"] == session
+                && let Some(id) = message["id"].as_u64()
+            {
+                remaining.remove(&id);
+            }
+            remaining.is_empty()
+        })
+        .await
+    })
+    .await;
+
+    let mut resumed =
+        send_cdp_command(&mut socket, 25, "Debugger.resume", Some(session), json!({})).await;
+    if !resumed.iter().any(|message| message["id"] == 13) {
+        resumed.extend(recv_until_id(&mut socket, 13).await);
+    }
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+
+    let paused = paused.expect("Overlay commands and queries must finish before resuming");
+    assert!(
+        !paused
+            .iter()
+            .any(|message| message["id"] == 13 || message["method"] == "Debugger.resumed")
+    );
+    for id in (14..=24).filter(|id| *id != 18) {
+        assert_cdp_success(&paused, id);
+    }
+    assert_eq!(response_by_id(&paused, 18)["error"]["code"], -32000);
+    assert_eq!(response_by_id(&paused, 15)["result"]["model"]["width"], 12);
+    assert_eq!(response_by_id(&paused, 24)["result"]["model"]["width"], 12);
+    assert!(response_by_id(&paused, 20)["result"]["result"].is_array());
+    for (id, color) in [(19, [0, 0, 255, 255]), (22, [255; 4])] {
+        let result = response_by_id(&paused, id);
+        let bytes = BASE64_STANDARD
+            .decode(result["result"]["data"].as_str().unwrap())
+            .unwrap();
+        let (width, _, pixels) = decode_png(&bytes);
+        assert_eq!(pixel(&pixels, width, 10, 10), color);
+    }
+    assert_cdp_success(&resumed, 25);
+    assert_eq!(
+        response_by_id(&resumed, 13)["result"]["result"]["value"],
+        42
+    );
+}
