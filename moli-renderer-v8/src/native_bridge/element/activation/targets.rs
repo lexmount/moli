@@ -1,8 +1,9 @@
 use crate::{
     RendererPendingPopupActivation, RendererPendingWindowOpenEvent, RendererPopupDisposition,
     context_bootstrap::{
-        dispatch_cross_document_navigation_navigate_event_for_window,
-        dispatch_top_level_navigation_event_with_source_element, runtime_window_dispatch_scope,
+        LocationNavigationKind, dispatch_cross_document_navigation_navigate_event_for_window,
+        dispatch_top_level_navigation_event_with_source_element,
+        navigate_location_object_with_source_element, runtime_window_dispatch_scope,
         sandbox_blocks_ancestor_or_top_navigation_from_source,
     },
     document_runtime::{DocumentPolicyContainer, DomHandle},
@@ -756,16 +757,56 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
         {
             return true;
         }
+        let Ok(url) = url::Url::parse(resolved_url) else {
+            return false;
+        };
         let runtime = unsafe { &*runtime_ptr };
-        let can_intercept = url::Url::parse(resolved_url)
-            .is_ok_and(|url| moli_url::same_origin(runtime.document_url(), &url));
+        let target_document = runtime.document_handle();
+        let same_url_from_same_origin = &url == runtime.document_url()
+            && runtime
+                .dom_host()
+                .owner_document_handle(source_handle)
+                .is_some_and(|source_document| {
+                    source_document == target_document
+                        || runtime.document_security_origin(source_document)
+                            == runtime.document_security_origin(target_document)
+                });
+        let history = if runtime.main_document_is_initial_empty()
+            || url.scheme() == "javascript"
+            || same_url_from_same_origin
+        {
+            NavigationHistoryMutation::Replace
+        } else {
+            NavigationHistoryMutation::Push
+        };
+        if url.fragment().is_some() && urls_refer_to_same_document(runtime.document_url(), &url) {
+            let Some(location) = target_window
+                .get(scope, v8str(scope, "location").into())
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            else {
+                return false;
+            };
+            let kind = match history {
+                NavigationHistoryMutation::Push => LocationNavigationKind::Assign,
+                NavigationHistoryMutation::Replace => LocationNavigationKind::Replace,
+            };
+            navigate_location_object_with_source_element(
+                scope,
+                location,
+                kind,
+                Some(resolved_url.to_owned()),
+                source_element,
+            );
+            return true;
+        }
+        let can_intercept = moli_url::same_origin(runtime.document_url(), &url);
         // Every top-target hyperlink dispatches once after resolving its owner.
         // Cancellation or interception must prevent the navigation from queuing.
         if !dispatch_top_level_navigation_event_with_source_element(
             scope,
             target_window,
             resolved_url,
-            "push",
+            history.navigation_type(),
             source_element,
             can_intercept,
             user_initiated,
@@ -773,11 +814,7 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
         ) {
             return true;
         }
-        return queue_top_level_location_navigation(
-            runtime_ptr,
-            resolved_url,
-            NavigationHistoryMutation::Push,
-        );
+        return queue_top_level_location_navigation(runtime_ptr, resolved_url, history);
     }
     navigate_target_window_location(scope, target_window, resolved_url)
 }

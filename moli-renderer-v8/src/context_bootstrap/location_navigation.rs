@@ -251,7 +251,7 @@ pub(crate) fn navigate_location_object_with_source_element<'s>(
         raw_target,
         source_element,
         false,
-        false,
+        true,
     );
 }
 
@@ -416,9 +416,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             LocationNavigationKind::Assign if replaces_initial_about_blank => {
                 LocationNavigationKind::Replace
             }
-            LocationNavigationKind::Assign if source_element.is_some() && exact_same_href => {
-                LocationNavigationKind::Replace
-            }
             LocationNavigationKind::Assign
                 if source_element.is_none()
                     && runtime_window_is_global(scope, owner)
@@ -433,7 +430,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             _ => kind,
         };
         let navigation_type = match effective_kind {
-            LocationNavigationKind::Assign if source_element.is_some() => "push",
             LocationNavigationKind::Assign => "push",
             LocationNavigationKind::Replace => "replace",
             LocationNavigationKind::Reload => "reload",
@@ -594,9 +590,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         cancel_active_intercepted_same_document_navigation(scope, navigation);
         cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
         let navigation_type = match kind {
-            LocationNavigationKind::Assign if source_element.is_some() && exact_same_href => {
-                "replace"
-            }
             LocationNavigationKind::Assign => "push",
             LocationNavigationKind::Replace => "replace",
             LocationNavigationKind::Reload => "reload",

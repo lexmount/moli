@@ -1313,6 +1313,59 @@ async fn same_document_navigation_publication_carries_exact_source_document() {
         .expect("same-Document navigation test page should close");
 }
 #[tokio::test(flavor = "current_thread")]
+async fn delegated_same_url_link_publishes_its_history_mutation() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let current = "https://example.test/source.html";
+    let mut page = create_test_html_page_with_navigation_dispatch(
+        &runtime,
+        &loader,
+        url::Url::parse(current).unwrap(),
+        r#"<!doctype html><a href="/source.html" target="_top">Open</a>"#,
+        RendererTopLevelNavigationDispatch::DelegateToBrowser,
+    )
+    .await;
+    output_rx.drain();
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"
+                let kind;
+                navigation.onnavigate = event => kind = event.navigationType;
+                document.querySelector('a').click();
+                kind;
+            "#
+            .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("click same-URL link");
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("replace"))
+    );
+    let navigation = output_rx
+        .drain()
+        .into_iter()
+        .flat_map(RendererOutputPublication::into_records)
+        .find_map(|record| match record.into_parts().1 {
+            RendererOutputItem::OwnerAction(RendererOwnerAction::TopLevelLocationNavigation(
+                navigation,
+            )) => Some(navigation),
+            _ => None,
+        })
+        .expect("same-URL link must be delegated");
+    assert_eq!(navigation.url(), current);
+    assert_eq!(
+        navigation.history_mutation(),
+        moli_page_types::NavigationHistoryMutation::Replace
+    );
+    page.close_async().await.expect("close same-URL fixture");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn document_open_preserves_document_sourced_navigation_handoffs() {
     let runtime = JsRuntime::initialize();
     let (output_tx, mut output_rx) = renderer_external_activity_test_channel();

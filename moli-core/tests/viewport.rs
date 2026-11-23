@@ -237,6 +237,129 @@ async fn viewport_history_survives_link_and_form_navigation() -> Result<()> {
 }
 
 #[tokio::test]
+async fn viewport_history_uses_the_link_source_origin_for_same_url_navigation() -> Result<()> {
+    let origin = moli_test_support::FixtureServer::spawn().await?;
+    let other_origin = moli_test_support::FixtureServer::spawn().await?;
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let previous = origin.url("/static?previous");
+    let current = origin.url("/static?current");
+    let style = "display:block;width:180px;height:60px";
+
+    for (case, target, frame_origin, adds_entry) in [
+        ("default target", "", None, false),
+        ("explicit self", "_self", None, false),
+        ("explicit top", "_top", None, false),
+        ("explicit parent", "_parent", None, false),
+        ("same-origin child", "_top", Some(&origin), false),
+        ("cross-origin child", "_top", Some(&other_origin), true),
+    ] {
+        let mut page = browser.fetch(&previous).await?;
+        page.evaluate_runtime_expression_async(&format!("location.assign({current:?})"))
+            .await?;
+        let mut frames = page
+            .subscribe_viewport_frames(ViewportSurface::default(), 1)
+            .await?;
+        let first = frame(&mut frames, |frame| {
+            frame.navigation.url.as_str() == current && frame.snapshot.is_some()
+        })
+        .await
+        .with_context(|| format!("{case} initial frame"))?;
+        assert!(first.navigation.can_go_back, "{case}");
+
+        let anchor = format!(r#"<a href="{current}" target="{target}" style="{style}">Open</a>"#);
+        if let Some(frame_origin) = frame_origin {
+            let mut child =
+                url::Url::parse(&frame_origin.url("/compat/child-dynamic-markup-document"))?;
+            child.query_pairs_mut().append_pair(
+                "markup",
+                &format!(r#"<!doctype html><body style="margin:0">{anchor}"#),
+            );
+            let loaded = page
+                .evaluate_runtime_expression_with_await_async(
+                    &format!(
+                        r#"
+                        new Promise(resolve => {{
+                            const child = document.createElement('iframe');
+                            child.style.cssText = 'display:block;width:200px;height:80px;border:0';
+                            child.onload = () => resolve(true);
+                            child.src = {:?};
+                            document.body.style.margin = '0';
+                            document.body.replaceChildren(child);
+                        }})
+                        "#,
+                        child.as_str(),
+                    ),
+                    true,
+                )
+                .await?;
+            assert_eq!(loaded["value"], true, "{case} child load");
+        } else {
+            page.evaluate_runtime_expression_async(&format!(
+                "document.body.style.margin = '0'; document.body.innerHTML = {anchor:?}"
+            ))
+            .await?;
+        }
+        let before = page
+            .evaluate_runtime_expression_by_value_async(
+                r#"
+                sessionStorage.removeItem('link-navigation-type');
+                navigation.addEventListener('navigate', event => {
+                    sessionStorage.setItem('link-navigation-type', event.navigationType);
+                });
+                [history.length, navigation.currentEntry.key]
+                "#,
+            )
+            .await?;
+        let history_length = before["value"][0].as_u64().context("history.length")?;
+
+        page.dispatch_mouse_event_at_point_async(16., 16., "mousedown", 0, Some(1), 0., 0.)
+            .await?;
+        page.dispatch_mouse_event_at_point_async(16., 16., "mouseup", 0, Some(0), 0., 0.)
+            .await?;
+        let next = frame(&mut frames, |frame| frame.document != first.document)
+            .await
+            .with_context(|| format!("{case} committed frame"))?;
+        assert_eq!(next.navigation.url.as_str(), current, "{case}");
+        assert!(next.navigation.can_go_back, "{case}");
+        let after = page
+            .evaluate_runtime_expression_by_value_async(
+                r#"
+                [history.length, navigation.currentEntry.key, navigation.activation.navigationType,
+                    sessionStorage.getItem('link-navigation-type')]
+                "#,
+            )
+            .await?;
+        let kind = if adds_entry { "push" } else { "replace" };
+        assert_eq!(
+            after["value"][0],
+            history_length + u64::from(adds_entry),
+            "{case}"
+        );
+        assert_eq!(
+            after["value"][1] != before["value"][1],
+            adds_entry,
+            "{case}"
+        );
+        assert_eq!(after["value"][2], kind, "{case}");
+        if !adds_entry || !after["value"][3].is_null() {
+            assert_eq!(after["value"][3], kind, "{case} navigate event");
+        }
+
+        assert!(page.traverse_viewport_history(-1).await?, "{case}");
+        let back = frame(&mut frames, |frame| frame.document != next.document)
+            .await
+            .with_context(|| format!("{case} back frame"))?;
+        assert_eq!(
+            back.navigation.url.as_str(),
+            if adds_entry { &current } else { &previous },
+            "{case}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_history_keeps_the_page_before_scripted_form_submission() -> Result<()> {
     let server = moli_test_support::FixtureServer::spawn().await?;
     let browser =
