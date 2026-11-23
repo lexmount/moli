@@ -1,5 +1,6 @@
 use super::*;
 use crate::conn::CdpSessionRoute;
+use base64::Engine as _;
 use moli_shared_worker::SharedWorkerInstanceId;
 
 fn expect_session_error(
@@ -681,20 +682,54 @@ async fn attach_to_target_registers_before_initial_document_and_commands_join_th
         });
     }
 
+    // The build has captured its settings, but the initial Page is still
+    // waiting to be installed. Both commands acknowledge the target policy.
+    ctx.process_async(json!({
+        "id": 12003, "method": "Emulation.setEmulatedMedia",
+        "params": {"features": [{"name": "prefers-color-scheme", "value": "dark"}]}
+    }))
+    .await;
+    ctx.expect_result(12003, json!({}), None);
+    ctx.process_async(json!({
+        "id": 12004, "sessionId": session_id,
+        "method": "Emulation.setEmulatedVisionDeficiency", "params": {"type": "achromatopsia"}
+    }))
+    .await;
+    ctx.expect_result(12004, json!({}), Some(&session_id));
+
     ctx.route_direct_command_output_for_test(Vec::new(), backend)
         .await;
     ctx.process_async(json!({
         "id": 12002,
         "method": "Runtime.evaluate",
         "sessionId": session_id,
-        "params": {"expression": "document.URL"}
+        "params": {
+            "expression": "document.documentElement.style.background = 'red'; [document.URL, matchMedia('(prefers-color-scheme: dark)').matches]",
+            "returnByValue": true
+        }
     }))
     .await;
     let evaluation = take_response_by_id(&mut ctx, 12002);
     assert_eq!(
         evaluation["result"]["result"]["value"],
-        json!("about:blank#direct-attach")
+        json!(["about:blank#direct-attach", true])
     );
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 12005, "sessionId": session_id, "method": "Page.captureScreenshot",
+        "params": {"clip": {"x": 0, "y": 0, "width": 4, "height": 4, "scale": 1}}
+    }))
+    .await;
+    let response = take_response_by_id(&mut ctx, 12005);
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(
+            response["result"]["data"]
+                .as_str()
+                .expect("screenshot data"),
+        )
+        .unwrap();
+    let image = moli_image::decode_png(&png).unwrap();
+    let [red, green, blue, alpha] = image.rgba[..4].try_into().unwrap();
+    assert!(red == green && red == blue && red > 0 && red < 255 && alpha == 255);
 }
 
 #[tokio::test(flavor = "multi_thread")]

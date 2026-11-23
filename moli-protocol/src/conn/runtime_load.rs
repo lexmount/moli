@@ -21,6 +21,7 @@ use moli_fetch::{
     StreamingRawResponse, url_pattern_matches,
 };
 use serde_json::Value;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use url::Url;
@@ -268,7 +269,7 @@ impl CompletedInitialDocumentPageBuild {
             return Ok(LoadedPageCreationDiagnosticsParts::default());
         };
         let diagnostics = loaded_page_creation_diagnostics_parts(built.page_creation_diagnostics);
-        let artifacts = built.page_creation_artifacts;
+        let mut artifacts = built.page_creation_artifacts;
         let mut page = built.page;
         let check = owner.clone();
         if !driver.with_state(move |state| state.initial_document_page_can_install(check))? {
@@ -276,20 +277,48 @@ impl CompletedInitialDocumentPageBuild {
             driver.with_state(move |state| state.complete_initial_document_page_build(owner))?;
             return Ok(LoadedPageCreationDiagnosticsParts::default());
         }
-        if let Err(error) =
+        let mut settings_result =
             apply_navigation_load_input_overrides_async(&mut page, &load_inputs, override_mode)
-                .await
-        {
-            let message = format!("{error:#}");
-            driver
-                .with_state(move |state| state.fail_initial_document_page_build(owner, message))?;
-            let _ = page.close_async().await;
-            return Err(error);
-        }
-        let install_owner = owner.clone();
-        let (result, retired) = driver.with_state(move |state| {
-            state.install_initial_document_page(install_owner, page, artifacts)
-        })?;
+                .await;
+        let mut applied_media = load_inputs.emulated_media;
+        let (result, retired) = loop {
+            if let Err(error) = settings_result {
+                let message = format!("{error:#}");
+                driver.with_state(move |state| {
+                    state.fail_initial_document_page_build(owner, message)
+                })?;
+                let _ = page.close_async().await;
+                return Err(error);
+            }
+            let install_owner = owner.clone();
+            // Commands can update the target while the Page is being built
+            // or while a renderer reply is pending. Compare and publish in
+            // the same protocol turn so later commands reach the loaded Page.
+            let step = driver.with_state(move |state| {
+                if let Some(media) = state.initial_document_page_emulated_media(&install_owner)
+                    && media != applied_media
+                {
+                    return ControlFlow::Continue((page, artifacts, media));
+                }
+                ControlFlow::Break(state.install_initial_document_page(
+                    install_owner,
+                    page,
+                    artifacts,
+                ))
+            })?;
+            match step {
+                ControlFlow::Break(installed) => break installed,
+                ControlFlow::Continue((candidate, candidate_artifacts, media)) => {
+                    page = candidate;
+                    artifacts = candidate_artifacts;
+                    settings_result = page
+                        .set_emulated_media_async(&media)
+                        .await
+                        .context("failed to apply current emulated media to the initial Page");
+                    applied_media = media;
+                }
+            }
+        };
         if let Some(retired) = retired {
             let _ = retired.close_async().await;
         }
