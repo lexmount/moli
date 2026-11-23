@@ -116,6 +116,7 @@ impl PageVm {
         );
         Ok(RendererInputDispatchOutcome {
             handled: true,
+            wheel_default_prevented: false,
             triggered_top_level_navigation: false,
             pending_download: None,
             pending_file_chooser: None,
@@ -232,6 +233,7 @@ impl PageVm {
                 event.pointer,
                 scroll.modifiers.bits(),
                 false,
+                true,
                 MouseDispatchCompletion::DeferToBatch,
             );
             if let Err(error) = result

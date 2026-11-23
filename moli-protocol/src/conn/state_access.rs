@@ -95,6 +95,16 @@ impl<'state> ProtocolWorkflowState<'state> {
 }
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_synthetic_wheel(
+        self,
+        wheel: crate::domains::input::SyntheticWheel,
+    ) -> Result<
+        Option<crate::domains::input::PendingInputCommandDispatch>,
+        crate::automation::DevToolsError,
+    > {
+        wheel.prepare(self.connection)
+    }
+
     /// Fixture setup and assertions only. Test workflows use the same driver
     /// as production; this callback cannot return a state borrow or future.
     #[cfg(test)]

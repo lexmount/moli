@@ -163,13 +163,14 @@ pub(crate) fn construct_wheel_event<'s>(
     button: i32,
     buttons: i32,
     modifiers: u8,
+    cancelable: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let view = scope.get_current_context().global(scope);
     let mouse = MouseEventInit::from_native(
         scope,
         EventInit {
             bubbles: true,
-            cancelable: true,
+            cancelable,
             composed: true,
         },
         coordinates,
@@ -279,6 +280,7 @@ pub(crate) fn construct_wheel_event_for_target<'s>(
     delta_y: f64,
     buttons: i32,
     modifiers: u8,
+    cancelable: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let target = unsafe { &mut *runtime_ptr }
         .native_bridge_mut()
@@ -295,5 +297,6 @@ pub(crate) fn construct_wheel_event_for_target<'s>(
         0,
         buttons,
         modifiers,
+        cancelable,
     )
 }

@@ -36,6 +36,13 @@ pub enum RendererDevToolsPageCommand {
         /// `Input.setInterceptDrags` state of the issuing DevTools session.
         intercept_drags: bool,
     },
+    DispatchSyntheticWheel {
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        cancelable: bool,
+    },
     DispatchTouchEvent {
         points: Vec<RendererTouchPoint>,
         event_name: String,

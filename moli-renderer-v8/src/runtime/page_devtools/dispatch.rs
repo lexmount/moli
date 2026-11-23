@@ -76,6 +76,12 @@ impl PageVm {
                 .map(RendererDevToolsPageReply::InputDispatchOutcome)
                 .map(RendererPageReply::DevTools)
             }
+            RendererDevToolsPageCommand::DispatchSyntheticWheel {
+                x, y, delta_x, delta_y, cancelable,
+            } => self
+                .dispatch_synthetic_wheel(x, y, delta_x, delta_y, cancelable)
+                .map(RendererDevToolsPageReply::InputDispatchOutcome)
+                .map(RendererPageReply::DevTools),
             RendererDevToolsPageCommand::DispatchTouchEvent {
                 points,
                 event_name,

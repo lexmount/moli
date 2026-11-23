@@ -32,6 +32,7 @@ impl PageVm {
             pointer,
             modifiers,
             intercept_drags,
+            true,
             MouseDispatchCompletion::FinishTurn,
         )?;
         #[cfg(feature = "molio")]
@@ -40,6 +41,43 @@ impl PageVm {
         }
         self.bind_input_dispatch_file_chooser_backend_node_id(&mut outcome);
         Ok(outcome)
+    }
+
+    pub(crate) fn dispatch_synthetic_wheel(
+        &mut self,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        cancelable: bool,
+    ) -> Result<RendererInputDispatchOutcome> {
+        let surface = self
+            .vm()
+            .document_runtime
+            .viewport_surface()
+            .unwrap_or_default();
+        anyhow::ensure!(
+            x >= 0.0
+                && y >= 0.0
+                && x < f64::from(surface.inner_width)
+                && y < f64::from(surface.inner_height),
+            "Position out of bounds",
+        );
+        self.vm_mut().dispatch_mouse_input(
+            x,
+            y,
+            "wheel",
+            -1,
+            None,
+            0,
+            delta_x,
+            delta_y,
+            RendererPointerEventProperties::default(),
+            0,
+            false,
+            cancelable,
+            MouseDispatchCompletion::FinishTurn,
+        )
     }
 
     pub(crate) fn dispatch_touch_event_at_points(

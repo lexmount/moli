@@ -800,6 +800,7 @@ pub(crate) use post_parse::{
 fn input_dispatch_outcome(handled: bool) -> RendererInputDispatchOutcome {
     RendererInputDispatchOutcome {
         handled,
+        wheel_default_prevented: false,
         triggered_top_level_navigation: false,
         pending_download: None,
         pending_file_chooser: None,

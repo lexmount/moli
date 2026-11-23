@@ -102,6 +102,14 @@ pub trait PageInputExt {
         &mut self,
         completion: CompletedPageCommand,
     ) -> Result<RendererInputDispatchOutcome>;
+    fn start_dispatch_synthetic_wheel(
+        &self,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        cancelable: bool,
+    ) -> Result<PendingPageCommand>;
     async fn dispatch_touch_event_at_point_with_outcome_async(
         &mut self,
         x: f64,
@@ -305,6 +313,25 @@ impl PageInputExt for Page {
     ) -> Result<RendererInputDispatchOutcome> {
         let reply = self.finish_page_command(completion);
         decode_input_dispatch_outcome_reply(reply, "mouse event page command")
+    }
+
+    fn start_dispatch_synthetic_wheel(
+        &self,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        cancelable: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchSyntheticWheel {
+                x,
+                y,
+                delta_x,
+                delta_y,
+                cancelable,
+            },
+        ))
     }
 
     async fn dispatch_touch_event_at_point_with_outcome_async(

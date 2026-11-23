@@ -128,6 +128,7 @@ fn perform_implicit_form_submission(
     let _ = submit_form_with_submit_event(scope, runtime_ptr, form_handle, None, true);
     RendererInputDispatchOutcome {
         handled: true,
+        wheel_default_prevented: false,
         triggered_top_level_navigation: !had_pending_top_level_navigation
             && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
         pending_download: None,

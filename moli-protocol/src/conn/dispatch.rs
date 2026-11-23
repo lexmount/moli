@@ -1030,6 +1030,9 @@ impl CdpConnection {
                             self.start_command_workflow(pending.into_workflow(access), cmd.id, cmd.session_id, command_context)
                          }
                     }
+                    crate::domains::input::InputCommandDispatchStep::Workflow(workflow) => {
+                        self.start_command_workflow(workflow, cmd.id, cmd.session_id, command_context)
+                    }
                     crate::domains::input::InputCommandDispatchStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
                     }
