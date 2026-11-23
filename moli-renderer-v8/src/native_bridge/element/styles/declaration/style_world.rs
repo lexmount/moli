@@ -165,22 +165,7 @@ pub(super) fn stylo_style_environment(
     runtime.note_style_observation_environment_resolution_for_test();
     environment_override
         .unwrap_or_else(|| StyloStyleEnvironment::from_emulated_media(runtime.emulated_media()))
-        .for_document_text_scale(document.is_some_and(|document| {
-            runtime
-                .dom_host()
-                .document_meta_content_for_document(document, "text-scale")
-                .is_some_and(|content| content.trim_ascii().eq_ignore_ascii_case("scale"))
-        }))
-        .with_page_color_schemes(
-            document
-                .map(|document| {
-                    crate::document_color_scheme::document_page_color_schemes(
-                        runtime.dom_host(),
-                        document,
-                    )
-                })
-                .unwrap_or_default(),
-        )
+        .for_document(runtime.dom_host(), document)
 }
 
 fn complete_style_world_snapshot(
@@ -388,10 +373,15 @@ pub(super) fn effective_raw_stylesheet_sources(
     include_detached: bool,
     viewport: StyleViewport,
 ) -> Vec<StyloStylesheetSource> {
+    let environment = StyloStyleEnvironment::from_emulated_media(runtime.emulated_media())
+        .for_document(
+            runtime.dom_host(),
+            runtime.dom_host().owner_document_handle(root),
+        );
     active_stylesheet_handles(runtime, root, include_detached)
         .into_iter()
         .map(|handle| stylesheet_source(runtime, handle))
-        .filter(|source| source.media_matches(runtime.emulated_media(), viewport))
+        .filter(|source| source.media_matches(environment, viewport))
         .collect()
 }
 

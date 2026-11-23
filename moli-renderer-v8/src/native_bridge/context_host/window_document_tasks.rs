@@ -283,6 +283,13 @@ impl PageScriptHost {
         if self.current_window_document_task_target_for_dispatch_scope(scope) != Some(owner) {
             return None;
         }
+        self.window_document_handle_for_dispatch_scope(scope)
+    }
+
+    pub(crate) fn window_document_handle_for_dispatch_scope(
+        &self,
+        scope: OwnerDispatchScope,
+    ) -> Option<DomHandle> {
         match scope {
             OwnerDispatchScope::Top => Some(self.document_handle()),
             OwnerDispatchScope::Child(frame) => self

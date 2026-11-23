@@ -24,43 +24,141 @@ mod native_navigator;
 mod scrollbars;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn os_text_scale_updates_the_default_font_and_env_in_opted_in_documents() {
-    let mut ctx = TestContext::new();
-    load_session_page_for_pending_emulation_test(&mut ctx).await;
-    evaluate(
-        &mut ctx,
-        r#"
-        document.head.innerHTML = '<style>body { line-height: calc(16px * env(preferred-text-scale, 1)) }</style>';
-        undefined
-        "#,
-    )
-    .await;
-    let sizes =
-        "[getComputedStyle(document.body).fontSize, getComputedStyle(document.body).lineHeight]";
-    expect_session_command_result(
-        &mut ctx,
-        88500,
-        "SID-1",
-        "Emulation.setEmulatedOSTextScale",
-        json!({"scale": 1.5}),
-    )
-    .await;
-    assert_eq!(evaluate(&mut ctx, sizes).await, json!(["16px", "16px"]));
-    evaluate(
-        &mut ctx,
-        "document.head.insertAdjacentHTML('beforeend', '<meta name=text-scale content=scale>'); undefined",
-    )
-    .await;
-    assert_eq!(evaluate(&mut ctx, sizes).await, json!(["24px", "24px"]));
-    expect_session_command_result(
-        &mut ctx,
-        88501,
-        "SID-1",
-        "Emulation.setEmulatedOSTextScale",
-        json!({}),
-    )
-    .await;
-    assert_eq!(evaluate(&mut ctx, sizes).await, json!(["16px", "16px"]));
+async fn os_text_scale_keeps_styles_document_media_queries_and_font_faces_in_sync() {
+    for policy in [
+        moli_core::LayoutPolicy::OnDemand,
+        moli_core::LayoutPolicy::Realtime,
+    ] {
+        let mut ctx = TestContext::new_with_layout_policy(policy);
+        load_session_page_for_pending_emulation_test(&mut ctx).await;
+        expect_session_command_result(
+            &mut ctx,
+            88499,
+            "SID-1",
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width": 800, "height": 600, "deviceScaleFactor": 1, "mobile": false}),
+        )
+        .await;
+        evaluate(
+            &mut ctx,
+            r#"
+            document.head.innerHTML = `<style id="test-style">
+                body { line-height: calc(16px * env(preferred-text-scale, 1)); --em: off; --rem: off }
+                @media (min-width: 40em) {
+                    body { --em: on }
+                    @font-face { font-family: Wide; src: local("Arial") }
+                }
+                @media (min-width: 40rem) { body { --rem: on } }
+            </style>`;
+            globalThis.queries = ["(min-width: 40em)", "(min-width: 40rem)"].map(query => matchMedia(query));
+            globalThis.faces = document.fonts;
+            undefined
+            "#,
+        )
+        .await;
+        let read_environment = r#"
+            (() => {
+                const style = getComputedStyle(document.body);
+                const sheet = document.getElementById("test-style").sheet;
+                return [
+                    style.fontSize, style.lineHeight, style.getPropertyValue("--em").trim(),
+                    style.getPropertyValue("--rem").trim(), ...queries.map(query => query.matches),
+                    ...queries.map(query => matchMedia(query.media).matches),
+                    sheet.cssRules[1].matches, [...faces].map(face => face.family),
+                ];
+            })()
+        "#;
+        let normal = json!([
+            "16px",
+            "16px",
+            "on",
+            "on",
+            true,
+            true,
+            true,
+            true,
+            true,
+            ["Wide"]
+        ]);
+        let scaled = json!([
+            "24px",
+            "24px",
+            "off",
+            "off",
+            false,
+            false,
+            false,
+            false,
+            false,
+            []
+        ]);
+        expect_session_command_result(
+            &mut ctx,
+            88500,
+            "SID-1",
+            "Emulation.setEmulatedOSTextScale",
+            json!({"scale": 1.5}),
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, read_environment).await,
+            normal,
+            "{policy:?}"
+        );
+        evaluate(
+            &mut ctx,
+            "document.body.insertAdjacentHTML('afterbegin', '<meta name=TEXT-SCALE content=SCALE>'); undefined",
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, read_environment).await,
+            scaled,
+            "{policy:?}"
+        );
+        evaluate(
+            &mut ctx,
+            "document.head.insertAdjacentHTML('afterbegin', '<meta id=first-meta name=text-scale>'); undefined",
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, read_environment).await,
+            normal,
+            "{policy:?}"
+        );
+        evaluate(
+            &mut ctx,
+            "document.querySelector('#first-meta').content = ' scale '",
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, read_environment).await,
+            normal,
+            "{policy:?}"
+        );
+        evaluate(
+            &mut ctx,
+            "document.querySelector('#first-meta').remove(); undefined",
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, read_environment).await,
+            scaled,
+            "{policy:?}"
+        );
+        expect_session_command_result(
+            &mut ctx,
+            88501,
+            "SID-1",
+            "Emulation.setEmulatedOSTextScale",
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, read_environment).await,
+            normal,
+            "{policy:?}"
+        );
+    }
 }
 
 async fn evaluate(ctx: &mut TestContext, expression: &str) -> serde_json::Value {

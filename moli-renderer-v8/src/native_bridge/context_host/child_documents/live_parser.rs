@@ -1200,6 +1200,11 @@ impl PageScriptHost {
             else {
                 continue;
             };
+            if element.attribute("media").is_some_and(|media| {
+                !self.media_query_matches_for_document(document_handle, media.trim())
+            }) {
+                continue;
+            }
             let Some(candidate) =
                 modulepreload_fetch_candidate(element, request_url, &initiator_url, None)
             else {

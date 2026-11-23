@@ -10,8 +10,6 @@ use crate::util::v8_string;
 use crate::v8_execution_watchdog::V8ExecutionWatchdog;
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 
-use crate::style_engine::media_list::evaluate_media_query_list;
-
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::geometry::compute_mock_client_rect;
 use super::super::{construct_simple_event, dispatch_public_event, resolve_url_like_attribute};
@@ -348,6 +346,7 @@ fn image_selected_picture_source(
     if !parent_element.is_html_element("picture") {
         return None;
     }
+    let document = runtime.dom_host().owner_document_handle(handle)?;
     for child in runtime.dom_host().child_handles(parent) {
         if child == handle {
             break;
@@ -360,11 +359,7 @@ fn image_selected_picture_source(
         }
         if let Some(media) = source.attribute("media")
             && !media.trim().is_empty()
-            && !evaluate_media_query_list(
-                media,
-                Some(runtime.emulated_media()),
-                runtime.style_viewport(),
-            )
+            && !runtime.media_query_matches_for_document(document, media)
         {
             continue;
         }

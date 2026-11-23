@@ -59,13 +59,12 @@ pub(super) fn owner_font_face_projection(
         .owner_live_stylesheet(owner)
         .or_else(|| host.linked_live_stylesheet(owner))
     {
+        let document = dom_host.owner_document_handle(owner)?;
         return Some(OwnerFontFaceProjection::Live {
             stylesheet_id: stylesheet.id(),
             projection: stylesheet.font_faces(
-                crate::style_engine::StyloStyleEnvironment::from_emulated_media(
-                    host.emulated_media(),
-                ),
-                host.style_viewport(),
+                host.style_environment_for_document(document),
+                crate::native_bridge::element::style_viewport_for_document(host, document),
             ),
         });
     }
@@ -426,6 +425,8 @@ fn document_adopted_font_faces<'s>(
     else {
         return Vec::new();
     };
+    let environment = host.style_environment_for_document(document);
+    let viewport = crate::native_bridge::element::style_viewport_for_document(host, document);
     let mut seen = Vec::new();
     let mut faces = Vec::new();
     for index in 0..sheets.length() {
@@ -449,10 +450,7 @@ fn document_adopted_font_faces<'s>(
         else {
             continue;
         };
-        let descriptors = stylesheet.font_faces(
-            crate::style_engine::StyloStyleEnvironment::from_emulated_media(host.emulated_media()),
-            host.style_viewport(),
-        );
+        let descriptors = stylesheet.font_faces(environment, viewport);
         faces.extend(sync_adopted_stylesheet_font_faces(
             scope,
             sheet,

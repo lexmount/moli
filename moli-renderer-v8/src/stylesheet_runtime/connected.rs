@@ -959,7 +959,7 @@ impl DocumentRuntime {
             }
             let load_event_binding =
                 Self::load_event_binding_for_connected_admission(event_admission);
-            if connected_modulepreload_has_non_matching_media(&self.dom_host, handle) {
+            if self.connected_modulepreload_has_non_matching_media(handle) {
                 self.stylesheet_lifecycle
                     .owner_states
                     .clear_async_operations(handle);
@@ -1788,6 +1788,12 @@ impl DocumentRuntime {
             .node(self.dom_host.document_handle())
             .and_then(Node::as_document)
             .map(|document| document.url().clone())?;
+        if element
+            .attribute("media")
+            .is_some_and(|media| !self.stylesheet_media_matches(media.trim()))
+        {
+            return None;
+        }
         let candidate = modulepreload_fetch_candidate(
             element,
             url.clone(),
@@ -1795,6 +1801,21 @@ impl DocumentRuntime {
             self.resolve_module_integrity(url),
         )?;
         Some((candidate.key, candidate.request))
+    }
+
+    fn connected_modulepreload_has_non_matching_media(&self, handle: DomHandle) -> bool {
+        let Some(element) = self.dom_host.node(handle).and_then(Node::as_element) else {
+            return false;
+        };
+        element.is_html_element("link")
+            && element
+                .attribute("rel")
+                .is_some_and(|rel| link_rel_includes_token(rel, "modulepreload"))
+            && connected_preload_like_link_url(&self.dom_host, NodeId::new(handle.index()))
+                .is_some()
+            && element
+                .attribute("media")
+                .is_some_and(|media| !self.stylesheet_media_matches(media.trim()))
     }
 
     fn connected_modulepreload_url_matches(
@@ -1898,21 +1919,6 @@ fn connected_modulepreload_invalid_as(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_ascii_lowercase)
-}
-
-fn connected_modulepreload_has_non_matching_media(
-    dom_host: &crate::dom::native::DomHost,
-    handle: DomHandle,
-) -> bool {
-    let Some(element) = dom_host.node(handle).and_then(Node::as_element) else {
-        return false;
-    };
-    element.is_html_element("link")
-        && element
-            .attribute("rel")
-            .is_some_and(|rel| link_rel_includes_token(rel, "modulepreload"))
-        && connected_preload_like_link_url(dom_host, NodeId::new(handle.index())).is_some()
-        && !modulepreload_media_matches(element)
 }
 
 fn connected_style_owner_kind(

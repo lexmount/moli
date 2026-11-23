@@ -4,7 +4,6 @@ use super::{
     simple_object_event_set_handler,
 };
 use crate::context_bootstrap::DEFAULT_WINDOW_SURFACE_PROFILE;
-use crate::context_bootstrap::current_window_style_viewport;
 use crate::context_bootstrap::window_accessors::{
     prepare_window_viewport_read, window_current_dispatch_scope,
 };
@@ -17,7 +16,7 @@ use crate::native_bridge::{
     PageScriptHost, WindowDocumentTaskTarget, WindowExecutionContextBinding,
 };
 use crate::style_engine::{
-    StyleViewport,
+    StyleViewport, StyloStyleEnvironment,
     media_list::{evaluate_media_query_list, normalize_media_query_list},
 };
 use crate::util::{
@@ -124,9 +123,11 @@ pub(in crate::context_bootstrap) fn read_media_query_matches<'s>(
         return Some(evaluate_match_media_query_list(&media, None));
     };
     let host = unsafe { &*host_ptr };
-    if window_current_dispatch_scope(scope, global, host).is_none() {
+    let Some(document) = window_current_dispatch_scope(scope, global, host)
+        .and_then(|dispatch| host.window_document_handle_for_dispatch_scope(dispatch))
+    else {
         return Some(false);
-    }
+    };
     if !prepare_window_viewport_read(scope, global) {
         return None;
     }
@@ -135,11 +136,7 @@ pub(in crate::context_bootstrap) fn read_media_query_matches<'s>(
     {
         return Some(host.realtime_media_query_matches(id));
     }
-    Some(evaluate_media_query_list(
-        &media,
-        Some(host.emulated_media()),
-        current_window_style_viewport(scope, host),
-    ))
+    Some(host.media_query_matches_for_document(document, &media))
 }
 
 pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
@@ -283,17 +280,16 @@ pub(crate) fn window_match_media_callback<'s>(
     if !prepare_window_viewport_read(scope, global) {
         return;
     }
-    let (emulated_media, viewport) =
-        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-            let host = unsafe { &*host_ptr };
-            (
-                Some(host.emulated_media().clone()),
-                current_window_style_viewport(scope, host),
-            )
-        } else {
-            (None, match_media_style_viewport(None))
-        };
-    let matches = evaluate_media_query_list(&serialized_query, emulated_media.as_ref(), viewport);
+    let matches = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let host = unsafe { &*host_ptr };
+        window_current_dispatch_scope(scope, global, host)
+            .and_then(|dispatch| host.window_document_handle_for_dispatch_scope(dispatch))
+            .is_some_and(|document| {
+                host.media_query_matches_for_document(document, &serialized_query)
+            })
+    } else {
+        evaluate_match_media_query_list(&serialized_query, None)
+    };
     let realtime_registration = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
         && unsafe { &*host_ptr }.layout_policy().is_realtime()
         && let Some(target) = unsafe { &*host_ptr }.current_window_document_task_target(scope)
@@ -339,9 +335,13 @@ pub(crate) fn dispatch_media_query_list_change_events<'s>(
         return false;
     };
     let host = unsafe { &*host_ptr };
-    let target = host.current_window_document_task_target(scope);
-    let current_media = host.emulated_media().clone();
-    let current_viewport = current_window_style_viewport(scope, host);
+    let Some(target) = host.current_window_document_task_target(scope) else {
+        return false;
+    };
+    let Some(document) = host.window_document_handle_for_dispatch_scope(target.dispatch_scope())
+    else {
+        return false;
+    };
     let Some(registry) = global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT) else {
         return false;
     };
@@ -356,18 +356,16 @@ pub(crate) fn dispatch_media_query_list_change_events<'s>(
         let Some(media) = media_query_list_media_slot(scope, mql) else {
             continue;
         };
-        if target.is_none_or(|target| {
-            !unsafe { &*host_ptr }.window_document_owner_is_current_for_dispatch_scope(
-                target.owner(),
-                target.dispatch_scope(),
-            )
-        }) {
+        let host = unsafe { &*host_ptr };
+        if !host.window_document_owner_is_current_for_dispatch_scope(
+            target.owner(),
+            target.dispatch_scope(),
+        ) {
             break;
         }
         let previous_matches = get_private_value(scope, mql, MEDIA_QUERY_LIST_MATCHES_SLOT)
             .is_some_and(|value| value.boolean_value(scope));
-        let current_matches =
-            evaluate_media_query_list(&media, Some(&current_media), current_viewport);
+        let current_matches = host.media_query_matches_for_document(document, &media);
         set_media_query_list_bool_slot(scope, mql, MEDIA_QUERY_LIST_MATCHES_SLOT, current_matches);
         if previous_matches == current_matches {
             continue;
@@ -435,7 +433,9 @@ pub(crate) fn evaluate_match_media_query_list_with_viewport_width(
 ) -> bool {
     evaluate_media_query_list(
         query,
-        emulated_media,
+        emulated_media
+            .map(StyloStyleEnvironment::from_emulated_media)
+            .unwrap_or_default(),
         match_media_style_viewport(viewport_width),
     )
 }

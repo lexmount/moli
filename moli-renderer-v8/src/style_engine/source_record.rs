@@ -1,6 +1,8 @@
 use crate::{
-    document_runtime::DomHandle, dom::native::DomHost, protocol_types::EmulatedMediaOverrides,
-    style_engine::StyleViewport,
+    document_runtime::DomHandle,
+    dom::native::DomHost,
+    protocol_types::EmulatedMediaOverrides,
+    style_engine::{StyleViewport, StyloStyleEnvironment},
 };
 use std::sync::Arc;
 
@@ -145,20 +147,24 @@ impl<'a> RetainedStylesheetSourceRecord<'a> {
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
     ) -> bool {
+        let environment_for_owner = |owner| {
+            StyloStyleEnvironment::from_emulated_media(emulated_media)
+                .for_document(host, host.owner_document_handle(owner))
+        };
         match self.id.kind {
             StyleSourceKind::OwnerStyleSheet { owner } => {
                 stylesheet_owner_is_stylesheet_source_enabled(
                     host,
                     owner,
                     &self.effective_media_text(host, owner),
-                    emulated_media,
+                    environment_for_owner(owner),
                     viewport,
                 )
             }
             StyleSourceKind::LinkedStyleSheet { owner } => {
                 linked_stylesheet_media_matches_for_stylesheet_source(
                     &self.effective_media_text(host, owner),
-                    emulated_media,
+                    environment_for_owner(owner),
                     viewport,
                 )
             }

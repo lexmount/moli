@@ -1,4 +1,3 @@
-use euclid::{Scale, Size2D};
 use style::context::QuirksMode;
 
 pub(crate) use moli_css_parse::{
@@ -6,17 +5,17 @@ pub(crate) use moli_css_parse::{
     normalize_media_query_list, parse_media_query_list_with_context,
 };
 
+use super::stylesheet::new_style_device_with_viewport;
 use super::{StyleViewport, StyloStyleEnvironment};
-use crate::style_engine::world_key::{DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH};
 
 pub(crate) fn evaluate_media_query_list(
     media_text: &str,
-    emulated_media: Option<&crate::protocol_types::EmulatedMediaOverrides>,
+    environment: StyloStyleEnvironment,
     viewport: StyleViewport,
 ) -> bool {
     evaluate_media_query_list_with_context(
         media_text,
-        emulated_media,
+        environment,
         viewport,
         &url::Url::parse("about:blank").expect("static URL"),
         QuirksMode::NoQuirks,
@@ -25,7 +24,7 @@ pub(crate) fn evaluate_media_query_list(
 
 pub(crate) fn evaluate_media_query_list_with_context(
     media_text: &str,
-    emulated_media: Option<&crate::protocol_types::EmulatedMediaOverrides>,
+    environment: StyloStyleEnvironment,
     viewport: StyleViewport,
     base_url: &url::Url,
     quirks_mode: QuirksMode,
@@ -35,24 +34,7 @@ pub(crate) fn evaluate_media_query_list_with_context(
         return true;
     }
 
-    let environment = emulated_media
-        .map(StyloStyleEnvironment::from_emulated_media)
-        .unwrap_or_default();
-    let width = viewport.width.unwrap_or(DEFAULT_VIEWPORT_WIDTH as f64) as f32;
-    let height = viewport.height.unwrap_or(DEFAULT_VIEWPORT_HEIGHT as f64) as f32;
-    let ratio = viewport.device_pixel_ratio.unwrap_or(1.0) as f32;
-    let device = moli_css_parse::create_media_query_device(
-        environment.stylo_media_type(),
-        quirks_mode,
-        Size2D::new(width, height),
-        Size2D::new(
-            viewport.screen_width.unwrap_or(f64::from(width)) as f32 * ratio,
-            viewport.screen_height.unwrap_or(f64::from(height)) as f32 * ratio,
-        ),
-        Scale::new(ratio),
-        environment.stylo_prefers_color_scheme(),
-        environment.stylo_media_feature_preferences(),
-    );
+    let device = new_style_device_with_viewport(viewport, environment, quirks_mode);
     moli_css_parse::evaluate_media_query_list(media_text, &device, base_url, quirks_mode)
 }
 
@@ -97,57 +79,65 @@ mod tests {
     fn media_query_list_evaluation_uses_stylo_device() {
         assert!(evaluate_media_query_list(
             "(width >= 768px) and (color)",
-            None,
+            StyloStyleEnvironment::default(),
             StyleViewport::new(Some(1920.0), Some(1080.0)),
         ));
         assert!(!evaluate_media_query_list(
             "print and (width >= 768px)",
-            None,
+            StyloStyleEnvironment::default(),
             StyleViewport::new(Some(1920.0), Some(1080.0)),
         ));
         assert!(evaluate_media_query_list(
             "print and (prefers-color-scheme: dark)",
-            Some(&crate::protocol_types::EmulatedMediaOverrides {
-                media: Some("print".to_owned()),
-                color_scheme: Some("dark".to_owned()),
-                ..Default::default()
-            }),
+            StyloStyleEnvironment::from_emulated_media(
+                &crate::protocol_types::EmulatedMediaOverrides {
+                    media: Some("print".to_owned()),
+                    color_scheme: Some("dark".to_owned()),
+                    ..Default::default()
+                }
+            ),
             StyleViewport::new(Some(1920.0), Some(1080.0)),
         ));
         assert!(evaluate_media_query_list(
             "(prefers-color-scheme: dark) and (prefers-reduced-motion: reduce)",
-            Some(&crate::protocol_types::EmulatedMediaOverrides {
-                color_scheme: Some("dark".to_owned()),
-                reduced_motion: Some("reduce".to_owned()),
-                ..Default::default()
-            }),
+            StyloStyleEnvironment::from_emulated_media(
+                &crate::protocol_types::EmulatedMediaOverrides {
+                    color_scheme: Some("dark".to_owned()),
+                    reduced_motion: Some("reduce".to_owned()),
+                    ..Default::default()
+                }
+            ),
             StyleViewport::new(Some(1920.0), Some(1080.0)),
         ));
         assert!(!evaluate_media_query_list(
             "(prefers-reduced-motion) and (prefers-contrast)",
-            None,
+            StyloStyleEnvironment::default(),
             StyleViewport::new(Some(1920.0), Some(1080.0)),
         ));
         assert!(evaluate_media_query_list(
             "(prefers-reduced-motion: no-preference) and (prefers-contrast: no-preference)",
-            None,
+            StyloStyleEnvironment::default(),
             StyleViewport::new(Some(1920.0), Some(1080.0)),
         ));
         assert!(evaluate_media_query_list(
             "(prefers-reduced-motion: no-preference) and (forced-colors: active)",
-            Some(&crate::protocol_types::EmulatedMediaOverrides {
-                reduced_motion: Some("no-preference".to_owned()),
-                forced_colors: Some("active".to_owned()),
-                ..Default::default()
-            }),
+            StyloStyleEnvironment::from_emulated_media(
+                &crate::protocol_types::EmulatedMediaOverrides {
+                    reduced_motion: Some("no-preference".to_owned()),
+                    forced_colors: Some("active".to_owned()),
+                    ..Default::default()
+                }
+            ),
             StyleViewport::new(Some(1920.0), Some(1080.0)),
         ));
         assert!(evaluate_media_query_list(
             "(prefers-reduced-transparency: reduce)",
-            Some(&crate::protocol_types::EmulatedMediaOverrides {
-                reduced_transparency: Some("reduce".to_owned()),
-                ..Default::default()
-            }),
+            StyloStyleEnvironment::from_emulated_media(
+                &crate::protocol_types::EmulatedMediaOverrides {
+                    reduced_transparency: Some("reduce".to_owned()),
+                    ..Default::default()
+                }
+            ),
             StyleViewport::new(Some(1920.0), Some(1080.0)),
         ));
     }
@@ -159,22 +149,22 @@ mod tests {
 
         assert!(evaluate_media_query_list(
             "(width: 800px) and (height: 600px)",
-            None,
+            StyloStyleEnvironment::default(),
             viewport,
         ));
         assert!(evaluate_media_query_list(
             "(device-width: 1920px) and (device-height: 1080px)",
-            None,
+            StyloStyleEnvironment::default(),
             viewport,
         ));
         assert!(evaluate_media_query_list(
             "(device-aspect-ratio: 16 / 9)",
-            None,
+            StyloStyleEnvironment::default(),
             viewport,
         ));
         assert!(!evaluate_media_query_list(
             "(device-width: 800px) or (device-height: 600px)",
-            None,
+            StyloStyleEnvironment::default(),
             viewport,
         ));
     }

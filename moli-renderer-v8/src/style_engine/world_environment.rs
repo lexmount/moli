@@ -6,7 +6,10 @@ use style::{
     values::specified::color::{ColorSchemeFlags, ForcedColors},
 };
 
-use crate::{document_runtime::DomHandle, dom::native::DomHost};
+use crate::{
+    document_runtime::DomHandle,
+    dom::native::{DomHost, Node},
+};
 
 /// Cheap, Document-local identity of the connected ShadowRoot universe
 /// sampled for one style observation. The actual root vector is cloned only
@@ -194,11 +197,19 @@ impl StyloStyleEnvironment {
         }
     }
 
-    pub(crate) fn for_document_text_scale(mut self, opted_in: bool) -> Self {
-        if !opted_in {
+    pub(crate) fn for_document(mut self, host: &DomHost, document: Option<DomHandle>) -> Self {
+        if self.preferred_text_scale_percent.is_some()
+            && !document.is_some_and(|document| document_uses_text_scale(host, document))
+        {
             self.preferred_text_scale_percent = None;
         }
-        self
+        self.with_page_color_schemes(
+            document
+                .map(|document| {
+                    crate::document_color_scheme::document_page_color_schemes(host, document)
+                })
+                .unwrap_or_default(),
+        )
     }
 
     pub(super) fn preferred_text_scale(self) -> f32 {
@@ -245,6 +256,18 @@ impl StyloStyleEnvironment {
             },
         }
     }
+}
+
+fn document_uses_text_scale(host: &DomHost, document: DomHandle) -> bool {
+    host.html_elements_by_local_name_in_document_tree_order(document, "meta")
+        .into_iter()
+        .filter_map(|handle| host.node(handle).and_then(Node::as_element))
+        .find(|meta| {
+            meta.attribute_ns("", "name")
+                .is_some_and(|name| name.eq_ignore_ascii_case("text-scale"))
+        })
+        .and_then(|meta| meta.attribute_ns("", "content"))
+        .is_some_and(|content| content.eq_ignore_ascii_case("scale"))
 }
 
 impl StyloStyleReducedPreference {

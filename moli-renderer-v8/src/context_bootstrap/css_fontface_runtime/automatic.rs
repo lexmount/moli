@@ -79,7 +79,7 @@ impl Inputs {
             style_generations: host.document_style_input_generations(document),
             visual_generation: host.visual_state_generation(),
             viewport,
-            environment: StyloStyleEnvironment::from_emulated_media(host.emulated_media()),
+            environment: host.style_environment_for_document(document),
             faces: faces.iter().map(FontSourceSignature::new).collect(),
         }
     }
