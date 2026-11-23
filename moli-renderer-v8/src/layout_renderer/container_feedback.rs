@@ -43,8 +43,9 @@ impl Checkpoint {
 impl ContainerQueryFeedback {
     /// With frozen gutters held fixed, the measured size table determines the
     /// next pass. Brent's expanding checkpoint detects exact repeats with a
-    /// single retained table. Accumulate scrollbar changes over that window
-    /// so only axes that toggle in a confirmed cycle are eligible to freeze.
+    /// single retained table. Require a matching scrollbar snapshot too: the
+    /// first occurrence of a size table can still carry gutters from the
+    /// transient pass that produced it.
     pub(super) fn observe(
         &mut self,
         sizes: QueryContainerSizes,
@@ -58,7 +59,7 @@ impl ContainerQueryFeedback {
         checkpoint
             .changed_axes
             .extend_changed_axes(&checkpoint.scrollbars, &scrollbars);
-        if checkpoint.sizes == sizes {
+        if checkpoint.sizes == sizes && checkpoint.scrollbars == scrollbars {
             if self
                 .frozen_scrollbars
                 .freeze_axes(std::mem::take(&mut checkpoint.changed_axes))
