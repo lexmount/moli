@@ -3,9 +3,13 @@ name: CI
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    paths-ignore: &molio_paths
+      - molio/**
+      - .github/workflows/molio-ci.yml
   push:
     branches:
       - main
+    paths-ignore: *molio_paths
   workflow_dispatch:
     inputs:
       base_ref:
@@ -95,7 +99,17 @@ jobs:
         run: rustup component add rustfmt
 
       - name: Check formatting
-        run: cargo fmt --all --check
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const { execFileSync } = require('node:child_process');
+            const metadata = execFileSync('cargo', [
+              'metadata', '--locked', '--no-deps', '--format-version', '1',
+            ], { encoding: 'utf8' });
+            const packages = JSON.parse(metadata).packages
+              .filter(({ name }) => name !== 'molio')
+              .flatMap(({ name }) => ['-p', name]);
+            execFileSync('cargo', ['fmt', '--check', ...packages], { stdio: 'inherit' });
 
   clippy:
     name: Clippy
@@ -115,7 +129,7 @@ jobs:
         run: rustup component add clippy
 
       - name: Check clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --exclude molio --all-targets --all-features -- -D warnings
 
       # The target cfg adds -Dwarnings alongside the repository's linker flags.
       - name: Check renderer tests without DevTools
@@ -168,8 +182,8 @@ jobs:
           echo "NEXTEST_TEST_THREADS=$test_threads" >> "$GITHUB_ENV"
           echo "Nextest test threads: $test_threads ($cpu_count available CPUs)"
 
-      - name: Run full workspace tests
-        run: cargo nextest run --workspace --profile ci
+      - name: Run Moli tests
+        run: cargo nextest run --workspace --exclude molio --profile ci
 
       - name: Run ACE protocol tests
         run: >-
