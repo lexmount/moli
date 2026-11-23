@@ -1,3 +1,4 @@
+mod container_feedback;
 mod inline_svg;
 #[cfg(test)]
 pub(crate) use inline_svg::parse_count as svg_parse_count;
@@ -8,13 +9,13 @@ mod style_resolver;
 use std::collections::HashMap;
 
 use moli_layout::{
-    AutoScrollbars, DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest,
-    LayoutPassResult, LayoutViewport, finish_measured_layout_pass, measure_prepared_layout_pass,
-    prepare_layout_pass,
+    DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
+    LayoutViewport, finish_measured_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
 };
 use moli_selector::QueryContainerSizes;
 
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
+use container_feedback::ContainerQueryFeedback;
 
 /// Measured sizes are provisional until a Realtime screen pass publishes.
 /// Captures and failed passes restore the previous tables for CSSOM reads.
@@ -124,14 +125,8 @@ fn build_native_layout_pass_recursive(
         };
         let finish = |services: &mut DocumentLayoutServices| {
             let mut measured = measure_prepared_layout_pass(prepared, services)?;
-            let mut iterations = 0usize;
-            let mut largest_container_count = 0;
+            let mut feedback = ContainerQueryFeedback::default();
             let mut previous_scrollbars = None;
-            let mut scrollbar_transitions =
-                Vec::<(QueryContainerSizes, AutoScrollbars<DomHandle>)>::new();
-            let mut frozen_scrollbars = AutoScrollbars::default();
-            let mut changed_scrollbar_axes = AutoScrollbars::default();
-            let mut last_scrollbar_progress = 0;
             loop {
                 let sizes: QueryContainerSizes = measured
                     .query_container_sizes()
@@ -145,59 +140,25 @@ fn build_native_layout_pass_recursive(
                         )
                     })
                     .collect();
-                largest_container_count = largest_container_count.max(sizes.len());
-                let repeated = scrollbar_transitions
-                    .iter()
-                    .rposition(|(earlier, _)| earlier == &sizes);
                 let Some(previous) = runtime.replace_layout_container_sizes(document, sizes) else {
                     break;
                 };
-                largest_container_count = largest_container_count.max(previous.len());
-                let scrollbars = measured.auto_scrollbars();
-                if let Some((earlier, _)) = &previous_scrollbars
-                    && changed_scrollbar_axes.extend_changed_axes(earlier, &scrollbars)
-                {
-                    last_scrollbar_progress = iterations;
-                }
-                // Keep only the size tables measured at a change in scrollbar
-                // visibility. An exact repeat identifies a feedback cycle, and
-                // only the gutters that toggled within it need to be frozen.
-                let changed = previous_scrollbars
-                    .as_ref()
-                    .is_none_or(|(earlier, _)| earlier != &scrollbars);
-                match previous_scrollbars.replace((scrollbars, changed)) {
-                    Some((earlier, true)) => scrollbar_transitions.push((previous, earlier)),
-                    Some((_, false)) => {}
+                let froze_scrollbars = match previous_scrollbars.take() {
+                    Some(scrollbars) => feedback.observe(previous, scrollbars)?,
                     None => {
                         frames
                             .original_container_sizes
                             .entry(document)
                             .or_insert(previous);
+                        false
                     }
-                }
-                if let Some(start) = repeated
-                    && let Some((current, record_current)) = &mut previous_scrollbars
-                {
-                    for (_, earlier) in scrollbar_transitions.drain(start..) {
-                        if frozen_scrollbars.extend_changed_axes(current, &earlier) {
-                            last_scrollbar_progress = iterations;
-                        }
-                    }
-                    scrollbar_transitions.clear();
-                    // The next pass starts a new history with the frozen gutters.
-                    *record_current = false;
-                }
-                // Each new scrollbar axis or frozen gutter can start another
-                // propagation through the container chain. Observing the same
-                // axis toggle again grants no additional rounds.
-                let budget = largest_container_count.saturating_mul(2).saturating_add(1);
-                if iterations.saturating_sub(last_scrollbar_progress) >= budget {
-                    return Err(
-                        moli_layout::LayoutError::ContainerQuerySizesDidNotConverge { iterations },
-                    );
-                }
-                iterations += 1;
-                measured = measured.remeasure(services, &frozen_scrollbars, &mut prepare)?;
+                };
+                // The size table returned on the next swap describes this
+                // measurement. Start a fresh checkpoint after changing gutters.
+                previous_scrollbars = (!froze_scrollbars).then(|| measured.auto_scrollbars());
+                feedback.reserve_rebuild(measured.box_count())?;
+                measured =
+                    measured.remeasure(services, &feedback.frozen_scrollbars, &mut prepare)?;
             }
             finish_measured_layout_pass(measured, &source, &mut frames)
         };
