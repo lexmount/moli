@@ -5,7 +5,10 @@ use moli_layout::{LayoutFlushReason, PaintCaptureRequest, PaintSnapshot, PaintVi
 use moli_page_types::ViewportSurface;
 use tokio::sync::{Notify, watch};
 
-use super::{PageVm, RendererDocumentLifecycleIdentity, RendererVisualStateToken};
+use super::{
+    PageVm, RendererDocumentLifecycleIdentity, RendererInputDispatchOutcome,
+    RendererVisualStateToken,
+};
 use crate::native_bridge::LayoutPublicationRequest;
 
 pub use style::values::specified::ui::CursorKind as RendererViewportCursorKind;
@@ -96,6 +99,19 @@ pub struct RendererViewportSubscription {
     pub updates: watch::Sender<Option<RendererViewportFrame>>,
     pub cursor: watch::Sender<Option<RendererViewportCursor>>,
     pub resource_wake: Arc<Notify>,
+}
+
+/// Pointer input in CSS pixels for the displayed document and viewport.
+#[derive(Clone, Copy, Debug)]
+pub struct RendererViewportPointerInput {
+    pub document: RendererDocumentLifecycleIdentity,
+    pub viewport_revision: u64,
+    pub position: (f64, f64),
+    pub event: &'static str,
+    pub button: i32,
+    pub buttons: i32,
+    pub click_count: i32,
+    pub modifiers: u8,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -230,31 +246,75 @@ impl PageVm {
         }
     }
 
+    pub(super) fn dispatch_viewport_pointer(
+        &mut self,
+        input: RendererViewportPointerInput,
+    ) -> anyhow::Result<Option<RendererInputDispatchOutcome>> {
+        self.dispatch_viewport_mouse(input, (0., 0.))
+    }
+
+    fn dispatch_viewport_mouse(
+        &mut self,
+        input: RendererViewportPointerInput,
+        delta: (f64, f64),
+    ) -> anyhow::Result<Option<RendererInputDispatchOutcome>> {
+        if input.document != self.document_lifecycle.identity()
+            || !self.document_settings.document_activity.visible
+            || !self.viewport_frames.as_ref().is_some_and(|state| {
+                state.subscription.viewport_revision == input.viewport_revision
+                    && state
+                        .subscription
+                        .updates
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|frame| {
+                            frame.document == input.document && frame.snapshot.is_some()
+                        })
+            })
+        {
+            return Ok(None);
+        }
+        match self.dispatch_mouse_event_at_point_with_pointer(
+            input.position.0,
+            input.position.1,
+            input.event,
+            input.button,
+            Some(input.buttons),
+            input.click_count,
+            delta.0,
+            delta.1,
+            super::RendererPointerEventProperties::default(),
+            input.modifiers,
+            false,
+        ) {
+            Ok(outcome) => Ok(Some(outcome)),
+            // A document can lose its geometry after the last frame was painted.
+            Err(error)
+                if error.downcast_ref::<moli_layout::LayoutError>()
+                    == Some(&moli_layout::LayoutError::NoLayoutSnapshot) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub(super) fn dispatch_viewport_wheel(
         &mut self,
         input: RendererViewportWheelInput,
     ) -> anyhow::Result<()> {
-        if input.document != self.document_lifecycle.identity()
-            || !self.document_settings.document_activity.visible
-            || self
-                .viewport_frames
-                .as_ref()
-                .is_none_or(|state| state.subscription.viewport_revision != input.viewport_revision)
-        {
-            return Ok(());
-        }
-        let result = self.dispatch_mouse_event_at_point_with_pointer(
-            input.position.0,
-            input.position.1,
-            "wheel",
-            -1,
-            Some(input.buttons),
-            0,
-            input.delta.0,
-            input.delta.1,
-            super::RendererPointerEventProperties::default(),
-            input.modifiers,
-            false,
+        let result = self.dispatch_viewport_mouse(
+            RendererViewportPointerInput {
+                document: input.document,
+                viewport_revision: input.viewport_revision,
+                position: input.position,
+                event: "wheel",
+                button: -1,
+                buttons: input.buttons,
+                click_count: 0,
+                modifiers: input.modifiers,
+            },
+            input.delta,
         );
         if let Err(error) = &result {
             tracing::warn!(%error, "viewport wheel dispatch failed");

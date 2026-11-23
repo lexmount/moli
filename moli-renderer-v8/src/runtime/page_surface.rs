@@ -5099,6 +5099,8 @@ pub enum RendererPageCommand {
     #[cfg(feature = "molio")]
     WakeViewportFrames,
     #[cfg(feature = "molio")]
+    DispatchViewportPointer(super::RendererViewportPointerInput),
+    #[cfg(feature = "molio")]
     DispatchViewportWheel(super::RendererViewportWheelInput),
     #[cfg(feature = "molio")]
     SetViewportPointerPosition {

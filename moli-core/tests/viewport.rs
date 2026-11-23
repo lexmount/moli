@@ -3,8 +3,8 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use moli_core::{
     LayoutPolicy, RendererPageNavigationState, RendererViewportCursor,
-    RendererViewportCursorKind as Cursor, RendererViewportFrame, RendererViewportWheelInput,
-    RendererViewportWheelPhase,
+    RendererViewportCursorKind as Cursor, RendererViewportFrame, RendererViewportPointerInput,
+    RendererViewportWheelInput, RendererViewportWheelPhase,
     page::{PageInputExt, ViewportBuffers, ViewportFrames, ViewportOutput},
     protocol_types::{DocumentActivity, ViewportSurface},
     runtime::{Browser, BrowserConfig},
@@ -474,6 +474,105 @@ async fn queued_viewport_wheel_preserves_input_order_and_document_scope() -> Res
         .evaluate_runtime_expression_async(SCROLL_AND_INPUT)
         .await?;
     assert_eq!(result["value"], "0:");
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_pointer_requires_a_current_rendered_document() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let html = r#"<!doctype html><body style="margin:0">
+        <div style="width:100px;height:100px">Pointer target</div>
+        <script>window.moves = 0; addEventListener('mousemove', () => moves++);</script>"#;
+    let mut page = browser.fetch(&html_url(html)).await?;
+    let mut navigation = page.subscribe_navigation_state().await?;
+    let document =
+        tokio::time::timeout(Duration::from_secs(5), navigation.wait_for(Option::is_some))
+            .await??
+            .as_ref()
+            .context("viewport document")?
+            .document;
+    let input = RendererViewportPointerInput {
+        document,
+        viewport_revision: 1,
+        position: (16., 16.),
+        event: "mousemove",
+        button: -1,
+        buttons: 0,
+        click_count: 0,
+        modifiers: 0,
+    };
+    assert!(page.dispatch_viewport_pointer(input).await?.is_none());
+
+    let surface = ViewportSurface::default();
+    let mut frames = page.subscribe_viewport_frames(surface, 1).await?;
+    let initial = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+    assert!(page.dispatch_viewport_pointer(input).await?.is_some());
+    assert_eq!(
+        page.evaluate_runtime_expression_async("moves").await?["value"],
+        1
+    );
+
+    let mut frames = page.subscribe_viewport_frames(surface, 2).await?;
+    assert!(page.dispatch_viewport_pointer(input).await?.is_none());
+    let resized = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+    let current_input = RendererViewportPointerInput {
+        viewport_revision: resized.viewport_revision,
+        ..input
+    };
+    page.evaluate_runtime_expression_async(
+        "window.savedRoot = document.documentElement; savedRoot.remove();",
+    )
+    .await?;
+    assert!(
+        page.dispatch_viewport_pointer(current_input)
+            .await?
+            .is_none()
+    );
+    page.evaluate_runtime_expression_async("document.append(savedRoot)")
+        .await?;
+    frame(&mut frames, |frame| {
+        frame.sequence > resized.sequence && frame.snapshot.is_some()
+    })
+    .await?;
+    assert!(
+        page.dispatch_viewport_pointer(current_input)
+            .await?
+            .is_some()
+    );
+    assert_eq!(
+        page.evaluate_runtime_expression_async("moves").await?["value"],
+        2
+    );
+
+    let next_url = html_url(&format!("{html} "));
+    let pending = page.start_viewport_navigation(Some(next_url))?;
+    assert!(page.finish_viewport_navigation(pending.wait().await?)?);
+    let replacement = frame(&mut frames, |frame| {
+        frame.document != initial.document && frame.snapshot.is_some()
+    })
+    .await?;
+    assert!(
+        page.dispatch_viewport_pointer(current_input)
+            .await?
+            .is_none()
+    );
+    assert_eq!(
+        page.evaluate_runtime_expression_async("moves").await?["value"],
+        0
+    );
+    assert!(
+        page.dispatch_viewport_pointer(RendererViewportPointerInput {
+            document: replacement.document,
+            ..current_input
+        })
+        .await?
+        .is_some()
+    );
+    assert_eq!(
+        page.evaluate_runtime_expression_async("moves").await?["value"],
+        1
+    );
     Ok(())
 }
 
@@ -1275,7 +1374,7 @@ async fn viewport_ime_replaces_a_selection_across_contenteditable_nodes() -> Res
 
 #[tokio::test]
 async fn viewport_file_drop_and_link_activation_use_the_current_document() -> Result<()> {
-    use moli_core::page::{PageInputExt, RendererDraggedFile};
+    use moli_core::page::RendererDraggedFile;
     use moli_test_support::FixtureServer;
 
     let server = FixtureServer::spawn().await?;
@@ -1309,10 +1408,23 @@ async fn viewport_file_drop_and_link_activation_use_the_current_document() -> Re
             .await?
     );
     page_state(&mut states, |state| state.navigation.title == file.name).await?;
-    page.dispatch_mouse_event_at_point_async(16., 16., "mousedown", 0, Some(1), 0., 0.)
-        .await?;
-    page.dispatch_mouse_event_at_point_async(16., 16., "mouseup", 0, Some(0), 0., 0.)
-        .await?;
+    let press = RendererViewportPointerInput {
+        document: first.document,
+        viewport_revision: first.viewport_revision,
+        position: (16., 16.),
+        event: "mousedown",
+        button: 0,
+        buttons: 1,
+        click_count: 1,
+        modifiers: 0,
+    };
+    assert!(page.dispatch_viewport_pointer(press).await?.is_some());
+    let release = RendererViewportPointerInput {
+        event: "mouseup",
+        buttons: 0,
+        ..press
+    };
+    assert!(page.dispatch_viewport_pointer(release).await?.is_some());
     let navigated = page_state(&mut states, |state| state.document != first.document).await?;
     assert_eq!(navigated.navigation.url.as_str(), next);
     assert!(
