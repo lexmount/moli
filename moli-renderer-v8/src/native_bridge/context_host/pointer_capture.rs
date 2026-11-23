@@ -3,7 +3,7 @@ use super::*;
 #[derive(Default)]
 pub(super) struct PointerState {
     buttons_active: bool,
-    document: Option<WindowDocumentTaskTarget>,
+    active_document: Option<WindowDocumentTaskTarget>,
     pending: Option<PointerCaptureTarget>,
     #[cfg(feature = "devtools")]
     active: Option<PointerCaptureTarget>,
@@ -28,7 +28,7 @@ impl PageScriptHost {
         let Some(state) = self.pointers.get(&pointer_id) else {
             return;
         };
-        let Some(document) = state.document.filter(|_| state.buttons_active) else {
+        let Some(document) = state.active_document.filter(|_| state.buttons_active) else {
             return;
         };
         let capture = PointerCaptureTarget { element, document };
@@ -106,15 +106,18 @@ impl PageScriptHost {
 
 #[cfg(feature = "devtools")]
 impl PageScriptHost {
-    pub(crate) fn update_pointer_input(
+    pub(crate) fn set_pointer_buttons_active(&mut self, pointer_id: i32, active: bool) {
+        self.pointers.entry(pointer_id).or_default().buttons_active = active;
+    }
+
+    pub(crate) fn set_pointer_active_document(
         &mut self,
         pointer_id: i32,
-        buttons_active: bool,
         document: Option<WindowDocumentTaskTarget>,
     ) {
-        let state = self.pointers.entry(pointer_id).or_default();
-        state.buttons_active = buttons_active;
-        state.document = document;
+        if let Some(state) = self.pointers.get_mut(&pointer_id) {
+            state.active_document = document;
+        }
     }
 
     pub(crate) fn remove_touch_pointer_input(&mut self, pointer_id: i32) {
