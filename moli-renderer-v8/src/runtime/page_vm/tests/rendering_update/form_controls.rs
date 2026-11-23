@@ -1,5 +1,189 @@
 use super::*;
 
+#[test]
+fn realtime_textarea_default_value_changes_repaint_through_reset() {
+    run_page_vm_large_stack_async_test("textarea-default-value-paint", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/textarea-default-value-paint").unwrap(),
+        );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+        page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 240,
+            inner_height: 100,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))
+        .unwrap();
+        let mut reference = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/textarea-default-value-reference").unwrap(),
+        );
+        let setup = r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0;background:white;overflow:hidden}
+textarea{display:block;box-sizing:border-box;width:220px;height:64px;padding:4px;
+  border:0;outline:0;resize:none;background:white;color:rgb(208,0,0);font:24px/28px monospace}
+textarea::placeholder{color:rgb(0,0,208);opacity:1}
+</style>`;
+document.body.innerHTML = '<form><textarea id=field placeholder=hint>default</textarea></form>';
+window.field = document.getElementById('field');
+'installed'
+"#;
+        for current in [&mut page, &mut reference] {
+            current.vm_mut().eval(setup).unwrap();
+            current.vm_mut().sync_live_document_style_sources();
+        }
+        let viewport = moli_layout::PaintViewport::new(240, 100, 1.0);
+        let mut previous_value = None;
+        for (stage, script, value, default_value) in [
+            ("initial", "void 0", "default", "default"),
+            (
+                "child text",
+                "field.firstChild.data='updated'",
+                "updated",
+                "updated",
+            ),
+            ("clear", "field.value=''", "", "updated"),
+            (
+                "dirty default text",
+                "field.firstChild.data='latest'",
+                "",
+                "latest",
+            ),
+            ("reset", "field.form.reset()", "latest", "latest"),
+            (
+                "dirty equal default",
+                "field.value='latest';field.defaultValue='replacement'",
+                "latest",
+                "replacement",
+            ),
+            (
+                "reset new default",
+                "field.form.reset()",
+                "replacement",
+                "replacement",
+            ),
+            (
+                "pristine default setter",
+                "field.defaultValue='final'",
+                "final",
+                "final",
+            ),
+        ] {
+            // Settle any demand from the previous explicit capture before
+            // checking that the next visible mutation requests its own frame.
+            if previous_value.is_some() {
+                if page
+                    .next_rendering_opportunity_deadline_for_test()
+                    .is_some()
+                {
+                    super::realtime_opportunity::run_opportunity(&mut page, &loader)
+                        .await
+                        .unwrap();
+                }
+                assert!(
+                    page.next_rendering_opportunity_deadline_for_test()
+                        .is_none(),
+                    "{stage}: idle before mutation"
+                );
+            }
+            let layout_builds = page.vm().layout_pass_observability_for_test().1;
+            page.vm_mut().eval(script).unwrap();
+            if previous_value != Some(value) {
+                assert!(
+                    page.next_rendering_opportunity_deadline_for_test()
+                        .is_some(),
+                    "{stage}: changed visible text must request a realtime frame"
+                );
+            }
+            if page
+                .next_rendering_opportunity_deadline_for_test()
+                .is_some()
+            {
+                super::realtime_opportunity::run_opportunity(&mut page, &loader)
+                    .await
+                    .unwrap();
+            }
+            if previous_value != Some(value) {
+                assert!(
+                    page.vm().layout_pass_observability_for_test().1 > layout_builds,
+                    "{stage}: realtime layout must update before capture"
+                );
+                assert_eq!(
+                    page.vm()
+                        .layout_pass_observability_for_test()
+                        .3
+                        .unwrap()
+                        .reason,
+                    moli_layout::LayoutFlushReason::RenderingOpportunity,
+                    "{stage}: layout must come from the realtime frame"
+                );
+            }
+            // A dirty reference exercises the established current-value paint
+            // path independently of the default text and reset transitions.
+            reference
+                .vm_mut()
+                .eval(&format!(
+                    "field.value={}",
+                    serde_json::to_string(value).unwrap()
+                ))
+                .unwrap();
+            let actual = page
+                .vm_mut()
+                .screenshot_layout_snapshot(viewport)
+                .unwrap()
+                .expect("textarea paint");
+            let expected = reference
+                .vm_mut()
+                .screenshot_layout_snapshot(viewport)
+                .unwrap()
+                .expect("reference paint");
+            let actual = moli_paint::raster_snapshot(&actual).unwrap();
+            let expected = moli_paint::raster_snapshot(&expected).unwrap();
+            assert_eq!(
+                (actual.width, actual.height),
+                (expected.width, expected.height)
+            );
+            assert!(
+                expected.rgba.as_chunks::<4>().0.iter().any(|pixel| {
+                    pixel[3] > 200
+                        && pixel[1] < 80
+                        && if value.is_empty() {
+                            pixel[2] > 150 && pixel[0] < 80
+                        } else {
+                            pixel[0] > 150 && pixel[2] < 80
+                        }
+                }),
+                "{stage}: reference must paint colored glyphs"
+            );
+            let different_pixels = actual
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(expected.rgba.as_chunks::<4>().0)
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(
+                different_pixels, 0,
+                "{stage}: painted text must match the current-value reference"
+            );
+            assert_eq!(
+                page.vm_mut()
+                    .eval("JSON.stringify([field.value,field.defaultValue])")
+                    .unwrap(),
+                serde_json::to_string(&[value, default_value]).unwrap(),
+                "{stage}: DOM current and default values"
+            );
+            previous_value = Some(value);
+        }
+    });
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn empty_text_control_caret_keeps_control_opacity_transform_and_clip() {
     run_page_vm_async_test(async move {

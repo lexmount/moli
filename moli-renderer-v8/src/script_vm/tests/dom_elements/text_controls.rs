@@ -1,6 +1,90 @@
 use super::*;
 
 #[test]
+fn textarea_default_value_preserves_dirty_values_equal_to_defaults() {
+    let mut vm = new_parsed_test_vm(
+        "https://textarea-default-value-dirty.test/",
+        "<!doctype html><body>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const rows = [];
+  for (const mode of ['detached', 'connected', 'inert']) {
+    for (const initial of ['a', 'line1\r\nline2', '']) {
+      const doc = mode === 'inert' ? document.implementation.createHTMLDocument('') : document;
+      const textarea = doc.createElement('textarea');
+      if (mode === 'connected') doc.body.append(textarea);
+      textarea.textContent = initial;
+      textarea.value = initial.replace(/\r\n?/g, '\n');
+      textarea.defaultValue = 'new\r\ndefault';
+      const first = [textarea.value, textarea.defaultValue, textarea.textContent];
+      textarea.defaultValue = 'later';
+      const second = [textarea.value, textarea.defaultValue];
+      const cloned = [false, true].map(deep => {
+        const clone = textarea.cloneNode(deep);
+        clone.defaultValue = 'clone';
+        return [clone.value, clone.defaultValue];
+      });
+      textarea.value = '';
+      textarea.defaultValue = 'cleared';
+      const cleared = [textarea.value, textarea.defaultValue];
+      rows.push({mode, initial, first, second, cloned, cleared});
+      textarea.remove();
+    }
+  }
+  return JSON.stringify(rows);
+})()
+"#,
+        )
+        .unwrap();
+    let mut expected = Vec::new();
+    for mode in ["detached", "connected", "inert"] {
+        for (initial, value) in [("a", "a"), ("line1\r\nline2", "line1\nline2"), ("", "")] {
+            expected.push(serde_json::json!({
+                "mode": mode,
+                "initial": initial,
+                "first": [value, "new\r\ndefault", "new\r\ndefault"],
+                "second": [value, "later"],
+                "cloned": [[value, "clone"], [value, "clone"]],
+                "cleared": ["", "cleared"]
+            }));
+        }
+    }
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::Value::Array(expected)
+    );
+}
+
+#[test]
+fn textarea_default_value_preserves_values_set_by_removal_reactions() {
+    let mut vm = new_parsed_test_vm(
+        "https://textarea-default-value-reactions.test/",
+        "<!doctype html><body>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const textarea = document.createElement('textarea');
+  document.body.append(textarea);
+  textarea.textContent = 'a';
+  customElements.define('x-default-value-child', class extends HTMLElement {
+    disconnectedCallback() { textarea.value = 'callback'; }
+  });
+  textarea.appendChild(document.createElement('x-default-value-child'));
+  textarea.defaultValue = 'new';
+  return JSON.stringify([textarea.value, textarea.defaultValue, textarea.textContent]);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, r#"["callback","new","new"]"#);
+}
+
+#[test]
 fn character_data_constructors_parse_webidl_data() {
     let mut vm = new_storage_test_vm("https://character-data-constructors.test/");
 

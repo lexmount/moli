@@ -65,6 +65,43 @@ fn copy_live_script_already_started_to_clone<'s>(
         .set_script_already_started(handle, true);
 }
 
+fn copy_live_textarea_value_to_clone<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    cloned: v8::Local<'s, v8::Object>,
+) {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, node)
+    else {
+        return;
+    };
+    let (value, dirty, user_edited) = {
+        let runtime = unsafe { &*runtime_ptr };
+        let Some(element) = runtime
+            .dom_host()
+            .node(handle)
+            .and_then(|node| node.as_element())
+            .filter(|element| element.is_html_textarea())
+        else {
+            return;
+        };
+        (
+            element.input_value(),
+            element.input_value_dirty(),
+            element.input_value_user_edited(),
+        )
+    };
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, cloned)
+    else {
+        return;
+    };
+    let host = unsafe { &mut *runtime_ptr }.dom_host_mut();
+    let _ = if user_edited {
+        host.set_input_value_from_user_edit(handle, &value)
+    } else {
+        host.set_input_value_with_dirty(handle, &value, dirty)
+    };
+}
+
 fn clone_element_attributes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
@@ -860,6 +897,7 @@ pub(in crate::native_bridge::document) fn clone_js_node_like_into_document_objec
             };
             clone_element_attributes(scope, node, cloned);
             copy_live_script_already_started_to_clone(scope, node, cloned);
+            copy_live_textarea_value_to_clone(scope, node, cloned);
             if deep {
                 if clone_template_content_if_present(
                     scope,
