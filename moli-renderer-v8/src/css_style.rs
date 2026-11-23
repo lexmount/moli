@@ -1,3 +1,5 @@
+pub(crate) mod value_dependencies;
+
 use crate::webidl;
 
 use cssparser::{ParseError, Parser, SourcePosition, ToCss, Token, TokenSerializationType};

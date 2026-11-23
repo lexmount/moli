@@ -126,6 +126,73 @@ fn realtime_cssom_native_container_units_refresh_the_requested_property() {
 }
 
 #[test]
+fn realtime_cssom_font_relative_values_refresh_container_dependent_font_sizes() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html><div id=box style='container-type:inline-size;width:200px'>
+        <div style='font-size:10cqw'><div id=target style='font-size:2em; outline-offset:1em; color:blue'></div></div></div>"#,
+    );
+    assert_eq!(
+        vm.eval("const held = getComputedStyle(target); void box.offsetWidth; held.fontSize")
+            .unwrap(),
+        "40px"
+    );
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval("box.style.width = '300px'; held.color").unwrap(),
+        "rgb(0, 0, 255)"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    assert_eq!(
+        vm.eval("box.style.width = '400px'; held.fontSize").unwrap(),
+        "80px"
+    );
+    assert_eq!(
+        vm.eval("box.style.width = '350px'; held.outlineOffset")
+            .unwrap(),
+        "70px"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+}
+
+#[test]
+fn realtime_cssom_registered_container_lengths_refresh_direct_and_variable_reads() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html><style>
+        @property --size { syntax:'<length>'; inherits:false; initial-value:0px }
+        #target { --size:10cqw; --raw:10cqw; --alias:var(--size); --label:blue;
+                  font-size:var(--size); outline-offset:var(--alias); color:var(--label) }
+        </style><div id=box style='container-type:inline-size;width:200px'><div id=target></div></div>"#,
+    );
+    assert_eq!(
+        vm.eval("const held = getComputedStyle(target); void box.offsetWidth; JSON.stringify([held.getPropertyValue('--size'), held.fontSize])")
+            .unwrap(),
+        r#"["20px","20px"]"#
+    );
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval("box.style.width = '300px'; JSON.stringify([held.getPropertyValue('--raw').trim(), held.color])")
+            .unwrap(),
+        r#"["10cqw","rgb(0, 0, 255)"]"#
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    assert_eq!(
+        vm.eval("box.style.width = '400px'; held.getPropertyValue('--size')")
+            .unwrap(),
+        "40px"
+    );
+    assert_eq!(
+        vm.eval("box.style.width = '450px'; held.fontSize").unwrap(),
+        "45px"
+    );
+    assert_eq!(
+        vm.eval("box.style.width = '500px'; held.outlineOffset")
+            .unwrap(),
+        "50px"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 3);
+}
+
+#[test]
 fn on_demand_cssom_size_container_query_keeps_live_inline_sizes() {
     let mut vm = new_parsed_test_vm(
         "https://ondemand-cssom.test/",
