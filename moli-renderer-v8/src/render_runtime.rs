@@ -1,5 +1,7 @@
 #[cfg(feature = "devtools")]
 use crate::runtime::RendererDevToolsPageCommand;
+#[cfg(feature = "molio")]
+use crate::runtime::{RendererPageToken, RendererViewportWheelInput};
 use anyhow::{Result, anyhow};
 use parking_lot::Mutex;
 use std::sync::{Arc, Weak};
@@ -24,10 +26,18 @@ use super::shared_worker_runtime::SharedWorkerRuntimeOwnerWake;
 // headroom for fresh V8 entry points.
 const RENDER_RUNTIME_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
+#[cfg(feature = "molio")]
+type PendingViewportWheel = Mutex<Option<RendererViewportWheelInput>>;
+
 pub(crate) enum RenderRuntimeEnvelope {
     Command {
         command: Box<RendererOwnerCommand>,
         reply_tx: oneshot::Sender<Result<RendererOwnerReply>>,
+    },
+    #[cfg(feature = "molio")]
+    ViewportWheel {
+        token: RendererPageToken,
+        pending: Arc<PendingViewportWheel>,
     },
     #[cfg(feature = "devtools")]
     InspectorMainReceiverWake(RendererInspectorMainOwnerWake),
@@ -45,6 +55,31 @@ struct RenderRuntimeState {
 struct RenderRuntimeAdmission {
     tx: mpsc::UnboundedSender<RenderRuntimeEnvelope>,
     terminal: bool,
+    #[cfg(feature = "molio")]
+    viewport_wheel_tail: Option<(RendererPageToken, Weak<PendingViewportWheel>)>,
+}
+
+impl RenderRuntimeAdmission {
+    fn new(tx: mpsc::UnboundedSender<RenderRuntimeEnvelope>) -> Self {
+        Self {
+            tx,
+            terminal: false,
+            #[cfg(feature = "molio")]
+            viewport_wheel_tail: None,
+        }
+    }
+
+    fn send_ordered(
+        &mut self,
+        envelope: RenderRuntimeEnvelope,
+    ) -> std::result::Result<(), mpsc::error::SendError<RenderRuntimeEnvelope>> {
+        #[cfg(feature = "molio")]
+        {
+            // Merging must use the same order as ordinary command admission.
+            self.viewport_wheel_tail = None;
+        }
+        self.tx.send(envelope)
+    }
 }
 
 pub(crate) struct RenderRuntimeEnqueueError {
@@ -133,10 +168,7 @@ impl RenderRuntimeOwner {
             .expect("failed to spawn render runtime thread");
         Self {
             state: Some(Arc::new(RenderRuntimeState {
-                admission: Mutex::new(RenderRuntimeAdmission {
-                    tx,
-                    terminal: false,
-                }),
+                admission: Mutex::new(RenderRuntimeAdmission::new(tx)),
             })),
             render_join: Some(render_join),
         }
@@ -200,19 +232,23 @@ impl RenderRuntimeHandle {
             });
         };
         let (reply_tx, reply_rx) = oneshot::channel();
-        let admission = state.admission.lock();
+        let mut admission = state.admission.lock();
         if admission.terminal {
             return Err(RenderRuntimeEnqueueError {
                 command: Box::new(command),
                 error: anyhow!("render runtime command admission has shut down"),
             });
         }
-        if let Err(error) = admission.tx.send(RenderRuntimeEnvelope::Command {
+        if let Err(error) = admission.send_ordered(RenderRuntimeEnvelope::Command {
             command: Box::new(command),
             reply_tx,
         }) {
             let command = match error.0 {
                 RenderRuntimeEnvelope::Command { command, .. } => command,
+                #[cfg(feature = "molio")]
+                RenderRuntimeEnvelope::ViewportWheel { .. } => {
+                    unreachable!("command admission sent a command envelope")
+                }
                 #[cfg(feature = "devtools")]
                 RenderRuntimeEnvelope::InspectorMainReceiverWake(_) => {
                     unreachable!("command admission must recover the command envelope it sent")
@@ -226,6 +262,42 @@ impl RenderRuntimeHandle {
         Ok(reply_rx)
     }
 
+    #[cfg(feature = "molio")]
+    pub(crate) fn enqueue_viewport_wheel(
+        &self,
+        token: RendererPageToken,
+        input: RendererViewportWheelInput,
+    ) -> Result<()> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| anyhow!("render runtime thread has shut down"))?;
+        let mut admission = state.admission.lock();
+        anyhow::ensure!(
+            !admission.terminal && !admission.tx.is_closed(),
+            "render runtime command admission has shut down"
+        );
+        if let Some((tail_token, tail)) = &admission.viewport_wheel_tail
+            && *tail_token == token
+            && let Some(pending) = tail.upgrade()
+            && let Some(previous) = pending.lock().as_mut()
+            && previous.coalesce(&input)
+        {
+            return Ok(());
+        }
+
+        let pending = Arc::new(Mutex::new(Some(input)));
+        admission
+            .tx
+            .send(RenderRuntimeEnvelope::ViewportWheel {
+                token,
+                pending: Arc::clone(&pending),
+            })
+            .map_err(|_| anyhow!("render runtime thread has shut down"))?;
+        admission.viewport_wheel_tail = Some((token, Arc::downgrade(&pending)));
+        Ok(())
+    }
+
     #[cfg(feature = "devtools")]
     pub(crate) fn enqueue_inspector_main_receiver_wake(
         &self,
@@ -234,13 +306,12 @@ impl RenderRuntimeHandle {
         let Some(state) = self.state.upgrade() else {
             return Err(anyhow!("render runtime thread has shut down"));
         };
-        let admission = state.admission.lock();
+        let mut admission = state.admission.lock();
         if admission.terminal {
             return Err(anyhow!("render runtime command admission has shut down"));
         }
         admission
-            .tx
-            .send(RenderRuntimeEnvelope::InspectorMainReceiverWake(wake))
+            .send_ordered(RenderRuntimeEnvelope::InspectorMainReceiverWake(wake))
             .map_err(|_| anyhow!("render runtime thread has shut down"))
     }
 
@@ -312,6 +383,106 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "molio")]
+    #[test]
+    fn viewport_wheel_admission_coalesces_pending_input_between_commands() -> Result<()> {
+        use crate::runtime::{
+            PageId, RendererDocumentLifecycleIdentity, RendererDocumentToken, RendererFrameToken,
+            RendererLifecycleEpoch, RendererViewportWheelPhase,
+        };
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let state = Arc::new(RenderRuntimeState {
+            admission: Mutex::new(RenderRuntimeAdmission::new(tx)),
+        });
+        let handle = RenderRuntimeHandle {
+            state: Arc::downgrade(&state),
+        };
+        let page_id = PageId::new_for_testing(1);
+        let token = RendererPageToken::new_for_testing(page_id);
+        let wheel = RendererViewportWheelInput {
+            document: RendererDocumentLifecycleIdentity {
+                frame: RendererFrameToken { page_id },
+                document: RendererDocumentToken::new_for_testing(page_id, 1),
+                epoch: RendererLifecycleEpoch(1),
+            },
+            viewport_revision: 1,
+            position: (16., 16.),
+            buttons: 0,
+            delta: (0., 2.),
+            modifiers: 0,
+            phase: RendererViewportWheelPhase::Moved,
+            precise: true,
+        };
+        handle.enqueue_viewport_wheel(token, wheel)?;
+        let RenderRuntimeEnvelope::ViewportWheel {
+            pending: in_flight, ..
+        } = rx.try_recv()?
+        else {
+            panic!("first wheel should be eligible for immediate dispatch");
+        };
+        let first = in_flight.lock().take().expect("first wheel input");
+        for _ in 0..120 {
+            handle.enqueue_viewport_wheel(token, wheel)?;
+        }
+        let _navigation_reply = handle.enqueue(RendererOwnerCommand::RunProtocolPageCommand {
+            token,
+            command: RendererPageCommand::NavigateViewport(None),
+        })?;
+        handle.enqueue_viewport_wheel(token, wheel)?;
+        let reversed = RendererViewportWheelInput {
+            delta: (0., -2.),
+            ..wheel
+        };
+        handle.enqueue_viewport_wheel(token, reversed)?;
+        handle.enqueue_viewport_wheel(
+            token,
+            RendererViewportWheelInput {
+                phase: RendererViewportWheelPhase::Ended,
+                ..reversed
+            },
+        )?;
+
+        let RenderRuntimeEnvelope::ViewportWheel {
+            pending: merged, ..
+        } = rx.try_recv()?
+        else {
+            panic!("expected one queued wheel before navigation");
+        };
+        assert_eq!(first.delta, (0., 2.));
+        assert!(in_flight.lock().is_none());
+        assert_eq!(
+            merged.lock().take().expect("merged wheel input").delta,
+            (0., 240.)
+        );
+        assert!(matches!(
+            rx.try_recv()?, RenderRuntimeEnvelope::Command { command, .. }
+                if matches!(*command, RendererOwnerCommand::RunProtocolPageCommand {
+                    command: RendererPageCommand::NavigateViewport(None), ..
+                })
+        ));
+        for expected in [
+            wheel,
+            reversed,
+            RendererViewportWheelInput {
+                phase: RendererViewportWheelPhase::Ended,
+                ..reversed
+            },
+        ] {
+            let RenderRuntimeEnvelope::ViewportWheel { pending, .. } = rx.try_recv()? else {
+                panic!("expected a separate wheel at an input boundary");
+            };
+            let input = pending.lock().take().expect("queued wheel input");
+            assert_eq!(input.delta, expected.delta);
+            assert_eq!(input.phase, expected.phase);
+        }
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        Ok(())
+    }
+
     #[cfg(feature = "devtools")]
     #[test]
     fn raw_owner_admission_rejects_inspector_page_commands() {
@@ -350,10 +521,7 @@ mod tests {
             .expect("failed to spawn render runtime test thread");
 
         let state = Arc::new(RenderRuntimeState {
-            admission: Mutex::new(RenderRuntimeAdmission {
-                tx: render_tx,
-                terminal: false,
-            }),
+            admission: Mutex::new(RenderRuntimeAdmission::new(render_tx)),
         });
         let weak_handle = RenderRuntimeHandle {
             state: Arc::downgrade(&state),

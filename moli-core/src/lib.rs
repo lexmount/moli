@@ -51,6 +51,7 @@ pub use moli_renderer_v8::{RendererPageAccessError, RendererPageCommand, Rendere
 pub use moli_renderer_v8::{
     RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
     RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
+    RendererViewportWheelInput, RendererViewportWheelPhase,
 };
 
 /// ACE page tasks executed on the renderer owner thread.

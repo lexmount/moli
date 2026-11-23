@@ -1,6 +1,8 @@
 use anyhow::Result;
 use moli_page_types::ViewportSurface;
-use moli_renderer_v8::{RendererViewportFrame, RendererViewportSubscription};
+use moli_renderer_v8::{
+    RendererViewportFrame, RendererViewportSubscription, RendererViewportWheelInput,
+};
 use std::sync::Arc;
 use tokio::sync::{Notify, watch};
 
@@ -15,6 +17,11 @@ pub struct ViewportFrames {
 }
 
 impl Page {
+    /// Queues desktop wheel input on the renderer owner without waiting for DOM dispatch.
+    pub fn enqueue_viewport_wheel(&self, input: RendererViewportWheelInput) -> Result<()> {
+        self.handle.enqueue_viewport_wheel(input)
+    }
+
     pub async fn viewport_selected_text(
         &mut self,
         document: crate::RendererDocumentLifecycleIdentity,

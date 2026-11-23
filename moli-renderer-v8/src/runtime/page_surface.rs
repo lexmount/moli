@@ -5075,6 +5075,8 @@ pub enum RendererPageCommand {
     #[cfg(feature = "molio")]
     WakeViewportFrames,
     #[cfg(feature = "molio")]
+    DispatchViewportWheel(super::RendererViewportWheelInput),
+    #[cfg(feature = "molio")]
     NavigateViewport(Option<String>),
     #[cfg(feature = "molio")]
     TraverseViewportHistory(i64),

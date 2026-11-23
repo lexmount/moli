@@ -359,7 +359,7 @@ pub use runtime::{RendererPopupActivationParts, RendererRuntimeInspectorMessageR
 pub use runtime::{
     RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
     RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
-    RendererViewportSubscription,
+    RendererViewportSubscription, RendererViewportWheelInput, RendererViewportWheelPhase,
 };
 pub use service_worker_runtime::{
     SharedServiceWorkerResourceStore, new_shared_json_service_worker_resource_store,

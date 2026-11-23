@@ -446,7 +446,7 @@ pub use self::page_surface::{
 pub use self::page_viewport::{
     RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
     RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
-    RendererViewportSubscription,
+    RendererViewportSubscription, RendererViewportWheelInput, RendererViewportWheelPhase,
 };
 pub(crate) use self::page_vm::PageVm;
 use self::page_vm::PageVmDropTracker;

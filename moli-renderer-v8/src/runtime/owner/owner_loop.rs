@@ -60,6 +60,8 @@ impl RendererOwnerHandle {
                                     "renderer browser context was dropped before command dispatch"
                                 )));
                             }
+                            #[cfg(feature = "molio")]
+                            RenderRuntimeEnvelope::ViewportWheel { .. } => {}
                             #[cfg(feature = "devtools")]
                             RenderRuntimeEnvelope::InspectorMainReceiverWake(_) => {}
                         }
@@ -532,6 +534,27 @@ impl RendererOwnerHandle {
     ) {
         let (command, reply_tx) = match envelope {
             RenderRuntimeEnvelope::Command { command, reply_tx } => (*command, reply_tx),
+            #[cfg(feature = "molio")]
+            RenderRuntimeEnvelope::ViewportWheel { token, pending } => {
+                if self.context_shutdown_started() {
+                    return;
+                }
+                let input = pending.lock().take().expect("viewport wheel taken once");
+                // Detached input participates in the normal order of owner turns.
+                pending_turns.push_back(RenderRuntimePendingTurn {
+                    reply_tx: None,
+                    turn: RenderRuntimeTurn::RunLivePageCommand {
+                        token,
+                        command: RendererPageCommand::DispatchViewportWheel(input),
+                        capture_policy:
+                            crate::runtime::RendererPageStateCapturePolicy::ProtocolTurn,
+                    },
+                    allow_command_overtake: false,
+                    command_admission_output_predecessor:
+                        renderer_output_fence_for_tail_on_bound_owner_local_store(token),
+                });
+                return;
+            }
             #[cfg(feature = "devtools")]
             RenderRuntimeEnvelope::InspectorMainReceiverWake(wake) => {
                 Self::enqueue_inspector_main_receiver_wake(wake, pending_turns);

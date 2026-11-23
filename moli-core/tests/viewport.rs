@@ -2,8 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use moli_core::{
-    LayoutPolicy, RendererViewportFrame,
-    page::{ViewportBuffers, ViewportFrames, ViewportOutput},
+    LayoutPolicy, RendererViewportFrame, RendererViewportWheelInput, RendererViewportWheelPhase,
+    page::{PageInputExt, ViewportBuffers, ViewportFrames, ViewportOutput},
     protocol_types::{DocumentActivity, ViewportSurface},
     runtime::{Browser, BrowserConfig},
 };
@@ -26,6 +26,71 @@ async fn frame(
     .await??
     .clone()
     .context("viewport frame disappeared")
+}
+
+#[tokio::test]
+async fn queued_viewport_wheel_preserves_input_order_and_document_scope() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let html = r#"<!doctype html><style>body { height: 1000px; margin: 0; }</style>
+        <script>
+            globalThis.inputOrder = [];
+            addEventListener('wheel', event => {
+                inputOrder.push(event.deltaY);
+                if (event.deltaY === 30) event.preventDefault();
+            }, { passive: false });
+            addEventListener('mousedown', () => inputOrder.push('down'));
+        </script><p>Scroll test</p>"#;
+    let mut page = browser.fetch(&html_url(html)).await?;
+    let viewport = ViewportSurface {
+        inner_width: 160,
+        inner_height: 120,
+        ..ViewportSurface::default()
+    };
+    let mut frames = page.subscribe_viewport_frames(viewport, 1).await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+    let wheel = RendererViewportWheelInput {
+        document,
+        viewport_revision: 1,
+        position: (16., 16.),
+        buttons: 0,
+        delta: (0., 20.),
+        modifiers: 0,
+        phase: RendererViewportWheelPhase::Moved,
+        precise: true,
+    };
+    page.enqueue_viewport_wheel(wheel)?;
+    page.dispatch_mouse_event_at_point_async(16., 16., "mousedown", 0, Some(1), 0., 0.)
+        .await?;
+    page.dispatch_mouse_event_at_point_async(16., 16., "mouseup", 0, Some(0), 0., 0.)
+        .await?;
+    page.enqueue_viewport_wheel(RendererViewportWheelInput {
+        delta: (0., 30.),
+        ..wheel
+    })?;
+    const SCROLL_AND_INPUT: &str = "`${scrollY}:${inputOrder.join(',')}`";
+    let result = page
+        .evaluate_runtime_expression_async(SCROLL_AND_INPUT)
+        .await?;
+    assert_eq!(result["value"], "20:20,down,30");
+
+    let next_url = html_url(&format!("{html} "));
+    let pending = page.start_viewport_navigation(Some(next_url))?;
+    assert!(page.finish_viewport_navigation(pending.wait().await?)?);
+    let replacement = frame(&mut frames, |frame| frame.document != document).await?;
+    page.enqueue_viewport_wheel(wheel)?;
+    page.enqueue_viewport_wheel(RendererViewportWheelInput {
+        document: replacement.document,
+        viewport_revision: 0,
+        ..wheel
+    })?;
+    let result = page
+        .evaluate_runtime_expression_async(SCROLL_AND_INPUT)
+        .await?;
+    assert_eq!(result["value"], "0:");
+    Ok(())
 }
 
 #[tokio::test]
