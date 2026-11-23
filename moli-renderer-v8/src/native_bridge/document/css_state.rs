@@ -25,10 +25,9 @@ pub(crate) fn sync_document_fonts_for_handle(
     host: &crate::native_bridge::PageScriptHost,
     document: crate::document_runtime::DomHandle,
 ) {
-    let Some(holder) = crate::util::node_wrapper_from_handle(scope, document) else {
-        return;
-    };
-    let _ = font_faces::sync_document_fonts(scope, holder, host, document);
+    crate::util::with_cached_node_wrapper_realm(scope, host, document, |scope, holder| {
+        let _ = font_faces::sync_document_fonts(scope, holder, host, document);
+    });
 }
 
 pub(crate) fn clear_adopted_stylesheet_font_face_wrappers(

@@ -79,6 +79,14 @@ fn hover_chain_for_input_hit(runtime: &PageScriptHost, hit: Option<DomHandle>) -
 }
 
 impl PageScriptHost {
+    pub(crate) fn style_environment_for_document(
+        &self,
+        document: DomHandle,
+    ) -> StyloStyleEnvironment {
+        StyloStyleEnvironment::from_emulated_media(self.emulated_media())
+            .for_document(self.dom_host(), Some(document))
+    }
+
     pub(crate) fn media_query_matches_for_document(
         &self,
         document: DomHandle,
@@ -89,7 +97,7 @@ impl PageScriptHost {
         };
         crate::style_engine::media_list::evaluate_media_query_list_with_context(
             media,
-            Some(self.emulated_media()),
+            self.style_environment_for_document(document),
             crate::native_bridge::element::style_viewport_for_document(self, document),
             document_node.base_url(),
             document_node.quirks_mode(),
@@ -860,6 +868,11 @@ impl PageScriptHost {
                 .map(String::as_str),
             Some("accept" | "dismiss")
         )
+    }
+
+    pub(crate) fn note_text_scale_meta_change(&mut self) {
+        self.queue_environment_change();
+        self.sample_realtime_media_queries(None);
     }
 
     pub(crate) fn set_emulated_media(

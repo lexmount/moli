@@ -1,10 +1,9 @@
 use std::{collections::BTreeMap, rc::Rc};
 
 use super::{
-    OwnerDispatchScope, PageScriptHost, RuntimeObservableContextToken, WindowDocumentOwner,
-    WindowDocumentTaskTarget, WindowExecutionContextIdentity, WindowExecutionContextOwner,
+    PageScriptHost, RuntimeObservableContextToken, WindowDocumentOwner, WindowDocumentTaskTarget,
+    WindowExecutionContextIdentity, WindowExecutionContextOwner,
 };
-use crate::style_engine::StyleViewport;
 
 #[derive(Clone, Copy)]
 pub(crate) struct RealtimeEnvironmentNotification {
@@ -256,15 +255,12 @@ impl PageScriptHost {
                 ) && self.window_execution_context_identity_is_current(query.execution_context)
             })
             .map(|(id, query)| {
-                let viewport = self.realtime_environment_viewport(query.target);
-                (
-                    *id,
-                    crate::style_engine::media_list::evaluate_media_query_list(
-                        &query.media,
-                        Some(self.emulated_media()),
-                        viewport,
-                    ),
-                )
+                let matches = self
+                    .window_document_handle_for_dispatch_scope(query.target.dispatch_scope())
+                    .is_some_and(|document| {
+                        self.media_query_matches_for_document(document, &query.media)
+                    });
+                (*id, matches)
             })
             .collect::<Vec<_>>();
         {
@@ -278,16 +274,6 @@ impl PageScriptHost {
             }
         }
         self.refresh_realtime_rendering_opportunity();
-    }
-
-    fn realtime_environment_viewport(&self, target: WindowDocumentTaskTarget) -> StyleViewport {
-        match target.dispatch_scope() {
-            OwnerDispatchScope::Child(frame) => {
-                super::super::element::iframe_handle_viewport(self, frame)
-                    .unwrap_or_else(|| self.style_viewport())
-            }
-            _ => self.style_viewport(),
-        }
     }
 
     pub(super) fn queue_realtime_environment_notification(&self, target: WindowDocumentTaskTarget) {

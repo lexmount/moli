@@ -229,15 +229,18 @@ impl ScriptVm {
         &mut self,
         overrides: &crate::protocol_types::EmulatedMediaOverrides,
     ) {
-        {
+        let text_scale_changed = {
             let mut host = self._context_host.borrow_mut();
             if host.emulated_media() == overrides {
                 return;
             }
+            let changed =
+                host.emulated_media().os_text_scale_percent != overrides.os_text_scale_percent;
             host.queue_environment_change();
             host.set_emulated_media(overrides);
-        }
-        self.sync_document_fonts_for_environment();
+            changed
+        };
+        self.sync_document_fonts_for_environment(text_scale_changed);
     }
 
     pub(crate) fn set_emulated_media_for_bootstrap(
@@ -275,11 +278,7 @@ impl ScriptVm {
             return true;
         };
         let host = self._context_host.borrow();
-        crate::style_engine::media_list::evaluate_media_query_list(
-            media,
-            Some(host.emulated_media()),
-            host.style_viewport(),
-        )
+        host.media_query_matches_for_document(host.document_handle(), media)
     }
 
     pub(crate) fn fetch_subresource_interception_matches(
@@ -303,7 +302,7 @@ impl ScriptVm {
             host.queue_viewport_change(viewport_surface);
             host.set_viewport_surface(viewport_surface);
         }
-        self.sync_document_fonts_for_environment();
+        self.sync_document_fonts_for_environment(false);
         Ok(())
     }
 
@@ -354,11 +353,22 @@ impl ScriptVm {
             .set_scrollbars_hidden(hidden)
     }
 
-    pub(super) fn sync_document_fonts_for_environment(&mut self) {
+    fn sync_document_fonts_for_environment(&mut self, text_scale_changed: bool) {
         let context_host = self._context_host.clone();
         let _ = self.with_current_main_world_scope(|scope, _| {
             let host = context_host.borrow();
-            for document in host.documents_with_adopted_style_sheets() {
+            let mut documents = host.documents_with_adopted_style_sheets();
+            if text_scale_changed {
+                documents.push(host.document_handle());
+                documents.extend(
+                    host.child_browsing_context_handles_in_document_order()
+                        .into_iter()
+                        .filter_map(|frame| host.child_browsing_context_document_handle(frame)),
+                );
+                documents.sort_unstable_by_key(|document| document.index());
+                documents.dedup();
+            }
+            for document in documents {
                 crate::native_bridge::document::sync_document_fonts_for_handle(
                     scope, &host, document,
                 );

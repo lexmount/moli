@@ -6,7 +6,6 @@
 use super::*;
 use crate::modulepreload::{
     ModulepreloadAsState, modulepreload_as_state, modulepreload_fetch_candidate,
-    modulepreload_media_matches,
 };
 
 mod attributes;

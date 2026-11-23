@@ -192,7 +192,7 @@ fn visible_custom_functions_for_scope(
     for source in inputs
         .document_stylesheet_sources
         .iter()
-        .filter(|source| source.media_matches(runtime.emulated_media(), viewport))
+        .filter(|source| source.media_matches(inputs.environment, viewport))
     {
         collect_custom_functions_from_stylesheet_source(runtime, source, &mut functions);
     }
@@ -208,7 +208,7 @@ fn visible_custom_functions_for_scope(
         if shadow_chain.contains(root) {
             for source in sources
                 .iter()
-                .filter(|source| source.media_matches(runtime.emulated_media(), viewport))
+                .filter(|source| source.media_matches(inputs.environment, viewport))
             {
                 collect_custom_functions_from_stylesheet_source(runtime, source, &mut functions);
             }

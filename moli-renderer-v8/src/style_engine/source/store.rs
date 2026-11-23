@@ -16,8 +16,8 @@ use super::super::{
 };
 use super::shared_cache::{SharedStyleSourceContents, shared_style_source_contents};
 use crate::{
-    document_runtime::DomHandle, protocol_types::EmulatedMediaOverrides,
-    style_engine::StyleViewport,
+    document_runtime::DomHandle,
+    style_engine::{StyleViewport, StyloStyleEnvironment},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -204,12 +204,12 @@ impl StyloStylesheetSource {
     /// compatibility paths that inspect serialized CSS outside Stylo.
     pub(crate) fn media_matches(
         &self,
-        emulated_media: &EmulatedMediaOverrides,
+        environment: StyloStyleEnvironment,
         viewport: StyleViewport,
     ) -> bool {
         crate::style_engine::source_owner::stylesheet_source_media_matches(
             &self.media_text,
-            emulated_media,
+            environment,
             viewport,
         )
     }

@@ -133,10 +133,6 @@ fn modulepreload_attributes_for_state(state: ModulepreloadAsState) -> Option<Mod
     }
 }
 
-pub(crate) fn modulepreload_media_matches(element: &Element) -> bool {
-    modulepreload_media_attribute_matches(element.attribute("media"))
-}
-
 pub(crate) fn modulepreload_media_attribute_matches(media: Option<&str>) -> bool {
     let Some(media) = media.map(str::trim) else {
         return true;
@@ -146,7 +142,7 @@ pub(crate) fn modulepreload_media_attribute_matches(media: Option<&str>) -> bool
     }
     crate::style_engine::media_list::evaluate_media_query_list(
         media,
-        None,
+        crate::style_engine::StyloStyleEnvironment::default(),
         crate::style_engine::StyleViewport::default(),
     )
 }
@@ -168,9 +164,6 @@ pub(crate) fn modulepreload_fetch_candidate(
     document_url: &Url,
     import_map_integrity: Option<String>,
 ) -> Option<ModulepreloadFetchCandidate> {
-    if !modulepreload_media_matches(element) {
-        return None;
-    }
     let state = modulepreload_as_state(element);
     let attributes = modulepreload_attributes_for_state(state)?;
     let fetch_metadata = crate::planning::ScriptFetchMetadata::from_script_attributes(

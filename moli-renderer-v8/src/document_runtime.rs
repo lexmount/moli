@@ -1291,14 +1291,18 @@ impl super::planning::ParserPlanningReadView for LiveRuntimeDomHost {
 
 impl super::stylesheet_blocking::StylesheetBlockingReadView for LiveRuntimeDomHost {
     fn media_query_matches(&self, media: &str) -> bool {
-        let document = self
-            .borrow()
-            .node(self.borrow().document_handle())
+        let host = self.borrow();
+        let handle = host.document_handle();
+        let document = host
+            .node(handle)
             .and_then(Node::as_document)
             .expect("live Document");
+        let environment =
+            crate::style_engine::StyloStyleEnvironment::from_emulated_media(&self.emulated_media)
+                .for_document(host, Some(handle));
         crate::style_engine::media_list::evaluate_media_query_list_with_context(
             media,
-            Some(&self.emulated_media),
+            environment,
             self.style_viewport(),
             document.base_url(),
             document.quirks_mode(),

@@ -1,9 +1,7 @@
 use crate::{
     document_runtime::DomHandle,
     dom::native::{DomHost, Element, Node},
-    protocol_types::EmulatedMediaOverrides,
-    style_engine::StyleViewport,
-    style_engine::media_list::evaluate_media_query_list,
+    style_engine::{StyleViewport, StyloStyleEnvironment, media_list::evaluate_media_query_list},
 };
 
 pub(crate) fn link_rel_qualifies_as_stylesheet(rel: Option<&str>, title: Option<&str>) -> bool {
@@ -35,7 +33,7 @@ pub(super) fn stylesheet_owner_is_stylesheet_source_enabled(
     host: &DomHost,
     handle: DomHandle,
     media_text: &str,
-    emulated_media: &EmulatedMediaOverrides,
+    environment: StyloStyleEnvironment,
     viewport: StyleViewport,
 ) -> bool {
     host.node(handle).is_some_and(|node| {
@@ -45,7 +43,7 @@ pub(super) fn stylesheet_owner_is_stylesheet_source_enabled(
                 host,
                 handle,
                 media_text,
-                emulated_media,
+                environment,
                 viewport,
             )
     })
@@ -67,7 +65,7 @@ fn style_element_is_stylesheet_source_enabled(
     host: &DomHost,
     handle: DomHandle,
     media_text: &str,
-    emulated_media: &EmulatedMediaOverrides,
+    environment: StyloStyleEnvironment,
     viewport: StyleViewport,
 ) -> bool {
     let Some(element) = host.node(handle).and_then(Node::as_element) else {
@@ -76,24 +74,24 @@ fn style_element_is_stylesheet_source_enabled(
     element.is_inline_style_element()
         && host.get_attribute(handle, "disabled").is_none()
         && stylesheet_owner_type_is_supported(element)
-        && stylesheet_source_media_matches(media_text, emulated_media, viewport)
+        && stylesheet_source_media_matches(media_text, environment, viewport)
 }
 
 pub(super) fn linked_stylesheet_media_matches_for_stylesheet_source(
     media_text: &str,
-    emulated_media: &EmulatedMediaOverrides,
+    environment: StyloStyleEnvironment,
     viewport: StyleViewport,
 ) -> bool {
-    stylesheet_source_media_matches(media_text, emulated_media, viewport)
+    stylesheet_source_media_matches(media_text, environment, viewport)
 }
 
 pub(super) fn stylesheet_source_media_matches(
     media_text: &str,
-    emulated_media: &EmulatedMediaOverrides,
+    environment: StyloStyleEnvironment,
     viewport: StyleViewport,
 ) -> bool {
     let media = media_text.trim();
-    media.is_empty() || evaluate_media_query_list(media, Some(emulated_media), viewport)
+    media.is_empty() || evaluate_media_query_list(media, environment, viewport)
 }
 
 #[cfg(test)]

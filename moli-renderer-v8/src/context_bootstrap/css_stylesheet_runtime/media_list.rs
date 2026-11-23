@@ -275,18 +275,26 @@ pub(crate) fn css_media_rule_matches_getter_callback<'s>(
         .filter(|view| view.rule_type == CssRuleType::Media)
         .map(|view| view.condition_text)
         .unwrap_or_default();
-    let (emulated_media, viewport) =
-        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-            let host = unsafe { &*host_ptr };
-            (Some(host.emulated_media().clone()), host.style_viewport())
-        } else {
-            (None, crate::style_engine::StyleViewport::default())
-        };
-    let matches = crate::style_engine::media_list::evaluate_media_query_list(
-        &media_text,
-        emulated_media.as_ref(),
-        viewport,
-    );
+    let context = args
+        .this()
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let matches = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let host = unsafe { &*host_ptr };
+        let global = context.global(scope);
+        crate::context_bootstrap::window_accessors::window_current_dispatch_scope(
+            scope, global, host,
+        )
+        .and_then(|dispatch| host.window_document_handle_for_dispatch_scope(dispatch))
+        .is_some_and(|document| host.media_query_matches_for_document(document, &media_text))
+    } else {
+        crate::style_engine::media_list::evaluate_media_query_list(
+            &media_text,
+            Default::default(),
+            Default::default(),
+        )
+    };
     rv.set_bool(matches);
 }
 
