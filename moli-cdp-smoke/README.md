@@ -866,11 +866,12 @@ Covered well:
   `/usr/bin/chromium` 145.0.7632.116 on 2026-09-27 (one run per mode).
 - The default raw `action-window` group holds Moli's on-demand input policy at
   the public CDP boundary. Three acknowledged `Input.dispatchMouseEvent`
-  wheel commands remain delayed until one fixed one-second deadline, preserve
-  event order, defer their microtask checkpoint, and publish one derived
-  IntersectionObserver transition. Coordinate-targeted vertical and horizontal
-  wheels must update an inner `overflow: auto` container's `scrollTop` and
-  `scrollLeft` without moving the page. `Page.captureScreenshot` must flush
+  wheel commands with alternating directions remain delayed until one fixed
+  one-second deadline, preserve event order, defer their microtask checkpoint,
+  and publish one derived IntersectionObserver transition. Compatible vertical
+  and horizontal wheel inputs at the same position coalesce into one event that
+  updates an inner `overflow: auto` container's `scrollTop` and `scrollLeft`
+  without moving the page. `Page.captureScreenshot` must flush
   pending wheel work before paint and retire that window so later input receives
   a fresh deadline. A wheel handler that calls `document.open()` must also stop
   the remainder of its batch from entering the replacement Document. These are

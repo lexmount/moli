@@ -331,7 +331,8 @@ async def _run_overflow_container_contract(
         "vertical and horizontal container wheels remain delayed",
     )
 
-    await _wait_for_witness(fixture, 2)
+    # Both inputs coalesce into one wheel event when the window releases.
+    await _wait_for_witness(fixture, 1)
     elapsed = asyncio.get_running_loop().time() - opened_at
     if elapsed < 0.85:
         raise SmokeError(
@@ -354,7 +355,7 @@ async def _run_overflow_container_contract(
         {
             "container": [45, 60],
             "page": [0, 0],
-            "deltas": [[0, 60], [45, 0]],
+            "deltas": [[45, 60]],
         },
         "overflow container wheel batch state",
     )
@@ -362,8 +363,8 @@ async def _run_overflow_container_contract(
         results,
         "raw_cdp_action_window_overflow_container_axes",
         contract=(
-            "delayed vertical and horizontal wheels hit the innermost overflow container "
-            "at their CDP coordinates without scrolling the page"
+            "compatible vertical and horizontal wheel inputs coalesce at the deadline "
+            "and scroll the innermost overflow container along both axes"
         ),
         source="Moli coordinate hit testing and fixed action-window scheduling",
         commands=[
@@ -457,7 +458,8 @@ async def _run_replacement_contract(
 ) -> None:
     await _navigate(client, session_id, f"{fixture}/action-window-replacement")
     await _capture_png(client, session_id)
-    for delta_y in (10, 20, 30):
+    # Alternate directions so later events are still queued when the first replaces the Document.
+    for delta_y in (10, -20, 30):
         await _dispatch_wheel(client, session_id, delta_y)
     # smoke-timing: observe retirement through the one-second action-window deadline.
     await asyncio.sleep(1.1)
