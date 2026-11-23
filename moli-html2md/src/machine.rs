@@ -746,7 +746,6 @@ impl<'a, D: Dom + ?Sized, Children: Iterator<Item = D::NodeId>> Machine<'a, D, C
 }
 
 fn bidi_controls(tag: &str, dir: Option<&str>) -> Option<(&'static str, &'static str)> {
-    let dir = dir.map(str::trim);
     match tag {
         "bdi" => Some((
             match dir {

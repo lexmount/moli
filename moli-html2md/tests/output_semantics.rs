@@ -1318,7 +1318,13 @@ fn preserves_explicit_bidi_isolation_for_arabic_rtl_and_ltr_tokens() {
 
 #[test]
 fn bdi_uses_auto_direction_for_missing_or_invalid_dir() {
-    for dir in ["", r#" dir="auto""#, r#" dir="invalid""#] {
+    for dir in [
+        "",
+        r#" dir="auto""#,
+        r#" dir="invalid""#,
+        r#" dir=" ltr ""#,
+        r#" dir=" rtl ""#,
+    ] {
         let input = Tree::parse(&format!("<p>User <bdi{dir}>إيان</bdi> has posted</p>"));
         assert_eq!(
             convert(&input, input.root),
@@ -1336,4 +1342,10 @@ fn preserves_bdo_overrides_of_opposite_direction_text() {
         markdown,
         "\u{2068}\u{202e}abc\u{202c}\u{2069} \u{2068}\u{202d}אבג\u{202c}\u{2069}"
     );
+}
+
+#[test]
+fn bdo_ignores_whitespace_padded_dir() {
+    let input = Tree::parse(r#"<bdo dir=" rtl ">abc</bdo> <bdo dir=" ltr ">אבג</bdo>"#);
+    assert_eq!(convert(&input, input.root), "abc אבג");
 }
