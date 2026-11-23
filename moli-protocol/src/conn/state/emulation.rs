@@ -98,6 +98,7 @@ pub struct EmulatedMediaOverrides {
     pub forced_colors: Option<String>,
     pub contrast: Option<String>,
     pub vision_deficiency: moli_page_types::VisionDeficiency,
+    pub os_text_scale_percent: Option<u16>,
 }
 
 impl From<EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
@@ -110,6 +111,7 @@ impl From<EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
             forced_colors: value.forced_colors,
             contrast: value.contrast,
             vision_deficiency: value.vision_deficiency,
+            os_text_scale_percent: value.os_text_scale_percent,
         }
     }
 }
@@ -124,6 +126,7 @@ impl From<&EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
             forced_colors: value.forced_colors.clone(),
             contrast: value.contrast.clone(),
             vision_deficiency: value.vision_deficiency,
+            os_text_scale_percent: value.os_text_scale_percent,
         }
     }
 }
@@ -191,6 +194,10 @@ impl EffectiveTargetEmulationState {
         self.emulated_media = EmulatedMediaOverrides::default();
         if raw.vision_deficiency.is_none() {
             self.emulated_media.vision_deficiency = previous.emulated_media.vision_deficiency;
+        }
+        if raw.emulated_media.os_text_scale_percent.is_none() {
+            self.emulated_media.os_text_scale_percent =
+                previous.emulated_media.os_text_scale_percent;
         }
         self.default_background_color = None;
         if raw.emulated_device_metrics.is_some() {

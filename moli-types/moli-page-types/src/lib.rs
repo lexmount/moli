@@ -3414,6 +3414,8 @@ pub struct EmulatedMediaOverrides {
     pub forced_colors: Option<String>,
     pub contrast: Option<String>,
     pub vision_deficiency: VisionDeficiency,
+    /// Emulated OS text scale, snapped to a platform scale bucket in percent.
+    pub os_text_scale_percent: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]

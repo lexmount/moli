@@ -250,6 +250,9 @@ pub(crate) fn try_start_emulation_command_dispatch(
         Some(EmulationAction::SetEmulatedVisionDeficiency) => {
             Some(start_vision_deficiency_command(conn, cmd))
         }
+        Some(EmulationAction::SetEmulatedOsTextScale) => {
+            Some(start_os_text_scale_command(conn, cmd))
+        }
         Some(EmulationAction::SetDefaultBackgroundColorOverride) => Some(
             EmulationCommandTaskStep::Complete(default_background_color_command(conn, cmd)),
         ),
@@ -1026,6 +1029,36 @@ fn update_media_overrides(
         session_id: cmd.session_id.map(str::to_owned),
         pending: PendingEmulationRendererDispatch::Pages(pending),
     })
+}
+
+fn start_os_text_scale_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> EmulationCommandTaskStep {
+    #[derive(serde::Deserialize)]
+    struct Params {
+        scale: Option<f64>,
+    }
+
+    let scale = match cmd.get_params::<Params>() {
+        Ok(params) => params.and_then(|params| params.scale),
+        Err(error) => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32602, error));
+        }
+    };
+    const SCALE_BUCKETS: [u16; 10] = [85, 100, 115, 130, 150, 180, 200, 250, 300, 350];
+    let percent = scale.map(|scale| {
+        let scale = scale.clamp(0.85, 3.5);
+        SCALE_BUCKETS
+            .into_iter()
+            .min_by(|&first, &second| {
+                (f64::from(first) / 100.0 - scale)
+                    .abs()
+                    .total_cmp(&(f64::from(second) / 100.0 - scale).abs())
+            })
+            .expect("scale bucket table is nonempty")
+    });
+    update_media_overrides(conn, cmd, |mut state| state.set_os_text_scale(percent))
 }
 
 fn start_user_agent_override_command(

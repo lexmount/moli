@@ -23,6 +23,46 @@ mod device_geometry;
 mod native_navigator;
 mod scrollbars;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn os_text_scale_updates_the_default_font_and_env_in_opted_in_documents() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+    evaluate(
+        &mut ctx,
+        r#"
+        document.head.innerHTML = '<style>body { line-height: calc(16px * env(preferred-text-scale, 1)) }</style>';
+        undefined
+        "#,
+    )
+    .await;
+    let sizes =
+        "[getComputedStyle(document.body).fontSize, getComputedStyle(document.body).lineHeight]";
+    expect_session_command_result(
+        &mut ctx,
+        88500,
+        "SID-1",
+        "Emulation.setEmulatedOSTextScale",
+        json!({"scale": 1.5}),
+    )
+    .await;
+    assert_eq!(evaluate(&mut ctx, sizes).await, json!(["16px", "16px"]));
+    evaluate(
+        &mut ctx,
+        "document.head.insertAdjacentHTML('beforeend', '<meta name=text-scale content=scale>'); undefined",
+    )
+    .await;
+    assert_eq!(evaluate(&mut ctx, sizes).await, json!(["24px", "24px"]));
+    expect_session_command_result(
+        &mut ctx,
+        88501,
+        "SID-1",
+        "Emulation.setEmulatedOSTextScale",
+        json!({}),
+    )
+    .await;
+    assert_eq!(evaluate(&mut ctx, sizes).await, json!(["16px", "16px"]));
+}
+
 async fn evaluate(ctx: &mut TestContext, expression: &str) -> serde_json::Value {
     ctx.process_async(json!({
         "id": 88000, "sessionId": "SID-1", "method": "Runtime.evaluate",

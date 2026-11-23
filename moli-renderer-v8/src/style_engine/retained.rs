@@ -386,6 +386,12 @@ fn update_document_scope(
         let guard = shared_lock.read();
         let guards = StylesheetGuards::same(&guard);
         device_affected_origins = retained.stylist.set_device(device, &guards);
+        if retained.key.environment.preferred_text_scale() != key.environment.preferred_text_scale()
+        {
+            // Variable substitutions and the initial font size can change
+            // even when the active media queries stay the same.
+            device_affected_origins = OriginSet::all();
+        }
         retained
             .stylist
             .force_stylesheet_origins_dirty(device_affected_origins);

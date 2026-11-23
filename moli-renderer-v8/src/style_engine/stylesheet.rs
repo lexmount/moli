@@ -79,7 +79,9 @@ pub(super) fn moli_ua_stylesheet_base_url() -> &'static url::Url {
 }
 
 #[derive(Debug)]
-struct HeadlessFontMetricsProvider;
+struct HeadlessFontMetricsProvider {
+    medium_font_size: f32,
+}
 
 pub(super) fn install_active_stylesheets(
     host: &DomHost,
@@ -386,14 +388,21 @@ pub(super) fn new_style_device_with_viewport(
     let ratio = viewport.device_pixel_ratio.unwrap_or(1.0) as f32;
     let screen_width = viewport.screen_width.unwrap_or(f64::from(width)) as f32;
     let screen_height = viewport.screen_height.unwrap_or(f64::from(height)) as f32;
-    let initial_style = ComputedValues::initial_values_with_font_override(Font::initial_values());
+    let scale = environment.preferred_text_scale();
+    let medium_font_size = (initial_font_size_px() as f32 * scale).round();
+    let mut font = Font::initial_values();
+    let mut font_size = font.clone_font_size();
+    font_size.computed_size.0 = Length::new(medium_font_size);
+    font_size.used_size = font_size.computed_size;
+    font.set_font_size(font_size);
+    let initial_style = ComputedValues::initial_values_with_font_override(font);
     let mut device = Device::new(
         environment.stylo_media_type(),
         quirks_mode,
         Size2D::<f32, CSSPixel>::new(width, height),
         Size2D::<f32, DevicePixel>::new(screen_width * ratio, screen_height * ratio),
         Scale::<f32, CSSPixel, DevicePixel>::new(ratio),
-        Box::new(HeadlessFontMetricsProvider),
+        Box::new(HeadlessFontMetricsProvider { medium_font_size }),
         initial_style,
         environment.stylo_prefers_color_scheme(),
         PointerCapabilities::default(),
@@ -401,6 +410,7 @@ pub(super) fn new_style_device_with_viewport(
     );
     device.set_media_feature_preferences(environment.stylo_media_feature_preferences());
     device.set_page_color_schemes(environment.stylo_page_color_schemes());
+    device.set_preferred_text_scale(scale);
     device
 }
 
@@ -538,7 +548,7 @@ impl FontMetricsProvider for HeadlessFontMetricsProvider {
     }
 
     fn base_size_for_generic(&self, _generic: GenericFontFamily) -> Length {
-        Length::new(16.0)
+        Length::new(self.medium_font_size)
     }
 }
 
