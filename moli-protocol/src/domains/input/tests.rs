@@ -215,6 +215,65 @@ async fn coordinate_mouse_commands_hit_test_real_layout_and_dispatch_dom_events(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn dispatch_mouse_event_preserves_click_count_in_mousedown_and_mouseup_detail() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(
+        &mut ctx,
+        r#"<html><body style='margin:0'>
+            <div id='t' style='width:100px;height:40px'></div>
+            <script>
+              window.__log = [];
+              const t = document.getElementById('t');
+              for (const ty of ['mousemove', 'mousedown', 'mouseup', 'click', 'dblclick']) {
+                t.addEventListener(ty, e => window.__log.push(ty + '|d' + e.detail));
+              }
+            </script>
+           </body></html>"#,
+    )
+    .await;
+    ctx.capture_fixture_layout(None).await;
+
+    let commands = [
+        json!({
+            "id": 1,
+            "method": "Input.dispatchMouseEvent",
+            "params": { "type": "mousePressed", "x": 50, "y": 20, "button": "left", "buttons": 1, "clickCount": 1 }
+        }),
+        json!({
+            "id": 2,
+            "method": "Input.dispatchMouseEvent",
+            "params": { "type": "mouseReleased", "x": 50, "y": 20, "button": "left", "buttons": 0, "clickCount": 1 }
+        }),
+        json!({
+            "id": 3,
+            "method": "Input.dispatchMouseEvent",
+            "params": { "type": "mousePressed", "x": 50, "y": 20, "button": "left", "buttons": 1, "clickCount": 2 }
+        }),
+        json!({
+            "id": 4,
+            "method": "Input.dispatchMouseEvent",
+            "params": { "type": "mouseReleased", "x": 50, "y": 20, "button": "left", "buttons": 0, "clickCount": 2 }
+        }),
+        json!({
+            "id": 5,
+            "method": "Input.dispatchMouseEvent",
+            "params": { "type": "mouseMoved", "x": 55, "y": 20, "button": "none", "buttons": 0, "clickCount": 2 }
+        }),
+    ];
+
+    for command in commands {
+        let id = command["id"].as_u64().expect("command id");
+        ctx.process_async(command).await;
+        ctx.expect_result(id, json!({}), None);
+    }
+
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__log.join(',')").await,
+        "mousedown|d1,mouseup|d1,click|d1,mousedown|d2,mouseup|d2,click|d2,dblclick|d2,mousemove|d0"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn coordinate_mouse_release_acknowledges_real_link_navigation() {
     tokio::task::LocalSet::new()
         .run_until(async {

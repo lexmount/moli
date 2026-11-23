@@ -137,3 +137,121 @@ fn native_mouse_release_followups_use_target_document_intrinsics() {
         }
     }
 }
+
+#[test]
+fn mouse_button_events_report_click_count_in_detail() {
+    let mut vm = new_storage_html_test_vm("https://mouse-detail.test/");
+    vm.eval(
+        r#"
+          document.body.style.margin = '0';
+          const target = document.createElement('div');
+          target.id = 't';
+          target.style.cssText = 'position:fixed;left:0;top:0;width:120px;height:60px';
+          document.body.appendChild(target);
+          globalThis.detailLog = [];
+          for (const type of ['mousemove', 'mousedown', 'mouseup', 'click', 'dblclick']) {
+            target.addEventListener(type, event => detailLog.push(type + '|d' + event.detail));
+          }
+          globalThis.takeDetailLog = () => {
+            const out = detailLog.join(',');
+            detailLog = [];
+            return out;
+          };
+        "#,
+    )
+    .unwrap();
+    vm.publish_layout_for_test().unwrap();
+
+    // Single click followed by double click (UI Events click count in detail).
+    for (event, buttons, click_count) in [
+        ("mousedown", 1, 1),
+        ("mouseup", 0, 1),
+        ("mousedown", 1, 2),
+        ("mouseup", 0, 2),
+    ] {
+        vm.dispatch_mouse_input(
+            50.0,
+            20.0,
+            event,
+            0,
+            Some(buttons),
+            click_count,
+            0.0,
+            0.0,
+            crate::runtime::RendererPointerEventProperties::default(),
+            0,
+            false,
+            MouseDispatchCompletion::FinishTurn,
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        vm.eval("takeDetailLog()").unwrap(),
+        "mousedown|d1,mouseup|d1,click|d1,mousedown|d2,mouseup|d2,click|d2,dblclick|d2"
+    );
+
+    // mousemove must retain detail: 0 even if click_count is non-zero.
+    vm.dispatch_mouse_input(
+        55.0,
+        20.0,
+        "mousemove",
+        -1,
+        Some(0),
+        2,
+        0.0,
+        0.0,
+        crate::runtime::RendererPointerEventProperties::default(),
+        0,
+        false,
+        MouseDispatchCompletion::FinishTurn,
+    )
+    .unwrap();
+    assert_eq!(vm.eval("takeDetailLog()").unwrap(), "mousemove|d0");
+
+    // Auxiliary mouse buttons also carry click_count on mousedown/mouseup.
+    for (event, buttons) in [("mousedown", 4), ("mouseup", 0)] {
+        vm.dispatch_mouse_input(
+            50.0,
+            20.0,
+            event,
+            1,
+            Some(buttons),
+            2,
+            0.0,
+            0.0,
+            crate::runtime::RendererPointerEventProperties::default(),
+            0,
+            false,
+            MouseDispatchCompletion::FinishTurn,
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        vm.eval("takeDetailLog()").unwrap(),
+        "mousedown|d2,mouseup|d2"
+    );
+
+    // Zero click_count reports detail: 0 on mousedown/mouseup.
+    for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+        vm.dispatch_mouse_input(
+            50.0,
+            20.0,
+            event,
+            0,
+            Some(buttons),
+            0,
+            0.0,
+            0.0,
+            crate::runtime::RendererPointerEventProperties::default(),
+            0,
+            false,
+            MouseDispatchCompletion::FinishTurn,
+        )
+        .unwrap();
+    }
+    assert!(
+        vm.eval("takeDetailLog()")
+            .unwrap()
+            .starts_with("mousedown|d0,mouseup|d0")
+    );
+}
