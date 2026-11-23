@@ -63,7 +63,11 @@ impl PaintFragmentProfile {
 /// The token retains generation metadata only. It never owns layout, paint,
 /// raster, or encoded-image data.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RendererVisualStateToken(Arc<RendererVisualState>, u64);
+pub struct RendererVisualStateToken {
+    state: Arc<RendererVisualState>,
+    overlay_generation: u64,
+    post_layout_work_deferred: bool,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct RendererVisualState {
@@ -89,8 +93,8 @@ impl RendererVisualStateToken {
         viewport: PaintViewport,
         base_background_color: [u8; 4],
     ) -> Self {
-        Self(
-            Arc::new(RendererVisualState {
+        Self {
+            state: Arc::new(RendererVisualState {
                 document,
                 dom_generation,
                 style_generations: style_generations
@@ -104,19 +108,20 @@ impl RendererVisualStateToken {
                 device_pixel_ratio_bits: viewport.device_pixel_ratio.to_bits(),
                 base_background_color,
             }),
-            0,
-        )
+            overlay_generation: 0,
+            post_layout_work_deferred: false,
+        }
     }
 
     #[cfg(feature = "devtools")]
     fn with_overlay_generation(mut self, generation: u64) -> Self {
-        self.1 = generation;
+        self.overlay_generation = generation;
         self
     }
 
     #[cfg(feature = "devtools")]
     fn has_same_resource_generation(&self, other: &Self) -> bool {
-        self.0.resource_generation == other.0.resource_generation
+        self.state.resource_generation == other.state.resource_generation
     }
 }
 
@@ -294,7 +299,8 @@ impl PageVm {
         request: RendererCaptureScreencastFrameRequest,
         before_layout: impl FnOnce(),
     ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
-        if !self.vm().is_debugger_paused() {
+        let debugger_paused = self.vm().is_debugger_paused();
+        if !debugger_paused {
             self.flush_page_action_window(moli_action_window::ActionBarrier::Screencast)?;
         }
         if self.layout_configuration.policy == LayoutPolicy::Mock {
@@ -314,7 +320,13 @@ impl PageVm {
                 request.base_background_color,
             )
             .with_overlay_generation(self.devtools.overlay.generation());
-        if request.known_visual_state.as_ref() == Some(&visual_state_before) {
+        // A paused capture skips resource discovery and other post-layout
+        // work. Retry that work on the first screencast poll after resuming.
+        if request.known_visual_state.as_ref().is_some_and(|known| {
+            (debugger_paused || !known.post_layout_work_deferred)
+                && known.state == visual_state_before.state
+                && known.overlay_generation == visual_state_before.overlay_generation
+        }) {
             return Ok(RendererCaptureScreencastFrameReply::Unchanged);
         }
         before_layout();
@@ -351,7 +363,9 @@ impl PageVm {
                 request.base_background_color,
             )
             .with_overlay_generation(self.devtools.overlay.generation());
-        let visual_state = visual_state_for_rendered_frame(visual_state_before, visual_state_after);
+        let mut visual_state =
+            visual_state_for_rendered_frame(visual_state_before, visual_state_after);
+        visual_state.post_layout_work_deferred = debugger_paused;
         Ok(RendererCaptureScreencastFrameReply::Captured(
             RendererCapturedScreencastFrame {
                 viewport_size: surface.visible_size(),
