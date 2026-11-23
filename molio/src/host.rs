@@ -216,11 +216,14 @@ impl BrowserHost {
                 });
             })
             .context("start browser host thread")?;
-        Ok((Self {
-            tabs: sender,
-            downloads: client,
-            worker: RefCell::new(Some((shutdown, worker))),
-        }, event_rx))
+        Ok((
+            Self {
+                tabs: sender,
+                downloads: client,
+                worker: RefCell::new(Some((shutdown, worker))),
+            },
+            event_rx,
+        ))
     }
 
     pub fn shutdown(&self) {
@@ -1391,20 +1394,29 @@ mod tests {
             };
         } else if (location.pathname === "/event-source") {
             let step = 0;
+            let report;
             const link = document.getElementById("open");
             link.target = "report";
             link.rel = "opener";
-            link.href = "/intercept";
             link.onclick = event => {
                 switch (step++) {
                     case 0:
                         event.preventDefault();
-                        window.open("/navigation-events", "report");
+                        report = window.open("/navigation-events", "report");
                         break;
                     case 1:
                         event.preventDefault();
                         window.open("/cancel", "report");
                         break;
+                    case 2:
+                        link.href = "/navigation-events#details";
+                        break;
+                    default:
+                        link.href = "/intercept";
+                        if (report.location.hash) {
+                            event.preventDefault();
+                            document.title = "Fragment unexpectedly committed";
+                        }
                 }
             };
         } else if (location.pathname === "/source") {
@@ -1437,22 +1449,30 @@ mod tests {
         }
         </script>"#;
 
-    const POPUP_NAVIGATION_EVENTS: &str = r#"<!doctype html><title>Navigation events</title>
+    const POPUP_NAVIGATION_EVENTS: &str = r##"<!doctype html><title>Navigation events</title>
         <script>
         navigation.addEventListener("navigate", event => {
-            const path = new URL(event.destination.url).pathname;
+            const { pathname: path, hash } = new URL(event.destination.url);
             if (path === "/cancel") {
                 event.preventDefault();
                 opener.document.title = event.defaultPrevented && event.sourceElement === null
                     ? "Popup navigation canceled" : "Unexpected window.open event";
+            } else if (hash === "#details") {
+                if (event.userInitiated && event.destination.sameDocument && event.hashChange
+                    && event.sourceElement === opener.document.getElementById("open")) {
+                    event.preventDefault();
+                }
+                opener.document.title = event.defaultPrevented
+                    ? "Popup fragment navigation canceled" : "Unexpected fragment event";
             } else if (path === "/intercept") {
                 event.intercept({handler() {
                     document.title = event.sourceElement === opener.document.getElementById("open")
                         && event.userInitiated ? "Popup navigation intercepted" : "Unexpected link event";
+                    opener.document.title = document.title;
                 }});
             }
         });
-        </script>"#;
+        </script>"##;
 
     async fn popup_fixture() -> Result<(String, mpsc::UnboundedReceiver<(String, Option<String>)>)>
     {
@@ -1606,9 +1626,29 @@ mod tests {
         );
 
         click(&opener, 0)?;
+        let fragment = next_popup(&mut events).await?;
+        assert_eq!(fragment.url, format!("{report_url}#details"));
+        assert!(fragment.pending_auxiliary_page.is_none());
+        wait_for_navigation(&opener, &source, "Popup fragment navigation canceled").await?;
+        assert_eq!(
+            wait_for_navigation(&report, &report_url, "Navigation events").await?,
+            document,
+        );
+
+        click(&opener, 0)?;
         let intercepted = next_popup(&mut events).await?;
         assert_eq!(intercepted.url, format!("{base}/intercept"));
         assert!(intercepted.pending_auxiliary_page.is_none());
+        assert_eq!(
+            intercepted.disposition,
+            moli_core::page::RendererPopupDisposition::Foreground,
+        );
+        wait_for_navigation(&opener, &source, "Popup navigation intercepted").await?;
+        // The browser selects the reused tab after a foreground activation.
+        report
+            .commands
+            .send(TabCommand::Activity(DocumentActivity::new(true, true)))
+            .map_err(|_| anyhow::anyhow!("activate the reused popup"))?;
         assert_eq!(
             wait_for_navigation(&report, &intercepted.url, "Popup navigation intercepted").await?,
             document,

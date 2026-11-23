@@ -25,3 +25,6 @@ tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 unicode-segmentation = "1.12"
 url = "2.5.7"
+
+[dev-dependencies]
+gpui = { package = "gpui-ce", git = "https://github.com/lexmount/gpui-ce", rev = "1d433ddc675f9946ca91e0c705e4bc9b0360a78c", features = ["test-support"] }

@@ -43,6 +43,7 @@ struct Tab {
     connection: Option<TabConnection>,
     state: TabState,
     zoom: f64,
+    show_new_tab_page: bool,
     page_focus: bool,
 }
 
@@ -107,7 +108,7 @@ pub struct BrowserWindow {
     tabs: Vec<Tab>,
     active: TabId,
     next_id: TabId,
-    closed: Vec<String>,
+    closed: Vec<Option<String>>,
     popup: Option<Popup>,
     displayed_address: String,
     tab_scroll: ScrollHandle,
@@ -198,7 +199,7 @@ impl BrowserWindow {
         self.attach_tab(
             connection,
             RendererPopupDisposition::Foreground,
-            url.is_some(),
+            url.is_none(),
             window,
             cx,
         );
@@ -238,23 +239,19 @@ impl BrowserWindow {
                     let disposition = popup.disposition;
                     match self.host.open_popup(popup) {
                         Ok(connection) => {
-                            self.attach_tab(connection, disposition, true, window, cx)
+                            self.attach_tab(connection, disposition, false, window, cx)
                         }
                         Err(error) => eprintln!("Could not open auxiliary tab: {error:#}"),
                     }
                 }
             }
             BrowserEvent::ClosePopup(popup) => {
-                if let Some(tab) = self
-                    .tabs
-                    .iter()
-                    .find(|tab| {
-                        tab.connection
-                            .as_ref()
-                            .and_then(|connection| connection.window_identity.auxiliary_window())
-                            == Some(&popup)
-                    })
-                {
+                if let Some(tab) = self.tabs.iter().find(|tab| {
+                    tab.connection
+                        .as_ref()
+                        .and_then(|connection| connection.window_identity.auxiliary_window())
+                        == Some(&popup)
+                }) {
                     self.close_tab(tab.id, window, cx);
                 }
             }
@@ -265,7 +262,7 @@ impl BrowserWindow {
         &mut self,
         connection: TabConnection,
         disposition: RendererPopupDisposition,
-        page_focus: bool,
+        show_new_tab_page: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -315,7 +312,8 @@ impl BrowserWindow {
             connection: Some(connection),
             state: TabState::default(),
             zoom: 1.,
-            page_focus,
+            show_new_tab_page,
+            page_focus: !show_new_tab_page,
         });
         if disposition != RendererPopupDisposition::Background {
             self.select_tab(id, window, cx);
@@ -335,6 +333,7 @@ impl BrowserWindow {
                 connection: None,
                 state: TabState::default(),
                 zoom: 1.,
+                show_new_tab_page: false,
                 page_focus: true,
             });
             id
@@ -388,18 +387,19 @@ impl BrowserWindow {
         {
             auxiliary.close();
         }
-        let url = tab
-            .connection
-            .as_ref()
-            .and_then(|connection| {
-                connection
-                    .state
-                    .borrow()
-                    .navigation
-                    .as_ref()
-                    .map(|navigation| navigation.url.to_string())
-            })
-            .unwrap_or_else(|| tab.url().to_owned());
+        let url = (!tab.show_new_tab_page).then(|| {
+            tab.connection
+                .as_ref()
+                .and_then(|connection| {
+                    connection
+                        .state
+                        .borrow()
+                        .navigation
+                        .as_ref()
+                        .map(|navigation| navigation.url.to_string())
+                })
+                .unwrap_or_else(|| tab.url().to_owned())
+        });
         self.closed.push(url);
         if self.closed.len() > 20 {
             self.closed.remove(0);
@@ -414,7 +414,7 @@ impl BrowserWindow {
 
     fn reopen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(url) = self.closed.pop() {
-            self.add_tab(Some(url), window, cx);
+            self.add_tab(url, window, cx);
         }
     }
 
@@ -496,12 +496,15 @@ impl BrowserWindow {
             self.show_downloads(window, cx);
             return;
         }
-        if let Some(url) = address_target(text) {
+        if let Some(url) = address_target(text)
+            && let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == self.active)
+        {
             let url = url.to_string();
-            if self.current().is_some_and(|tab| tab.connection.is_none()) {
+            if tab.connection.is_none() {
                 self.add_tab(Some(url), window, cx);
                 return;
             }
+            tab.show_new_tab_page = false;
             self.displayed_address.clone_from(&url);
             self.address
                 .update(cx, |address, cx| address.show(url.clone(), cx));
@@ -943,9 +946,9 @@ impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Palette::for_window(window.appearance());
         let error = self.current().and_then(|tab| tab.state.error.clone());
-        let blank = self
+        let show_new_tab_page = self
             .current()
-            .is_some_and(|tab| tab.url() == "about:blank" && !tab.state.loading);
+            .is_some_and(|tab| tab.show_new_tab_page && !tab.state.loading);
         let showing_downloads = self.current().is_some_and(|tab| tab.connection.is_none());
         let surface = div().relative().flex_1().min_h_0().overflow_hidden();
         let surface = if showing_downloads {
@@ -983,10 +986,11 @@ impl Render for BrowserWindow {
                             .on_click(cx.listener(|view, _, _, _| view.reload_or_stop())),
                     ),
             )
-        } else if blank {
+        } else if show_new_tab_page {
             let surface = surface.child(self.surface.clone());
             surface.child(
                 div()
+                    .debug_selector(|| "new-tab-page".into())
                     .absolute()
                     .inset_0()
                     .bg(colors.toolbar)
@@ -1183,4 +1187,55 @@ fn address_target(input: &str) -> Option<url::Url> {
     let mut search = url::Url::parse("https://duckduckgo.com/").expect("search URL");
     search.query_pairs_mut().append_pair("q", input);
     Some(search)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use gpui::{TestAppContext, VisualTestContext, size};
+
+    use super::*;
+
+    #[test]
+    fn blank_popup_content_is_not_covered_by_the_new_tab_page() -> anyhow::Result<()> {
+        let (host, events) = BrowserHost::start(None)?;
+        let mut app = TestAppContext::single();
+        let browser = app.open_window(size(px(640.), px(480.)), |window, cx| {
+            BrowserWindow::new(Rc::new(host), events, None, window, cx)
+        });
+        let mut cx = VisualTestContext::from_window(browser.into(), &app);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("new-tab-page").is_some());
+
+        let html = r#"<script>
+            const report = window.open("", "report");
+            report.document.title = "Invoice";
+            report.document.body.innerHTML = "<h1>Invoice</h1>";
+        </script>"#;
+        let html: String = url::form_urlencoded::byte_serialize(html.as_bytes()).collect();
+        let url = format!("data:text/html,{}", html.replace('+', "%20"));
+        browser.update(&mut cx, |browser, window, cx| {
+            browser.open_address(&url, window, cx);
+        })?;
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if browser.update(&mut cx, |browser, _, _| {
+                browser.tabs.len() == 2
+                    && browser
+                        .current()
+                        .is_some_and(|tab| tab.url() == "about:blank" && tab.title() == "Invoice")
+            })? {
+                break;
+            }
+            anyhow::ensure!(Instant::now() < deadline, "invoice popup did not open");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("new-tab-page").is_none());
+        Ok(())
+    }
 }

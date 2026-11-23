@@ -51,6 +51,14 @@ pub(crate) enum LocationNavigationKind {
     Reload,
 }
 
+#[derive(Default)]
+struct LocationNavigationOptions<'s> {
+    source_element: Option<v8::Local<'s, v8::Object>>,
+    user_initiated: bool,
+    dispatch_child_navigate_event_for_all_kinds: bool,
+    force_exact_same_document_navigation: bool,
+}
+
 pub(crate) fn resolve_cross_window_location_target(
     scope: &mut v8::PinScope<'_, '_>,
     raw: &str,
@@ -75,8 +83,12 @@ pub(crate) fn navigate_location_object<'s>(
     kind: LocationNavigationKind,
     raw_target: Option<String>,
 ) {
-    navigate_location_object_with_source_element_and_child_navigate_event(
-        scope, location, kind, raw_target, None, false, false,
+    navigate_location_object_with_options(
+        scope,
+        location,
+        kind,
+        raw_target,
+        LocationNavigationOptions::default(),
     );
 }
 
@@ -90,6 +102,20 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
     scope: &mut v8::PinScope<'_, '_>,
     target: String,
     replace_current: bool,
+) -> bool {
+    navigate_top_level_same_document(
+        scope,
+        target,
+        replace_current,
+        LocationNavigationOptions::default(),
+    )
+}
+
+fn navigate_top_level_same_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: String,
+    replace_current: bool,
+    options: LocationNavigationOptions<'s>,
 ) -> bool {
     let kind = if replace_current {
         LocationNavigationKind::Replace
@@ -113,18 +139,17 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
         return false;
     }
 
-    // A repeated Page.navigate to the current fragment is unlike assigning a
-    // fragment-only string through Location: Chromium pushes a same-document
-    // history entry and runs the Navigation/popstate surfaces even though the
-    // serialized URL does not change.
-    navigate_location_object_with_source_element_and_child_navigate_event(
+    // Browser and popup requests still apply history and dispatch events
+    // when the serialized fragment URL stays the same.
+    navigate_location_object_with_options(
         scope,
         location,
         kind,
         Some(target),
-        None,
-        false,
-        true,
+        LocationNavigationOptions {
+            force_exact_same_document_navigation: true,
+            ..options
+        },
     );
     true
 }
@@ -156,7 +181,16 @@ pub(crate) fn queue_related_popup_navigation<'s>(
         super::navigation_window::navigation_document_is_initial_empty(scope, window);
     let replace_current = initial_empty || (same_origin && current_url == target);
     if same_origin
-        && navigate_top_level_same_document_from_browser(scope, target.to_string(), replace_current)
+        && navigate_top_level_same_document(
+            scope,
+            target.to_string(),
+            replace_current,
+            LocationNavigationOptions {
+                source_element: source_element.filter(|_| can_dispatch_navigate_event),
+                user_initiated: can_dispatch_navigate_event && user_initiated,
+                ..Default::default()
+            },
+        )
     {
         return;
     }
@@ -213,9 +247,7 @@ pub(crate) fn navigate_top_level_from_browser(
     } else {
         LocationNavigationKind::Reload
     };
-    navigate_location_object_with_source_element_and_child_navigate_event(
-        scope, location, kind, target, None, false, false,
-    );
+    navigate_location_object(scope, location, kind, target);
     context_host_ptr_from_global_bridge(scope)
         .is_some_and(|host_ptr| unsafe { &*host_ptr }.has_pending_location_navigation())
 }
@@ -259,14 +291,15 @@ pub(crate) fn navigate_top_level_meta_refresh(
     let kind = meta_refresh_navigation_kind(&current_url, target, delay_ms);
     let same_document_fragment = kind == LocationNavigationKind::Assign
         && is_same_document_fragment_navigation(Some(&current_url), target);
-    navigate_location_object_with_source_element_and_child_navigate_event(
+    navigate_location_object_with_options(
         scope,
         location,
         kind,
         Some(target.to_string()),
-        None,
-        false,
-        same_document_fragment,
+        LocationNavigationOptions {
+            force_exact_same_document_navigation: same_document_fragment,
+            ..Default::default()
+        },
     );
     context_host_ptr_from_global_bridge(scope)
         .is_some_and(|host_ptr| unsafe { &*host_ptr }.has_pending_location_navigation())
@@ -291,14 +324,16 @@ pub(crate) fn navigate_child_meta_refresh<'s>(
     let kind = meta_refresh_navigation_kind(&current_url, target, delay_ms);
     let same_document_fragment = kind == LocationNavigationKind::Assign
         && is_same_document_fragment_navigation(Some(&current_url), target);
-    navigate_location_object_with_source_element_and_child_navigate_event(
+    navigate_location_object_with_options(
         scope,
         location,
         kind,
         Some(target.to_string()),
-        None,
-        true,
-        same_document_fragment,
+        LocationNavigationOptions {
+            dispatch_child_navigate_event_for_all_kinds: true,
+            force_exact_same_document_navigation: same_document_fragment,
+            ..Default::default()
+        },
     );
 }
 
@@ -309,14 +344,16 @@ pub(crate) fn navigate_location_object_with_source_element<'s>(
     raw_target: Option<String>,
     source_element: Option<v8::Local<'s, v8::Object>>,
 ) {
-    navigate_location_object_with_source_element_and_child_navigate_event(
+    navigate_location_object_with_options(
         scope,
         location,
         kind,
         raw_target,
-        source_element,
-        false,
-        true,
+        LocationNavigationOptions {
+            source_element,
+            force_exact_same_document_navigation: true,
+            ..Default::default()
+        },
     );
 }
 
@@ -326,20 +363,31 @@ pub(crate) fn navigate_location_object_with_child_navigate_event<'s>(
     kind: LocationNavigationKind,
     raw_target: Option<String>,
 ) {
-    navigate_location_object_with_source_element_and_child_navigate_event(
-        scope, location, kind, raw_target, None, true, false,
+    navigate_location_object_with_options(
+        scope,
+        location,
+        kind,
+        raw_target,
+        LocationNavigationOptions {
+            dispatch_child_navigate_event_for_all_kinds: true,
+            ..Default::default()
+        },
     );
 }
 
-fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
+fn navigate_location_object_with_options<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     location: v8::Local<'s, v8::Object>,
     kind: LocationNavigationKind,
     raw_target: Option<String>,
-    source_element: Option<v8::Local<'s, v8::Object>>,
-    dispatch_child_navigate_event_for_all_kinds: bool,
-    force_exact_same_document_navigation: bool,
+    options: LocationNavigationOptions<'s>,
 ) {
+    let LocationNavigationOptions {
+        source_element,
+        user_initiated,
+        dispatch_child_navigate_event_for_all_kinds,
+        force_exact_same_document_navigation,
+    } = options;
     let owner = runtime_window_owner(scope, location);
     if let Some(context) = location.get_creation_context(scope)
         && let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context)
@@ -514,7 +562,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 ),
                 true,
                 true,
-                false,
+                user_initiated,
                 None,
                 None,
                 None,
@@ -674,7 +722,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                     LocationNavigationKind::Reload => "reload",
                 },
                 source_element,
-                false,
+                user_initiated,
                 None,
                 None,
             )
@@ -713,7 +761,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         kind,
         Some(LocationNavigateEvent {
             source_element,
-            user_initiated: false,
+            user_initiated,
             can_intercept: true,
         }),
         navigation_source,
