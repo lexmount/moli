@@ -365,46 +365,64 @@ impl Browser {
         receiver
     }
 
-    /// Creates an empty desktop tab or adopts the renderer's already staged
-    /// auxiliary Page, preserving its Window, storage and opener relationship.
+    /// Creates the initial blank Page for a desktop tab.
     #[cfg(feature = "molio")]
-    pub async fn open_viewport_page(
+    pub async fn create_viewport_page(
         &self,
         window_identity: moli_renderer_v8::RendererPageWindowIdentity,
-        popup: Option<&moli_renderer_v8::RendererPopupActivationParts>,
     ) -> Result<Page> {
-        let mut url = Url::parse("about:blank").expect("valid about:blank URL");
-        if let Some(popup) = popup {
-            let pending = popup
-                .pending_auxiliary_page
-                .as_ref()
-                .context("popup has no staged renderer Page")?;
-            anyhow::ensure!(
-                pending
-                    .renderer_runtime()
-                    .browser_context_runtime()
-                    .shares_state_with(&self.js_runtime.browser_context_runtime()),
-                "popup belongs to another browser context"
-            );
-            let target = Url::parse(&popup.url)?;
-            if is_about_blank_url(&target) {
-                url = target;
-            }
-        }
+        let url = Url::parse("about:blank").expect("valid about:blank URL");
         self.materialize_static_html_page(
             url.as_str(),
             url.clone(),
             PageVmInitStage::DomContentLoaded,
-            if popup.is_some() {
-                RendererReplyBoundary::DocumentCommit
-            } else {
-                RendererReplyBoundary::Stage
-            },
+            RendererReplyBoundary::Stage,
             None,
             String::new(),
             StaticPageCreation {
                 window_identity,
-                popup,
+                popup: None,
+            },
+        )
+        .await
+    }
+
+    /// Adopts the popup's staged Page, preserving its Window, storage and opener.
+    #[cfg(feature = "molio")]
+    pub async fn adopt_viewport_page(
+        &self,
+        popup: &moli_renderer_v8::RendererPopupActivationParts,
+    ) -> Result<Page> {
+        let pending = popup
+            .pending_auxiliary_page
+            .as_ref()
+            .context("popup has no staged renderer Page")?;
+        anyhow::ensure!(
+            pending
+                .renderer_runtime()
+                .browser_context_runtime()
+                .shares_state_with(&self.js_runtime.browser_context_runtime()),
+            "popup belongs to another browser context"
+        );
+        let window_identity = popup
+            .window_identity()
+            .context("popup has no Window identity")?;
+        let target = Url::parse(&popup.url)?;
+        let url = if is_about_blank_url(&target) {
+            target
+        } else {
+            Url::parse("about:blank").expect("valid about:blank URL")
+        };
+        self.materialize_static_html_page(
+            url.as_str(),
+            url.clone(),
+            PageVmInitStage::DomContentLoaded,
+            RendererReplyBoundary::DocumentCommit,
+            None,
+            String::new(),
+            StaticPageCreation {
+                window_identity,
+                popup: Some(popup),
             },
         )
         .await

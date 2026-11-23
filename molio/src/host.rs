@@ -114,8 +114,12 @@ struct OpenTab {
     commands: mpsc::UnboundedReceiver<TabCommand>,
     state: watch::Sender<TabState>,
     viewport: Arc<ViewportOutput>,
-    window_identity: RendererPageWindowIdentity,
-    popup: Option<Box<RendererPopupActivationParts>>,
+    page: TabPage,
+}
+
+enum TabPage {
+    New(RendererPageWindowIdentity),
+    Popup(Box<RendererPopupActivationParts>),
 }
 
 impl BrowserHost {
@@ -237,23 +241,20 @@ impl BrowserHost {
     }
 
     pub fn open_tab(&self) -> Result<TabConnection> {
-        self.open_viewport(RendererPageWindowIdentity::default(), None)
+        self.open_viewport(TabPage::New(RendererPageWindowIdentity::default()))
     }
 
     pub fn open_popup(&self, popup: Box<RendererPopupActivationParts>) -> Result<TabConnection> {
-        let name = popup
-            .browsing_context_name
-            .clone()
-            .context("popup has no Window identity")?;
-        let identity = RendererPageWindowIdentity::new(name, popup.auxiliary_window.clone());
-        self.open_viewport(identity, Some(popup))
+        self.open_viewport(TabPage::Popup(popup))
     }
 
-    fn open_viewport(
-        &self,
-        window_identity: RendererPageWindowIdentity,
-        popup: Option<Box<RendererPopupActivationParts>>,
-    ) -> Result<TabConnection> {
+    fn open_viewport(&self, page: TabPage) -> Result<TabConnection> {
+        let window_identity = match &page {
+            TabPage::New(identity) => identity.clone(),
+            TabPage::Popup(popup) => popup
+                .window_identity()
+                .context("popup has no Window identity")?,
+        };
         let (commands, request_rx) = mpsc::unbounded_channel();
         let (state_tx, state) = watch::channel(TabState::default());
         let viewport = Arc::new(ViewportOutput::default());
@@ -262,8 +263,7 @@ impl BrowserHost {
                 commands: request_rx,
                 state: state_tx,
                 viewport: viewport.clone(),
-                window_identity: window_identity.clone(),
-                popup,
+                page,
             })
             .map_err(|_| anyhow::anyhow!("browser host is unavailable"))?;
         Ok(TabConnection {
@@ -314,16 +314,15 @@ fn start_favicon_load(
 }
 
 async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
-    let initial = {
-        let popup = tab.popup.take();
-        tokio::time::timeout(
-            Duration::from_secs(20),
-            browser.open_viewport_page(tab.window_identity, popup.as_deref()),
-        )
-        .await
-        .context("opening the tab timed out")
-        .and_then(|result| result)
-    };
+    let initial = tokio::time::timeout(Duration::from_secs(20), async {
+        match tab.page {
+            TabPage::New(identity) => browser.create_viewport_page(identity).await,
+            TabPage::Popup(popup) => browser.adopt_viewport_page(&popup).await,
+        }
+    })
+    .await
+    .context("opening the tab timed out")
+    .and_then(|result| result);
     let mut page = match initial {
         Ok(page) => page,
         Err(error) => {
@@ -1333,7 +1332,14 @@ mod tests {
             .context("renderer staged the auxiliary Page")?
             .page_reservation()
             .page_id();
+        let name = popup
+            .browsing_context_name
+            .clone()
+            .context("popup name cell")?;
+        let window = popup.auxiliary_window.clone().context("auxiliary window")?;
         let mut child = host.open_popup(popup)?;
+        assert_eq!(child.window_identity.name(), &name);
+        assert_eq!(child.window_identity.auxiliary_window(), Some(&window));
         let child_document = show_tab(&mut child, "", 2, [255, 255, 255, 255]).await?;
         assert_eq!(child_document.document.page_id, staged_page);
         assert_eq!(
