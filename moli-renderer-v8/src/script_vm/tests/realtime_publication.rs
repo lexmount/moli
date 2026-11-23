@@ -107,6 +107,31 @@ fn realtime_publication_container_query_auto_scrollbars_stabilize_on_reflow() {
 }
 
 #[test]
+fn realtime_publication_container_query_freezes_only_scrollbars_in_the_cycle() {
+    let (mut vm, _) = fixture(
+        r#"<!doctype html><style>
+        .scroller { width: 200px; height: 100px; overflow-y: auto }
+        .content { height: 200px }
+        #query { container: main / inline-size }
+        #trigger { container: trigger / inline-size; width: 300px }
+        #nested { container: nested / inline-size; width: 100px }
+        @container main (width < 190px) { #cycle { height: 50px } }
+        @container trigger (width >= 300px) { #nested { width: 200px } }
+        @container nested (width >= 200px) { #shortened { height: 50px } }
+        </style>
+        <div id=scroller class=scroller><div id=query><div id=cycle class=content></div></div></div>
+        <div id=trigger><div id=nested><div id=other class=scroller><div id=shortened class=content></div></div></div></div>"#,
+    );
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([scroller.clientWidth, query.offsetWidth, cycle.offsetHeight, other.clientWidth, shortened.offsetHeight])",
+        )
+        .unwrap(),
+        "[185,185,50,200,50]"
+    );
+}
+
+#[test]
 fn realtime_publication_container_query_can_reveal_three_scrollable_ancestors() {
     let (mut vm, viewport) = fixture(
         r#"<!doctype html><style>
