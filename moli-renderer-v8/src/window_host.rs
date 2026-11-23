@@ -22,11 +22,10 @@ use super::{
             ComputedStyleTargetContext, STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT,
             STYLE_DECLARATION_PSEUDO_ELEMENT_SLOT, STYLE_DECLARATION_READ_DOCUMENT_SLOT,
             STYLE_DECLARATION_SCREEN_HEIGHT_SLOT, STYLE_DECLARATION_SCREEN_WIDTH_SLOT,
-            STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT,
-            STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT, STYLE_DECLARATION_VIEWPORT_HEIGHT_SLOT,
-            STYLE_DECLARATION_VIEWPORT_WIDTH_SLOT, computed_style_target_context,
-            dispatched_click_activation_target, finish_legacy_activation_for_dispatched_click,
-            observable_event_offset, perform_click_default_action_for_dispatched_event,
+            STYLE_DECLARATION_VIEWPORT_HEIGHT_SLOT, STYLE_DECLARATION_VIEWPORT_WIDTH_SLOT,
+            computed_style_target_context, dispatched_click_activation_target,
+            finish_legacy_activation_for_dispatched_click, observable_event_offset,
+            perform_click_default_action_for_dispatched_event,
             prepare_legacy_activation_for_dispatched_click,
             queue_animation_start_for_listener_target, queue_scroll_observable_effects,
         },
@@ -1206,14 +1205,6 @@ pub(crate) fn build_computed_style_object<'s>(
     if target_context.returns_empty_style(host_ref) {
         host_ref.retire_computed_style_for_inactive_handle(handle);
     }
-    let cached_target_empty = match target_context {
-        ComputedStyleTargetContext::ChildFrameDocument { .. } => {
-            Some(target_context.returns_empty_style(host_ref))
-        }
-        ComputedStyleTargetContext::ActiveDocument
-        | ComputedStyleTargetContext::PopupDocument { .. }
-        | ComputedStyleTargetContext::EmptyForDetached => None,
-    };
     let viewport = target_context.viewport(host_ref);
     let read_document = match target_context {
         ComputedStyleTargetContext::PopupDocument { document_handle } => Some(document_handle),
@@ -1248,24 +1239,6 @@ pub(crate) fn build_computed_style_object<'s>(
         style,
         STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT,
         empty.into(),
-    );
-    let target_empty = cached_target_empty
-        .map(|empty| v8::Boolean::new(scope, empty).into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT,
-        target_empty,
-    );
-    let target_context_epoch = cached_target_empty
-        .map(|_| v8::BigInt::new_from_u64(scope, host.style_target_context_epoch()).into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT,
-        target_context_epoch,
     );
     set_private_value(
         scope,

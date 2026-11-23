@@ -69,10 +69,6 @@ pub(crate) const STYLE_DECLARATION_SCREEN_WIDTH_SLOT: &str = "__moliStyleDeclara
 pub(crate) const STYLE_DECLARATION_SCREEN_HEIGHT_SLOT: &str = "__moliStyleDeclarationScreenHeight";
 pub(crate) const STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT: &str =
     "__moliStyleDeclarationForcedEmptyComputed";
-pub(crate) const STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT: &str =
-    "__moliStyleDeclarationTargetEmptyComputed";
-pub(crate) const STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT: &str =
-    "__moliStyleDeclarationTargetContextEpoch";
 pub(crate) const STYLE_DECLARATION_PSEUDO_ELEMENT_SLOT: &str =
     "__moliStyleDeclarationPseudoElement";
 pub(crate) const STYLE_DECLARATION_READ_DOCUMENT_SLOT: &str = "__moliStyleDeclarationReadDocument";
@@ -117,13 +113,6 @@ fn style_object_forces_empty_computed<'s>(
         unsafe { &*runtime_ptr }.retire_computed_style_for_inactive_handle(*handle);
         return true;
     }
-    if let Some(value) =
-        get_private_value(scope, style, STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT)
-        && value.is_boolean()
-        && target_context_epoch_is_current(scope, unsafe { &*runtime_ptr }, style)
-    {
-        return value.boolean_value(scope);
-    }
     let empty = match bridge_handle {
         BridgeHandle::ComputedStyle(handle, ref descriptor) => match descriptor.target {
             ComputedStyleTargetKey::ChildFrame(_) => {
@@ -132,12 +121,11 @@ fn style_object_forces_empty_computed<'s>(
                 // outgoing Document still becomes empty when it is retired.
                 let context = computed_style_target_context(scope, runtime, handle, None);
                 let empty = context.returns_empty_style(runtime);
-                cache_target_empty_context(scope, runtime, style, empty);
                 cache_computed_viewport(scope, style, (!empty).then(|| context.viewport(runtime)));
                 empty
             }
             ComputedStyleTargetKey::PopupDocument(document_handle) => {
-                !popup_document_target_is_current(unsafe { &*runtime_ptr }, handle, document_handle)
+                !popup_document_target_is_active(unsafe { &*runtime_ptr }, handle, document_handle)
             }
             ComputedStyleTargetKey::Dynamic => {
                 computed_style_target_context(scope, unsafe { &*runtime_ptr }, handle, None)
@@ -152,7 +140,7 @@ fn style_object_forces_empty_computed<'s>(
     empty
 }
 
-fn popup_document_target_is_current(
+fn popup_document_target_is_active(
     runtime: &PageScriptHost,
     target: DomHandle,
     popup_document: DomHandle,
@@ -162,47 +150,10 @@ fn popup_document_target_is_current(
         .node(target)
         .and_then(crate::dom::native::Node::owner_document);
     target_document == Some(popup_document)
+        && computed_style_target_is_in_document_flat_tree(runtime, target, popup_document)
         && runtime
             .lightweight_popup_id_for_document_handle(popup_document)
             .is_some_and(|popup_id| runtime.lightweight_popup_is_open(popup_id))
-}
-
-fn target_context_epoch_is_current<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime: &PageScriptHost,
-    style: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(value) = get_private_value(scope, style, STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT)
-    else {
-        return false;
-    };
-    let Ok(value) = v8::Local::<v8::BigInt>::try_from(value) else {
-        return false;
-    };
-    let (epoch, lossless) = value.u64_value();
-    lossless && epoch == runtime.style_target_context_epoch()
-}
-
-fn cache_target_empty_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime: &PageScriptHost,
-    style: v8::Local<'s, v8::Object>,
-    empty: bool,
-) {
-    let empty = v8::Boolean::new(scope, empty);
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT,
-        empty.into(),
-    );
-    let epoch = v8::BigInt::new_from_u64(scope, runtime.style_target_context_epoch());
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT,
-        epoch.into(),
-    );
 }
 
 fn cache_computed_viewport<'s>(
@@ -504,6 +455,9 @@ pub(crate) fn computed_style_target_context(
     let Some(document) = host.dom_host().owner_document_handle(handle) else {
         return ComputedStyleTargetContext::EmptyForDetached;
     };
+    if !computed_style_target_is_in_document_flat_tree(host, handle, document) {
+        return ComputedStyleTargetContext::EmptyForDetached;
+    }
     if let Some(frame_handle) = computed_style_target_child_frame_handle(scope, host, handle)
         .or_else(|| {
             computed_style_target_requesting_child_frame_handle(
@@ -520,7 +474,7 @@ pub(crate) fn computed_style_target_context(
             rendered,
         };
     }
-    if computed_style_target_is_in_flat_tree(host, handle) {
+    if document == host.document_handle() {
         ComputedStyleTargetContext::ActiveDocument
     } else if host
         .lightweight_popup_id_for_document_handle(document)
@@ -725,6 +679,9 @@ fn document_snapshot_style_context(
                 .with_read_document(Some(document)),
         })
     } else {
+        if !computed_style_target_is_in_document_flat_tree(host, handle, document) {
+            return None;
+        }
         let frame_handle = host.child_browsing_context_host_for_document_handle(document)?;
         if style_property_value(host, frame_handle, StyleMode::Computed, "display") == "none" {
             return Some(DocumentSnapshotStyleComputation::HiddenChildFrame);
@@ -814,6 +771,10 @@ fn iframe_handle_viewport_with_depth(
     )
 }
 
+fn computed_style_target_is_in_flat_tree(host: &PageScriptHost, handle: DomHandle) -> bool {
+    computed_style_target_is_in_document_flat_tree(host, handle, host.document_handle())
+}
+
 fn computed_style_target_is_in_document_flat_tree(
     host: &PageScriptHost,
     handle: DomHandle,
@@ -821,23 +782,7 @@ fn computed_style_target_is_in_document_flat_tree(
 ) -> bool {
     let mut current = handle;
     loop {
-        if current == document {
-            return host
-                .dom_host()
-                .node(current)
-                .is_some_and(crate::dom::native::Node::is_document);
-        }
-        match computed_style_flat_tree_step(host, current) {
-            ControlFlow::Break(_) => return false,
-            ControlFlow::Continue(parent) => current = parent,
-        }
-    }
-}
-
-fn computed_style_target_is_in_flat_tree(host: &PageScriptHost, handle: DomHandle) -> bool {
-    let mut current = handle;
-    loop {
-        match computed_style_flat_tree_step(host, current) {
+        match computed_style_flat_tree_step_for_document(host, current, document) {
             ControlFlow::Break(connected) => return connected,
             ControlFlow::Continue(parent) => current = parent,
         }
@@ -848,15 +793,26 @@ fn computed_style_flat_tree_step(
     host: &PageScriptHost,
     current: DomHandle,
 ) -> ControlFlow<bool, DomHandle> {
+    computed_style_flat_tree_step_for_document(host, current, host.document_handle())
+}
+
+fn computed_style_flat_tree_step_for_document(
+    host: &PageScriptHost,
+    current: DomHandle,
+    document: DomHandle,
+) -> ControlFlow<bool, DomHandle> {
     #[cfg(test)]
     snapshot_tests::note_flat_tree_step();
+    if let Some(slot) = host.dom_host().assigned_slot_for_node(current) {
+        return ControlFlow::Continue(slot);
+    }
     let Some(parent) = host
         .dom_host()
         .node(current)
         .and_then(crate::dom::native::Node::parent_node)
     else {
         return ControlFlow::Break(
-            current == host.dom_host().document_handle()
+            current == document
                 && host
                     .dom_host()
                     .node(current)
@@ -871,7 +827,18 @@ fn computed_style_flat_tree_step(
     }
     if host.dom_host().shadow_root_handle(parent).is_some()
         && computed_style_node_is_slotable_for_flat_tree(host, current)
-        && host.dom_host().assigned_slot_for_node(current).is_none()
+    {
+        return ControlFlow::Break(false);
+    }
+    if host
+        .dom_host()
+        .node(parent)
+        .is_some_and(|node| node.is_html_element_named("slot"))
+        && host.dom_host().containing_shadow_root(parent).is_some()
+        && !host
+            .dom_host()
+            .assigned_nodes_for_slot_with_options(parent, false)
+            .is_empty()
     {
         return ControlFlow::Break(false);
     }
