@@ -1,10 +1,13 @@
 //! Composition of already resolved placement. No CSS, ancestor lookup or world
 //! access belongs here. Precise query mappings and paint share the same input.
 
-use super::ProjectedCoordinateSpace;
+use super::{
+    PaintSpace, ProjectedCoordinateSpace, paint_space::derive_paint_space,
+    sticky::StickyConstraints,
+};
 use crate::{
-    LayoutCoordinateSpaceId, LayoutOutputBoxId, LayoutPoint, LayoutTransform2D,
-    layout_tree::LayoutCoordinateSpace, style::ResolvedLayoutTransform,
+    LayoutBoxId, LayoutCoordinateSpaceId, LayoutError, LayoutOutputBoxId, LayoutPoint,
+    LayoutTransform2D, layout_tree::LayoutCoordinateSpace, style::ResolvedLayoutTransform,
 };
 
 #[derive(Clone, Copy)]
@@ -79,9 +82,172 @@ pub(super) fn compose_layout_space(
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct BoxPlacement {
+    pub(super) parent: Option<LayoutBoxId>,
+    pub(super) location: LayoutPoint,
+    pub(super) transform: ResolvedLayoutTransform,
+    pub(super) fixed: bool,
+}
+
+pub(super) struct ResolvedCoordinates {
+    pub(super) spaces: Vec<ProjectedCoordinateSpace>,
+    pub(super) position_adjustments: Vec<LayoutPoint>,
+}
+
+pub(super) fn resolve_coordinate_spaces(
+    root: LayoutBoxId,
+    viewport_scroll: LayoutPoint,
+    box_count: usize,
+    paint: bool,
+    placements: impl Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
+    scroll_offset: impl Fn(LayoutBoxId) -> Option<LayoutPoint>,
+) -> Result<ResolvedCoordinates, LayoutError> {
+    let mut resolver = CoordinateSpaceResolver {
+        root,
+        viewport_scroll,
+        paint,
+        placements,
+        scroll_offset,
+        spaces: vec![None; box_count + 1],
+        state: vec![0; box_count],
+        position_adjustments: vec![LayoutPoint::ZERO; box_count],
+    };
+    resolver.spaces[0] = Some(ProjectedCoordinateSpace {
+        layout: LayoutCoordinateSpace {
+            id: LayoutCoordinateSpaceId::from_index(0),
+            owner: None,
+            parent: None,
+            local_to_parent: LayoutTransform2D::IDENTITY,
+            local_to_document: LayoutTransform2D::IDENTITY,
+            local_to_viewport: LayoutTransform2D::IDENTITY,
+            local_to_document_ignoring_css_transforms: LayoutTransform2D::IDENTITY,
+            local_to_viewport_ignoring_css_transforms: LayoutTransform2D::IDENTITY,
+        },
+        paint: PaintSpace::ROOT,
+    });
+    for index in 0..box_count {
+        resolver.resolve(index)?;
+    }
+    let spaces = resolver
+        .spaces
+        .into_iter()
+        .enumerate()
+        .map(|(index, space)| {
+            space.ok_or(LayoutError::InvalidBoxReference {
+                index: index.saturating_sub(1),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ResolvedCoordinates {
+        spaces,
+        position_adjustments: resolver.position_adjustments,
+    })
+}
+
+// Resolve dependencies before projecting a box. Sticky scroll ancestry can
+// differ from numeric parentage, so both dependencies need the same cycle check.
+struct CoordinateSpaceResolver<Placement, Offset> {
+    root: LayoutBoxId,
+    viewport_scroll: LayoutPoint,
+    paint: bool,
+    placements: Placement,
+    scroll_offset: Offset,
+    spaces: Vec<Option<ProjectedCoordinateSpace>>,
+    state: Vec<u8>,
+    position_adjustments: Vec<LayoutPoint>,
+}
+
+impl<Placement, Offset> CoordinateSpaceResolver<Placement, Offset>
+where
+    Placement: Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
+    Offset: Fn(LayoutBoxId) -> Option<LayoutPoint>,
+{
+    fn resolve(&mut self, index: usize) -> Result<(), LayoutError> {
+        let Some(state) = self.state.get_mut(index) else {
+            return Err(LayoutError::InvalidBoxReference { index });
+        };
+        match *state {
+            2 => return Ok(()),
+            1 => return Err(LayoutError::NumericTreeCycle { index }),
+            _ => *state = 1,
+        }
+        let (base, sticky) = (self.placements)(index)?;
+        if let Some(parent) = base.parent {
+            self.resolve(parent.index())?;
+        }
+        if let Some(sticky) = &sticky
+            && sticky.scroll_container != self.root
+        {
+            self.resolve(sticky.scroll_container.index())?;
+        }
+        let parent = base.parent.map(|id| self.space(id)).transpose()?;
+        let anchor = match parent {
+            Some(parent) => ProjectionAnchor::Parent(parent),
+            None if base.fixed => ProjectionAnchor::Viewport,
+            None => ProjectionAnchor::Document,
+        };
+        let parent_scroll = base
+            .parent
+            .filter(|parent| *parent != self.root)
+            .and_then(&self.scroll_offset);
+        let local_delta = match sticky {
+            Some(sticky) => {
+                let origin = if sticky.scroll_container == self.root {
+                    self.viewport_scroll
+                } else {
+                    self.space(sticky.scroll_container)?
+                        .layout
+                        .local_to_document_ignoring_css_transforms
+                        .map_point(LayoutPoint::ZERO)
+                };
+                sticky.resolve_offset(
+                    origin,
+                    parent.map_or(LayoutTransform2D::IDENTITY, |space| {
+                        space.layout.local_to_document_ignoring_css_transforms
+                    }),
+                    parent_scroll.unwrap_or(LayoutPoint::ZERO),
+                    base.location,
+                )
+            }
+            None => LayoutPoint::ZERO,
+        };
+        let placement = ResolvedPlacement {
+            anchor,
+            layout_location_in_parent: base.location,
+            local_sticky_delta_in_parent: local_delta,
+            parent_scroll,
+            transform: base.transform,
+        };
+        let projected = ProjectedCoordinateSpace {
+            layout: compose_layout_space(index, placement, self.viewport_scroll),
+            paint: if self.paint {
+                derive_paint_space(placement, self.viewport_scroll)
+            } else {
+                PaintSpace::ROOT
+            },
+        };
+        let inherited = base
+            .parent
+            .map(|parent| self.position_adjustments[parent.index()])
+            .unwrap_or(LayoutPoint::ZERO);
+        self.position_adjustments[index] =
+            LayoutPoint::new(inherited.x + local_delta.x, inherited.y + local_delta.y);
+        self.spaces[index + 1] = Some(projected);
+        self.state[index] = 2;
+        Ok(())
+    }
+
+    fn space(&self, id: LayoutBoxId) -> Result<&ProjectedCoordinateSpace, LayoutError> {
+        self.spaces
+            .get(id.index() + 1)
+            .and_then(Option::as_ref)
+            .ok_or(LayoutError::InvalidBoxReference { index: id.index() })
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::paint_space::derive_paint_space;
     use super::*;
     use crate::LayoutRect;
 

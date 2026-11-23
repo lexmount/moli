@@ -184,13 +184,15 @@ impl PageScriptHost {
             LayoutInputChange::StyleEnvironment => self
                 .style_engine
                 .bump_target_context_epoch_for_document(self.document_handle()),
-            LayoutInputChange::UsedGeometry => {
-                self.clear_layout_rect_cache();
-                self.document_layout_state
-                    .borrow_mut()
-                    .mark_visual_state_dirty();
-            }
+            LayoutInputChange::UsedGeometry => self.invalidate_layout_projection(),
         }
+    }
+
+    pub(super) fn invalidate_layout_projection(&self) {
+        self.clear_layout_rect_cache();
+        self.document_layout_state
+            .borrow_mut()
+            .mark_visual_state_dirty();
     }
 
     pub(crate) const fn scrollbars_hidden(&self) -> bool {
@@ -546,29 +548,7 @@ impl PageScriptHost {
         let metrics = pass.metrics;
         let pass_viewport = pass.viewport;
         let live_frames = self.child_browsing_context_handles_in_document_order();
-        let mut frames_by_document: HashMap<_, HashSet<_>> = HashMap::new();
-        for &frame in &live_frames {
-            if let Some(parent) = self.dom_host().owner_document_handle(frame) {
-                frames_by_document.entry(parent).or_default().insert(frame);
-            }
-        }
-        let mut frames = FrameLayoutPublication {
-            content_boxes: HashMap::new(),
-            #[cfg(feature = "devtools")]
-            geometry: PublishedFrameGeometry::new(
-                self.current_window_document_task_target_for_dispatch_scope(
-                    super::OwnerDispatchScope::Top,
-                ),
-            ),
-        };
-        frames.collect(
-            self,
-            document,
-            &pass.tree,
-            &frames_by_document,
-            #[cfg(feature = "devtools")]
-            (document == self.document_handle()).then_some(LayoutTransform2D::IDENTITY),
-        );
+        let frames = self.collect_frame_layout_publication(document, &pass.tree, &live_frames);
         let frame_viewports = live_frames
             .into_iter()
             .filter_map(|frame| {
@@ -637,6 +617,54 @@ impl PageScriptHost {
         self.last_layout_pass_metrics.set(Some(metrics));
         self.layout_snapshot_cache_publishes
             .set(self.layout_snapshot_cache_publishes.get().saturating_add(1));
+    }
+
+    fn collect_frame_layout_publication(
+        &self,
+        document: DomHandle,
+        tree: &FrozenLayoutTree<DomHandle>,
+        live_frames: &[DomHandle],
+    ) -> FrameLayoutPublication {
+        let mut frames_by_document: HashMap<_, HashSet<_>> = HashMap::new();
+        for &frame in live_frames {
+            if let Some(parent) = self.dom_host().owner_document_handle(frame) {
+                frames_by_document.entry(parent).or_default().insert(frame);
+            }
+        }
+        let mut frames = FrameLayoutPublication {
+            content_boxes: HashMap::new(),
+            #[cfg(feature = "devtools")]
+            geometry: PublishedFrameGeometry::new(
+                self.current_window_document_task_target_for_dispatch_scope(
+                    super::OwnerDispatchScope::Top,
+                ),
+            ),
+        };
+        frames.collect(
+            self,
+            document,
+            tree,
+            &frames_by_document,
+            #[cfg(feature = "devtools")]
+            (document == self.document_handle()).then_some(LayoutTransform2D::IDENTITY),
+        );
+        frames
+    }
+
+    pub(super) fn refresh_published_scroll_projection(&self) -> Result<bool, LayoutError> {
+        let document = self.document_handle();
+        self.document_layout_state
+            .borrow_mut()
+            .refresh_scroll_projection(
+                document,
+                |source| crate::layout_renderer::native_scroll_offset(self.dom_host(), source),
+                #[cfg(feature = "devtools")]
+                |tree| {
+                    let frames = self.child_browsing_context_handles_in_document_order();
+                    self.collect_frame_layout_publication(document, tree, &frames)
+                        .geometry
+                },
+            )
     }
 
     #[cfg(feature = "devtools")]

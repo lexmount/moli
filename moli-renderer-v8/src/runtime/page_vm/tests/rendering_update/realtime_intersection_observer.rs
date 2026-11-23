@@ -376,6 +376,7 @@ fn realtime_io_observe_after_clean_frame_and_scroll_progress_without_capture() {
             page.vm_mut().eval("events.join('|')").unwrap(),
             "false|true"
         );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
         assert!(
             page.next_rendering_opportunity_deadline_for_test()
                 .is_none()

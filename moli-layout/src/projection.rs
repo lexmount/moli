@@ -13,11 +13,13 @@
 
 mod coordinates;
 mod paint_space;
+mod scroll;
 mod sticky;
 
-use coordinates::{ProjectionAnchor, ResolvedPlacement, compose_layout_space};
+use coordinates::{BoxPlacement, resolve_coordinate_spaces};
 pub(crate) use paint_space::PaintSpace;
-use paint_space::derive_paint_space;
+pub(crate) use scroll::ScrollProjection;
+use scroll::clamp_scroll_offset;
 
 use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
 
@@ -60,6 +62,7 @@ pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
     reason: LayoutFlushReason,
     started: Instant,
     paint_capture: Option<PaintCaptureRequest>,
+    retain_scroll_projection: bool,
     mut object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
     mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
     phase_metrics: LayoutPassPhaseMetrics,
@@ -72,7 +75,7 @@ where
     let mut projection = OutputProjection::new(world, viewport);
     projection.build_local_box_geometry(&overflow);
     projection.build_scroll_extents(&overflow);
-    projection.build_coordinate_spaces()?;
+    let scroll_projection = projection.build_coordinate_spaces(retain_scroll_projection)?;
     for object in &mut object_geometry {
         let owner = object.owner.index();
         let content = projection.boxes[owner].content_box;
@@ -176,6 +179,7 @@ where
         content_size,
         object_geometry,
         embedded_frames,
+        scroll_projection,
     );
     Ok(LayoutPassResult::new(
         tree,
@@ -228,7 +232,6 @@ where
     pub(crate) diagnostics: Vec<PaintDiagnostic>,
     resolved_transforms: Vec<ResolvedLayoutTransform>,
     scrollable_overflow: Vec<LayoutRect>,
-    viewport_anchored: Vec<bool>,
     pub(crate) direct_fragments: Vec<Option<LayoutFragmentId>>,
     pub(crate) owner_paint_fragments: Vec<Vec<LayoutFragmentId>>,
     pub(crate) background_clips: Vec<Option<LayoutClipChainId>>,
@@ -266,14 +269,13 @@ where
             fragments: Vec::new(),
             scroll_proxy_links,
             scroll_extents: Vec::with_capacity(count),
-            coordinate_spaces: Vec::with_capacity(count + 1),
+            coordinate_spaces: Vec::new(),
             clip_chain: Vec::new(),
             paint_order_count: 0,
             control_paint_orders: vec![None; count],
             diagnostics: Vec::new(),
             resolved_transforms: vec![ResolvedLayoutTransform::IDENTITY; count],
             scrollable_overflow: vec![LayoutRect::ZERO; count],
-            viewport_anchored: vec![false; count],
             direct_fragments: vec![None; count],
             owner_paint_fragments: vec![Vec::new(); count],
             background_clips: vec![None; count],
@@ -487,7 +489,7 @@ where
             let horizontal_range = (scroll_size.width - scrollport.width).max(0.0);
             let vertical_range = (scroll_size.height - scrollport.height).max(0.0);
             let is_scroll_container = self.establishes_scroll_container(id);
-            let requested = finite_point(self.world.boxes[index].scroll_offset);
+            let requested = self.world.boxes[index].scroll_offset;
             let (minimum_offset, maximum_offset) = if is_scroll_container {
                 let reversed = self.world.boxes[index].style.reversed_scroll_axes();
                 (
@@ -504,10 +506,7 @@ where
                 (LayoutPoint::ZERO, LayoutPoint::ZERO)
             };
             let applied = if is_scroll_container {
-                LayoutPoint::new(
-                    requested.x.clamp(minimum_offset.x, maximum_offset.x),
-                    requested.y.clamp(minimum_offset.y, maximum_offset.y),
-                )
+                clamp_scroll_offset(requested, minimum_offset, maximum_offset)
             } else {
                 LayoutPoint::ZERO
             };
@@ -593,50 +592,48 @@ where
         self.viewport_scroll = self.scroll_extents[self.world.root.index()].applied_offset;
     }
 
-    fn build_coordinate_spaces(&mut self) -> Result<(), LayoutError> {
-        let mut spaces = vec![None; self.world.boxes.len() + 1];
-        spaces[0] = Some(ProjectedCoordinateSpace {
-            layout: LayoutCoordinateSpace {
-                id: LayoutCoordinateSpaceId::from_index(0),
-                owner: None,
-                parent: None,
-                local_to_parent: LayoutTransform2D::IDENTITY,
-                local_to_document: LayoutTransform2D::IDENTITY,
-                local_to_viewport: LayoutTransform2D::IDENTITY,
-                local_to_document_ignoring_css_transforms: LayoutTransform2D::IDENTITY,
-                local_to_viewport_ignoring_css_transforms: LayoutTransform2D::IDENTITY,
-            },
-            paint: PaintSpace::ROOT,
-        });
-        let mut state = vec![0_u8; self.world.boxes.len()];
-        let mut accumulated_position_adjustments = vec![LayoutPoint::ZERO; self.world.boxes.len()];
-        let mut resolver = CoordinateSpaceResolver {
-            world: self.world,
-            viewport_scroll: self.viewport_scroll,
-            scroll_extents: &self.scroll_extents,
-            resolved_transforms: &self.resolved_transforms,
-            viewport_anchored: &mut self.viewport_anchored,
-            accumulated_position_adjustments: &mut accumulated_position_adjustments,
-            spaces: &mut spaces,
-            state: &mut state,
+    fn build_coordinate_spaces(
+        &mut self,
+        retain: bool,
+    ) -> Result<Option<Box<ScrollProjection<N>>>, LayoutError> {
+        let world = self.world;
+        let scroll_extents = &self.scroll_extents;
+        let placements = |index: usize| {
+            let node = &world.boxes[index];
+            let location = node.final_layout.location;
+            Ok((
+                BoxPlacement {
+                    parent: node.layout_parent,
+                    location: LayoutPoint::new(location.x, location.y),
+                    transform: self.resolved_transforms[index],
+                    fixed: node.style.is_fixed_positioned(),
+                },
+                sticky::prepare_constraints(index, world, scroll_extents)?,
+            ))
         };
-        for index in 0..self.world.boxes.len() {
-            resolver.resolve(index)?;
-        }
-        for (geometry, offset) in self.boxes.iter_mut().zip(accumulated_position_adjustments) {
+        let retained = retain
+            .then(|| ScrollProjection::new(world, &self.boxes, scroll_extents, placements))
+            .transpose()?;
+        let resolved = resolve_coordinate_spaces(
+            world.root,
+            self.viewport_scroll,
+            world.boxes.len(),
+            true,
+            |index| match &retained {
+                Some(retained) => Ok(retained.placement(index)),
+                None => placements(index),
+            },
+            |id| {
+                let extent = &scroll_extents[id.index()];
+                extent.is_scroll_container.then_some(extent.applied_offset)
+            },
+        )?;
+        for (geometry, offset) in self.boxes.iter_mut().zip(resolved.position_adjustments) {
             geometry.layout_origin_in_document.x += offset.x;
             geometry.layout_origin_in_document.y += offset.y;
         }
-        self.coordinate_spaces = spaces
-            .into_iter()
-            .enumerate()
-            .map(|(index, space)| {
-                space.ok_or(LayoutError::InvalidBoxReference {
-                    index: index.saturating_sub(1),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(())
+        self.coordinate_spaces = resolved.spaces;
+        Ok(retained.map(Box::new))
     }
 
     fn build_fragments(&mut self) {
@@ -1002,6 +999,7 @@ where
         content_size: LayoutSize,
         object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
         embedded_frames: Vec<crate::FrozenEmbeddedFrame<N>>,
+        scroll_projection: Option<Box<ScrollProjection<N>>>,
     ) -> FrozenLayoutTree<N> {
         let root_box = LayoutOutputBoxId::from_index(self.world.root.index());
         let mut coordinate_spaces = self
@@ -1067,7 +1065,7 @@ where
                 },
             )
             .collect();
-        FrozenLayoutTree::new(
+        let mut tree = FrozenLayoutTree::new(
             source_root,
             self.viewport,
             self.viewport_scroll,
@@ -1080,138 +1078,10 @@ where
             viewport_coordinate_space,
             self.clip_chain,
             embedded_frames,
-        )
-    }
-}
-
-/// Pass-local dependency coordination. CSS decisions are resolved here; the
-/// coordinate and paint composers consume only a ResolvedPlacement.
-struct CoordinateSpaceResolver<'a, N>
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    world: &'a LayoutWorld<N>,
-    viewport_scroll: LayoutPoint,
-    scroll_extents: &'a [LayoutScrollExtent],
-    resolved_transforms: &'a [ResolvedLayoutTransform],
-    viewport_anchored: &'a mut [bool],
-    accumulated_position_adjustments: &'a mut [LayoutPoint],
-    spaces: &'a mut [Option<ProjectedCoordinateSpace>],
-    state: &'a mut [u8],
-}
-
-impl<N: Copy + Debug + Eq + Hash> CoordinateSpaceResolver<'_, N> {
-    fn resolve(&mut self, index: usize) -> Result<(), LayoutError> {
-        let Some(slot_state) = self.state.get(index).copied() else {
-            return Err(LayoutError::InvalidBoxReference { index });
-        };
-        match slot_state {
-            2 => return Ok(()),
-            1 => return Err(LayoutError::NumericTreeCycle { index }),
-            _ => self.state[index] = 1,
-        }
-        let parent_box = self.world.boxes[index].layout_parent;
-        if let Some(parent) = parent_box {
-            self.resolve(parent.index())?;
-        }
-        let sticky = sticky::prepare_constraints(index, self.world, self.scroll_extents)?;
-        if let Some(constraints) = &sticky
-            && constraints.scroll_container != self.world.root
-        {
-            // Scroll ancestry need not equal numeric layout ancestry. Resolve
-            // the actual referenced space, retaining the same cycle checks.
-            self.resolve(constraints.scroll_container.index())?;
-        }
-        let (placement, is_viewport_anchored) = self.resolve_placement(index, sticky.as_ref())?;
-        let local_delta = placement.local_sticky_delta_in_parent;
-        let space = ProjectedCoordinateSpace {
-            layout: compose_layout_space(index, placement, self.viewport_scroll),
-            paint: derive_paint_space(placement, self.viewport_scroll),
-        };
-        // This separate, existing O(N) pass-local array serves layout metrics.
-        // It never becomes a local transform or a second retained geometry tree.
-        let inherited = parent_box
-            .map(|parent| self.accumulated_position_adjustments[parent.index()])
-            .unwrap_or(LayoutPoint::ZERO);
-        self.accumulated_position_adjustments[index] =
-            LayoutPoint::new(inherited.x + local_delta.x, inherited.y + local_delta.y);
-        self.viewport_anchored[index] = is_viewport_anchored;
-        self.spaces[index + 1] = Some(space);
-        self.state[index] = 2;
-        Ok(())
-    }
-
-    fn resolve_placement(
-        &self,
-        index: usize,
-        sticky: Option<&sticky::StickyConstraints>,
-    ) -> Result<(ResolvedPlacement<'_>, bool), LayoutError> {
-        let layout_box = &self.world.boxes[index];
-        let is_viewport_anchored = layout_box.layout_parent.map_or_else(
-            || layout_box.style.is_fixed_positioned(),
-            |parent| self.viewport_anchored[parent.index()],
         );
-        let parent = layout_box
-            .layout_parent
-            .map(|id| self.space(id))
-            .transpose()?;
-        let anchor = match parent {
-            Some(parent) => ProjectionAnchor::Parent(parent),
-            None if is_viewport_anchored => ProjectionAnchor::Viewport,
-            None => ProjectionAnchor::Document,
-        };
-        let parent_scroll = layout_box.layout_parent.and_then(|id| {
-            (id != self.world.root && self.scroll_extents[id.index()].is_scroll_container)
-                .then_some(self.scroll_extents[id.index()].applied_offset)
-        });
-        let location = layout_box.final_layout.location;
-        let layout_location_in_parent = LayoutPoint::new(location.x, location.y);
-        let local_sticky_delta_in_parent = match sticky {
-            Some(constraints) => {
-                let origin = if constraints.scroll_container == self.world.root {
-                    self.viewport_scroll
-                } else {
-                    self.space(constraints.scroll_container)?
-                        .layout
-                        .local_to_document_ignoring_css_transforms
-                        .map_point(LayoutPoint::ZERO)
-                };
-                constraints.resolve_offset(
-                    origin,
-                    parent.map_or(LayoutTransform2D::IDENTITY, |space| {
-                        space.layout.local_to_document_ignoring_css_transforms
-                    }),
-                    parent_scroll.unwrap_or(LayoutPoint::ZERO),
-                    layout_location_in_parent,
-                )
-            }
-            None => LayoutPoint::ZERO,
-        };
-        Ok((
-            ResolvedPlacement {
-                anchor,
-                layout_location_in_parent,
-                local_sticky_delta_in_parent,
-                parent_scroll,
-                transform: self.resolved_transforms[index],
-            },
-            is_viewport_anchored,
-        ))
+        tree.scroll_projection = scroll_projection;
+        tree
     }
-
-    fn space(&self, id: LayoutBoxId) -> Result<&ProjectedCoordinateSpace, LayoutError> {
-        self.spaces
-            .get(id.index() + 1)
-            .and_then(Option::as_ref)
-            .ok_or(LayoutError::InvalidBoxReference { index: id.index() })
-    }
-}
-
-fn finite_point(point: LayoutPoint) -> LayoutPoint {
-    LayoutPoint::new(
-        if point.x.is_finite() { point.x } else { 0.0 },
-        if point.y.is_finite() { point.y } else { 0.0 },
-    )
 }
 
 fn inline_fragment_box_model<N>(
@@ -1406,7 +1276,7 @@ mod dependency_tests {
                 scrollbar_colors: None,
             })
             .collect();
-        projection.build_coordinate_spaces().unwrap();
+        projection.build_coordinate_spaces(false).unwrap();
         let sticky = &projection.coordinate_spaces[2].layout;
         assert_eq!(
             sticky.local_to_viewport.map_point(LayoutPoint::ZERO).y,

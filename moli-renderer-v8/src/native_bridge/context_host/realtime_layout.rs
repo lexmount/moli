@@ -41,6 +41,7 @@ impl PreparedLayoutPublication {
 /// remains the only owner of published geometry.
 pub(super) struct RealtimeLayoutState {
     non_dom_revision: Cell<Option<u64>>,
+    scroll_projection_dirty: Cell<bool>,
     published: RefCell<Option<ScreenLayoutInputs>>,
     pub(super) frame: RefCell<RealtimeFrameState>,
     pub(super) animation_frames: RefCell<RealtimeAnimationFrames>,
@@ -53,6 +54,7 @@ impl Default for RealtimeLayoutState {
     fn default() -> Self {
         Self {
             non_dom_revision: Cell::new(Some(0)),
+            scroll_projection_dirty: Cell::new(false),
             published: RefCell::new(None),
             frame: RefCell::new(RealtimeFrameState::default()),
             animation_frames: RefCell::new(RealtimeAnimationFrames::default()),
@@ -81,6 +83,7 @@ impl RealtimeLayoutState {
     pub(super) fn reset(&self) {
         self.clear_publication();
         self.non_dom_revision.set(Some(0));
+        self.scroll_projection_dirty.set(false);
         self.frame.borrow_mut().retire_document();
     }
 }
@@ -186,6 +189,7 @@ impl PageScriptHost {
     fn did_publish_screen_layout(&self, state: &RealtimeLayoutState, inputs: ScreenLayoutInputs) {
         // Attach the verified inputs after the geometry update retires the previous validity.
         *state.published.borrow_mut() = Some(inputs);
+        state.scroll_projection_dirty.set(false);
         crate::observer_runtime::did_publish_realtime_resize_observer_layout(self);
         self.did_publish_realtime_font_layout();
     }
@@ -200,6 +204,16 @@ impl PageScriptHost {
     pub(crate) fn note_realtime_layout_input_change(&self) {
         if let Some(state) = &self.realtime_layout_state {
             state.invalidate();
+            self.request_realtime_rendering_opportunity();
+        }
+    }
+
+    /// Scrolling changes the projection and lifecycle demand, but leaves the
+    /// dimensions that were computed by the last layout pass intact.
+    pub(crate) fn note_realtime_scroll_change(&self) {
+        if let Some(state) = &self.realtime_layout_state {
+            state.scroll_projection_dirty.set(true);
+            self.invalidate_layout_projection();
             self.request_realtime_rendering_opportunity();
         }
     }
@@ -276,7 +290,11 @@ impl PageScriptHost {
                     .borrow()
                     .latest_layout(self.document_handle())
                     .is_some())
+            && (!state.scroll_projection_dirty.get()
+                || inputs.documents[0].root.is_none()
+                || self.refresh_published_scroll_projection()?)
         {
+            state.scroll_projection_dirty.set(false);
             return Ok(());
         }
 
@@ -284,7 +302,8 @@ impl PageScriptHost {
         // network admission, or nested event-loop checkpoint at this boundary.
         self.prepare_current_screen_styles(&inputs);
         let request = LayoutPassRequest::new(inputs.viewport, reason)
-            .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes);
+            .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
+            .with_scroll_projection(true);
         let document = self.document_handle();
         let Some(pass) = self.build_layout_pass_for_document(document, request)? else {
             if self.screen_layout_inputs(state)? != inputs {

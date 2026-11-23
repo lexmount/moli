@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use moli_layout::{DocumentLayoutServices, FrozenLayoutTree, LayoutViewport};
+use moli_layout::{
+    DocumentLayoutServices, FrozenLayoutTree, LayoutError, LayoutPoint, LayoutViewport,
+};
 
 use super::layout_snapshot::LatestLayoutTreeCache;
 #[cfg(feature = "devtools")]
@@ -228,6 +230,22 @@ impl DocumentLayoutState {
             #[cfg(feature = "devtools")]
             frame_geometry,
         );
+    }
+
+    pub(super) fn refresh_scroll_projection(
+        &mut self,
+        document: DomHandle,
+        offset: impl Fn(DomHandle) -> LayoutPoint,
+        #[cfg(feature = "devtools")] frame_geometry: impl FnOnce(
+            &FrozenLayoutTree<DomHandle>,
+        ) -> PublishedFrameGeometry,
+    ) -> Result<bool, LayoutError> {
+        self.latest_layout.refresh_scroll_projection(
+            document,
+            offset,
+            #[cfg(feature = "devtools")]
+            frame_geometry,
+        )
     }
 
     pub(super) fn clear_latest_layout(&mut self) {

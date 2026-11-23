@@ -2,6 +2,7 @@ mod inline_svg;
 #[cfg(test)]
 pub(crate) use inline_svg::parse_count as svg_parse_count;
 mod source_view;
+pub(crate) use source_view::native_scroll_offset;
 mod style_resolver;
 
 use std::collections::HashMap;
@@ -96,6 +97,7 @@ fn build_native_layout_pass_recursive(
             include_backgrounds: request.includes_backgrounds(),
             environment_override,
             frame_coverage: request.frame_coverage(),
+            retain_scroll_projection: request.retains_scroll_projection(),
             document_stack,
             embedded_document_services,
         };
@@ -147,6 +149,7 @@ struct NativeEmbeddedFrameRenderer<'a> {
     include_backgrounds: bool,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     frame_coverage: moli_layout::LayoutFrameCoverage,
+    retain_scroll_projection: bool,
     document_stack: &'a mut Vec<DomHandle>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
 }
@@ -196,7 +199,8 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         } else {
             LayoutPassRequest::new(viewport, self.reason)
         }
-        .with_frame_coverage(self.frame_coverage);
+        .with_frame_coverage(self.frame_coverage)
+        .with_scroll_projection(self.retain_scroll_projection);
         let result = build_native_layout_pass_recursive(
             self.runtime,
             root,

@@ -1,6 +1,6 @@
-use moli_layout::FrozenLayoutTree;
 #[cfg(feature = "devtools")]
 use moli_layout::LayoutTransform2D;
+use moli_layout::{FrozenLayoutTree, LayoutError, LayoutPoint};
 #[cfg(feature = "devtools")]
 use std::{collections::HashMap, rc::Rc};
 
@@ -104,6 +104,29 @@ impl LatestLayoutTreeCache {
             #[cfg(feature = "devtools")]
             frame_geometry: Rc::new(frame_geometry),
         });
+    }
+
+    pub(super) fn refresh_scroll_projection(
+        &mut self,
+        document: DomHandle,
+        offset: impl Fn(DomHandle) -> LayoutPoint,
+        #[cfg(feature = "devtools")] frame_geometry: impl FnOnce(
+            &FrozenLayoutTree<DomHandle>,
+        ) -> PublishedFrameGeometry,
+    ) -> Result<bool, LayoutError> {
+        let Some(snapshot) = self.latest.as_mut().filter(|snapshot| {
+            snapshot.document == document && snapshot.tree.has_scroll_projection()
+        }) else {
+            return Ok(false);
+        };
+        let changed = snapshot.tree.refresh_scroll_projection(offset)?;
+        #[cfg(feature = "devtools")]
+        if changed {
+            snapshot.frame_geometry = Rc::new(frame_geometry(&snapshot.tree));
+        }
+        #[cfg(not(feature = "devtools"))]
+        let _ = changed;
+        Ok(true)
     }
 
     pub(super) fn clear(&mut self) {

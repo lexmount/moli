@@ -57,6 +57,34 @@ fn dispatch(vm: &mut StandaloneScriptVmHarness, kind: &str, x: f64, y: f64, butt
     assert!(result.handled);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_scroll_reprojects_nested_frame_pointer_coordinates() {
+    let mut vm = captured_child_vm(true, false).await;
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+    vm.eval("document.body.style.height='2000px'").unwrap();
+    // Establish :hover before taking the baseline so the next mousemove
+    // keeps the same style inputs while exercising the reprojected frame.
+    dispatch(&mut vm, "mousemove", 140.0, 100.0, 0);
+    assert_eq!(
+        vm.eval("events.length=0;frame.getBoundingClientRect().top")
+            .unwrap(),
+        "60"
+    );
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval("scrollTo(0,40);frame.getBoundingClientRect().top")
+            .unwrap(),
+        "20"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    dispatch(&mut vm, "mousemove", 140.0, 60.0, 0);
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"[["pointermove","captured",30,30]]"#
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+}
+
 async fn assert_removed_pointer_target_preserves_frame_coordinates(
     pointer_type: &str,
     scaled: bool,
