@@ -237,6 +237,100 @@ async fn viewport_history_survives_link_and_form_navigation() -> Result<()> {
 }
 
 #[tokio::test]
+async fn viewport_history_keeps_the_page_before_scripted_form_submission() -> Result<()> {
+    let server = moli_test_support::FixtureServer::spawn().await?;
+    let original = server.url("/static");
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+
+    for method in ["GET", "POST"] {
+        for submit in ["submit", "requestSubmit"] {
+            let mut page = browser.fetch(&original).await?;
+            let mut frames = page
+                .subscribe_viewport_frames(ViewportSurface::default(), 1)
+                .await?;
+            let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+            assert!(!first.navigation.can_go_back, "{method} {submit}");
+
+            let setup = format!(
+                r#"
+                document.body.innerHTML =
+                    '<form action="/net/echo" method="{method}"><input name="q" value="hello"></form>';
+                sessionStorage.removeItem('form-navigation');
+                navigation.addEventListener('navigate', event => {{
+                    sessionStorage.setItem('form-navigation',
+                        event.navigationType + ':' + event.userInitiated);
+                }});
+                document.readyState
+                "#
+            );
+            let loaded = page.evaluate_runtime_expression_async(&setup).await?;
+            assert_eq!(loaded["value"], "complete", "{method} {submit}");
+            page.evaluate_runtime_expression_async(&format!(
+                "document.querySelector('form').{submit}()"
+            ))
+            .await?;
+            let next = frame(&mut frames, |frame| frame.document != first.document).await?;
+            assert_eq!(next.navigation.url.path(), "/net/echo", "{method} {submit}");
+            let types = page
+                .evaluate_runtime_expression_async(
+                    "sessionStorage.getItem('form-navigation') + ':' + navigation.activation.navigationType",
+                )
+                .await?;
+            assert_eq!(types["value"], "push:false:push", "{method} {submit}");
+            assert!(next.navigation.can_go_back, "{method} {submit}");
+            assert!(
+                page.traverse_viewport_history(-1).await?,
+                "{method} {submit}"
+            );
+            let back = frame(&mut frames, |frame| {
+                frame.navigation.url == first.navigation.url
+            })
+            .await?;
+            assert!(back.navigation.can_go_forward, "{method} {submit}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_form_submission_during_load_replaces_the_current_entry() -> Result<()> {
+    let server = moli_test_support::FixtureServer::spawn().await?;
+    let mut source = url::Url::parse(&server.url("/compat/child-dynamic-markup-document"))?;
+    source.query_pairs_mut().append_pair(
+        "markup",
+        r#"<!doctype html><form action="/net/echo" method="post"></form>
+        <script>
+            addEventListener('load', () => {
+                navigation.addEventListener('navigate', event => {
+                    sessionStorage.setItem('form-navigation',
+                        document.readyState + ':' + event.navigationType);
+                });
+                document.querySelector('form').requestSubmit();
+            });
+        </script>"#,
+    );
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser.fetch(source.as_str()).await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let next = frame(&mut frames, |frame| {
+        frame.navigation.url.path() == "/net/echo"
+    })
+    .await?;
+    let types = page
+        .evaluate_runtime_expression_async(
+            "sessionStorage.getItem('form-navigation') + ':' + navigation.activation.navigationType",
+        )
+        .await?;
+    assert_eq!(types["value"], "complete:replace:replace");
+    assert!(!next.navigation.can_go_back);
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_reports_history_updates_on_a_static_document() -> Result<()> {
     let server = moli_test_support::FixtureServer::spawn().await?;
     let browser =

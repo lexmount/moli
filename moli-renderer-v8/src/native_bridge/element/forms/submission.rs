@@ -1,5 +1,7 @@
 use super::*;
 use crate::context_bootstrap::sandbox_blocks_ancestor_or_top_navigation_from_source;
+use crate::dom::native::DocumentReadyState;
+use crate::frame_owner_model::MainDocumentLoadCompletionState;
 use crate::native_bridge::context_host::ChildBrowsingContextNavigationRequest;
 use crate::native_bridge::element::NodePublicEventDispatchOutcome;
 #[cfg(feature = "devtools")]
@@ -627,6 +629,14 @@ pub(in crate::native_bridge) fn submit_form_default_action(
             user_initiated,
         );
     }
+    let top_level_history = |destination: &str| {
+        top_level_form_history_mutation(
+            unsafe { &*runtime_ptr },
+            submitting_document,
+            &initiator,
+            destination,
+        )
+    };
     match target_name.as_deref() {
         Some(target_name) if special_target.is_none() => {
             let target_handle = named_iframe_target_handle_for_navigation(
@@ -715,6 +725,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
                 form_handle,
                 target_name.as_deref(),
                 &resolved_url,
+                top_level_history(&resolved_url),
                 user_initiated,
             ),
             FormSubmissionMethod::Post {
@@ -746,6 +757,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
                         initiator,
                     );
                 }
+                let history = top_level_history(resolved_url.as_str());
                 submit_post_form_to_top_level_browsing_context(
                     scope,
                     runtime_ptr,
@@ -755,11 +767,50 @@ pub(in crate::native_bridge) fn submit_form_default_action(
                     body,
                     content_type,
                     &form_data_entries,
+                    history,
                     user_initiated,
                     initiator,
                 )
             }
         },
+    }
+}
+
+fn top_level_form_history_mutation(
+    runtime: &PageScriptHost,
+    form_document: DomHandle,
+    initiator: &RendererNavigationInitiator,
+    destination: &str,
+) -> NavigationHistoryMutation {
+    let active_document = runtime.document_handle();
+    let form_is_active_document = form_document == active_document;
+    // The Complete ready state precedes delivery of the window load event.
+    let form_is_loading = form_is_active_document
+        && runtime.current_main_document_task_owner().map_or_else(
+            || runtime.host_document().ready_state() != DocumentReadyState::Complete,
+            |owner| {
+                runtime.current_main_document_load_completion_state(owner)
+                    != Some(MainDocumentLoadCompletionState::Completed)
+            },
+        );
+    let same_url_and_origin = destination == runtime.document_url().as_str()
+        && (form_is_active_document
+            || initiator
+                .origin()
+                .same_origin(&moli_url::WebOrigin::from_serialized(
+                    &runtime
+                        .document_security_origin(active_document)
+                        .ascii_serialization(),
+                )));
+
+    if form_is_loading
+        || same_url_and_origin
+        || runtime.main_document_is_initial_empty()
+        || destination.starts_with("javascript:")
+    {
+        NavigationHistoryMutation::Replace
+    } else {
+        NavigationHistoryMutation::Push
     }
 }
 
@@ -988,6 +1039,7 @@ fn submit_post_form_to_top_level_browsing_context(
     body: bytes::Bytes,
     content_type: String,
     form_data_entries: &[(String, v8::Global<v8::Value>)],
+    history: NavigationHistoryMutation,
     user_initiated: bool,
     initiator: RendererNavigationInitiator,
 ) -> bool {
@@ -1005,11 +1057,6 @@ fn submit_post_form_to_top_level_browsing_context(
     };
     let source_handle = submitter.unwrap_or(form_handle);
     let source_element = wrap_handle_object(scope, runtime_ptr, source_handle);
-    let history = if user_initiated {
-        NavigationHistoryMutation::Push
-    } else {
-        NavigationHistoryMutation::Replace
-    };
     if !crate::context_bootstrap::dispatch_top_level_form_navigation_event(
         scope,
         window,

@@ -694,7 +694,7 @@ fn form_navigation_events_use_resolved_top_window_across_realms() {
                             true,
                             true,
                             true,
-                            "replace",
+                            "push",
                             expected_url,
                             true,
                             true,
@@ -718,6 +718,11 @@ fn form_navigation_events_use_resolved_top_window_across_realms() {
                         } else {
                             let pending = pending.expect(&description);
                             assert_eq!(pending.url.as_str(), expected_url, "{description}");
+                            assert_eq!(
+                                pending.history_mutation,
+                                Some(moli_page_types::NavigationHistoryMutation::Push),
+                                "{description}"
+                            );
                             assert_eq!(
                                 pending.request_method,
                                 method.to_ascii_uppercase(),
