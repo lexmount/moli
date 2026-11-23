@@ -25,7 +25,9 @@ struct PipeFd(tokio::io::unix::AsyncFd<std::fs::File>);
 impl PipeFd {
     fn new(file: std::fs::File) -> io::Result<Self> {
         socket2::SockRef::from(&file).set_nonblocking(true)?;
-        Ok(Self(tokio::io::unix::AsyncFd::new(file)?))
+        // SAFETY: AsyncFd owns the File and its descriptor until deregistration.
+        let fd = unsafe { tokio::io::unix::AsyncFd::register(file)? };
+        Ok(Self(fd))
     }
 }
 
