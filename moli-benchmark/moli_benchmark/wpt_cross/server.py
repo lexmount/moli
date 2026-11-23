@@ -23,6 +23,7 @@ out at the case-set selection layer.
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import html
 import http.client
@@ -4485,13 +4486,15 @@ class WptFixtureServer:
         self._listeners: list[ThreadingHTTPServer] = []
         self._listener_threads: list[threading.Thread] = []
 
-        def listener(host: str, name: str, *, secure: bool = False) -> tuple[ThreadingHTTPServer, threading.Thread]:
+        def listener(
+            host: str, name: str, *, port: int = 0, secure: bool = False,
+        ) -> tuple[ThreadingHTTPServer, threading.Thread]:
             if secure:
                 cls = _Ipv6ThreadingHTTPSServer if ":" in host else _FixtureThreadingHTTPSServer
-                httpd = cls((host, 0), handler_cls, context=self.tls.context)
+                httpd = cls((host, port), handler_cls, context=self.tls.context)
             else:
                 cls = _Ipv6ThreadingHTTPServer if ":" in host else _FixtureThreadingHTTPServer
-                httpd = cls((host, 0), handler_cls)
+                httpd = cls((host, port), handler_cls)
             self._listeners.append(httpd)
             thread = threading.Thread(
                 target=httpd.serve_forever,
@@ -4510,6 +4513,22 @@ class WptFixtureServer:
             self.alternate_port = int(self.alternate_httpd.server_address[1])
             self.https_port = int(self.httpsd.server_address[1])
             self.alternate_https_port = int(self.alternate_httpsd.server_address[1])
+            # A .localhost hostname can resolve to either loopback address.
+            # Both listeners serve the same origin and share fixture state.
+            if socket.has_ipv6:
+                try:
+                    for thread, port, secure in (
+                        (self.thread, self.port, False),
+                        (self.alternate_thread, self.alternate_port, False),
+                        (self.https_thread, self.https_port, True),
+                        (self.alternate_https_thread, self.alternate_https_port, True),
+                    ):
+                        listener("::1", f"{thread.name}-ipv6", port=port, secure=secure)
+                except OSError as error:
+                    if error.errno not in (
+                        errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT,
+                    ):
+                        raise
             for httpd in self._listeners:
                 self._configure_httpd_defaults(
                     httpd, primary_port=self.port, alternate_port=self.alternate_port,

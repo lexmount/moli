@@ -66,6 +66,21 @@ class WptTlsFixtureTests(unittest.TestCase):
             with socket.create_connection(("127.0.0.1", self.server.https_port), timeout=3) as raw:
                 self.context.wrap_socket(raw, server_hostname="unrelated.invalid")
 
+    @unittest.skipUnless(socket.has_ipv6, "IPv6 is unavailable")
+    def test_ipv6_loopback_serves_the_same_http_and_https_ports(self):
+        server = self.server
+        for port in (server.port, server.alternate_port, server.https_port, server.alternate_https_port):
+            with self.subTest(port=port):
+                if port in (server.https_port, server.alternate_https_port):
+                    connection = HTTPSConnection("::1", port, context=self.context, timeout=3)
+                else:
+                    connection = HTTPConnection("::1", port, timeout=3)
+                self.addCleanup(connection.close)
+                connection.request("GET", "/resources/testharness.js")
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.read(), b"// test fixture")
+
     def test_wss_echo_uses_verified_tls_for_a_named_fixture_origin(self):
         name = "www2.web-platform.localhost"
         with socket.create_connection(("127.0.0.1", self.server.https_port), timeout=3) as raw:
