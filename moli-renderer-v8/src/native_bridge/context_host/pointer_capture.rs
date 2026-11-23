@@ -101,10 +101,10 @@ impl PageScriptHost {
     pub(crate) fn set_pointer_active_document(
         &mut self,
         pointer_id: i32,
-        document: Option<WindowDocumentTaskTarget>,
+        document: WindowDocumentTaskTarget,
     ) {
         if let Some(state) = self.pointers.get_mut(&pointer_id) {
-            state.active_document = document;
+            state.active_document = Some(document);
         }
     }
 
