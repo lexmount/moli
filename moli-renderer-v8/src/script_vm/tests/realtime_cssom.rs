@@ -593,3 +593,40 @@ fn legacy_css_clip_hides_paint_hit_targets_without_changing_box_geometry() {
         r#"[60,["","",""],["","fixed","target"]]"#
     );
 }
+
+#[test]
+fn legacy_css_clip_applies_to_filter_output() {
+    // Exercise the filter order from WPT css/css-masking/clip/clip-filter-order.html,
+    // and a shadow whose only source lies outside the CSS clip.
+    let mut vm = realtime_vm(
+        r#"<!doctype html><style>
+        html, body { margin: 0; background: white }
+        .clipped { position: absolute; width: 80px; height: 55px;
+                   clip: rect(0, 40px, 55px, 0) }
+        #blur { left: 20px; top: 20px; background: red; filter: blur(4px) }
+        #shadow { left: 20px; top: 100px; filter: drop-shadow(-40px 0 green) }
+        #shadow-source { margin-left: 40px; width: 40px; height: 55px; background: red }
+        #ancestor { left: 160px; top: 20px }
+        #filtered-child { width: 80px; height: 55px; background: green;
+                          filter: drop-shadow(12px 0 4px red) }
+        </style>
+        <div id=blur class=clipped></div>
+        <div id=shadow class=clipped><div id=shadow-source></div></div>
+        <div id=ancestor class=clipped><div id=filtered-child></div></div>"#,
+    );
+    let snapshot = vm
+        .screenshot_layout_snapshot(moli_layout::PaintViewport::new(260, 175, 1.0))
+        .unwrap()
+        .unwrap();
+    let image = moli_paint::raster_snapshot(&snapshot).unwrap();
+    let pixel = |x, y| {
+        let index = ((y * image.width + x) * 4) as usize;
+        &image.rgba[index..index + 4]
+    };
+    assert_eq!(pixel(58, 45), [255, 0, 0, 255]);
+    assert_eq!(pixel(62, 45), [255, 255, 255, 255]);
+    assert_eq!(pixel(45, 125), [0, 128, 0, 255]);
+    assert_eq!(pixel(62, 125), [255, 255, 255, 255]);
+    assert_eq!(pixel(198, 45), [0, 128, 0, 255]);
+    assert_eq!(pixel(202, 45), [255, 255, 255, 255]);
+}
