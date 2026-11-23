@@ -94,28 +94,7 @@ fn construct_mouse_event_with_detail_and_related_target<'s>(
     construct_native_mouse_event(scope, event_type, init)
 }
 
-pub(crate) fn construct_pointer_event_with_modifiers<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    coordinates: InputEventCoordinates,
-    button: i32,
-    buttons: i32,
-    pointer: &RendererPointerEventProperties,
-    modifiers: u8,
-) -> Option<v8::Local<'s, v8::Object>> {
-    construct_pointer_event_with_related_target_and_modifiers(
-        scope,
-        event_type,
-        coordinates,
-        button,
-        buttons,
-        pointer,
-        None,
-        modifiers,
-    )
-}
-
-pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
+pub(crate) fn construct_pointer_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
     coordinates: InputEventCoordinates,
@@ -146,27 +125,6 @@ pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
         None,
     )?;
     construct_native_pointer_event(scope, event_type, mouse, pointer)
-}
-
-pub(crate) fn construct_pointer_event_with_related_target<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    coordinates: InputEventCoordinates,
-    button: i32,
-    buttons: i32,
-    pointer: &RendererPointerEventProperties,
-    related_target: Option<v8::Local<'s, v8::Value>>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    construct_pointer_event_with_related_target_and_modifiers(
-        scope,
-        event_type,
-        coordinates,
-        button,
-        buttons,
-        pointer,
-        related_target,
-        0,
-    )
 }
 
 pub(crate) fn construct_drag_event_with_related_target<'s>(

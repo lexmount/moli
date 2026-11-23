@@ -76,27 +76,15 @@ impl PageScriptHost {
             .iter()
             .filter_map(|(&pointer_id, state)| {
                 let target = state.pending?.element;
-                self.pointer_capture_subtree_contains(root, target)
+                self.dom_host()
+                    .shadow_including_subtree(root)
+                    .any(|node| node == target)
                     .then_some(pointer_id)
             })
             .collect();
         for pointer_id in removed {
             self.release_pending_pointer_capture_target(pointer_id);
         }
-    }
-
-    fn pointer_capture_subtree_contains(&self, root: DomHandle, target: DomHandle) -> bool {
-        let mut stack = vec![root];
-        while let Some(handle) = stack.pop() {
-            if handle == target {
-                return true;
-            }
-            if let Some(shadow_root) = self.dom_host().shadow_root_handle(handle) {
-                stack.push(shadow_root);
-            }
-            stack.extend(self.dom_host().child_handles(handle));
-        }
-        false
     }
 
     pub(crate) fn clear_pointer_capture_state(&mut self) {

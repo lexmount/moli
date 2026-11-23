@@ -36,10 +36,8 @@ use crate::native_bridge::element::{
     activate_handle_via_keyboard, cache_input_files_from_selected_files,
     construct_drag_event_with_related_target, construct_keyboard_event,
     construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target, construct_pointer_event_with_modifiers,
-    construct_pointer_event_with_related_target,
-    construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
-    construct_touch_event_with_points, construct_wheel_event_for_target,
+    construct_mouse_event_with_related_target_for_target, construct_pointer_event,
+    construct_simple_event, construct_touch_event_with_points, construct_wheel_event_for_target,
     contenteditable_editing_host, dispatch_public_event, input_surface_hit_test,
     input_target_in_document, is_disabled_form_control, observable_input_hit_test,
     perform_auxiliary_link_default_action, perform_drop_default_action,
@@ -665,13 +663,23 @@ impl PreparedPointerEvent<'_> {
         scope: &mut v8::PinScope<'s, '_>,
         event_name: &str,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        construct_pointer_event_with_modifiers(
+        self.construct_with_related_target(scope, event_name, None)
+    }
+
+    fn construct_with_related_target<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event_name: &str,
+        related: Option<v8::Local<'s, v8::Value>>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        construct_pointer_event(
             scope,
             event_name,
             self.coordinates,
             self.button,
             self.buttons,
             self.pointer,
+            related,
             self.modifiers,
         )
     }
@@ -721,23 +729,12 @@ fn dispatch_drag_pointer_suppression_boundaries(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     target: DomHandle,
-    coordinates: InputEventCoordinates,
-    pointer: &RendererPointerEventProperties,
-    modifiers: u8,
+    data: PreparedPointerEvent<'_>,
 ) {
     if !unsafe { &*runtime_ptr }.dom_host().is_connected(target) {
         return;
     }
-    if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-        scope,
-        "pointerout",
-        coordinates,
-        -1,
-        0,
-        pointer,
-        None,
-        modifiers,
-    ) {
+    if let Some(event) = data.construct(scope, "pointerout") {
         let _ = dispatch_public_event(scope, runtime_ptr, target, event);
     }
     // Like Blink's boundary dispatcher, freeze the flat ancestor chain after
@@ -752,16 +749,7 @@ fn dispatch_drag_pointer_suppression_boundaries(
         }
     };
     for ancestor in ancestors {
-        if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-            scope,
-            "pointerleave",
-            coordinates,
-            -1,
-            0,
-            pointer,
-            None,
-            modifiers,
-        ) {
+        if let Some(event) = data.construct(scope, "pointerleave") {
             let _ = dispatch_public_event(scope, runtime_ptr, ancestor, event);
         }
     }
@@ -778,16 +766,11 @@ fn dispatch_mouse_pointer_boundaries(
 ) {
     let dispatch = move |scope: &mut v8::PinScope<'_, '_>, name, target, related, coordinates| {
         let related = related_target_value(scope, related);
-        if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-            scope,
-            name,
+        let boundary = PreparedPointerEvent {
             coordinates,
-            data.button,
-            data.buttons,
-            data.pointer,
-            related,
-            data.modifiers,
-        ) {
+            ..data
+        };
+        if let Some(event) = boundary.construct_with_related_target(scope, name, related) {
             let _ = dispatch_public_event(scope, runtime_ptr, target, event);
         }
     };
@@ -832,15 +815,11 @@ fn dispatch_touch_pointer_boundary_events(
             for name in names {
                 let coordinates = position.for_target(unsafe { &*runtime_ptr }, target, sampled);
                 let related = related_target_value(scope, related);
-                if let Some(event) = construct_pointer_event_with_related_target(
-                    scope,
-                    name,
+                let boundary = PreparedPointerEvent {
                     coordinates,
-                    data.button,
-                    data.buttons,
-                    data.pointer,
-                    related,
-                ) {
+                    ..data
+                };
+                if let Some(event) = boundary.construct_with_related_target(scope, name, related) {
                     let _ = dispatch_public_event(scope, runtime_ptr, target, event);
                 }
             }
@@ -1727,9 +1706,7 @@ impl ScriptVm {
                         scope,
                         runtime_ptr,
                         cancel_target,
-                        cancel.coordinates,
-                        &cancel_pointer,
-                        modifiers,
+                        cancel,
                     );
                     // Preserve ScriptVm's legacy mouse hover cache while
                     // marking this suppressed pointer stream as outside.
