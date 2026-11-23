@@ -195,10 +195,6 @@ impl EffectiveTargetEmulationState {
         if raw.vision_deficiency.is_none() {
             self.emulated_media.vision_deficiency = previous.emulated_media.vision_deficiency;
         }
-        if raw.emulated_media.os_text_scale_percent.is_none() {
-            self.emulated_media.os_text_scale_percent =
-                previous.emulated_media.os_text_scale_percent;
-        }
         self.default_background_color = None;
         if raw.emulated_device_metrics.is_some() {
             self.emulated_device_metrics = None;

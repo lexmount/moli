@@ -39,7 +39,6 @@ impl TargetEmulationStateUpdate<'_> {
         &mut self,
         mut emulated_media: EmulatedMediaOverrides,
     ) -> EmulatedMediaOverrides {
-        emulated_media.os_text_scale_percent = self.raw.emulated_media.os_text_scale_percent;
         self.raw.emulated_media = emulated_media.clone();
         emulated_media.vision_deficiency = self.effective.emulated_media.vision_deficiency;
         emulated_media.os_text_scale_percent = self.effective.emulated_media.os_text_scale_percent;
@@ -57,7 +56,6 @@ impl TargetEmulationStateUpdate<'_> {
     }
 
     pub(crate) fn set_os_text_scale(&mut self, percent: Option<u16>) -> EmulatedMediaOverrides {
-        self.raw.emulated_media.os_text_scale_percent = percent;
         self.effective.emulated_media.os_text_scale_percent = percent;
         self.effective.emulated_media.clone()
     }

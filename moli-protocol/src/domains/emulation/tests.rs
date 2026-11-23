@@ -161,9 +161,50 @@ async fn os_text_scale_keeps_styles_document_media_queries_and_font_faces_in_syn
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn detaching_an_untouched_emulation_session_resets_the_target_text_scale() {
+    let mut ctx = TestContext::new();
+    install_multi_session_page_state(&mut ctx);
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<meta name=text-scale content=scale><body>scaled</body>",
+        Some("SID-primary"),
+    )
+    .await;
+    expect_session_command_result(
+        &mut ctx,
+        88502,
+        "SID-primary",
+        "Emulation.setEmulatedOSTextScale",
+        json!({"scale": 1.5}),
+    )
+    .await;
+    let size = "getComputedStyle(document.body).fontSize";
+    assert_eq!(
+        evaluate_in_session(&mut ctx, "SID-primary", size).await,
+        "24px"
+    );
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 88503, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-attached"}
+    }))
+    .await;
+    ctx.expect_result(88503, json!({}), None);
+    assert_eq!(
+        evaluate_in_session(&mut ctx, "SID-primary", size).await,
+        "16px"
+    );
+}
+
 async fn evaluate(ctx: &mut TestContext, expression: &str) -> serde_json::Value {
+    evaluate_in_session(ctx, "SID-1", expression).await
+}
+
+async fn evaluate_in_session(
+    ctx: &mut TestContext,
+    session_id: &str,
+    expression: &str,
+) -> serde_json::Value {
     ctx.process_async(json!({
-        "id": 88000, "sessionId": "SID-1", "method": "Runtime.evaluate",
+        "id": 88000, "sessionId": session_id, "method": "Runtime.evaluate",
         "params": {"expression": expression, "returnByValue": true, "awaitPromise": true}
     }))
     .await;
@@ -3266,11 +3307,19 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_activa
     bc.insert_page_target_host(background);
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(
-        "data:text/html,<style>html{background:red}</style><body>background</body>",
+        "data:text/html,<meta name=text-scale content=scale><style>html{background:red}</style><body>background</body>",
         Some("SID-background"),
     )
     .await;
     ctx.sent.clear();
+    expect_session_command_result(
+        &mut ctx,
+        186,
+        "SID-background",
+        "Emulation.setEmulatedOSTextScale",
+        json!({"scale": 1.5}),
+    )
+    .await;
     let original = background_screenshot(&mut ctx).await;
     expect_session_command_result(
         &mut ctx,
@@ -3310,7 +3359,7 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_activa
         "method": "Runtime.evaluate",
         "sessionId": "SID-background",
         "params": {
-            "expression": "JSON.stringify({ dark: matchMedia('(prefers-color-scheme: dark)').matches, light: matchMedia('(prefers-color-scheme: light)').matches })"
+            "expression": "JSON.stringify({ dark: matchMedia('(prefers-color-scheme: dark)').matches, light: matchMedia('(prefers-color-scheme: light)').matches, fontSize: getComputedStyle(document.body).fontSize })"
         }
     }))
     .await;
@@ -3327,6 +3376,7 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_activa
         serde_json::from_str(payload).expect("runtime evaluate payload should be json");
     assert_eq!(payload["dark"], json!(true));
     assert_eq!(payload["light"], json!(false));
+    assert_eq!(payload["fontSize"], json!("24px"));
     assert_eq!(background_screenshot(&mut ctx).await, simulated);
     ctx.with_fixture(|conn| {
         let background = conn
@@ -3342,6 +3392,13 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_activa
                 .color_scheme
                 .as_deref(),
             Some("dark"),
+        );
+        assert_eq!(
+            background
+                .effective_emulation_state
+                .emulated_media
+                .os_text_scale_percent,
+            Some(150)
         );
         assert_eq!(
             conn.browser_context
