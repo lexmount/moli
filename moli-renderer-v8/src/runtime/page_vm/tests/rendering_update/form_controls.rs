@@ -272,6 +272,22 @@ document.body.innerHTML = '<input id=field placeholder="Example">';
                 Some((1, 3)),
             ),
             (
+                "combining mark on an uppercase expansion",
+                "ß\u{0301}",
+                "••",
+                "uppercase",
+                Some((1, 2)),
+                Some((1, 2)),
+            ),
+            (
+                "combining mark on a three-letter uppercase expansion",
+                "ﬃ\u{0301}",
+                "•••",
+                "uppercase",
+                Some((1, 2)),
+                Some((1, 3)),
+            ),
+            (
                 "caret inside a surrogate pair after uppercase expansion",
                 "Aß😀e\u{0301}Z",
                 "••••••",
