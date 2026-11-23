@@ -331,6 +331,48 @@ async fn viewport_form_submission_during_load_replaces_the_current_entry() -> Re
 }
 
 #[tokio::test]
+async fn viewport_history_honors_the_source_document_referrer_policy() -> Result<()> {
+    let server = moli_test_support::FixtureServer::spawn().await?;
+    let mut source = url::Url::parse(&server.url("/compat/child-dynamic-markup-document"))?;
+    source
+        .query_pairs_mut()
+        .append_pair("private", "source-value")
+        .append_pair(
+            "markup",
+            r#"<!doctype html><meta name="referrer" content="no-referrer">
+        <a href="/static" style="display:block;width:180px;height:60px">Next</a>"#,
+        );
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser.fetch(source.as_str()).await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+
+    page.dispatch_mouse_event_at_point_async(16., 16., "mousedown", 0, Some(1), 0., 0.)
+        .await?;
+    page.dispatch_mouse_event_at_point_async(16., 16., "mouseup", 0, Some(0), 0., 0.)
+        .await?;
+    let next = frame(&mut frames, |frame| frame.document != first.document).await?;
+    assert_eq!(next.navigation.url.path(), "/static");
+    assert!(next.navigation.can_go_back);
+    let urls = page
+        .evaluate_runtime_expression_async(
+            r#"
+            (() => {
+                const from = navigation.activation.from;
+                const previous = navigation.entries().find(entry => entry.key === from.key);
+                return JSON.stringify([from.url, previous.url]);
+            })()
+            "#,
+        )
+        .await?;
+    assert_eq!(urls["value"], "[null,null]");
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_reports_history_updates_on_a_static_document() -> Result<()> {
     let server = moli_test_support::FixtureServer::spawn().await?;
     let browser =
