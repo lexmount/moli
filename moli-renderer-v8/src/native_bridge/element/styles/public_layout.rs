@@ -1,8 +1,9 @@
 use moli_layout::LayoutError;
+use style::computed_value_flags::ComputedValueFlags;
 
 use super::declaration::{
-    StyleObservation, property_uses_container_geometry,
-    style_property_value_for_pseudo_with_context, style_property_value_with_context,
+    ComputedStyleRead, style_property_value_for_pseudo_with_context,
+    style_property_value_with_context,
 };
 use super::{
     DomHandle, PageScriptHost, StyleMode, style_object_computation_context,
@@ -17,29 +18,22 @@ pub(super) fn prepare_public_style_property(
     handle: DomHandle,
     mode: StyleMode,
     property: &str,
-    pseudo: Option<&str>,
 ) -> Result<(), LayoutError> {
     if mode == StyleMode::Computed
         && runtime.layout_policy().is_realtime()
-        && style_read_needs_layout(
-            runtime,
-            handle,
-            || property_may_observe_used_geometry(property),
-            [property],
-            pseudo,
-        )
+        && style_read_needs_layout(runtime, handle, || {
+            property_may_observe_used_geometry(property)
+        })
     {
         runtime.ensure_observable_layout()?;
     }
     Ok(())
 }
 
-fn style_read_needs_layout<'a>(
+fn style_read_needs_layout(
     runtime: &PageScriptHost,
     handle: DomHandle,
     observes_used_geometry: impl FnOnce() -> bool,
-    properties: impl IntoIterator<Item = &'a str> + Clone,
-    pseudo: Option<&str>,
 ) -> bool {
     runtime.dom_host().is_connected_to_document(handle)
         && runtime.owner_dispatch_scope_for_node(handle).is_some()
@@ -51,33 +45,21 @@ fn style_read_needs_layout<'a>(
                         .child_browsing_context_host_for_document_handle(document)
                         .is_some()
                 })
-            || properties
-                .clone()
-                .into_iter()
-                .any(|property| property_uses_container_geometry(runtime, handle, property))
-            || size_container_dependency_needs_layout(runtime, handle, pseudo, properties))
+            || size_container_style_needs_layout(runtime, handle))
 }
 
-fn size_container_dependency_needs_layout<'a>(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    pseudo: Option<&str>,
-    properties: impl IntoIterator<Item = &'a str>,
-) -> bool {
-    if runtime.realtime_screen_layout_is_current() {
-        return false;
-    }
-    runtime
-        .layout_document_for_source(handle)
-        .is_some_and(|document| {
-            StyleObservation::new(runtime).with_resolution_pass(document, |pass| {
-                pass.depends_on_size_container_query(handle, pseudo)
-                    || properties.into_iter().any(|property| {
-                        let property = canonical_style_property_name(property);
-                        pass.property_uses_container_units(handle, pseudo, &property)
-                    })
+fn size_container_style_needs_layout(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    // Stylo records size containers on the flat-tree style path. Refresh the
+    // connected element's style as a whole when that geometry can be stale,
+    // including queries originating from its pseudos and inherited values.
+    !runtime.realtime_screen_layout_is_current()
+        && ComputedStyleRead::new(runtime, handle)
+            .computed_values()
+            .is_none_or(|style| {
+                style
+                    .flags
+                    .contains(ComputedValueFlags::SELF_OR_ANCESTOR_HAS_SIZE_CONTAINER_TYPE)
             })
-        })
 }
 
 /// Deliberately conservative for used-value families. A pure root-document
@@ -118,15 +100,10 @@ pub(super) fn prepare_public_style_batch(
     let used_geometry = properties
         .iter()
         .any(|property| property_may_observe_used_geometry(property));
-    let needs_layout = handles.iter().copied().any(|handle| {
-        style_read_needs_layout(
-            runtime,
-            handle,
-            || used_geometry,
-            properties.iter().map(String::as_str),
-            None,
-        )
-    });
+    let needs_layout = handles
+        .iter()
+        .copied()
+        .any(|handle| style_read_needs_layout(runtime, handle, || used_geometry));
     if needs_layout {
         runtime.ensure_observable_layout()?;
     }
@@ -141,10 +118,7 @@ pub(super) fn read_live_style_property<'s>(
     mode: StyleMode,
     property: &str,
 ) -> Option<String> {
-    let pseudo = style_object_pseudo_element(scope, style, mode);
-    if let Err(error) =
-        prepare_public_style_property(runtime, handle, mode, property, pseudo.as_deref())
-    {
+    if let Err(error) = prepare_public_style_property(runtime, handle, mode, property) {
         if let Some(message) = v8_string(scope, &format!("Layout failed: {error}")) {
             let exception = v8::Exception::error(scope, message);
             scope.throw_exception(exception);
@@ -153,7 +127,7 @@ pub(super) fn read_live_style_property<'s>(
     }
     // A screen layout pass can update the viewport of a child document.
     let context = style_object_computation_context(scope, style, runtime, handle, mode);
-    Some(match pseudo {
+    Some(match style_object_pseudo_element(scope, style, mode) {
         Some(pseudo) => style_property_value_for_pseudo_with_context(
             runtime, handle, &pseudo, property, context,
         ),
