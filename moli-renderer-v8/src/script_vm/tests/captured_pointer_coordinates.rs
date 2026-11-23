@@ -529,6 +529,58 @@ async fn lost_touch_capture_checks_the_previous_document_before_cross_frame_move
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn touch_cancel_cleans_up_capture_when_the_original_frame_retires() {
+    let mut vm = captured_child_vm(false, false).await;
+    vm.eval(
+        r#"
+        globalThis.captureLog = [];
+        captured.addEventListener('pointermove', event =>
+            captured.releasePointerCapture(event.pointerId));
+        captured.addEventListener('pointercancel', () => captureLog.push('retired cancel'));
+        outside.addEventListener('pointermove', event =>
+            outside.setPointerCapture(event.pointerId), {once:true});
+        outside.addEventListener('gotpointercapture', event => {
+            captureLog.push('got');
+            outside.releasePointerCapture(event.pointerId);
+        });
+        outside.addEventListener('lostpointercapture', () => captureLog.push('lost'));
+        "#,
+    )
+    .unwrap();
+    for (x, y, kind) in [
+        (130.0, 90.0, "touchstart"),
+        (131.0, 91.0, "touchmove"),
+        (20.0, 20.0, "touchmove"),
+        (21.0, 21.0, "touchmove"),
+    ] {
+        vm.dispatch_touch_event_at_point(x, y, kind, false).unwrap();
+    }
+    assert_eq!(vm.eval("JSON.stringify(captureLog)").unwrap(), r#"["got"]"#);
+    let document = {
+        let host = vm._context_host.borrow();
+        let frame = host.child_browsing_context_handles_in_document_order()[0];
+        host.child_browsing_context_document_handle(frame).unwrap()
+    };
+    vm.eval("frame.remove()").unwrap();
+    {
+        let host = vm._context_host.borrow();
+        assert!(host.input_owner_for_document(document).is_none());
+        assert!(host.pointer_is_known(2));
+    }
+
+    vm.dispatch_touch_event_at_point(21.0, 21.0, "touchcancel", false)
+        .unwrap();
+
+    assert_eq!(
+        vm.eval("JSON.stringify(captureLog)").unwrap(),
+        r#"["got","lost"]"#
+    );
+    assert!(!vm._context_host.borrow().pointer_is_known(2));
+    assert!(vm.active_touch_points.is_empty());
+    assert!(vm.active_touch_pointer_handles.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn frame_navigation_retires_the_capture_route_and_old_projection() {
     let mut vm = captured_child_vm(false, false).await;
     dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);
