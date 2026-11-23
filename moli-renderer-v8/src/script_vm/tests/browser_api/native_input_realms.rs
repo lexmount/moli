@@ -1,6 +1,132 @@
 use super::*;
 
 #[test]
+fn mouse_release_over_inert_document_clears_capture_and_compatibility_state() {
+    use moli_page_types::LayoutPolicy;
+
+    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        for release_x in [55.0, -20.0] {
+            let mut vm = new_parsed_test_vm(
+                "https://inert-mouse-release.test/",
+                r#"<!doctype html><button id="target" style="position:absolute;left:30px;top:30px;width:100px;height:100px">Press</button>"#,
+            );
+            vm.set_layout_policy(policy);
+            vm.eval(
+                r#"
+                const target = document.getElementById('target');
+                window.inputEvents = [];
+                window.captureOnExit = null;
+                window.lostCaptures = 0;
+                target.addEventListener('lostpointercapture', () => lostCaptures++);
+                for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
+                    target.addEventListener(type, event => inputEvents.push(event.type));
+                }
+                target.addEventListener('pointerdown', event => {
+                    window.pressedPointer = event.pointerId;
+                    target.setPointerCapture(pressedPointer);
+                    event.preventDefault();
+                }, {once: true});
+                target.addEventListener('pointerout', () => {
+                    target.setPointerCapture(pressedPointer);
+                    window.captureOnExit = target.hasPointerCapture(pressedPointer);
+                }, {once: true});
+                "#,
+            )
+            .unwrap();
+            publish_layout_for_test(&mut vm);
+
+            vm.dispatch_mouse_event_at_point(55.0, 55.0, "mousedown", 0, Some(1), 0.0, 0.0)
+                .unwrap();
+            vm.dispatch_mouse_event_at_point(55.0, 55.0, "mousemove", -1, Some(1), 0.0, 0.0)
+                .unwrap();
+            // Withdraw pending capture so the release reaches hit testing,
+            // while the old active capture still needs its lost event.
+            vm.eval("target.releasePointerCapture(pressedPointer); document.documentElement.inert = true")
+                .unwrap();
+            vm.dispatch_mouse_event_at_point(release_x, 55.0, "mouseup", 0, Some(0), 0.0, 0.0)
+                .unwrap();
+            assert_eq!(
+                vm.eval(
+                    r#"
+                    document.documentElement.inert = false;
+                    target.setPointerCapture(pressedPointer);
+                    JSON.stringify([captureOnExit, target.hasPointerCapture(pressedPointer),
+                                    lostCaptures, inputEvents.splice(0)])
+                    "#,
+                )
+                .unwrap(),
+                r#"[false,false,1,["pointerdown"]]"#,
+                "{policy:?}, release x={release_x}",
+            );
+
+            vm.dispatch_mouse_event_at_point(55.0, 55.0, "mousedown", 0, Some(1), 0.0, 0.0)
+                .unwrap();
+            vm.dispatch_mouse_event_at_point(55.0, 55.0, "mouseup", 0, Some(0), 0.0, 0.0)
+                .unwrap();
+            assert_eq!(
+                vm.eval("JSON.stringify(inputEvents)").unwrap(),
+                r#"["pointerdown","mousedown","pointerup","mouseup"]"#,
+                "{policy:?}, release x={release_x}",
+            );
+        }
+    }
+}
+
+#[test]
+fn mouse_input_in_an_inert_child_viewport_targets_its_document_root() {
+    use moli_page_types::LayoutPolicy;
+
+    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        let mut vm = new_storage_html_test_vm("https://inert-child-mouse-input.test/");
+        vm.set_layout_policy(policy);
+        vm.eval(
+            r#"
+            document.body.style.margin = '0';
+            const frame = document.createElement('iframe');
+            frame.style.cssText = 'position:absolute;left:65px;top:45px;width:320px;height:240px;border:0';
+            document.body.appendChild(frame);
+            const inner = frame.contentDocument;
+            inner.body.innerHTML = '<button>child</button>';
+            inner.documentElement.inert = true;
+            window.inputEvents = [];
+            for (const [doc, source] of [[document, 'parent'], [inner, 'child']]) {
+                for (const type of ['mousedown', 'mouseup', 'click']) {
+                    doc.addEventListener(type, event => inputEvents.push([
+                        source, event.type, event.target.nodeName, event.clientX, event.clientY
+                    ]));
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        publish_layout_for_test(&mut vm);
+
+        vm.dispatch_mouse_event_at_point(110.0, 105.0, "mousedown", 0, Some(1), 0.0, 0.0)
+            .unwrap();
+        vm.dispatch_mouse_event_at_point(110.0, 105.0, "mouseup", 0, Some(0), 0.0, 0.0)
+            .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify(inputEvents)").unwrap(),
+            r#"[["child","mousedown","HTML",45,60],["child","mouseup","HTML",45,60],["child","click","HTML",45,60]]"#,
+            "{policy:?}",
+        );
+
+        vm.eval("inputEvents.length = 0; frame.inert = true")
+            .unwrap();
+        vm.dispatch_mouse_event_at_point(110.0, 105.0, "mousedown", 0, Some(1), 0.0, 0.0)
+            .unwrap();
+        vm.dispatch_mouse_event_at_point(110.0, 105.0, "mouseup", 0, Some(0), 0.0, 0.0)
+            .unwrap();
+        assert_eq!(
+            vm.eval("inputEvents.length === 3 && inputEvents.every(([source, , tag]) => source === 'parent' && tag !== 'IFRAME')")
+                .unwrap(),
+            "true",
+            "{policy:?}",
+        );
+    }
+}
+
+#[test]
 fn mouse_boundary_events_leave_and_reenter_after_an_inert_hit_miss() {
     let mut vm = new_rendered_test_vm(
         "https://inert-mouse-boundary.test/",
