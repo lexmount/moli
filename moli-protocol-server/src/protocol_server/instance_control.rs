@@ -16,6 +16,7 @@ pub enum InstanceCommand {
 #[derive(Clone, Debug, Default)]
 pub struct BrowserInstanceControl {
     shutdown: InstanceShutdown,
+    pub(crate) expose_command_line: bool,
 }
 
 impl BrowserInstanceControl {

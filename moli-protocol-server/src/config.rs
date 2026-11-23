@@ -10,6 +10,8 @@ pub struct ServerConfig {
     /// Requests without Origin and requests from the bound server's own HTTP
     /// origin are allowed by default. Other origins require this allowlist.
     pub remote_allow_origins: Vec<String>,
+    /// Allow CDP clients to read the process command line.
+    pub enable_automation: bool,
     /// Base screencast interval in milliseconds; must be positive.
     pub screencast_interval_ms: u32,
 }
@@ -27,6 +29,7 @@ impl Default for ServerConfig {
             port: 9222,
             timeout_secs: 10,
             remote_allow_origins: Vec::new(),
+            enable_automation: false,
             screencast_interval_ms: DEFAULT_SCREENCAST_INTERVAL_MS,
         }
     }
