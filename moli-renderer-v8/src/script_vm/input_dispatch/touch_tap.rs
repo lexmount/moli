@@ -1,17 +1,14 @@
 use super::*;
+use crate::native_bridge::element::InputHit;
 
 fn hit_after_callbacks(
-    host: &crate::native_bridge::PageScriptHost,
-    x: f64,
-    y: f64,
-) -> Result<Option<crate::native_bridge::element::InputHit>> {
-    // Coordinate input shares the published tree. Only a cold start may
-    // build layout; callbacks do not change the snapshot's refresh lifecycle.
-    Ok(observable_input_hit_test(
-        host,
-        host.document_handle(),
-        moli_layout::LayoutPoint::new(x as f32, y as f32),
-    )?)
+    host: &PageScriptHost,
+    position: InputPosition,
+) -> Result<(Option<InputHit>, Option<Rc<PublishedFrameGeometry>>)> {
+    let hit = observable_input_hit_test(host, host.document_handle(), position.layout_point())?;
+    // Keep this hit's projection available if a following boundary listener
+    // clears the publication.
+    Ok((hit, host.published_frame_geometry()))
 }
 
 fn transition(
@@ -20,9 +17,10 @@ fn transition(
     previous: Option<DomHandle>,
     current: Option<DomHandle>,
     position: InputPosition,
+    sampled: Option<&PublishedFrameGeometry>,
 ) {
     unsafe { &mut *runtime_ptr }.set_hovered_element_for_input(current);
-    let coordinates = |target| position.for_target(unsafe { &*runtime_ptr }, target, None);
+    let coordinates = |target| position.for_target(unsafe { &*runtime_ptr }, target, sampled);
     dispatch_mouse_boundary_events(
         scope,
         runtime_ptr,
@@ -45,10 +43,10 @@ pub(super) fn dispatch_touch_tap_activation(
     previous_hover: Option<DomHandle>,
 ) -> Result<(RendererInputDispatchOutcome, Option<DomHandle>)> {
     let position = InputPosition::headless(x, y);
-    let coordinates = |hit: crate::native_bridge::element::InputHit| {
+    let coordinates = |hit: InputHit, sampled: Option<&PublishedFrameGeometry>| {
         let host = unsafe { &*runtime_ptr };
         if host.layout_policy().uses_real_layout() {
-            position.for_target(host, hit.handle, None)
+            position.for_target(host, hit.handle, sampled)
         } else {
             position.coordinates(Some(hit.root_to_frame))
         }
@@ -58,9 +56,16 @@ pub(super) fn dispatch_touch_tap_activation(
     if !touch_tap_is_live(unsafe { &*runtime_ptr }, tap) {
         return Ok((input_dispatch_outcome(true), hover));
     }
-    let initial = hit_after_callbacks(unsafe { &*runtime_ptr }, x, y)?;
+    let (initial, mut sampled) = hit_after_callbacks(unsafe { &*runtime_ptr }, position)?;
     let initial_hover = initial.map(|hit| hit.handle);
-    transition(scope, runtime_ptr, hover, initial_hover, position);
+    transition(
+        scope,
+        runtime_ptr,
+        hover,
+        initial_hover,
+        position,
+        sampled.as_deref(),
+    );
     hover = initial_hover;
     let Some(mut hit) = initial else {
         return Ok((input_dispatch_outcome(true), None));
@@ -78,7 +83,7 @@ pub(super) fn dispatch_touch_tap_activation(
             runtime_ptr,
             hit.handle,
             "mousemove",
-            coordinates(hit),
+            coordinates(hit, sampled.as_deref()),
             0,
             0,
             0,
@@ -89,13 +94,15 @@ pub(super) fn dispatch_touch_tap_activation(
         if !touch_tap_is_live(unsafe { &*runtime_ptr }, tap) {
             return Ok((input_dispatch_outcome(true), None));
         }
-        let next = hit_after_callbacks(unsafe { &*runtime_ptr }, x, y)?;
+        let (next, next_sample) = hit_after_callbacks(unsafe { &*runtime_ptr }, position)?;
+        sampled = next_sample;
         transition(
             scope,
             runtime_ptr,
             hover,
             next.map(|hit| hit.handle),
             position,
+            sampled.as_deref(),
         );
         hover = next.map(|hit| hit.handle);
         let Some(next) = next else {
@@ -113,7 +120,7 @@ pub(super) fn dispatch_touch_tap_activation(
             runtime_ptr,
             hit.handle,
             "mousedown",
-            coordinates(hit),
+            coordinates(hit, sampled.as_deref()),
             1,
             0,
             1,
@@ -128,13 +135,15 @@ pub(super) fn dispatch_touch_tap_activation(
         if !touch_tap_is_live(unsafe { &*runtime_ptr }, tap) {
             return Ok((input_dispatch_outcome(true), None));
         }
-        let next = hit_after_callbacks(unsafe { &*runtime_ptr }, x, y)?;
+        let (next, next_sample) = hit_after_callbacks(unsafe { &*runtime_ptr }, position)?;
+        sampled = next_sample;
         transition(
             scope,
             runtime_ptr,
             hover,
             next.map(|hit| hit.handle),
             position,
+            sampled.as_deref(),
         );
         hover = next.map(|hit| hit.handle);
         let Some(next) = next else {
@@ -149,7 +158,7 @@ pub(super) fn dispatch_touch_tap_activation(
             runtime_ptr,
             hit.handle,
             "mouseup",
-            coordinates(hit),
+            coordinates(hit, sampled.as_deref()),
             1,
             0,
             0,
@@ -177,7 +186,7 @@ pub(super) fn dispatch_touch_tap_activation(
         scope,
         runtime_ptr,
         target,
-        coordinates(hit),
+        coordinates(hit, sampled.as_deref()),
         touch_pointer_id(tap.id),
     );
     Ok((outcome, hover))

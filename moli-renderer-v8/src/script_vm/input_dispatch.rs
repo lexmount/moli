@@ -161,6 +161,13 @@ impl InputDocument {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DragInput<'a> {
+    position: InputPosition,
+    sampled: Option<&'a PublishedFrameGeometry>,
+    modifiers: u8,
+}
+
 fn drag_related_target_in_document(
     runtime: &crate::native_bridge::PageScriptHost,
     document: DomHandle,
@@ -189,16 +196,14 @@ fn create_drag_data_transfer_view_for_target<'s>(
     crate::context_bootstrap::create_drag_data_transfer_view(scope, store, mode, drop_effect)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn dispatch_native_drag_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     event_type: &str,
     target: DomHandle,
     related: Option<DomHandle>,
-    position: InputPosition,
+    input: DragInput<'_>,
     transfer: v8::Local<'s, v8::Object>,
-    modifiers: u8,
 ) -> Option<crate::native_bridge::element::NodePublicEventDispatchOutcome> {
     let (coordinates, related) = {
         let runtime = unsafe { &*runtime_ptr };
@@ -206,7 +211,10 @@ fn dispatch_native_drag_event<'s>(
         let document = dom.owner_document_handle(target)?;
         let related =
             related.and_then(|related| drag_related_target_in_document(runtime, document, related));
-        (position.for_target(runtime, target, None), related)
+        (
+            input.position.for_target(runtime, target, input.sampled),
+            related,
+        )
     };
     let context =
         crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
@@ -218,7 +226,7 @@ fn dispatch_native_drag_event<'s>(
         coordinates,
         transfer.into(),
         related,
-        modifiers,
+        input.modifiers,
     )?;
     Some(dispatch_public_event(scope, runtime_ptr, target, event))
 }
@@ -237,8 +245,7 @@ fn finish_drag_session<'s>(
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     active: &mut Option<ActiveDragSession>,
     reason: DragFinishReason,
-    position: InputPosition,
-    modifiers: u8,
+    input: DragInput<'_>,
 ) {
     let Some(session) = active.take() else {
         return;
@@ -249,7 +256,7 @@ fn finish_drag_session<'s>(
     ) && let Some(target) = session.target
     {
         if !session.intercepted {
-            dispatch_drag_source_event(scope, runtime_ptr, &session, position, modifiers);
+            dispatch_drag_source_event(scope, runtime_ptr, &session, input);
         }
         if let Some(data_transfer) = create_drag_data_transfer_view_for_target(
             scope,
@@ -265,9 +272,8 @@ fn finish_drag_session<'s>(
                 "dragleave",
                 target,
                 None,
-                position,
+                input,
                 data_transfer,
-                modifiers,
             );
             crate::context_bootstrap::finish_drag_data_transfer_view(scope, data_transfer);
         }
@@ -291,9 +297,8 @@ fn finish_drag_session<'s>(
             "dragend",
             source,
             None,
-            position,
+            input,
             data_transfer,
-            modifiers,
         );
         crate::context_bootstrap::finish_drag_data_transfer_view(scope, data_transfer);
     }
@@ -336,11 +341,10 @@ fn update_drag_target<'s>(
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     session: &mut ActiveDragSession,
     target: Option<DomHandle>,
-    position: InputPosition,
-    modifiers: u8,
+    input: DragInput<'_>,
 ) {
-    session.position = position;
-    session.modifiers = modifiers;
+    session.position = input.position;
+    session.modifiers = input.modifiers;
     session.drop_allowed = false;
     session.drop_effect = "none".to_owned();
     let target_document = target.and_then(|target| {
@@ -349,7 +353,7 @@ fn update_drag_target<'s>(
             .owner_document_handle(target)
     });
     if target.is_some() && (session.target != target || !session.only_drag_over_next) {
-        dispatch_drag_source_event(scope, runtime_ptr, session, position, modifiers);
+        dispatch_drag_source_event(scope, runtime_ptr, session, input);
     }
     let Some(view_target) = target.or(session.target) else {
         return;
@@ -382,9 +386,8 @@ fn update_drag_target<'s>(
                 "dragenter",
                 target,
                 session.target,
-                position,
+                input,
                 transfer,
-                modifiers,
             )
         {
             let canceled = !dispatched.allows_default();
@@ -398,9 +401,8 @@ fn update_drag_target<'s>(
                 "dragleave",
                 previous,
                 target,
-                position,
+                input,
                 transfer,
-                modifiers,
             );
         }
         session.target = target;
@@ -412,9 +414,8 @@ fn update_drag_target<'s>(
             "dragover",
             target,
             None,
-            position,
+            input,
             transfer,
-            modifiers,
         )
     {
         let canceled = !dispatched.allows_default();
@@ -443,8 +444,7 @@ fn drop_drag_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     session: &mut ActiveDragSession,
-    position: InputPosition,
-    modifiers: u8,
+    input: DragInput<'_>,
 ) -> DragFinishReason {
     let Some(target) = session.target.filter(|_| session.drop_allowed) else {
         return DragFinishReason::Rejected;
@@ -466,16 +466,9 @@ fn drop_drag_target<'s>(
     ) else {
         return DragFinishReason::Rejected;
     };
-    let Some(dispatched) = dispatch_native_drag_event(
-        scope,
-        runtime_ptr,
-        "drop",
-        target,
-        None,
-        position,
-        transfer,
-        modifiers,
-    ) else {
+    let Some(dispatched) =
+        dispatch_native_drag_event(scope, runtime_ptr, "drop", target, None, input, transfer)
+    else {
         crate::context_bootstrap::finish_drag_data_transfer_view(scope, transfer);
         return DragFinishReason::Rejected;
     };
@@ -1237,6 +1230,12 @@ impl ScriptVm {
             button, buttons, ..
         } = prepared;
         let position = InputPosition::headless(x, y);
+        let sampled = self._context_host.borrow().published_frame_geometry();
+        let drag_input = DragInput {
+            position,
+            sampled: sampled.as_deref(),
+            modifiers,
+        };
         let pointer_id = pointer.pointer_id;
 
         if self
@@ -1266,29 +1265,15 @@ impl ScriptVm {
                 if let Some(session) = active.as_mut() {
                     session.position = position;
                     if !session.intercepted {
-                        update_drag_target(
-                            scope,
-                            runtime_ptr,
-                            session,
-                            target,
-                            position,
-                            modifiers,
-                        );
+                        update_drag_target(scope, runtime_ptr, session, target, drag_input);
                     }
                     if event_name == "mouseup" && button == 0 {
                         let reason = if session.intercepted {
                             DragFinishReason::Rejected
                         } else {
-                            drop_drag_target(scope, runtime_ptr, session, position, modifiers)
+                            drop_drag_target(scope, runtime_ptr, session, drag_input)
                         };
-                        finish_drag_session(
-                            scope,
-                            runtime_ptr,
-                            active,
-                            reason,
-                            position,
-                            modifiers,
-                        );
+                        finish_drag_session(scope, runtime_ptr, active, reason, drag_input);
                     }
                 }
                 Ok(())
@@ -1323,7 +1308,6 @@ impl ScriptVm {
                 }
             };
         }
-        let sampled = self._context_host.borrow().published_frame_geometry();
         let initial_target = {
             let mut runtime = self._context_host.borrow_mut();
             if tracks_mouse_hover_for_event(event_name) {
@@ -1353,7 +1337,7 @@ impl ScriptVm {
                     if let Some(session) = unsafe { &mut *active }.as_mut()
                         && !session.intercepted
                     {
-                        update_drag_target(scope, runtime_ptr, session, None, position, modifiers);
+                        update_drag_target(scope, runtime_ptr, session, None, drag_input);
                     }
                     Ok(())
                 })?;
@@ -1676,9 +1660,11 @@ impl ScriptVm {
                     "dragstart",
                     drag_start_handle,
                     None,
-                    start_position,
+                    DragInput {
+                        position: start_position,
+                        ..drag_input
+                    },
                     data_transfer,
-                    modifiers,
                 )
                 .is_some_and(|outcome| outcome.allows_default());
                 if allowed
@@ -1760,7 +1746,7 @@ impl ScriptVm {
                 && let Some(session) = unsafe { &mut *active_drag_session }.as_mut()
                 && !session.intercepted
             {
-                update_drag_target(scope, runtime_ptr, session, hit_handle, position, modifiers);
+                update_drag_target(scope, runtime_ptr, session, hit_handle, drag_input);
             }
             if event_name == "mouseup" && button == 0 {
                 let active = unsafe { &mut *active_drag_session };
@@ -1770,17 +1756,10 @@ impl ScriptVm {
                 {
                     // Revalidate against the release target. Acceptance from
                     // a previously hovered element must never authorize it.
-                    update_drag_target(
-                        scope,
-                        runtime_ptr,
-                        session,
-                        hit_handle,
-                        position,
-                        modifiers,
-                    );
-                    reason = drop_drag_target(scope, runtime_ptr, session, position, modifiers);
+                    update_drag_target(scope, runtime_ptr, session, hit_handle, drag_input);
+                    reason = drop_drag_target(scope, runtime_ptr, session, drag_input);
                 }
-                finish_drag_session(scope, runtime_ptr, active, reason, position, modifiers);
+                finish_drag_session(scope, runtime_ptr, active, reason, drag_input);
             }
             // Keep the host-owned press alive through the release listeners;
             // synchronous DOM removals can invalidate it before click targeting.
@@ -1906,6 +1885,12 @@ impl ScriptVm {
             .as_ref()
             .map(|session| session.position)
             .unwrap_or_default();
+        let sampled = self._context_host.borrow().published_frame_geometry();
+        let drag_input = DragInput {
+            position,
+            sampled: sampled.as_deref(),
+            modifiers,
+        };
         self.pending_drag_gesture = None;
         self._context_host.borrow_mut().clear_mouse_press();
         let active = &mut self.active_drag_session as *mut Option<ActiveDragSession>;
@@ -1917,8 +1902,7 @@ impl ScriptVm {
                 runtime_ptr,
                 unsafe { &mut *active },
                 reason,
-                position,
-                modifiers,
+                drag_input,
             );
             Ok(())
         })
@@ -2392,6 +2376,12 @@ impl ScriptVm {
         )?;
         let target = hit.map(|hit| hit.handle);
         let position = InputPosition::headless(x, y);
+        let sampled = self._context_host.borrow().published_frame_geometry();
+        let drag_input = DragInput {
+            position,
+            sampled: sampled.as_deref(),
+            modifiers,
+        };
         let active = &mut self.active_drag_session as *mut Option<ActiveDragSession>;
         // A finished/canceled session cannot be recreated by a late drop.
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
@@ -2441,7 +2431,7 @@ impl ScriptVm {
                 );
             }
             if matches!(event_name, "dragenter" | "dragover" | "drop") {
-                update_drag_target(scope, runtime_ptr, session, target, position, modifiers);
+                update_drag_target(scope, runtime_ptr, session, target, drag_input);
             }
             if event_name == "drop" {
                 // Empty data is an explicit replacement too. Import it only
@@ -2453,11 +2443,11 @@ impl ScriptVm {
                 )
                 .is_some()
                 {
-                    drop_drag_target(scope, runtime_ptr, session, position, modifiers)
+                    drop_drag_target(scope, runtime_ptr, session, drag_input)
                 } else {
                     DragFinishReason::Rejected
                 };
-                finish_drag_session(scope, runtime_ptr, active, reason, position, modifiers);
+                finish_drag_session(scope, runtime_ptr, active, reason, drag_input);
             }
             Ok(input_dispatch_outcome(target.is_some()))
         });

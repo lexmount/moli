@@ -4,8 +4,7 @@ pub(super) fn dispatch_drag_source_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     session: &ActiveDragSession,
-    position: InputPosition,
-    modifiers: u8,
+    input: DragInput<'_>,
 ) {
     let Some(source) = session.source else {
         return;
@@ -18,14 +17,5 @@ pub(super) fn dispatch_drag_source_event(
     let transfer = v8::Local::new(scope, source_transfer);
     // Blink dispatches source drag before destination updates and ignores its
     // canceled result. It does not run an autonomous timer while intercepted.
-    let _ = dispatch_native_drag_event(
-        scope,
-        runtime_ptr,
-        "drag",
-        source,
-        None,
-        position,
-        transfer,
-        modifiers,
-    );
+    let _ = dispatch_native_drag_event(scope, runtime_ptr, "drag", source, None, input, transfer);
 }

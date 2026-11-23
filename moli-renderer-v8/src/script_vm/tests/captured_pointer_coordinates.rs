@@ -410,6 +410,32 @@ async fn capture_projects_through_a_frame_box_without_a_child_layout_tree() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn tap_mousemove_keeps_child_coordinates_after_mouseover_invalidates_layout() {
+    let mut vm = captured_child_vm(false, false).await;
+    vm.eval(
+        r#"
+        globalThis.tapSamples=[];
+        captured.addEventListener('mouseover',event=>{
+            tapSamples.push([event.type,event.clientX,event.clientY,event.screenX,event.screenY]);
+            frame.style.left='200px';
+        }, {once:true});
+        captured.addEventListener('mousemove',event=>
+            tapSamples.push([event.type,event.clientX,event.clientY,event.screenX,event.screenY]));
+        'installed'
+    "#,
+    )
+    .unwrap();
+    vm.dispatch_touch_event_at_point(130.0, 90.0, "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_point(130.0, 90.0, "touchend", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(tapSamples)").unwrap(),
+        r#"[["mouseover",30,30,130,90],["mousemove",30,30,130,90]]"#
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn capture_transfers_in_a_live_child_document_without_published_geometry() {
     let mut vm = captured_child_vm(true, false).await;
     dispatch(&mut vm, "mousedown", 140.0, 100.0, 1);
