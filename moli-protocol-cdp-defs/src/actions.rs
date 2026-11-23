@@ -216,6 +216,7 @@ pub enum EmulationAction {
     SetTimezoneOverride,
     SetUserAgentOverride,
     SetEmulatedMedia,
+    SetEmulatedVisionDeficiency,
     SetDefaultBackgroundColorOverride,
 }
 

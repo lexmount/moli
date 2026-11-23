@@ -97,6 +97,7 @@ pub struct EmulatedMediaOverrides {
     pub reduced_transparency: Option<String>,
     pub forced_colors: Option<String>,
     pub contrast: Option<String>,
+    pub vision_deficiency: moli_page_types::VisionDeficiency,
 }
 
 impl From<EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
@@ -108,6 +109,7 @@ impl From<EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
             reduced_transparency: value.reduced_transparency,
             forced_colors: value.forced_colors,
             contrast: value.contrast,
+            vision_deficiency: value.vision_deficiency,
         }
     }
 }
@@ -121,6 +123,7 @@ impl From<&EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
             reduced_transparency: value.reduced_transparency.clone(),
             forced_colors: value.forced_colors.clone(),
             contrast: value.contrast.clone(),
+            vision_deficiency: value.vision_deficiency,
         }
     }
 }
@@ -186,6 +189,9 @@ impl EffectiveTargetEmulationState {
         // Blink clears media on every Emulation handler disable. Keep the
         // target-wide side effect while retaining each handler's raw copy.
         self.emulated_media = EmulatedMediaOverrides::default();
+        if raw.emulated_media.vision_deficiency == moli_page_types::VisionDeficiency::None {
+            self.emulated_media.vision_deficiency = previous.emulated_media.vision_deficiency;
+        }
         self.default_background_color = None;
         if raw.emulated_device_metrics.is_some() {
             self.emulated_device_metrics = None;

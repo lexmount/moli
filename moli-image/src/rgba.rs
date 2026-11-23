@@ -56,6 +56,15 @@ impl RgbaImage {
     pub fn byte_len(&self) -> usize {
         self.rgba.len()
     }
+
+    pub fn gaussian_blur(&mut self, sigma: f32) -> Result<(), RgbaImageError> {
+        self.validate()?;
+        let image =
+            image::RgbaImage::from_raw(self.width, self.height, std::mem::take(&mut self.rgba))
+                .expect("validated RGBA dimensions");
+        self.rgba = image::imageops::blur(&image, sigma).into_raw();
+        Ok(())
+    }
 }
 
 impl AsRef<[u8]> for RgbaImage {

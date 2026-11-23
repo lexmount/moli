@@ -35,9 +35,24 @@ impl TargetEmulationStateUpdate<'_> {
         self.effective.geolocation_override = geolocation_override;
     }
 
-    pub(crate) fn set_emulated_media(&mut self, emulated_media: EmulatedMediaOverrides) {
+    pub(crate) fn set_emulated_media(
+        &mut self,
+        mut emulated_media: EmulatedMediaOverrides,
+    ) -> EmulatedMediaOverrides {
+        emulated_media.vision_deficiency = self.raw.emulated_media.vision_deficiency;
         self.raw.emulated_media = emulated_media.clone();
-        self.effective.emulated_media = emulated_media;
+        emulated_media.vision_deficiency = self.effective.emulated_media.vision_deficiency;
+        self.effective.emulated_media = emulated_media.clone();
+        emulated_media
+    }
+
+    pub(crate) fn set_vision_deficiency(
+        &mut self,
+        vision_deficiency: moli_page_types::VisionDeficiency,
+    ) -> EmulatedMediaOverrides {
+        self.raw.emulated_media.vision_deficiency = vision_deficiency;
+        self.effective.emulated_media.vision_deficiency = vision_deficiency;
+        self.effective.emulated_media.clone()
     }
 
     pub(crate) fn set_emulated_device_metrics(

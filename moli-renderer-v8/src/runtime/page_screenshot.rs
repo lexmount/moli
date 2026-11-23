@@ -12,6 +12,8 @@ use std::time::Instant;
 
 use super::{PageVm, RendererDocumentLifecycleIdentity};
 
+mod vision;
+
 #[derive(Default)]
 struct PaintFragmentProfile {
     push_layer: usize,
@@ -440,6 +442,13 @@ impl PageVm {
 
         let raster_started = profile_enabled.then(Instant::now);
         let mut raster = moli_paint::raster_snapshot(&snapshot)?;
+        if reason != moli_layout::LayoutFlushReason::Print {
+            vision::apply(
+                &mut raster,
+                self.document_settings.emulated_media.vision_deficiency,
+                snapshot.surface.device_scale,
+            )?;
+        }
         let raster_us = raster_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
