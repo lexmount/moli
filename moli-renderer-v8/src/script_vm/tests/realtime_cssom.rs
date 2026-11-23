@@ -53,6 +53,20 @@ fn realtime_size_container_queries_follow_nested_content_boxes() {
 }
 
 #[test]
+fn realtime_size_container_query_uses_table_caption_content_box() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html><style>
+        #target { width: 20px }
+        @container cap (width >= 300px) { #target { width: 110px } }
+        </style><div style='container-type:inline-size;width:600px'>
+        <table style='width:400px'>
+        <caption style='container:cap / inline-size;width:400px'><div id=target></div></caption>
+        </table></div>"#,
+    );
+    assert_eq!(vm.eval("target.offsetWidth").unwrap(), "110");
+}
+
+#[test]
 fn realtime_cssom_shared_adopted_sheet_refreshes_all_shadow_clients_in_same_turn() {
     for first_read in ["color", "width", "offsetWidth"] {
         let mut vm =
