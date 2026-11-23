@@ -213,15 +213,16 @@ pub enum RendererCaptureScreenshotReply {
     NoDocument,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RendererCapturedScreencastFrame {
     /// Native viewport dimensions before the encoded frame is fitted to limits.
     pub viewport_size: (u32, u32),
+    pub page_scale_factor: f64,
     pub image: RendererCapturedScreenshot,
     pub visual_state: RendererVisualStateToken,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RendererCaptureScreencastFrameReply {
     Captured(RendererCapturedScreencastFrame),
     Unchanged,
@@ -404,6 +405,9 @@ impl PageVm {
         let job = RendererScreencastFrameRasterJob {
             capture,
             viewport_size: surface.visible_size(),
+            page_scale_factor: surface
+                .mobile_viewport()
+                .map_or(1.0, |viewport| viewport.scale),
             visual_state,
             format: request.format,
             quality: request.quality,
@@ -620,6 +624,7 @@ impl PreparedImageCapture {
 pub struct RendererScreencastFrameRasterJob {
     capture: PreparedImageCapture,
     viewport_size: (u32, u32),
+    page_scale_factor: f64,
     visual_state: RendererVisualStateToken,
     format: RendererScreenshotFormat,
     quality: u8,
@@ -652,6 +657,7 @@ impl RendererScreencastFrameRasterJob {
         Ok(RendererCaptureScreencastFrameReply::Captured(
             RendererCapturedScreencastFrame {
                 viewport_size: self.viewport_size,
+                page_scale_factor: self.page_scale_factor,
                 visual_state: self.visual_state,
                 image,
             },
@@ -776,17 +782,12 @@ fn paint_viewport_region(
     let (scale, width, height) = match capture {
         ViewportCapture::Surface => {
             let ratio = surface.device_pixel_ratio / view.native_device_pixel_ratio;
-            let (width, height) = if view.mobile_viewport.is_some() {
-                (view.width, view.height)
-            } else {
-                (surface.inner_width, surface.inner_height)
-            };
+            let (width, height) = view.device_size;
             (ratio, f64::from(width) * ratio, f64::from(height) * ratio)
         }
         #[cfg(feature = "devtools")]
         ViewportCapture::Widget => (view.scale, f64::from(view.width), f64::from(view.height)),
     };
-    let scale = scale * view.mobile_viewport.map_or(1.0, |viewport| viewport.scale);
     let (transform, scroll_scale) = if let Some(viewport) = view.viewport {
         // Blink applies the preview scale first, then the page-coordinate
         // viewport offset and scale. Resolve scroll compensation during layout.
@@ -802,6 +803,7 @@ fn paint_viewport_region(
             viewport.scale,
         )
     } else {
+        let scale = scale * view.mobile_viewport.map_or(1.0, |viewport| viewport.scale);
         (LayoutTransform2D::scale(scale, scale), 0.0)
     };
     Ok(PaintCaptureRegion::TransformedViewport {

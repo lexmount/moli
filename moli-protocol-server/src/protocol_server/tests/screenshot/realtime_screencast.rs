@@ -596,6 +596,97 @@ async fn websocket_screencast_discovers_css_image_after_debugger_resume() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_realtime_mobile_capture_uses_device_widget_and_page_scale() {
+    let (addr, server) = spawn_realtime_cast_server().await;
+    let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let html = r#"<!doctype html><meta name=viewport content="width=device-width, initial-scale=2">
+        <style>html,body{margin:0;overflow:hidden;background:white}
+        div{position:absolute;top:0;left:0;width:60px;height:100px;background:red}</style><div></div>"#;
+    let url = format!(
+        "data:text/html,{}",
+        percent_encoding::utf8_percent_encode(html, percent_encoding::NON_ALPHANUMERIC),
+    );
+    let target = open_screenshot_target(&mut socket, &url).await;
+    let session = target.session_id.as_str();
+    for (id, metrics, expected_dimensions, expected_pixel) in [
+        (
+            10,
+            json!({"width":375,"height":667,"deviceScaleFactor":2,"mobile":true,"dontSetVisibleSize":true}),
+            (800, 600),
+            [255, 0, 0, 255],
+        ),
+        (
+            20,
+            json!({"width":375,"height":667,"deviceScaleFactor":1,"mobile":true}),
+            (375, 667),
+            [255, 0, 0, 255],
+        ),
+        (
+            30,
+            json!({"width":375,"height":667,"deviceScaleFactor":1,"mobile":true,
+            "viewport":{"x":0,"y":0,"width":100,"height":100,"scale":1}}),
+            (100, 100),
+            [255; 4],
+        ),
+    ] {
+        let applied = send_cdp_command(
+            &mut socket,
+            id,
+            "Emulation.setDeviceMetricsOverride",
+            Some(session),
+            metrics,
+        )
+        .await;
+        assert_cdp_success(&applied, id);
+        if id == 10 {
+            let screenshot = capture_png(&mut socket, session, id + 1).await;
+            let (width, height, _) = decode_png(&screenshot);
+            assert_eq!((width, height), (750, 1334));
+        }
+        let started = send_cdp_command(
+            &mut socket,
+            id + 2,
+            "Page.startScreencast",
+            Some(session),
+            json!({"format":"png","everyNthFrame":1}),
+        )
+        .await;
+        assert_cdp_success(&started, id + 2);
+        let (frame, _) = receive_cast(&mut socket, session, started).await;
+        let metadata = &frame["params"]["metadata"];
+        assert_eq!(metadata["pageScaleFactor"].as_f64(), Some(2.0));
+        assert_eq!(
+            metadata["deviceWidth"].as_f64(),
+            Some(f64::from(expected_dimensions.0))
+        );
+        assert_eq!(
+            metadata["deviceHeight"].as_f64(),
+            Some(f64::from(expected_dimensions.1))
+        );
+        let bytes = BASE64_STANDARD
+            .decode(frame["params"]["data"].as_str().unwrap())
+            .unwrap();
+        let (width, height, pixels) = decode_png(&bytes);
+        assert_eq!((width, height), expected_dimensions);
+        assert_eq!(pixel(&pixels, width, 30, 10), [255, 0, 0, 255]);
+        assert_eq!(pixel(&pixels, width, 90, 10), expected_pixel);
+        let stopped = send_cdp_command(
+            &mut socket,
+            id + 3,
+            "Page.stopScreencast",
+            Some(session),
+            json!({}),
+        )
+        .await;
+        assert_cdp_success(&stopped, id + 3);
+    }
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_realtime_mobile_meta_resamples_existing_media_queries_and_resize() {
     let (addr, server) = spawn_realtime_cast_server().await;
     let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
