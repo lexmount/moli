@@ -109,6 +109,7 @@ members = [
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
+html5ever = { path = "vendor/html5ever-0.40.1" }
 # Share glyph preparation between CPU rendering and PDF ink measurement.
 glifo = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
 vello_common = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
