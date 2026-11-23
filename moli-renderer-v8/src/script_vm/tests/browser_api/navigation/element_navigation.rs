@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn link_navigation_replaces_the_initial_top_level_document() {
+    let mut vm = new_parsed_test_vm(
+        "about:blank",
+        r#"<a href="https://anchor-navigation-target.test/destination">Open</a>"#,
+    );
+    vm._context_host
+        .borrow_mut()
+        .mark_main_document_initial_empty();
+    vm.eval("document.querySelector('a').click()").unwrap();
+    let pending = vm.take_pending_location_navigation_with_seed().unwrap();
+    assert_eq!(
+        pending.history_mutation,
+        Some(moli_page_types::NavigationHistoryMutation::Replace)
+    );
+}
+
+#[test]
+fn link_navigation_to_the_current_fragment_replaces_in_the_same_document() {
+    let mut vm = new_parsed_test_vm(
+        "https://anchor-navigation-target.test/source#current",
+        r##"<a href="#current">Open</a>"##,
+    );
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+                const original = document;
+                const length = history.length;
+                let result;
+                navigation.onnavigate = event => {
+                    result = [event.navigationType, event.destination.sameDocument];
+                };
+                document.querySelector('a').click();
+                return JSON.stringify([result, original === document, history.length === length]);
+            })()
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, r#"[["replace",true],true,true]"#);
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
 fn anchor_navigation_fires_once_when_click_is_borrowed_from_child_realm() {
     for target in ["", "_sElF", "_ToP", "_PARENT"] {
         for use_child_realm in [true, false] {

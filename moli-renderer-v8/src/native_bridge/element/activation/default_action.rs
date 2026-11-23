@@ -6,10 +6,7 @@ pub(crate) use devtools::{
     perform_auxiliary_link_default_action, perform_drop_default_action,
 };
 
-use crate::context_bootstrap::{
-    LocationNavigationKind, navigate_location_object_with_source_element,
-    selection_value_for_window,
-};
+use crate::context_bootstrap::selection_value_for_window;
 use crate::dom::{
     forms::{ButtonTypeState, InputType},
     native::{Element, Node},
@@ -1680,53 +1677,6 @@ fn anchor_click_default_action(
     if (target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current))
         && navigate_hyperlink_source_browsing_context(scope, runtime_ptr, handle, &resolved)
     {
-        return None;
-    }
-    if (target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current))
-        && runtime.host_document().url().as_str() == resolved
-    {
-        let global = scope.get_current_context().global(scope);
-        if let Some(location) = global
-            .get(scope, v8str(scope, "location").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            let source_element = node_wrapper_from_handle(scope, handle);
-            navigate_location_object_with_source_element(
-                scope,
-                location,
-                LocationNavigationKind::Assign,
-                Some(resolved),
-                source_element,
-            );
-        }
-        return None;
-    }
-    if (target_name.is_none()
-        || matches!(
-            special_target,
-            Some(
-                SpecialBrowsingContextTarget::Current
-                    | SpecialBrowsingContextTarget::Top
-                    | SpecialBrowsingContextTarget::Parent
-            )
-        ))
-        && let Ok(url) = url::Url::parse(&resolved)
-        && same_document_fragment_target(runtime.host_document().url(), &url)
-    {
-        let global = scope.get_current_context().global(scope);
-        if let Some(location) = global
-            .get(scope, v8str(scope, "location").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            let source_element = node_wrapper_from_handle(scope, handle);
-            navigate_location_object_with_source_element(
-                scope,
-                location,
-                LocationNavigationKind::Assign,
-                Some(resolved),
-                source_element,
-            );
-        }
         return None;
     }
     let source_element = node_wrapper_from_handle(scope, handle);

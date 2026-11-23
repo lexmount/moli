@@ -1,4 +1,5 @@
 use super::*;
+use moli_page_types::{NavigationHistoryMutation, SessionHistoryCommit};
 
 impl ScriptVm {
     pub(crate) fn resync_child_browsing_contexts(&mut self) {
@@ -501,12 +502,14 @@ impl ScriptVm {
             )
         })?;
         let runtime_command_cause = pending.runtime_command_cause;
-        let history_mutation = if pending.entry_seed.as_ref().is_some_and(|seed| {
-            seed.session_history.commit == moli_page_types::SessionHistoryCommit::Replace
-        }) {
-            moli_page_types::NavigationHistoryMutation::Replace
-        } else {
-            moli_page_types::NavigationHistoryMutation::Push
+        let history_mutation = match pending.entry_seed.as_ref() {
+            Some(seed) if seed.session_history.commit == SessionHistoryCommit::Replace => {
+                NavigationHistoryMutation::Replace
+            }
+            Some(_) => NavigationHistoryMutation::Push,
+            None => pending
+                .history_mutation
+                .unwrap_or(NavigationHistoryMutation::Push),
         };
         let action = crate::runtime::RendererOwnerAction::TopLevelLocationNavigation(
             crate::runtime::RendererDocumentSourcedTopLevelLocationNavigation::
