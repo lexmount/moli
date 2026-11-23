@@ -3,10 +3,6 @@ use super::*;
 /// Dependencies of the renderer's existing numeric/custom-function CSSOM
 /// projections. This only observes source/style values; it never asks layout
 /// for a used value. Its caller must drop this query before a freshness flush.
-///
-/// Native Stylo container-query support is a separate boundary: an element-wide
-/// USES_CONTAINER_UNITS flag would incorrectly turn an unrelated color read
-/// into a layout demand, and does not describe supplemental numeric entries.
 pub(in crate::native_bridge::element::styles) fn property_uses_container_geometry(
     runtime: &PageScriptHost,
     handle: DomHandle,
@@ -96,70 +92,106 @@ impl ContainerGeometryDependencies<'_> {
     }
 
     fn value(&mut self, handle: DomHandle, value: &str, depth: usize) -> bool {
-        self.tokens(handle, &mut Parser::new(value), depth)
+        container_geometry_in_tokens(
+            &mut Parser::new(value),
+            &|name| self.raw_property(handle, name),
+            &mut Vec::new(),
+            depth,
+        )
     }
+}
 
-    fn tokens(&mut self, handle: DomHandle, input: &mut Parser<'_>, depth: usize) -> bool {
-        if depth >= 64 {
-            return true;
-        }
-        let mut depends = false;
-        while let Ok(token) = input.next().cloned() {
-            match token {
-                Token::Dimension { unit, .. } => {
-                    depends |= ["cqw", "cqh", "cqi", "cqb", "cqmin", "cqmax"]
-                        .iter()
-                        .any(|known| unit.eq_ignore_ascii_case(known));
-                }
-                Token::Function(name) if name.eq_ignore_ascii_case("var") => {
-                    depends |= input
-                        .parse_nested_block(|arguments| {
-                            let name = arguments.expect_ident_cloned()?;
-                            let key = (handle, name.to_string());
-                            let cyclic = self.visiting.contains(&key);
-                            let value = (!cyclic)
-                                .then(|| self.raw_property(handle, &name))
-                                .flatten();
-                            if let Some(value) = value {
-                                self.visiting.push(key);
-                                let result = self.value(handle, &value, depth + 1);
-                                self.visiting.pop();
-                                // The fallback is not consumed by a present value.
-                                // Still drain its tokens so parse_nested_block has
-                                // the normal exhausted-input postcondition.
-                                while arguments.next().is_ok() {}
-                                return Ok::<_, cssparser::ParseError<()>>(result);
-                            }
-                            if arguments.try_parse(Parser::expect_comma).is_ok() {
-                                return Ok(self.tokens(handle, arguments, depth + 1));
-                            }
-                            Ok(false)
-                        })
-                        .unwrap_or(true);
-                }
-                Token::Function(name) => {
-                    let custom_function = name.starts_with("--");
-                    depends |= input
-                        .parse_nested_block(|nested| {
-                            let nested = self.tokens(handle, nested, depth + 1);
-                            Ok::<_, cssparser::ParseError<()>>(custom_function || nested)
-                        })
-                        .unwrap_or(true);
-                }
-                Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => {
-                    depends |= input
-                        .parse_nested_block(|nested| {
-                            Ok::<_, cssparser::ParseError<()>>(self.tokens(
-                                handle,
-                                nested,
-                                depth + 1,
-                            ))
-                        })
-                        .unwrap_or(true);
-                }
-                _ => {}
-            }
-        }
-        depends
+pub(in crate::native_bridge::element::styles) fn native_value_uses_container_geometry(
+    value: &str,
+    style: &ComputedValues,
+) -> bool {
+    container_geometry_in_tokens(
+        &mut Parser::new(value),
+        &|name| {
+            let name = style::Atom::from(name.strip_prefix("--")?);
+            style
+                .custom_properties()
+                .get_for_cssom(&name)
+                .map(style_traits::ToCss::to_css_string)
+        },
+        &mut Vec::new(),
+        0,
+    )
+}
+
+fn container_geometry_in_tokens(
+    input: &mut Parser<'_>,
+    variable: &impl Fn(&str) -> Option<String>,
+    visiting: &mut Vec<String>,
+    depth: usize,
+) -> bool {
+    if depth >= 64 {
+        return true;
     }
+    let mut depends = false;
+    while let Ok(token) = input.next().cloned() {
+        match token {
+            Token::Dimension { unit, .. } => {
+                depends |= ["cqw", "cqh", "cqi", "cqb", "cqmin", "cqmax"]
+                    .iter()
+                    .any(|known| unit.eq_ignore_ascii_case(known));
+            }
+            Token::Function(name) if name.eq_ignore_ascii_case("var") => {
+                depends |= input
+                    .parse_nested_block(|arguments| {
+                        let name = arguments.expect_ident_cloned()?.to_string();
+                        let value = (!visiting.contains(&name))
+                            .then(|| variable(&name))
+                            .flatten();
+                        if let Some(value) = value {
+                            visiting.push(name);
+                            let result = container_geometry_in_tokens(
+                                &mut Parser::new(&value),
+                                variable,
+                                visiting,
+                                depth + 1,
+                            );
+                            visiting.pop();
+                            // The present value consumes var() without its fallback.
+                            while arguments.next().is_ok() {}
+                            return Ok::<_, cssparser::ParseError<()>>(result);
+                        }
+                        if arguments.try_parse(Parser::expect_comma).is_ok() {
+                            return Ok(container_geometry_in_tokens(
+                                arguments,
+                                variable,
+                                visiting,
+                                depth + 1,
+                            ));
+                        }
+                        Ok(false)
+                    })
+                    .unwrap_or(true);
+            }
+            Token::Function(name) => {
+                let custom_function = name.starts_with("--");
+                depends |= input
+                    .parse_nested_block(|nested| {
+                        let nested =
+                            container_geometry_in_tokens(nested, variable, visiting, depth + 1);
+                        Ok::<_, cssparser::ParseError<()>>(custom_function || nested)
+                    })
+                    .unwrap_or(true);
+            }
+            Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => {
+                depends |= input
+                    .parse_nested_block(|nested| {
+                        Ok::<_, cssparser::ParseError<()>>(container_geometry_in_tokens(
+                            nested,
+                            variable,
+                            visiting,
+                            depth + 1,
+                        ))
+                    })
+                    .unwrap_or(true);
+            }
+            _ => {}
+        }
+    }
+    depends
 }

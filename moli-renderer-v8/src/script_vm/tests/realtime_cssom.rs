@@ -86,6 +86,46 @@ fn realtime_cssom_size_container_query_refreshes_retained_color_and_display() {
 }
 
 #[test]
+fn realtime_cssom_native_container_units_refresh_the_requested_property() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html><style>
+        #target { width: 10cqw; color: blue }
+        #variable { --measure: calc(5cqi + 2px); font-size: var(--measure) }
+        </style><div id=box style='container-type:inline-size;width:200px'>
+        <div id=target style='font-size:10cqw'><div id=inherited></div></div><div id=variable></div></div>"#,
+    );
+    assert_eq!(
+        vm.eval("const held = getComputedStyle(target); void box.offsetWidth; held.fontSize")
+            .unwrap(),
+        "20px"
+    );
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval("box.style.width = '400px'; held.color").unwrap(),
+        "rgb(0, 0, 255)"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    assert_eq!(
+        vm.eval("box.style.width = '450px'; held.fontSize").unwrap(),
+        "45px"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    assert_eq!(
+        vm.eval(
+            "box.style.width = '350px'; getComputedStyle(inherited).getPropertyValue('font-size')"
+        )
+        .unwrap(),
+        "35px"
+    );
+    assert_eq!(
+        vm.eval("box.style.width = '400px'; getComputedStyle(variable).fontSize")
+            .unwrap(),
+        "22px"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 3);
+}
+
+#[test]
 fn on_demand_cssom_size_container_query_keeps_live_inline_sizes() {
     let mut vm = new_parsed_test_vm(
         "https://ondemand-cssom.test/",
