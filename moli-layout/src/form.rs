@@ -3,12 +3,13 @@
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use taffy::Size;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     LayoutAnonymousReason, LayoutAnonymousStyleContext, LayoutBoxId, LayoutBoxKind, LayoutDisplay,
     LayoutElementCategory, LayoutElementSemantics, LayoutError, LayoutFormControlKind,
-    LayoutInputControlKind, LayoutStyleResolver, LayoutWorld, ResolvedLayoutStyle,
-    replaced::ReplacedContext,
+    LayoutInputControlKind, LayoutStyleResolver, LayoutTextSelection, LayoutWorld,
+    ResolvedLayoutStyle, replaced::ReplacedContext,
 };
 
 pub(crate) fn prepare_form_controls<N, R>(
@@ -22,14 +23,13 @@ where
     let controls = (0..world.boxes.len())
         .map(LayoutBoxId::from_index)
         .filter_map(|id| {
-            form_control_texts(&world.boxes[id.index()].element_semantics)
-                .map(|(texts, placeholder)| (id, texts, placeholder))
+            let control = &world.boxes[id.index()];
+            form_control_texts(&control.element_semantics, control.text_selection)
+                .map(|(texts, placeholder, selection)| (id, texts, placeholder, selection))
         })
-        .filter(|(id, texts, _)| {
-            !texts.is_empty() || world.boxes[id.index()].text_selection.is_some()
-        })
+        .filter(|(_, texts, _, selection)| !texts.is_empty() || selection.is_some())
         .collect::<Vec<_>>();
-    for (control, mut texts, placeholder) in controls {
+    for (control, mut texts, placeholder, selection) in controls {
         let Some(owner) = world.boxes[control.index()].source else {
             continue;
         };
@@ -57,7 +57,6 @@ where
                 .expect("form control has a source owner"),
             LayoutDisplay::Block,
         )?;
-        let selection = world.boxes[control.index()].text_selection;
         if texts.is_empty() && selection.is_some() {
             texts.push(Arc::from(""));
         }
@@ -112,7 +111,10 @@ where
     Ok(())
 }
 
-fn form_control_texts(semantics: &Option<LayoutElementSemantics>) -> Option<(Vec<Arc<str>>, bool)> {
+fn form_control_texts(
+    semantics: &Option<LayoutElementSemantics>,
+    selection: Option<LayoutTextSelection>,
+) -> Option<(Vec<Arc<str>>, bool, Option<LayoutTextSelection>)> {
     let semantics = semantics.as_ref()?;
     let LayoutElementCategory::FormControl(kind) = semantics.category else {
         return None;
@@ -127,9 +129,10 @@ fn form_control_texts(semantics: &Option<LayoutElementSemantics>) -> Option<(Vec
         .cloned()
         .unwrap_or_default();
     if kind == LayoutFormControlKind::Select {
-        return Some((select_control_texts(&data), false));
+        return Some((select_control_texts(&data), false, selection));
     }
-    let (text, placeholder) = form_control_text(kind, &data.value, &data.placeholder);
+    let (text, placeholder, selection) =
+        form_control_text_with_selection(kind, &data.value, &data.placeholder, selection);
     Some((
         if text.is_empty() {
             Vec::new()
@@ -137,6 +140,7 @@ fn form_control_texts(semantics: &Option<LayoutElementSemantics>) -> Option<(Vec
             vec![text.into()]
         },
         placeholder,
+        selection,
     ))
 }
 
@@ -165,6 +169,21 @@ pub fn form_control_text(
     value: &str,
     placeholder_text: &str,
 ) -> (String, bool) {
+    let (text, placeholder, _) =
+        form_control_text_with_selection(kind, value, placeholder_text, None);
+    (text, placeholder)
+}
+
+fn form_control_text_with_selection(
+    kind: LayoutFormControlKind,
+    value: &str,
+    placeholder_text: &str,
+    selection: Option<LayoutTextSelection>,
+) -> (String, bool, Option<LayoutTextSelection>) {
+    if kind == LayoutFormControlKind::Input(LayoutInputControlKind::Password) && !value.is_empty() {
+        let (text, selection) = mask_password(value, selection);
+        return (text, false, selection);
+    }
     let placeholder = value.is_empty()
         && !placeholder_text.is_empty()
         && matches!(
@@ -245,7 +264,29 @@ pub fn form_control_text(
         | LayoutFormControlKind::Progress
         | LayoutFormControlKind::Meter => String::new(),
     };
-    (text, placeholder)
+    (text, placeholder, selection)
+}
+
+fn mask_password(
+    value: &str,
+    selection: Option<LayoutTextSelection>,
+) -> (String, Option<LayoutTextSelection>) {
+    let mut text = String::with_capacity(value.len());
+    let mut source_offset = 0;
+    let mut masked_selection = LayoutTextSelection::new(0, 0);
+    for grapheme in value.graphemes(true) {
+        text.push('\u{2022}');
+        if let Some(selection) = selection {
+            // A UTF-16 offset inside a grapheme maps to the end of its bullet.
+            masked_selection.start += usize::from(source_offset < selection.start);
+            masked_selection.end += usize::from(source_offset < selection.end);
+            source_offset += grapheme.encode_utf16().count();
+        }
+    }
+    let selection = selection
+        .filter(|original| original.is_caret() || !masked_selection.is_caret())
+        .map(|_| masked_selection);
+    (text, selection)
 }
 
 pub(crate) fn select_row_height(font_size: f32, line_height: f32) -> f32 {
