@@ -41,21 +41,15 @@ impl PublishedFrameGeometry {
         host: &PageScriptHost,
         document: DomHandle,
     ) -> Option<LayoutTransform2D> {
-        self.owner_for_document(host, document)?;
-        self.frames.get(&document)?.1
-    }
-
-    pub(super) fn owner_for_document(
-        &self,
-        host: &PageScriptHost,
-        document: DomHandle,
-    ) -> Option<WindowDocumentTaskTarget> {
         let root_owner = self.root_owner?;
         if host.input_document_for_owner(root_owner) != Some(host.document_handle()) {
             return None;
         }
-        let (owner, _) = *self.frames.get(&document)?;
-        (host.input_document_for_owner(owner) == Some(document)).then_some(owner)
+        let (owner, transform) = *self.frames.get(&document)?;
+        if host.input_document_for_owner(owner) != Some(document) {
+            return None;
+        }
+        transform
     }
 }
 
