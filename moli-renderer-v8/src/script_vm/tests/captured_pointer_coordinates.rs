@@ -447,6 +447,46 @@ async fn capture_transfers_in_a_live_child_document_without_published_geometry()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn lost_touch_capture_checks_the_previous_document_before_cross_frame_move() {
+    let mut vm = captured_child_vm(false, false).await;
+    vm.eval(
+        r#"
+        globalThis.recapture=[];
+        captured.addEventListener('pointermove',event=>captured.releasePointerCapture(event.pointerId),
+            {once:true});
+        captured.addEventListener('lostpointercapture',event=>{
+            outside.setPointerCapture(event.pointerId);
+            const outsideCaptured=outside.hasPointerCapture(event.pointerId);
+            captured.setPointerCapture(event.pointerId);
+            recapture.push([outsideCaptured,captured.hasPointerCapture(event.pointerId)]);
+        }, {once:true});
+        'installed'
+    "#,
+    )
+    .unwrap();
+    vm.dispatch_touch_event_at_point(130.0, 90.0, "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_point(131.0, 91.0, "touchmove", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_point(20.0, 20.0, "touchmove", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(recapture)").unwrap(),
+        "[[false,true]]"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(events.at(-1))").unwrap(),
+        r#"["pointermove","outside",20,20]"#
+    );
+    vm.dispatch_touch_event_at_point(21.0, 21.0, "touchmove", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(transitions)").unwrap(),
+        r#"[["gotpointercapture","captured"],["lostpointercapture","captured"],["gotpointercapture","captured"]]"#
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn frame_navigation_retires_the_capture_route_and_old_projection() {
     let mut vm = captured_child_vm(false, false).await;
     dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);

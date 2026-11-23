@@ -1445,11 +1445,9 @@ impl ScriptVm {
                 let Some(trigger) = pointer_data.construct(scope, trigger_name) else {
                     return Ok(input_dispatch_outcome(false));
                 };
-                unsafe { &mut *runtime_ptr }.update_pointer_input(
-                    pointer_id,
-                    buttons != 0,
-                    input_document.owner,
-                );
+                // Capture callbacks still see the active Document from the
+                // previous pointerdown, pointermove or pointerup.
+                unsafe { &mut *runtime_ptr }.set_pointer_buttons_active(pointer_id, buttons != 0);
                 pointer_data.process_capture(scope, runtime_ptr, trigger);
                 let Some(target) = input_document.target_after_capture(
                     runtime(),
@@ -1460,7 +1458,11 @@ impl ScriptVm {
                     return Ok(input_dispatch_outcome(false));
                 };
                 pointer_dispatch_handle = target;
-                unsafe { &mut *runtime_ptr }.set_mouse_event_target(pointer_dispatch_handle);
+                let host = unsafe { &mut *runtime_ptr };
+                if !is_move {
+                    host.set_pointer_active_document(pointer_id, input_document.owner);
+                }
+                host.set_mouse_event_target(pointer_dispatch_handle);
                 if event_name == "mousedown" && button >= 0 {
                     unsafe { &mut *runtime_ptr }.begin_mouse_press(pointer_dispatch_handle, button);
                 }
@@ -1514,11 +1516,6 @@ impl ScriptVm {
                     let Some(event) = pointer_data.construct(scope, name) else {
                         return Ok(input_dispatch_outcome(false));
                     };
-                    unsafe { &mut *runtime_ptr }.update_pointer_input(
-                        pointer_id,
-                        buttons != 0,
-                        input_document.owner,
-                    );
                     pointer_data.process_capture(scope, runtime_ptr, event);
                     let Some(target) = input_document.target_after_capture(
                         runtime(),
@@ -1532,7 +1529,9 @@ impl ScriptVm {
                     };
                     let previous = pointer_dispatch_handle;
                     pointer_dispatch_handle = target;
-                    unsafe { &mut *runtime_ptr }.set_mouse_event_target(pointer_dispatch_handle);
+                    let host = unsafe { &mut *runtime_ptr };
+                    host.set_pointer_active_document(pointer_id, input_document.owner);
+                    host.set_mouse_event_target(pointer_dispatch_handle);
                     if previous != target {
                         dispatch_mouse_pointer_boundaries(
                             scope,
@@ -1726,8 +1725,6 @@ impl ScriptVm {
                         pressure: 0.0,
                         ..pointer.clone()
                     };
-                    let cancel_owner = InputDocument::for_target(runtime(), cancel_target)
-                        .and_then(|document| document.owner);
                     let cancel = PreparedPointerEvent {
                         coordinates: coordinates_for(cancel_target),
                         button: -1,
@@ -1735,11 +1732,7 @@ impl ScriptVm {
                         pointer: &cancel_pointer,
                         modifiers,
                     };
-                    unsafe { &mut *runtime_ptr }.update_pointer_input(
-                        pointer_id,
-                        false,
-                        cancel_owner,
-                    );
+                    unsafe { &mut *runtime_ptr }.set_pointer_buttons_active(pointer_id, false);
                     if let Some(event) = cancel.construct(scope, "pointercancel") {
                         let _ = dispatch_public_event(scope, runtime_ptr, cancel_target, event);
                         cancel.release_capture(scope, runtime_ptr, event);
@@ -2247,11 +2240,9 @@ impl ScriptVm {
                 let Some(event) = data.construct(scope, event_name_for_pointer) else {
                     continue;
                 };
-                unsafe { &mut *runtime_ptr }.update_pointer_input(
-                    pointer_id,
-                    buttons != 0,
-                    input_document.owner,
-                );
+                // Capture callbacks still see the active Document from the
+                // previous pointerdown, pointermove or pointerup.
+                unsafe { &mut *runtime_ptr }.set_pointer_buttons_active(pointer_id, buttons != 0);
                 data.process_capture(scope, runtime_ptr, event);
                 let Some(pointer_handle) = input_document.target_after_capture(
                     runtime(),
@@ -2264,9 +2255,12 @@ impl ScriptVm {
                     }
                     continue;
                 };
+                let host = unsafe { &mut *runtime_ptr };
+                if event_name_for_pointer != "pointercancel" {
+                    host.set_pointer_active_document(pointer_id, input_document.owner);
+                }
                 if event_name == "touchstart" {
-                    unsafe { &mut *runtime_ptr }
-                        .set_pending_pointer_capture_target(pointer_id, pointer_handle);
+                    host.set_pending_pointer_capture_target(pointer_id, pointer_handle);
                 }
                 let previous_pointer = pointer_handles.insert(point.id, pointer_handle);
                 dispatch_touch_pointer_boundary_events(
