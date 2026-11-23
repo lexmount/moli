@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, num::NonZeroU32, sync::Arc};
 
 use style::Atom;
-use taffy::{Cache, DetailedLayoutInfo, Layout, Point, Style};
+use taffy::{Cache, DetailedLayoutInfo, Layout, Point, Size, Style};
 
 use crate::{
     LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
@@ -549,6 +549,30 @@ impl Default for ViewportLayoutState {
 }
 
 impl<N> LayoutBox<N> {
+    pub(crate) fn size_query_axes(&self) -> Option<Size<bool>> {
+        use style::values::specified::box_::ContainerType;
+
+        let computed = self.style.stylo_computed_values()?;
+        let container_type = computed.clone_container_type();
+        if self.source.is_none()
+            || !container_type.is_size_container_type()
+            || self.inline_flattened
+            || self.kind.is_internal_table_box()
+            || matches!(
+                self.kind,
+                LayoutBoxKind::TableWrapper | LayoutBoxKind::InlineTableWrapper
+            )
+        {
+            return None;
+        }
+        let both_axes = container_type.contains(ContainerType::SIZE);
+        let horizontal = computed.writing_mode.is_horizontal();
+        Some(Size {
+            width: both_axes || horizontal,
+            height: both_axes || !horizontal,
+        })
+    }
+
     pub fn kind(&self) -> LayoutBoxKind {
         self.kind
     }

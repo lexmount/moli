@@ -131,6 +131,25 @@ fn realtime_publication_container_query_can_reveal_three_scrollable_ancestors() 
 }
 
 #[test]
+fn realtime_publication_inline_block_query_size_excludes_child_intrinsic_width() {
+    let (mut vm, viewport) = fixture(
+        r#"<!doctype html><style>
+        .query { display:inline-block; container-type:inline-size; vertical-align:top }
+        #automatic { padding:3px; border:2px solid }
+        #intrinsic { width:max-content; contain-intrinsic-width:120px }
+        .content { width:200px; height:20px }
+        @container (width >= 100px) { .content { width:50px } }
+        </style><div id=automatic class=query><div id=child class=content></div></div>
+        <div id=intrinsic class=query><div id=other class=content></div></div>"#,
+    );
+    let read = "JSON.stringify([automatic.offsetWidth, automatic.offsetHeight, child.offsetWidth, intrinsic.offsetWidth, other.offsetWidth])";
+    assert_eq!(vm.eval(read).unwrap(), "[10,30,200,120,50]");
+    vm.eval("child.style.width = '250px'").unwrap();
+    assert_eq!(vm.eval(read).unwrap(), "[10,30,250,120,50]");
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+}
+
+#[test]
 fn realtime_publication_transient_intent_does_not_publish_even_with_screenshot_reason() {
     let (mut vm, viewport) = fixture("<!doctype html><div id=target style='width:100px'></div>");
     assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "100");

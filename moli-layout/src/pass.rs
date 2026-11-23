@@ -395,8 +395,6 @@ where
 
     /// Untransformed content-box dimensions on the queryable physical axes.
     pub fn query_container_sizes(&self) -> impl Iterator<Item = (N, [Option<f32>; 2])> + '_ {
-        use style::values::specified::box_::ContainerType;
-
         let world = &self.prepared.world;
         world
             .boxes
@@ -404,31 +402,17 @@ where
             .enumerate()
             .filter_map(|(index, layout_box)| {
                 let source = layout_box.source()?;
-                let computed = layout_box.style.stylo_computed_values()?;
-                let container_type = computed.clone_container_type();
-                if !container_type.is_size_container_type()
-                    || layout_box.inline_flattened
-                    || layout_box.kind.is_internal_table_box()
-                    || matches!(
-                        layout_box.kind,
-                        crate::LayoutBoxKind::TableWrapper
-                            | crate::LayoutBoxKind::InlineTableWrapper
-                    )
-                {
-                    return None;
-                }
+                let axes = layout_box.size_query_axes()?;
                 let geometry = crate::overflow::project_box(
                     world,
                     self.prepared.request.viewport,
                     crate::LayoutBoxId::from_index(index),
                 );
-                let both_axes = container_type.contains(ContainerType::SIZE);
-                let horizontal = computed.writing_mode.is_horizontal();
                 Some((
                     source,
                     [
-                        (both_axes || horizontal).then_some(geometry.content_box.width),
-                        (both_axes || !horizontal).then_some(geometry.content_box.height),
+                        axes.width.then_some(geometry.content_box.width),
+                        axes.height.then_some(geometry.content_box.height),
                     ],
                 ))
             })

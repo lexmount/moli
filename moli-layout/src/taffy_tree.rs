@@ -2007,6 +2007,16 @@ where
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
         let id = LayoutBoxId::from_taffy(node_id);
+        if inputs.run_mode == RunMode::ComputeSize
+            && !self.measure_baselines
+            && matches!(
+                inputs.sizing_purpose,
+                SizingPurpose::IntrinsicContribution | SizingPurpose::ContentProbe
+            )
+            && let Some(output) = self.measure_contained_intrinsic_size(id, inputs)
+        {
+            return output;
+        }
         let layout_box = &self.boxes[id.index()];
         let kind = layout_box.kind;
         let display = layout_box.style.display();
