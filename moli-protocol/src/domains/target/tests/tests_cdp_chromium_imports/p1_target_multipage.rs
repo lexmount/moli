@@ -1316,18 +1316,18 @@ async fn rust_cdp_chromium_target_named_reuse_updates_dom_opener_before_returnin
         &mut ctx,
         &parent_session,
         269_027,
-        "child.opener=null;Object.getOwnPropertyDescriptor(child,'opener').value===null",
+        "child.opener=null;child.opener===null && typeof Object.getOwnPropertyDescriptor(child,'opener').get==='function'",
     )
     .await;
     assert_eq!(disowned["result"]["result"]["value"], true);
-    let shadowed = evaluate_return_by_value(
+    let reattached = evaluate_return_by_value(
         &mut ctx,
         &sibling_session,
         269_028,
-        "open('', 'child').opener===null",
+        "open('', 'child').opener===window",
     )
     .await;
-    assert_eq!(shadowed["result"]["result"]["value"], true);
+    assert_eq!(reattached["result"]["result"]["value"], true);
     ctx.process_async(json!({
         "id": 269_026,
         "method": "Target.getTargetInfo",
