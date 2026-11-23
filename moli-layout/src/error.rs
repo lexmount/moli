@@ -14,9 +14,18 @@ pub enum LayoutError {
     /// A layout demand attempted to enter while another synchronous pass was active.
     #[error("a synchronous layout pass cannot re-enter itself")]
     ReentrantLayoutPass,
-    /// Container-query feedback did not settle within its layout budget.
-    #[error("container query sizes did not converge after {iterations} feedback iterations")]
-    ContainerQuerySizesDidNotConverge { iterations: usize },
+    /// A container-query size table repeated with no new scrollbar axis to freeze.
+    #[error("container query sizes repeated in a cycle of {period} feedback iterations")]
+    ContainerQueryFeedbackCycle { period: usize },
+    /// The page exhausted the work budget for rebuilding layout boxes during feedback.
+    #[error(
+        "container query feedback exceeded its layout work budget after {iterations} iterations: {boxes} boxes, limit {max_boxes}"
+    )]
+    ContainerQueryFeedbackBudgetExceeded {
+        iterations: usize,
+        boxes: usize,
+        max_boxes: usize,
+    },
     /// A consumer requested paint data from a geometry-only output.
     #[error("this layout pass did not request a paint projection")]
     PaintProjectionNotRequested,

@@ -314,11 +314,16 @@ impl<N: Eq + Hash> Default for AutoScrollbars<N> {
 }
 
 impl<N: Copy + Eq + Hash> AutoScrollbars<N> {
-    /// Record changed visibility and report whether it introduced any new axes.
-    pub fn extend_changed_axes(&mut self, first: &Self, second: &Self) -> bool {
-        let previous_count = self.0.len();
+    /// Record every axis whose visibility differs between two measurements.
+    pub fn extend_changed_axes(&mut self, first: &Self, second: &Self) {
         self.0
             .extend(first.0.symmetric_difference(&second.0).copied());
+    }
+
+    /// Add the axes observed in a confirmed cycle to the frozen gutters.
+    pub fn freeze_axes(&mut self, changed: Self) -> bool {
+        let previous_count = self.0.len();
+        self.0.extend(changed.0);
         self.0.len() != previous_count
     }
 }
@@ -327,6 +332,10 @@ impl<N> MeasuredLayoutPass<N>
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
+    pub fn box_count(&self) -> usize {
+        self.prepared.world.len()
+    }
+
     /// Rebuild after style feedback, keeping the cost of the discarded layout.
     pub fn remeasure(
         self,
