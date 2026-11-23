@@ -454,27 +454,21 @@ fn collapsed_text_selection(
     Some((node, LayoutTextSelection::new(length, length)))
 }
 
-fn layout_element_semantics(element: &crate::dom::native::Element) -> LayoutElementSemantics {
-    let namespace = LayoutNamespace::from_uri(element.namespace());
-    let local_name = element.local_name();
-    let (category, replaced) = layout_element_classification(element);
-    let metadata = layout_element_metadata(element, category);
-    LayoutElementSemantics::new(namespace, local_name, category, replaced).with_metadata(metadata)
-}
-
 fn layout_element_semantics_for_source(
     host: &DomHost,
     node: DomHandle,
     element: &crate::dom::native::Element,
 ) -> LayoutElementSemantics {
-    let mut semantics = layout_element_semantics(element);
-    if element.is_html_select() {
-        semantics.metadata.form_control = Some(select_control_data(host, node, element));
-    }
-    semantics
+    let namespace = LayoutNamespace::from_uri(element.namespace());
+    let local_name = element.local_name();
+    let (category, replaced) = layout_element_classification(element);
+    let metadata = layout_element_metadata(host, node, element, category);
+    LayoutElementSemantics::new(namespace, local_name, category, replaced).with_metadata(metadata)
 }
 
 fn layout_element_metadata(
+    host: &DomHost,
+    node: DomHandle,
     element: &crate::dom::native::Element,
     category: LayoutElementCategory,
 ) -> LayoutElementMetadata {
@@ -503,7 +497,11 @@ fn layout_element_metadata(
             metadata.list = list_data(element);
         }
         LayoutElementCategory::FormControl(_) => {
-            metadata.form_control = Some(form_control_data(element));
+            metadata.form_control = Some(if element.is_html_select() {
+                select_control_data(host, node, element)
+            } else {
+                form_control_data(host, node, element)
+            });
         }
         LayoutElementCategory::Generic | LayoutElementCategory::LineBreak => {}
     }
@@ -540,9 +538,7 @@ fn numeric_dimension_attribute(host: &DomHost, node: DomHandle, name: &str) -> O
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        flat_children, flat_parent, layout_element_semantics, layout_element_semantics_for_source,
-    };
+    use super::{flat_children, flat_parent, layout_element_semantics_for_source};
     use crate::{
         dom::native::{DomHost, NativeDom},
         dom_presentation::{html_element_semantics, html_input_control_kind},
@@ -690,22 +686,58 @@ mod tests {
             .create_element_ns(Some("urn:moli:layout"), "lm:box")
             .unwrap();
 
-        let svg = layout_element_semantics(host.node(svg).unwrap().as_element().unwrap());
+        let svg = layout_element_semantics_for_source(
+            &host,
+            svg,
+            host.node(svg).unwrap().as_element().unwrap(),
+        );
         assert_eq!(svg.namespace, LayoutNamespace::Svg);
         assert_eq!(&*svg.local_name, "svg");
         assert_eq!(svg.category, LayoutElementCategory::Generic);
         assert_eq!(svg.replaced, Some(LayoutReplacedKind::Svg));
 
-        let math = layout_element_semantics(host.node(math).unwrap().as_element().unwrap());
+        let math = layout_element_semantics_for_source(
+            &host,
+            math,
+            host.node(math).unwrap().as_element().unwrap(),
+        );
         assert_eq!(math.namespace, LayoutNamespace::MathMl);
         assert_eq!(&*math.local_name, "math");
 
-        let custom = layout_element_semantics(host.node(custom).unwrap().as_element().unwrap());
+        let custom = layout_element_semantics_for_source(
+            &host,
+            custom,
+            host.node(custom).unwrap().as_element().unwrap(),
+        );
         assert_eq!(
             custom.namespace,
             LayoutNamespace::Other("urn:moli:layout".into())
         );
         assert_eq!(&*custom.local_name, "box");
+    }
+
+    #[test]
+    fn textarea_layout_uses_default_content_until_value_is_set() {
+        let mut host = test_host();
+        let textarea = host.create_element("textarea");
+        let text = host.create_text_node("first\r\nsecond");
+        assert!(host.append_child(textarea, text));
+        let layout_value = |host: &DomHost| {
+            layout_element_semantics_for_source(
+                host,
+                textarea,
+                host.node(textarea).unwrap().as_element().unwrap(),
+            )
+            .metadata
+            .form_control
+            .unwrap()
+            .value
+        };
+        assert_eq!(&*layout_value(&host), "first\nsecond");
+        assert!(host.set_input_value(textarea, "edited"));
+        assert_eq!(&*layout_value(&host), "edited");
+        assert!(host.set_input_value(textarea, ""));
+        assert_eq!(&*layout_value(&host), "");
     }
 
     #[test]

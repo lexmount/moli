@@ -112,9 +112,44 @@ pub(crate) fn html_input_control_kind(value: Option<&str>) -> LayoutInputControl
     LayoutInputControlKind::from_type_attribute(value)
 }
 
-pub(crate) fn form_control_data(element: &Element) -> LayoutFormControlData {
-    let value = if element.is_html_input() || element.is_html_textarea() {
+pub(crate) fn textarea_value_from_dom(
+    host: &DomHost,
+    node: DomHandle,
+    element: &Element,
+) -> String {
+    let value = if element.input_value_dirty() {
         element.input_value()
+    } else {
+        host.dom().direct_text_content(node).unwrap_or_default()
+    };
+    normalize_textarea_api_value(&value)
+}
+
+pub(crate) fn normalize_textarea_api_value(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                let _ = chars.next();
+            }
+            output.push('\n');
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+pub(crate) fn form_control_data(
+    host: &DomHost,
+    node: DomHandle,
+    element: &Element,
+) -> LayoutFormControlData {
+    let value = if element.is_html_input() {
+        element.input_value()
+    } else if element.is_html_textarea() {
+        textarea_value_from_dom(host, node, element)
     } else {
         element.attribute("value").unwrap_or("").to_owned()
     };
@@ -187,7 +222,7 @@ pub(crate) fn select_control_data(
         value: selected.into(),
         option_labels,
         maximum_option_characters: u16::try_from(maximum).unwrap_or(u16::MAX),
-        ..form_control_data(element)
+        ..form_control_data(host, node, element)
     }
 }
 
