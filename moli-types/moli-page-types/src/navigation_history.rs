@@ -79,7 +79,6 @@ pub struct NavigationActivationSeed {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationTraversalSeedCandidate {
-    pub current_url: Url,
     pub target_url: Url,
     pub seed: NavigationHistoryEntrySeed,
 }
@@ -448,11 +447,9 @@ pub fn traversal_navigation_seed_candidate(
         return None;
     }
 
-    let current_url = Url::parse(&current_entry.url).ok()?;
     let target_url = Url::parse(&target_entry.url).ok()?;
     Some(NavigationTraversalSeedCandidate {
-        current_url,
-        target_url: target_url.clone(),
+        target_url,
         seed: NavigationHistoryEntrySeed {
             session_history: crate::SessionHistorySeed {
                 commit: crate::SessionHistoryCommit::Traverse,
@@ -948,10 +945,6 @@ mod tests {
 
         let candidate =
             traversal_navigation_seed_candidate(entries, 0, 1).expect("traversal candidate");
-        assert_eq!(
-            candidate.current_url.as_str(),
-            "https://example.test/current"
-        );
         assert_eq!(candidate.target_url.as_str(), "https://example.test/target");
         assert_eq!(candidate.seed.current_index, 1);
         assert_eq!(
