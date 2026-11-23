@@ -7,6 +7,8 @@
 
 use std::{fmt::Debug, hash::Hash};
 
+use style::values::computed::Appearance;
+
 use super::geometry::canonical_shape;
 use crate::{
     LayoutBox, LayoutElementCategory, LayoutFormControlKind, LayoutInputControlKind, LayoutRect,
@@ -31,18 +33,25 @@ pub(super) fn project_form_control_appearance<N>(
     if !semantics.is_replaced() || rect.width <= 0.0 || rect.height <= 0.0 {
         return;
     }
-    let data = semantics
-        .metadata
-        .form_control
-        .as_ref()
-        .cloned()
-        .unwrap_or_default();
     let LayoutFormControlKind::Input(
         control @ (LayoutInputControlKind::Checkbox | LayoutInputControlKind::Radio),
     ) = kind
     else {
         return;
     };
+    if layout_box
+        .style
+        .stylo_computed_values()
+        .is_some_and(|computed| computed.get_box().clone_appearance() == Appearance::None)
+    {
+        return;
+    }
+    let data = semantics
+        .metadata
+        .form_control
+        .as_ref()
+        .cloned()
+        .unwrap_or_default();
     let accent = if data.disabled {
         PaintColor::new(209.0 / 255.0, 209.0 / 255.0, 209.0 / 255.0, 1.0)
     } else {
