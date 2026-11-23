@@ -2063,13 +2063,12 @@ mod producer_tests {
             1,
         );
         let mut slot = super::InputPreparedOutputSlot::from_outputs(super::InputPreparedOutputs {
-            download_activations: vec![RendererPendingDownloadActivation {
-                initiator_url: None,
-                frame_id: None,
-                url: "https://example.test/download".to_owned(),
-                suggested_filename: Some("download.txt".to_owned()),
-                response: None,
-            }],
+            download_activations: vec![RendererPendingDownloadActivation::new(
+                "https://example.test/download".to_owned(),
+                None,
+                Some("download.txt".to_owned()),
+                None,
+            )],
             file_chooser_activations: vec![
                 super::file_chooser::PreparedFileChooserActivation::from_renderer_for_test(
                     owner,
@@ -2441,13 +2440,12 @@ mod producer_tests {
         let prepared =
             ProtocolOutputPayloads::from_slot(super::InputPreparedOutputSlot::from_outputs(
                 super::InputPreparedOutputs::from_download_activations_for_test(vec![
-                    RendererPendingDownloadActivation {
-                        initiator_url: None,
-                        frame_id: None,
-                        url: "https://example.test/report.txt".to_owned(),
-                        suggested_filename: Some("report.txt".to_owned()),
-                        response: None,
-                    },
+                    RendererPendingDownloadActivation::new(
+                        "https://example.test/report.txt".to_owned(),
+                        None,
+                        Some("report.txt".to_owned()),
+                        None,
+                    ),
                 ]),
             ));
 

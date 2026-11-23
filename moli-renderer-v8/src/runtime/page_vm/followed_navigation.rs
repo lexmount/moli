@@ -86,18 +86,17 @@ pub(super) async fn load_followed_location_navigation(
                 .try_into_materialized_bytes()
                 .map_err(|_| anyhow!("local navigation download body was not materialized"))?;
             return Ok(LoadedFollowedLocationNavigation::Download(
-                RendererPendingDownloadActivation {
-                    initiator_url: None,
-                    frame_id: None,
-                    url: head.final_url.as_str().to_owned(),
-                    suggested_filename: None,
-                    response: Some(Box::new(RendererPendingDownloadResponse {
+                RendererPendingDownloadActivation::new(
+                    head.final_url.as_str().to_owned(),
+                    None,
+                    None,
+                    Some(RendererPendingDownloadResponse {
                         final_url: head.final_url.as_str().to_owned(),
                         status: head.status,
                         headers: head.headers,
                         body: body.into(),
-                    })),
-                },
+                    }),
+                ),
             ));
         }
         let (final_url, response_status, response_headers, raw_body) =
@@ -128,21 +127,36 @@ pub(super) async fn load_followed_location_navigation(
         return Ok(LoadedFollowedLocationNavigation::NoDocument);
     }
     if response_headers_indicate_download(&response.headers) {
+        let final_url = response.final_url.as_str().to_owned();
+        let status = response.status;
+        #[cfg(feature = "molio")]
+        let (headers, body) = (
+            response.headers.clone(),
+            crate::runtime::RendererDownloadBody::Network(
+                crate::network::ResourceInterceptionBody::new(response, None),
+            ),
+        );
+        #[cfg(not(feature = "molio"))]
+        let (headers, body) = {
+            let mut body = Vec::new();
+            while let Some(chunk) = response.next_chunk().await {
+                body.extend_from_slice(&chunk);
+            }
+            response.finish().await?;
+            (std::mem::take(&mut response.headers), body.into())
+        };
         return Ok(LoadedFollowedLocationNavigation::Download(
-            RendererPendingDownloadActivation {
-                initiator_url: None,
-                frame_id: None,
-                url: response.final_url.as_str().to_owned(),
-                suggested_filename: None,
-                response: Some(Box::new(RendererPendingDownloadResponse {
-                    final_url: response.final_url.as_str().to_owned(),
-                    status: response.status,
-                    headers: response.headers.clone(),
-                    body: crate::runtime::RendererDownloadBody::Network(
-                        crate::network::ResourceInterceptionBody::new(response, None),
-                    ),
-                })),
-            },
+            RendererPendingDownloadActivation::new(
+                final_url.clone(),
+                None,
+                None,
+                Some(RendererPendingDownloadResponse {
+                    final_url,
+                    status,
+                    headers,
+                    body,
+                }),
+            ),
         ));
     }
     Ok(LoadedFollowedLocationNavigation::StreamingDocument {

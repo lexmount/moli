@@ -703,18 +703,17 @@ mod tests {
         limits.max_message_bytes = 4 * 1024;
         let (sender, mut receiver) = renderer_output_transport_channel_with_limits(limits);
         let download = RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
-            RendererOwnerAction::Download(RendererPendingDownloadActivation {
-                initiator_url: None,
-                frame_id: None,
-                url: "https://example.test/download".to_owned(),
-                suggested_filename: Some("payload.bin".to_owned()),
-                response: Some(Box::new(RendererPendingDownloadResponse {
+            RendererOwnerAction::Download(RendererPendingDownloadActivation::new(
+                "https://example.test/download".to_owned(),
+                None,
+                Some("payload.bin".to_owned()),
+                Some(RendererPendingDownloadResponse {
                     final_url: "https://example.test/payload.bin".to_owned(),
                     status: 200,
                     headers: Vec::new(),
                     body: (vec![0; 8 * 1024]).into(),
-                })),
-            }),
+                }),
+            )),
         ));
 
         assert!(sender.send(publication(1, vec![download])).is_err());
@@ -731,18 +730,17 @@ mod tests {
         let (sender, mut receiver) = renderer_output_transport_channel_with_limits(limits);
         let body = crate::runtime::RendererDownloadBody::Blob(vec![0; 64 * 1024 * 1024].into());
         let download = RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
-            RendererOwnerAction::Download(RendererPendingDownloadActivation {
-                initiator_url: None,
-                frame_id: None,
-                url: "blob:https://example.test/retained".to_owned(),
-                suggested_filename: Some("large.bin".to_owned()),
-                response: Some(Box::new(RendererPendingDownloadResponse {
+            RendererOwnerAction::Download(RendererPendingDownloadActivation::new(
+                "blob:https://example.test/retained".to_owned(),
+                None,
+                Some("large.bin".to_owned()),
+                Some(RendererPendingDownloadResponse {
                     final_url: "blob:https://example.test/retained".to_owned(),
                     status: 200,
                     headers: Vec::new(),
                     body,
-                })),
-            }),
+                }),
+            )),
         ));
         let message = publication(1, vec![download]);
         sender

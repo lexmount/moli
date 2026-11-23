@@ -1764,6 +1764,7 @@ fn anchor_download_activation(
     if !runtime.document_allows_downloads_for_handle(handle) {
         return None;
     }
+    #[cfg(feature = "molio")]
     let initiator_url = runtime
         .dom_host()
         .owner_document_handle(handle)
@@ -1793,45 +1794,50 @@ fn anchor_download_activation(
     }
     // Retain the authorized backing at activation, before script can revoke
     // the URL. Reading it belongs to the asynchronous download task.
-    let url = url::Url::parse(&resolved).ok()?;
-    let response = match url.scheme() {
-        "blob" => {
-            crate::blob::object_url_download_data(unsafe { &mut *runtime_ptr }, handle, &resolved)
-                .map(|(data, mime_type)| {
-                    Box::new(crate::runtime::RendererPendingDownloadResponse {
-                        final_url: resolved.clone(),
-                        status: 200,
-                        headers: vec![
-                            ("Content-Type".to_owned(), mime_type.into_bytes()),
-                            (
-                                "Content-Length".to_owned(),
-                                data.len().to_string().into_bytes(),
-                            ),
-                        ],
-                        body: crate::runtime::RendererDownloadBody::Blob(data),
-                    })
-                })
-        }
-        "data" => crate::network_host::local_url_response_result(&url, "GET")
-            .and_then(Result::ok)
-            .and_then(|response| {
-                let (head, body) = response.into_body();
-                Some(Box::new(crate::runtime::RendererPendingDownloadResponse {
+    let response = url::Url::parse(&resolved)
+        .ok()
+        .and_then(|url| match url.scheme() {
+            "blob" => crate::blob::object_url_download_data(
+                unsafe { &mut *runtime_ptr },
+                handle,
+                &resolved,
+            )
+            .map(
+                |(data, mime_type)| crate::runtime::RendererPendingDownloadResponse {
                     final_url: resolved.clone(),
-                    status: head.status,
-                    headers: head.headers,
-                    body: body.try_into_materialized_bytes().ok()?.into(),
-                }))
-            }),
-        _ => None,
-    };
-    Some(RendererPendingDownloadActivation {
+                    status: 200,
+                    headers: vec![
+                        ("Content-Type".to_owned(), mime_type.into_bytes()),
+                        (
+                            "Content-Length".to_owned(),
+                            data.len().to_string().into_bytes(),
+                        ),
+                    ],
+                    body: crate::runtime::RendererDownloadBody::Blob(data),
+                },
+            ),
+            #[cfg(feature = "molio")]
+            "data" => crate::network_host::local_url_response_result(&url, "GET")
+                .and_then(Result::ok)
+                .and_then(|response| {
+                    let (head, body) = response.into_body();
+                    Some(crate::runtime::RendererPendingDownloadResponse {
+                        final_url: resolved.clone(),
+                        status: head.status,
+                        headers: head.headers,
+                        body: body.try_into_materialized_bytes().ok()?.into(),
+                    })
+                }),
+            _ => None,
+        });
+    let activation =
+        RendererPendingDownloadActivation::new(resolved, frame_id, suggested_filename, response);
+    #[cfg(feature = "molio")]
+    let activation = RendererPendingDownloadActivation {
         initiator_url,
-        frame_id,
-        url: resolved,
-        suggested_filename,
-        response,
-    })
+        ..activation
+    };
+    Some(activation)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
