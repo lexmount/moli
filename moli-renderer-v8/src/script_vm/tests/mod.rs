@@ -2348,6 +2348,7 @@ mod offline_audio_float;
 mod periodic_wave_interfaces;
 mod post_parse;
 
+mod popup_root_window;
 mod promise_jobs;
 mod queue_microtask;
 
