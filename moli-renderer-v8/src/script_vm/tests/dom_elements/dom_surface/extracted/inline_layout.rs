@@ -1592,6 +1592,8 @@ fn html_bidi_contexts_use_ua_defaults_and_allow_author_overrides() {
     );
     let read = r#"Array.from(document.querySelectorAll('[id]'), element =>
         getComputedStyle(element).unicodeBidi).join('|')"#;
+    // Chromium 156.0.8078.79 computes isolate for <input type=text dir=auto>.
+    // The HTML rendering rules specify plaintext for the Text state.
     let expected = "isolate|isolate-override|isolate-override|normal|isolate|plaintext|plaintext|plaintext|plaintext|plaintext|plaintext|isolate|normal";
     assert_eq!(vm.eval(read).unwrap(), expected);
     publish_layout_for_test(&mut vm);
