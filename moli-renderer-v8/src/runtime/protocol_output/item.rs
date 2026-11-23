@@ -311,3 +311,72 @@ impl RendererOutputRecord {
         .unwrap_or_else(|_| panic!("test RendererOutputRecord must carry resolved identities"))
     }
 }
+
+#[cfg(feature = "molio")]
+impl super::RendererOutputPublication {
+    pub(super) fn prepare_desktop_downloads(&mut self, limit: usize) {
+        use std::cmp::Reverse;
+
+        use crate::runtime::{RendererDownloadBody, RendererPendingDownloadActivation};
+
+        let mut has_downloads = false;
+        for record in &mut self.records {
+            let RendererOutputItem::OwnerAction(RendererOwnerAction::Download(download)) =
+                &mut record.item
+            else {
+                continue;
+            };
+            has_downloads = true;
+            if let Some(response) = &mut download.response
+                && let RendererDownloadBody::Buffered(bytes) = &mut response.body
+            {
+                response.body = RendererDownloadBody::Blob(std::mem::take(bytes).into());
+            }
+        }
+        if !has_downloads {
+            return;
+        }
+
+        let mut excess = self.transport_charge_bytes().saturating_sub(limit);
+        if excess == 0 {
+            return;
+        }
+        let mut downloads: Vec<_> = self
+            .records
+            .iter_mut()
+            .filter(|record| {
+                matches!(
+                    record.item,
+                    RendererOutputItem::OwnerAction(RendererOwnerAction::Download(_))
+                )
+            })
+            .map(|record| (record.transport_charge_bytes(), record))
+            .collect();
+        downloads.sort_unstable_by_key(|(charge, _)| Reverse(*charge));
+        for (previous_charge, record) in downloads {
+            if excess == 0 {
+                break;
+            }
+            if previous_charge <= super::transport_memory::RECORD_FLOOR_BYTES {
+                break;
+            }
+            let RendererOutputItem::OwnerAction(RendererOwnerAction::Download(download)) =
+                &mut record.item
+            else {
+                unreachable!("only desktop download records are selected");
+            };
+            let name = download
+                .suggested_filename
+                .as_deref()
+                .map(|name| name[..name.floor_char_boundary(255)].to_owned());
+            if let Some(response) = &download.response {
+                response.body.cancel();
+            }
+            *download =
+                RendererPendingDownloadActivation::new("about:blank".to_owned(), None, name, None);
+            download.desktop_failure = Some("Download metadata exceeds the output limit");
+            excess = excess
+                .saturating_sub(previous_charge.saturating_sub(record.transport_charge_bytes()));
+        }
+    }
+}

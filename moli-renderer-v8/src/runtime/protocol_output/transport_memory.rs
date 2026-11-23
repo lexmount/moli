@@ -2,6 +2,8 @@ use super::{
     RendererOutputItem, RendererOutputRecord, RendererOwnerAction, RendererProtocolObservation,
 };
 
+pub(super) const RECORD_FLOOR_BYTES: usize = 512;
+
 impl RendererOutputRecord {
     /// Conservative retained-memory charge for one frozen semantic record.
     ///
@@ -11,7 +13,6 @@ impl RendererOutputRecord {
     /// measures retained semantic data rather than future CDP JSON, which does
     /// not exist until protocol projection.
     pub(crate) fn transport_charge_bytes(&self) -> usize {
-        const RECORD_FLOOR_BYTES: usize = 512;
         let payload = match self.item() {
             RendererOutputItem::Observation(observation) => {
                 observation_transport_charge_bytes(observation)
@@ -224,6 +225,10 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
                     .saturating_add(string_charge(&response.final_url))
                     .saturating_add(headers_charge(&response.headers))
                     .saturating_add(response.body.transport_charge_bytes());
+            }
+            #[cfg(feature = "molio")]
+            if let Some(initiator) = &event.navigation_initiator {
+                total = total.saturating_add(string_charge(initiator.url().as_str()));
             }
             total
         }

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use gpui::{
     App, Context, Entity, FontWeight, MouseButton, Render, ScrollHandle, SharedString,
     Subscription, Window, actions, div, prelude::*, px,
@@ -96,7 +98,7 @@ enum Popup {
 }
 
 pub struct BrowserWindow {
-    host: BrowserHost,
+    host: Rc<BrowserHost>,
     surface: Entity<MoliSurface>,
     address: Entity<Address>,
     downloads: Entity<DownloadsPage>,
@@ -113,7 +115,7 @@ pub struct BrowserWindow {
 
 impl BrowserWindow {
     pub fn new(
-        host: BrowserHost,
+        host: Rc<BrowserHost>,
         initial_url: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,

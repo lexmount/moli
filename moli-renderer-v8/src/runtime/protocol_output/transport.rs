@@ -351,6 +351,8 @@ enum RendererOutputTransportEnvelope {
 pub struct RendererOutputTransportSender {
     tx: mpsc::UnboundedSender<RendererOutputTransportEnvelope>,
     shared: Arc<RendererOutputTransportShared>,
+    #[cfg(feature = "molio")]
+    desktop_downloads: bool,
 }
 
 impl fmt::Debug for RendererOutputTransportSender {
@@ -363,10 +365,32 @@ impl fmt::Debug for RendererOutputTransportSender {
 }
 
 impl RendererOutputTransportSender {
+    #[cfg(feature = "molio")]
+    pub fn with_desktop_downloads(mut self) -> Self {
+        self.desktop_downloads = true;
+        self
+    }
+
+    #[cfg(feature = "molio")]
+    pub(crate) fn receives_desktop_downloads(&self) -> bool {
+        self.desktop_downloads && !self.tx.is_closed() && !self.diagnostics().terminal
+    }
+
     pub fn send(
         &self,
         message: RendererOutputTransportMessage,
     ) -> Result<(), RendererOutputTransportSendError> {
+        #[cfg(feature = "molio")]
+        let message = match message {
+            RendererOutputTransportMessage::Publication(mut publication)
+                if self.desktop_downloads =>
+            {
+                let limit = self.shared.budget.lock().limits.max_message_bytes;
+                publication.prepare_desktop_downloads(limit);
+                RendererOutputTransportMessage::Publication(publication)
+            }
+            message => message,
+        };
         let _send_order = self.shared.send_order.lock();
         let class = message.admission_class();
         let residence = message.residence();
@@ -517,6 +541,8 @@ fn renderer_output_transport_channel_with_limits(
         RendererOutputTransportSender {
             tx,
             shared: shared.clone(),
+            #[cfg(feature = "molio")]
+            desktop_downloads: false,
         },
         RendererOutputTransportReceiver {
             rx,
@@ -721,6 +747,49 @@ mod tests {
         assert!(receiver.is_terminal());
         assert!(receiver.is_closed());
         assert_eq!(receiver.diagnostics().pending_messages, 0);
+    }
+
+    #[cfg(feature = "molio")]
+    #[tokio::test]
+    async fn oversized_desktop_download_metadata_fails_the_download() {
+        let mut limits = test_limits();
+        limits.max_message_bytes = 4 * 1024;
+        let (sender, mut receiver) = renderer_output_transport_channel_with_limits(limits);
+        let sender = sender.with_desktop_downloads();
+        let normal = RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
+            RendererOwnerAction::Download(RendererPendingDownloadActivation::new(
+                format!("https://example.test/{}", "b".repeat(512)),
+                None,
+                Some("other.bin".to_owned()),
+                None,
+            )),
+        ));
+        let download = RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
+            RendererOwnerAction::Download(RendererPendingDownloadActivation::new(
+                format!("https://example.test/{}", "a".repeat(8192)),
+                None,
+                Some("payload.bin".to_owned()),
+                None,
+            )),
+        ));
+        sender
+            .send(publication(1, vec![normal.clone(), download]))
+            .unwrap();
+        let Some(RendererOutputTransportMessage::Publication(output)) = receiver.recv().await
+        else {
+            panic!("expected a failed download record");
+        };
+        assert_eq!(output.records()[0], normal);
+        let RendererOutputItem::OwnerAction(RendererOwnerAction::Download(download)) =
+            output.records()[1].item()
+        else {
+            panic!("expected a download");
+        };
+        assert!(download.desktop_failure.is_some());
+        assert_eq!(download.suggested_filename.as_deref(), Some("payload.bin"));
+        let next = publication(2, vec![owner_action_record()]);
+        sender.send(next.clone()).unwrap();
+        assert_eq!(receiver.recv().await, Some(next));
     }
 
     #[tokio::test]

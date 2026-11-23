@@ -174,6 +174,64 @@ struct HyperlinkPopupCreator<'s> {
     document_url: url::Url,
 }
 
+fn hyperlink_navigation_initiator(
+    runtime: &PageScriptHost,
+    source_handle: DomHandle,
+    dispatch_scope: crate::native_bridge::OwnerDispatchScope,
+    document_url: &url::Url,
+    policy: &DocumentPolicyContainer,
+    suppress_referrer: bool,
+) -> crate::runtime::RendererNavigationInitiator {
+    let initiator_origin = if policy.sandbox.forces_opaque_origin {
+        moli_url::WebOrigin::Opaque
+    } else {
+        runtime
+            .document_resource_loader_for_dispatch_scope(dispatch_scope)
+            .map(|loader| loader.fetch_context().request_origin())
+            .unwrap_or(moli_url::WebOrigin::Opaque)
+    };
+    let referrer_policy = if suppress_referrer {
+        Some("no-referrer".to_owned())
+    } else {
+        runtime
+            .dom_host()
+            .node(source_handle)
+            .and_then(crate::dom::native::Node::as_element)
+            .and_then(|element| element.attribute("referrerpolicy"))
+            .and_then(crate::referrer_policy::normalize_referrer_policy)
+            .or_else(|| policy.referrer_policy.clone())
+    };
+    crate::runtime::RendererNavigationInitiator::new(
+        runtime
+            .document_referrer_source_url_for_dispatch_scope(dispatch_scope)
+            .unwrap_or_else(|| document_url.clone()),
+        initiator_origin,
+        referrer_policy,
+    )
+}
+
+#[cfg(feature = "molio")]
+pub(super) fn hyperlink_download_initiator(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    source_handle: DomHandle,
+) -> Option<crate::runtime::RendererNavigationInitiator> {
+    let dispatch_scope =
+        browsing_context_dispatch_scope_for_node(scope, runtime_ptr, source_handle)?;
+    let runtime = unsafe { &*runtime_ptr };
+    let policy = runtime.document_policy_container_for_inheritance(dispatch_scope)?;
+    let document = runtime.dom_host().owner_document_handle(source_handle)?;
+    let document_url = runtime.document_url_for_handle(document);
+    Some(hyperlink_navigation_initiator(
+        runtime,
+        source_handle,
+        dispatch_scope,
+        &document_url,
+        &policy,
+        hyperlink_popup_relations(runtime, source_handle, "_self").suppress_referrer,
+    ))
+}
+
 fn hyperlink_popup_creator<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -258,30 +316,13 @@ fn navigate_hyperlink_popup_target(
     creator.policy_container.referrer_policy =
         crate::context_bootstrap::current_document_referrer_policy(scope, creator.opener)
             .or(creator.policy_container.referrer_policy);
-    let initiator_origin = if creator.policy_container.sandbox.forces_opaque_origin {
-        moli_url::WebOrigin::Opaque
-    } else {
-        unsafe { &*runtime_ptr }
-            .document_resource_loader_for_dispatch_scope(dispatch_scope)
-            .map(|loader| loader.fetch_context().request_origin())
-            .unwrap_or(moli_url::WebOrigin::Opaque)
-    };
-    let navigation_initiator = crate::runtime::RendererNavigationInitiator::new(
-        unsafe { &*runtime_ptr }
-            .document_referrer_source_url_for_dispatch_scope(dispatch_scope)
-            .unwrap_or_else(|| creator.document_url.clone()),
-        initiator_origin,
-        if relations.suppress_referrer {
-            Some("no-referrer".to_owned())
-        } else {
-            unsafe { &*runtime_ptr }
-                .dom_host()
-                .node(source_handle)
-                .and_then(crate::dom::native::Node::as_element)
-                .and_then(|element| element.attribute("referrerpolicy"))
-                .and_then(crate::referrer_policy::normalize_referrer_policy)
-                .or_else(|| creator.policy_container.referrer_policy.clone())
-        },
+    let navigation_initiator = hyperlink_navigation_initiator(
+        unsafe { &*runtime_ptr },
+        source_handle,
+        dispatch_scope,
+        &creator.document_url,
+        &creator.policy_container,
+        relations.suppress_referrer,
     );
     creator.policy_container.document_referrer = if relations.suppress_opener {
         navigation_initiator

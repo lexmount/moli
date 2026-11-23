@@ -474,11 +474,16 @@ impl RendererOwnerHandle {
         download: RendererPendingDownloadActivation,
     ) -> RenderRuntimeDispatchOutcome {
         entry.settle_renderer_navigation_follow(true);
+        #[cfg(feature = "molio")]
+        let desktop_downloads = self
+            .state
+            .browser_context_runtime
+            .has_desktop_download_receiver();
         match completion {
             LivePagePendingNavigationCompletion::Background
             | LivePagePendingNavigationCompletion::PublishedPageCreation { .. } => {
                 #[cfg(feature = "molio")]
-                if entry.page_vm().viewport_frames.is_some() {
+                if desktop_downloads {
                     entry.page_vm().append_renderer_output_records(vec![
                         PendingRendererOutputRecord::owner_action(
                             None,
@@ -517,7 +522,7 @@ impl RendererOwnerHandle {
             } => {
                 let reply = match *reply {
                     #[cfg(feature = "molio")]
-                    reply @ RendererPageReply::ViewportNavigation(_) => {
+                    reply @ RendererPageReply::ViewportNavigation(_) if desktop_downloads => {
                         entry.page_vm().append_renderer_output_records(vec![
                             PendingRendererOutputRecord::owner_action(
                                 None,

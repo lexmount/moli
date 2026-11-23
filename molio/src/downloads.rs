@@ -20,7 +20,10 @@ use moli_core::{
 use moli_fetch::FetchCancelHandle;
 use serde::{Deserialize, Serialize};
 use tempfile::TempPath;
-use tokio::sync::{mpsc, watch};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinHandle,
+};
 use url::Url;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -91,10 +94,16 @@ impl DownloadClient {
 pub struct Downloads {
     entries: watch::Sender<Vec<Download>>,
     directory: PathBuf,
-    history: Option<PathBuf>,
+    history: RefCell<Option<DownloadHistory>>,
     next_id: Cell<u64>,
     active: RefCell<HashMap<u64, FetchCancelHandle>>,
+    stopping: Cell<bool>,
     loader: ResourceRequestClient,
+}
+
+struct DownloadHistory {
+    updates: watch::Sender<()>,
+    writer: JoinHandle<()>,
 }
 
 impl Downloads {
@@ -112,17 +121,28 @@ impl Downloads {
         }
         let next_id = restored.len() as u64;
         entries.send_replace(restored);
+        let history = history.map(|path| {
+            let (updates, changes) = watch::channel(());
+            DownloadHistory {
+                updates,
+                writer: tokio::spawn(write_history_updates(path, entries.subscribe(), changes)),
+            }
+        });
         Rc::new(Self {
             entries,
             directory,
-            history,
+            history: RefCell::new(history),
             next_id: Cell::new(next_id),
             active: RefCell::new(HashMap::new()),
+            stopping: Cell::new(false),
             loader,
         })
     }
 
     pub fn start(self: &Rc<Self>, activation: RendererPendingDownloadActivation) {
+        if self.stopping.get() {
+            return;
+        }
         let id = self.next_id.get();
         self.next_id.set(id + 1);
         let url = Url::parse(&activation.url).ok();
@@ -174,6 +194,24 @@ impl Downloads {
         });
     }
 
+    pub async fn shutdown(&self) {
+        self.stopping.set(true);
+        for cancel in self.active.borrow().values() {
+            cancel.cancel();
+        }
+        let mut entries = self.entries.subscribe();
+        let _ = entries
+            .wait_for(|entries| entries.iter().all(|entry| !entry.is_active()))
+            .await;
+        let history = self.history.borrow_mut().take();
+        if let Some(DownloadHistory { updates, writer }) = history {
+            drop(updates);
+            if let Err(error) = writer.await {
+                eprintln!("Could not finish download history writer: {error}");
+            }
+        }
+    }
+
     pub fn command(&self, command: DownloadCommand) {
         if let DownloadCommand::Cancel(id) = command {
             if let Some(cancel) = self.active.borrow().get(&id) {
@@ -200,6 +238,9 @@ impl Downloads {
         activation: RendererPendingDownloadActivation,
         cancel: &FetchCancelHandle,
     ) -> Result<(PathBuf, u64)> {
+        if let Some(error) = activation.desktop_failure {
+            anyhow::bail!("{error}");
+        }
         let (url, status, headers, body) = if let Some(response) = activation.response {
             (
                 Url::parse(&response.final_url)?,
@@ -208,7 +249,14 @@ impl Downloads {
                 response.body.into(),
             )
         } else {
-            let request = download_request(&activation.url, activation.initiator_url.as_deref())?;
+            let initiator = activation.navigation_initiator.as_ref();
+            let request = download_request(&activation.url, initiator.map(|source| source.url()))?;
+            let request = match initiator {
+                Some(source) => request
+                    .with_request_origin(source.origin())
+                    .with_subresource_request_metadata(source.request_metadata()),
+                None => request,
+            };
             ensure!(
                 matches!(request.url.scheme(), "http" | "https"),
                 "Download source is unavailable"
@@ -316,10 +364,27 @@ impl Downloads {
     }
 
     fn persist(&self) {
-        let Some(path) = &self.history else { return };
-        let entries = self.entries.borrow();
-        let history: Vec<_> = entries.iter().filter(|entry| !entry.is_active()).collect();
-        if let Err(error) = write_history(path, &history) {
+        if let Some(history) = self.history.borrow().as_ref() {
+            let _ = history.updates.send(());
+        }
+    }
+}
+
+async fn write_history_updates(
+    path: PathBuf,
+    entries: watch::Receiver<Vec<Download>>,
+    mut changes: watch::Receiver<()>,
+) {
+    while changes.changed().await.is_ok() {
+        let history: Vec<_> = entries
+            .borrow()
+            .iter()
+            .filter(|entry| !entry.is_active())
+            .cloned()
+            .collect();
+        let path = path.clone();
+        let result = tokio::task::spawn_blocking(move || write_history(&path, &history)).await;
+        if let Err(error) = result.map_err(anyhow::Error::from).flatten() {
             eprintln!("Could not save download history: {error:#}");
         }
     }
@@ -382,7 +447,7 @@ fn load_history(path: &Path) -> Vec<Download> {
     }
 }
 
-fn write_history(path: &Path, entries: &[&Download]) -> Result<()> {
+fn write_history(path: &Path, entries: &[Download]) -> Result<()> {
     let directory = path
         .parent()
         .context("Download history has no parent folder")?;
