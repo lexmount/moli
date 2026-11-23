@@ -168,11 +168,10 @@ where
                 let Some(node) = self.clip_chain.get(id.index()) else {
                     break;
                 };
-                if node.owner == root_box {
+                if node.is_viewport() || node.owner.is_some_and(|owner| Some(owner) == root_box) {
                     break;
                 }
-                if node.owner.is_some()
-                    && clip_ids.insert(id)
+                if clip_ids.insert(id)
                     && let Some(space) = self.coordinate_space(node.coordinate_space)
                 {
                     ancestor_clips.push(space.local_to_viewport.map_rect(node.rect));

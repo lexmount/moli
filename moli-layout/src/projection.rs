@@ -781,7 +781,12 @@ where
             viewport_space,
             self.scroll_extents[self.world.root.index()].scrollport,
         );
-        self.assign_box_clip_metadata(self.world.root, Some(viewport_clip), viewport_clip);
+        self.assign_box_clip_metadata(
+            self.world.root,
+            Some(viewport_clip),
+            viewport_clip,
+            &mut Vec::new(),
+        );
         self.paint_events = build_paint_order(self.world);
         let mut text_owners = HashMap::new();
         for event in self.paint_events.clone() {
@@ -892,6 +897,7 @@ where
         id: LayoutBoxId,
         ancestor_clip: Option<LayoutClipChainId>,
         viewport_clip: LayoutClipChainId,
+        legacy_clips: &mut Vec<LayoutClipChainId>,
     ) {
         let index = id.index();
         // CSS overflow clips follow the containing-block chain, not the box
@@ -902,17 +908,47 @@ where
         // accumulated by that fixed containing block. Blink maintains the
         // same separate in-flow, absolute-position and fixed-position clip
         // contexts in its paint property tree builder.
-        let box_clip = if self.world.boxes[index].style.is_absolute_positioned()
+        let mut box_clip = if self.world.boxes[index].style.is_absolute_positioned()
             || self.world.boxes[index].style.is_fixed_positioned()
         {
-            self.world.boxes[index]
+            let mut positioned_clip = self.world.boxes[index]
                 .positioned_containing_block
                 .map_or(Some(viewport_clip), |containing_block| {
                     self.content_clips[containing_block.index()]
-                })
+                });
+            // CSS clip applies to the entire subtree, including descendants
+            // that skip an intermediate overflow clip.
+            for &legacy_clip in legacy_clips.iter() {
+                let legacy = &self.clip_chain[legacy_clip.index()];
+                let mut ancestor = positioned_clip;
+                while let Some(id) = ancestor {
+                    let clip = &self.clip_chain[id.index()];
+                    if clip.owner.is_none() && clip.coordinate_space == legacy.coordinate_space {
+                        break;
+                    }
+                    ancestor = clip.parent;
+                }
+                if ancestor.is_none() {
+                    positioned_clip = Some(self.push_clip(
+                        positioned_clip,
+                        None,
+                        legacy.coordinate_space,
+                        legacy.rect,
+                    ));
+                }
+            }
+            positioned_clip
         } else {
             ancestor_clip
         };
+        let legacy_rect = self.world.boxes[index]
+            .style
+            .legacy_clip_rect(self.boxes[index].border_box);
+        if let Some(rect) = legacy_rect {
+            let clip = self.push_clip(box_clip, None, self.boxes[index].coordinate_space, rect);
+            box_clip = Some(clip);
+            legacy_clips.push(clip);
+        }
         self.boxes[index].clip_chain = box_clip;
         self.background_clips[index] = box_clip;
 
@@ -931,7 +967,10 @@ where
         };
         self.content_clips[index] = child_clip;
         for child in self.world.boxes[index].children.clone() {
-            self.assign_box_clip_metadata(child, child_clip, viewport_clip);
+            self.assign_box_clip_metadata(child, child_clip, viewport_clip, legacy_clips);
+        }
+        if legacy_rect.is_some() {
+            legacy_clips.pop();
         }
     }
 

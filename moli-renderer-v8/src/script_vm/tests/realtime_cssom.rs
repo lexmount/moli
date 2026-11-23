@@ -543,3 +543,53 @@ fn realtime_cssom_existing_custom_function_projection_refreshes_container_width(
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 }
+
+#[test]
+fn legacy_css_clip_hides_paint_hit_targets_without_changing_box_geometry() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html><style>
+        body { margin: 0 }
+        #target { position: absolute; left: 10px; top: 10px; width: 60px; height: 40px;
+                  clip: rect(1px, 1px, 1px, 1px) }
+        #target:focus { clip: rect(auto, auto, auto, 20px) }
+        #fixed { position: fixed; left: 30px; top: 20px; width: 10px; height: 10px }
+        </style><div id=target tabindex=0><div id=fixed></div></div>"#,
+    );
+    {
+        use moli_layout::{
+            LayoutFlushReason, LayoutPassRequest, LayoutRect, LayoutViewport, PaintFragment,
+            PaintShape,
+        };
+        let runtime = vm._context_host.borrow();
+        let pass = runtime
+            .build_layout_pass_for_document(
+                runtime.document_handle(),
+                LayoutPassRequest::with_paint(
+                    LayoutViewport::new(120, 90, 1.0),
+                    LayoutFlushReason::Test,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            pass.paint_snapshot()
+                .unwrap()
+                .fragments
+                .iter()
+                .any(|fragment| {
+                    matches!(fragment, PaintFragment::PushClip { shape: PaintShape::Rect(rect), .. }
+                if *rect == LayoutRect::new(1.0, 1.0, 0.0, 0.0))
+                })
+        );
+    }
+    assert_eq!(
+        vm.eval(
+            r#"const sample = () => [15, 35, 50].map(x => document.elementFromPoint(x, 25)?.id ?? '');
+            const clipped = sample();
+            target.focus();
+            JSON.stringify([target.getBoundingClientRect().width, clipped, sample()])"#,
+        )
+        .unwrap(),
+        r#"[60,["","",""],["","fixed","target"]]"#
+    );
+}
