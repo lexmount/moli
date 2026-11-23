@@ -366,7 +366,7 @@ pub(crate) fn replace_contenteditable_selection(
     )
 }
 
-pub(super) fn replace_contenteditable_selection_after_beforeinput(
+pub(crate) fn replace_contenteditable_selection_after_beforeinput(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,

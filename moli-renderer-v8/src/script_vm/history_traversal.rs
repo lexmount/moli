@@ -13,9 +13,16 @@ impl ScriptVm {
     pub(crate) fn queue_top_level_history_traversal_by_delta(
         &mut self,
         delta: i64,
+        load_root_document: bool,
     ) -> Result<bool> {
         self.with_default_context_scope(|scope, _host_ptr| {
-            Ok(crate::context_bootstrap::queue_top_level_history_traversal_by_delta(scope, delta))
+            Ok(
+                crate::context_bootstrap::queue_top_level_history_traversal_by_delta(
+                    scope,
+                    delta,
+                    load_root_document,
+                ),
+            )
         })
     }
 

@@ -5070,6 +5070,24 @@ pub enum RendererPageCommand {
     SetBypassContentSecurityPolicy(bool),
     SetEmulatedMedia(crate::protocol_types::EmulatedMediaOverrides),
     SetViewportSurface(Option<crate::protocol_types::ViewportSurface>),
+    SubscribeViewportFrames(super::RendererViewportSubscription),
+    WakeViewportFrames,
+    NavigateViewport(Option<String>),
+    TraverseViewportHistory(i64),
+    #[cfg(feature = "devtools")]
+    ReadViewportEditor,
+    #[cfg(feature = "devtools")]
+    ReadViewportSelection(RendererDocumentLifecycleIdentity),
+    #[cfg(feature = "devtools")]
+    ApplyViewportEdit(super::RendererViewportEdit),
+    #[cfg(feature = "devtools")]
+    DropViewportFiles {
+        document: RendererDocumentLifecycleIdentity,
+        x: f64,
+        y: f64,
+        files: Vec<RendererDraggedFile>,
+        modifiers: u8,
+    },
     SetNetworkOffline(bool),
     SetBypassServiceWorker(bool),
     SetBlockedUrlPatterns(Vec<String>),
@@ -5317,6 +5335,10 @@ impl RendererRuntimeEvaluationResult {
 
 #[non_exhaustive]
 pub enum RendererPageReply {
+    #[cfg(feature = "devtools")]
+    ViewportEditor(Option<super::RendererViewportEditor>),
+    #[cfg(feature = "devtools")]
+    ViewportEdit(super::RendererViewportEditReply),
     #[cfg(feature = "devtools")]
     DevTools(RendererDevToolsPageReply),
     ElementClickPreparation(Result<RendererElementClickTarget, RendererElementClickError>),

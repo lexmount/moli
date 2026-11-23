@@ -135,7 +135,6 @@ impl PageScriptHost {
             .visual_state_generation()
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn visual_state_token(
         &self,
         document: crate::runtime::RendererDocumentLifecycleIdentity,

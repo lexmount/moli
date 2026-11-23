@@ -127,6 +127,31 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
     true
 }
 
+pub(crate) fn navigate_top_level_from_browser(
+    scope: &mut v8::PinScope<'_, '_>,
+    target: Option<String>,
+) -> bool {
+    if let Some(target) = target.as_ref()
+        && navigate_top_level_same_document_from_browser(scope, target.clone(), false)
+    {
+        return true;
+    }
+    let window = scope.get_current_context().global(scope);
+    let Some(location) = window_location_for_holder(scope, window) else {
+        return false;
+    };
+    let kind = if target.is_some() {
+        LocationNavigationKind::Assign
+    } else {
+        LocationNavigationKind::Reload
+    };
+    navigate_location_object_with_source_element_and_child_navigate_event(
+        scope, location, kind, target, None, false, false,
+    );
+    context_host_ptr_from_global_bridge(scope)
+        .is_some_and(|host_ptr| unsafe { &*host_ptr }.has_pending_location_navigation())
+}
+
 pub(crate) fn meta_refresh_navigation_kind(
     current_url: &url::Url,
     target_url: &url::Url,

@@ -120,9 +120,12 @@ impl super::PageScriptHost {
         result
     }
 
-    #[cfg(feature = "devtools")]
     pub(in crate::native_bridge::context_host) fn visual_resource_generation(&self) -> u64 {
         self.image_resources.visual_generation()
+    }
+
+    pub(crate) fn set_viewport_resource_wake(&self, wake: &std::sync::Arc<tokio::sync::Notify>) {
+        self.image_resources.set_viewport_resource_wake(wake);
     }
 
     #[cfg(all(test, feature = "devtools"))]
