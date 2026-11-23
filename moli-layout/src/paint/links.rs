@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use crate::{
     LayoutFragmentId, LayoutFragmentKind, LayoutPoint, LayoutSource, PaintLink, PaintLinkTarget,
-    PaintSnapshot, projection::OutputProjection,
+    PaintSnapshot, projection::PaintProjection,
 };
 
 pub(crate) struct LinkProjection {
@@ -11,7 +11,7 @@ pub(crate) struct LinkProjection {
 }
 
 impl LinkProjection {
-    pub(crate) fn new<N, S>(projection: &OutputProjection<'_, N>, source: &S) -> Self
+    pub(crate) fn new<N, S>(projection: &PaintProjection<'_, N>, source: &S) -> Self
     where
         N: Copy + Debug + Eq + Hash,
         S: LayoutSource<NodeId = N>,
@@ -41,7 +41,7 @@ impl LinkProjection {
                                     .first()
                                     .copied()
                             })?;
-                            let fragment = projection.boxes[id.index()].fragments.first()?;
+                            let fragment = projection.geometry(id.index()).fragments.first()?;
                             let fragment = &projection.fragments[fragment.index()];
                             let matrix = projection.coordinate_spaces
                                 [fragment.coordinate_space.index()]
@@ -71,7 +71,7 @@ impl LinkProjection {
 
     pub(super) fn append<N>(
         &self,
-        projection: &OutputProjection<'_, N>,
+        projection: &PaintProjection<'_, N>,
         fragment: LayoutFragmentId,
         snapshot: &mut PaintSnapshot,
     ) where

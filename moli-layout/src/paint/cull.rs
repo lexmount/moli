@@ -15,7 +15,7 @@ use super::{
 };
 use crate::{
     LayoutBoxId, LayoutPoint, LayoutRect, LayoutTransform2D, PaintFilter, PaintFragment,
-    inline::InlinePaintBounds, projection::OutputProjection, stacking::PaintOrderEvent,
+    inline::InlinePaintBounds, projection::PaintProjection, stacking::PaintOrderEvent,
 };
 
 const CULL_ANTIALIAS_MARGIN: f32 = 1.0;
@@ -104,14 +104,14 @@ pub(super) struct PaintCullPlan {
 }
 
 impl PaintCullPlan {
-    pub(super) fn build<N>(projection: &OutputProjection<'_, N>) -> Self
+    pub(super) fn build<N>(projection: &PaintProjection<'_, N>) -> Self
     where
         N: Copy + Debug + Eq + Hash,
     {
-        let mut entries = vec![PaintCullPlanEntry::default(); projection.paint_events.len()];
+        let mut entries = vec![PaintCullPlanEntry::default(); projection.metadata.events.len()];
         let mut contexts = Vec::<ContextAccumulator>::new();
 
-        for (index, event) in projection.paint_events.iter().copied().enumerate() {
+        for (index, event) in projection.metadata.events.iter().copied().enumerate() {
             match event {
                 PaintOrderEvent::PushStackingContext(id) => {
                     contexts.push(ContextAccumulator {
@@ -173,7 +173,7 @@ impl PaintCullPlan {
 }
 
 fn event_ink_bounds<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     event: PaintOrderEvent,
 ) -> PaintCullBounds
 where
@@ -203,10 +203,11 @@ where
             );
             bounds
         }
-        PaintOrderEvent::InlineBox { owner, fragment } => {
-            let id = projection.owner_paint_fragments[owner.index()][fragment];
-            map_box_rect(projection, owner, projection.fragments[id.index()].rect)
-        }
+        PaintOrderEvent::InlineBox { owner, fragment } => map_box_rect(
+            projection,
+            owner,
+            projection.inline_fragments(owner)[fragment].rect,
+        ),
         PaintOrderEvent::InlineText { owner, line, .. } => {
             let layout_box = &projection.world.boxes[owner.index()];
             let context = layout_box.inline_layout.as_ref().unwrap();
@@ -230,10 +231,7 @@ where
     }
 }
 
-fn box_background_bounds<N>(
-    projection: &OutputProjection<'_, N>,
-    id: LayoutBoxId,
-) -> PaintCullBounds
+fn box_background_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -241,7 +239,7 @@ where
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let bounds = map_box_rect(projection, id, projection.boxes[id.index()].border_box);
+    let bounds = map_box_rect(projection, id, projection.geometry(id.index()).border_box);
     if matches!(bounds, PaintCullBounds::Empty) && layout_box.is_replaced() {
         // Replaced-content projection can publish a fallback diagnostic even
         // when its used box has no ink. Do not make diagnostics depend on the
@@ -252,7 +250,7 @@ where
     }
 }
 
-fn box_contents_bounds<N>(projection: &OutputProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
+fn box_contents_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -260,7 +258,7 @@ where
     if !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let mut local = projection.boxes[id.index()].border_box;
+    let mut local = projection.geometry(id.index()).border_box;
     if let Some(context) = layout_box.inline_layout.as_ref() {
         let layout = layout_box.final_layout;
         let origin = LayoutPoint::new(
@@ -285,7 +283,7 @@ where
     }
 }
 
-fn table_border_bounds<N>(projection: &OutputProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
+fn table_border_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -303,7 +301,7 @@ where
     bounds
 }
 
-fn outset_shadow_bounds<N>(projection: &OutputProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
+fn outset_shadow_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -311,7 +309,7 @@ where
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()].paint;
     let areas = BoxAreas::for_box(projection, id);
     let mut bounds = PaintCullBounds::Empty;
@@ -352,7 +350,7 @@ where
     bounds
 }
 
-fn box_outline_bounds<N>(projection: &OutputProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
+fn box_outline_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -360,7 +358,7 @@ where
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()].paint;
     let mut bounds = PaintCullBounds::Empty;
     let radii = layout_box
@@ -376,7 +374,7 @@ where
         bounds.include(map_rect(transform, rect));
     }
 
-    let extent = &projection.scroll_extents[id.index()];
+    let extent = projection.scroll_extent(id.index());
     let scrollbar_transform = if id == projection.world.root {
         LayoutTransform2D::IDENTITY
     } else {
@@ -396,7 +394,7 @@ where
 }
 
 fn context_output_bounds<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     source_bounds: PaintCullBounds,
 ) -> (PaintCullBounds, bool)
@@ -416,7 +414,7 @@ where
         return (source_bounds, false);
     }
 
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
         .local_transform();
@@ -444,14 +442,14 @@ fn filter_moves_pixels(filter: &PaintFilter) -> bool {
 }
 
 fn map_box_rect<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     rect: LayoutRect,
 ) -> PaintCullBounds
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
         .local_transform();

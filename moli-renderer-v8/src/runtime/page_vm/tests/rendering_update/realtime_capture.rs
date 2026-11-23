@@ -299,9 +299,10 @@ fn realtime_screencast_reuses_published_scroll_and_matches_fresh_pixels() {
             document.body.style.cssText = 'margin:0;height:850px;background:white';
             document.body.innerHTML = `
                 <div style="position:fixed;top:3px;right:3px;width:10px;height:10px;background:red"></div>
+                <div id="overlay" style="position:fixed;top:37px;left:8px;width:35px;height:47px;background:magenta;clip:rect(1px,24px,40px,3px);z-index:1;opacity:.6"></div>
                 <div id="scroller" style="position:absolute;top:58px;left:4px;width:70px;height:36px;overflow:auto;transform:translateX(.5px)">
                     <div style="position:sticky;top:0;height:8px;background:blue"></div>
-                    <div style="height:130px;background:linear-gradient(yellow,green)">Text</div>
+                    <div style="height:130px;background:linear-gradient(yellow,green)"><span style="background:cyan">Text <span style="display:inline-block;width:8px;height:8px;background:black"></span> wraps</span></div>
                 </div>
                 <iframe id="frame" style="position:absolute;left:85px;top:50px;width:65px;height:45px;border:0"></iframe>
             `;
@@ -375,5 +376,23 @@ fn realtime_screencast_reuses_published_scroll_and_matches_fresh_pixels() {
             };
             assert_eq!(moli_image::decode_png(&fresh.bytes).unwrap().rgba, pixels);
         }
+
+        let session = RendererScreencastPaintSession::default();
+        let (before_style, known) = capture(&mut page, &session, None);
+        page.vm_mut()
+            .eval("overlay.style.clip='rect(3px,31px,24px,13px)';overlay.style.zIndex='-1'")
+            .unwrap();
+        let (after_style, _) = capture(&mut page, &session, Some(known));
+        assert_ne!(before_style, after_style);
+        let RendererCaptureScreenshotReply::Captured(fresh) = page
+            .capture_screenshot(RendererCaptureScreenshotRequest::viewport_png())
+            .unwrap()
+        else {
+            panic!("fresh screenshot after the clip and stacking order changed");
+        };
+        assert_eq!(
+            moli_image::decode_png(&fresh.bytes).unwrap().rgba,
+            after_style
+        );
     });
 }

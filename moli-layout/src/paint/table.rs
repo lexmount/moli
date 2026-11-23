@@ -6,11 +6,11 @@ use std::{fmt::Debug, hash::Hash};
 
 use crate::{
     LayoutBoxId, PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintColor,
-    PaintCornerRadii, PaintEdgeSizes, PaintFragment, PaintSnapshot, projection::OutputProjection,
+    PaintCornerRadii, PaintEdgeSizes, PaintFragment, PaintSnapshot, projection::PaintProjection,
 };
 
 pub(super) fn project_collapsed_table_borders<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     snapshot: &mut PaintSnapshot,
 ) where
@@ -23,7 +23,7 @@ pub(super) fn project_collapsed_table_borders<N>(
     let Some(borders) = projection.world.collapsed_table_borders.get(&id) else {
         return;
     };
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
 

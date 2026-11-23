@@ -13,11 +13,14 @@
 
 mod coordinates;
 mod paint_space;
+mod paint_view;
 mod scroll;
 mod sticky;
 
 use coordinates::{BoxPlacement, resolve_coordinate_spaces};
 pub(crate) use paint_space::PaintSpace;
+pub(crate) use paint_view::PaintProjection;
+use paint_view::{BoxPaintMetadata, PaintMetadata};
 pub(crate) use scroll::ScrollProjection;
 use scroll::clamp_scroll_offset;
 
@@ -105,12 +108,13 @@ where
             request
                 .resolve(viewport, projection.viewport_scroll, content_size)
                 .map(|capture| {
+                    let paint_projection = PaintProjection::from_layout_pass(&projection);
                     crate::paint::project_paint_snapshot(
-                        &projection,
+                        &paint_projection,
                         capture,
                         content_size,
                         (reason == LayoutFlushReason::Print)
-                            .then(|| crate::paint::LinkProjection::new(&projection, source)),
+                            .then(|| crate::paint::LinkProjection::new(&paint_projection, source)),
                         &mut embedded_paint,
                     )
                 })
@@ -183,7 +187,12 @@ where
             }
         })
         .collect();
-    let screen_diagnostics = retain_screen_paint.then(|| projection.diagnostics.clone());
+    let screen_paint_inputs = retain_screen_paint.then(|| {
+        (
+            std::mem::take(&mut projection.paint_metadata),
+            projection.diagnostics.clone(),
+        )
+    });
     let tree = projection.into_frozen_tree(
         source.root(),
         content_size,
@@ -191,7 +200,7 @@ where
         embedded_frames,
         scroll_projection,
     );
-    let screen_paint = screen_diagnostics.map(|diagnostics| {
+    let screen_paint = screen_paint_inputs.map(|(paint_metadata, diagnostics)| {
         world.box_caches = Vec::new();
         world.native_grid_details = HashMap::new();
         world.resolved_grid_tracks = HashMap::new();
@@ -200,6 +209,7 @@ where
             world,
             frames: screen_frames,
             diagnostics,
+            paint_metadata,
         })
     });
     Ok(LayoutPassResult::new(
@@ -221,6 +231,7 @@ where
     world: LayoutWorld<N>,
     frames: HashMap<N, (LayoutBoxId, Box<Self>)>,
     diagnostics: Vec<PaintDiagnostic>,
+    paint_metadata: PaintMetadata,
 }
 
 impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
@@ -240,32 +251,18 @@ impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
                 "paint inputs and published box placements differ",
             ));
         }
-        let mut projection = OutputProjection::new(world, tree.viewport);
-        projection.viewport_scroll = tree.viewport_scroll;
-        projection.diagnostics.clone_from(&self.diagnostics);
-        for (index, layout_box) in tree.boxes.iter().enumerate() {
-            let mut geometry = layout_box.geometry.clone();
-            geometry.fragments.clear();
-            projection.boxes.push(geometry);
-            projection
-                .scroll_extents
-                .push(layout_box.scroll_extent.clone());
-            projection.resolved_transforms[index] = scroll.placement(index).0.transform;
-        }
-        projection.coordinate_spaces = resolve_coordinate_spaces(
+        let coordinates = resolve_coordinate_spaces(
             world.root,
             tree.viewport_scroll,
             tree.boxes.len(),
             true,
             |index| Ok(scroll.placement(index)),
             |id| {
-                let extent = &projection.scroll_extents[id.index()];
+                let extent = &tree.boxes[id.index()].scroll_extent;
                 extent.is_scroll_container.then_some(extent.applied_offset)
             },
-        )?
-        .spaces;
-        projection.build_fragments();
-        projection.assign_clip_and_paint_order();
+        )?;
+        let projection = PaintProjection::from_publication(self, tree, scroll, &coordinates.spaces);
 
         let mut embedded_paint = HashMap::new();
         for frame in tree.embedded_frames() {
@@ -316,7 +313,7 @@ impl ProjectedCoordinateSpace {
     }
 }
 
-pub(crate) struct OutputProjection<'a, N>
+struct OutputProjection<'a, N>
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -337,11 +334,7 @@ where
     pub(crate) diagnostics: Vec<PaintDiagnostic>,
     resolved_transforms: Vec<ResolvedLayoutTransform>,
     scrollable_overflow: Vec<LayoutRect>,
-    pub(crate) direct_fragments: Vec<Option<LayoutFragmentId>>,
-    pub(crate) owner_paint_fragments: Vec<Vec<LayoutFragmentId>>,
-    pub(crate) background_clips: Vec<Option<LayoutClipChainId>>,
-    pub(crate) content_clips: Vec<Option<LayoutClipChainId>>,
-    pub(crate) paint_events: Vec<PaintOrderEvent>,
+    paint_metadata: PaintMetadata,
 }
 
 impl<'a, N> OutputProjection<'a, N>
@@ -381,16 +374,11 @@ where
             diagnostics: Vec::new(),
             resolved_transforms: vec![ResolvedLayoutTransform::IDENTITY; count],
             scrollable_overflow: vec![LayoutRect::ZERO; count],
-            direct_fragments: vec![None; count],
-            owner_paint_fragments: vec![Vec::new(); count],
-            background_clips: vec![None; count],
-            content_clips: vec![None; count],
-            paint_events: Vec::new(),
+            paint_metadata: PaintMetadata {
+                boxes: (0..count).map(|_| BoxPaintMetadata::default()).collect(),
+                events: Vec::new(),
+            },
         }
-    }
-
-    pub(crate) fn resolved_transform_has_unsupported_3d(&self, id: LayoutBoxId) -> bool {
-        self.resolved_transforms[id.index()].has_unsupported_3d
     }
 
     fn scrollbar_control_thickness(&self, id: LayoutBoxId) -> f32 {
@@ -778,15 +766,13 @@ where
                     clip_chain: None,
                     paint_order: None,
                 });
-                self.direct_fragments[index] = Some(fragment);
+                self.paint_metadata.boxes[index].direct_fragment = Some(fragment);
                 self.register_box_fragment(index, fragment);
             }
 
             let Some(context) = layout_box.inline_layout.as_ref() else {
                 continue;
             };
-            self.owner_paint_fragments[index]
-                .reserve_exact(context.fragments.boxes.len() + context.fragments.text.len());
             let layout = layout_box.final_layout;
             let box_id = LayoutBoxId::from_index(index);
             let vertical_leading_gutter =
@@ -824,6 +810,7 @@ where
                 });
                 self.boxes[index].fragments.push(fragment);
             }
+            let inline_start = self.fragments.len();
             for inline in &context.fragments.boxes {
                 let target = inline.box_id.index();
                 let box_model = inline_fragment_box_model(self.world, index, inline);
@@ -841,7 +828,6 @@ where
                     clip_chain: None,
                     paint_order: None,
                 });
-                self.owner_paint_fragments[index].push(fragment);
                 self.register_box_fragment(target, fragment);
             }
             for text in &context.fragments.text {
@@ -860,9 +846,9 @@ where
                     clip_chain: None,
                     paint_order: None,
                 });
-                self.owner_paint_fragments[index].push(fragment);
                 self.register_box_fragment(target, fragment);
             }
+            self.paint_metadata.boxes[index].inline_fragments = inline_start..self.fragments.len();
         }
     }
 
@@ -891,14 +877,15 @@ where
             viewport_clip,
             &mut Vec::new(),
         );
-        self.paint_events = build_paint_order(self.world);
+        self.paint_metadata.events = build_paint_order(self.world);
         let mut text_owners = HashMap::new();
-        for event in self.paint_events.clone() {
+        for event_index in 0..self.paint_metadata.events.len() {
+            let event = self.paint_metadata.events[event_index];
             match event {
                 PaintOrderEvent::BoxBackground(id) => {
                     let index = id.index();
-                    if let Some(fragment) = self.direct_fragments[index] {
-                        self.assign_fragment_paint_metadata(fragment, self.background_clips[index]);
+                    if let Some(fragment) = self.paint_metadata.boxes[index].direct_fragment {
+                        self.assign_fragment_paint_metadata(fragment, self.boxes[index].clip_chain);
                     }
                 }
                 PaintOrderEvent::InlineContents(id) => {
@@ -906,11 +893,9 @@ where
                 }
                 PaintOrderEvent::BoxText(id) => self.assign_owner_paint_metadata(id, true),
                 PaintOrderEvent::InlineBox { owner, fragment } => {
-                    let fragment = self.owner_paint_fragments[owner.index()][fragment];
-                    self.assign_fragment_paint_metadata(
-                        fragment,
-                        self.content_clips[owner.index()],
-                    );
+                    let metadata = &self.paint_metadata.boxes[owner.index()];
+                    let fragment = self.fragments[metadata.inline_fragments.clone()][fragment].id;
+                    self.assign_fragment_paint_metadata(fragment, metadata.content_clip);
                 }
                 PaintOrderEvent::InlineText { owner, line, item } => {
                     // Index the shaped line and its hit fragments once. Repeated
@@ -936,12 +921,15 @@ where
                                 (ranges, Vec::new())
                             })
                             .collect::<Vec<_>>();
+                        let range = self.paint_metadata.boxes[owner.index()]
+                            .inline_fragments
+                            .clone();
+                        let text_fragments =
+                            &self.fragments[range][context.fragments.boxes.len()..];
                         for (index, text) in context.fragments.text.iter().enumerate() {
-                            lines[text.line_index].1.push((
-                                text.output_range.clone(),
-                                self.owner_paint_fragments[owner.index()]
-                                    [context.fragments.boxes.len() + index],
-                            ));
+                            lines[text.line_index]
+                                .1
+                                .push((text.output_range.clone(), text_fragments[index].id));
                         }
                         for (_, fragments) in &mut lines {
                             fragments.sort_by_key(|(range, _)| (range.start, range.end));
@@ -958,7 +946,7 @@ where
                     {
                         self.assign_fragment_paint_metadata(
                             *fragment,
-                            self.content_clips[owner.index()],
+                            self.paint_metadata.boxes[owner.index()].content_clip,
                         );
                     }
                 }
@@ -985,13 +973,18 @@ where
 
     fn assign_owner_paint_metadata(&mut self, id: LayoutBoxId, text: bool) {
         let index = id.index();
-        for fragment in self.owner_paint_fragments[index].clone() {
+        let metadata = &self.paint_metadata.boxes[index];
+        let clip = metadata.content_clip;
+        for fragment_index in metadata.inline_fragments.clone() {
             let is_text = matches!(
-                self.fragments[fragment.index()].kind,
+                self.fragments[fragment_index].kind,
                 LayoutFragmentKind::Text { .. }
             );
             if is_text == text {
-                self.assign_fragment_paint_metadata(fragment, self.content_clips[index]);
+                self.assign_fragment_paint_metadata(
+                    LayoutFragmentId::from_index(fragment_index),
+                    clip,
+                );
             }
         }
     }
@@ -1018,7 +1011,7 @@ where
             let mut positioned_clip = self.world.boxes[index]
                 .positioned_containing_block
                 .map_or(Some(viewport_clip), |containing_block| {
-                    self.content_clips[containing_block.index()]
+                    self.paint_metadata.boxes[containing_block.index()].content_clip
                 });
             // CSS clip applies to the entire subtree, including descendants
             // that skip an intermediate overflow clip.
@@ -1060,7 +1053,6 @@ where
             legacy_clips.push(clip);
         }
         self.boxes[index].clip_chain = box_clip;
-        self.background_clips[index] = box_clip;
 
         let child_clip = if id != self.world.root
             && !self.world.is_viewport_defining_body(id)
@@ -1075,7 +1067,7 @@ where
         } else {
             box_clip
         };
-        self.content_clips[index] = child_clip;
+        self.paint_metadata.boxes[index].content_clip = child_clip;
         for child in self.world.boxes[index].children.clone() {
             self.assign_box_clip_metadata(child, child_clip, viewport_clip, legacy_clips);
         }
