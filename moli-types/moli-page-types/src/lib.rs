@@ -3413,6 +3413,20 @@ pub struct EmulatedMediaOverrides {
     pub reduced_transparency: Option<String>,
     pub forced_colors: Option<String>,
     pub contrast: Option<String>,
+    pub vision_deficiency: VisionDeficiency,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VisionDeficiency {
+    #[default]
+    None,
+    BlurredVision,
+    ReducedContrast,
+    Achromatopsia,
+    Deuteranopia,
+    Protanopia,
+    Tritanopia,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

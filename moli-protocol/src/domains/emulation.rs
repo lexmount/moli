@@ -247,6 +247,9 @@ pub(crate) fn try_start_emulation_command_dispatch(
             Some(start_user_agent_override_command(conn, cmd))
         }
         Some(EmulationAction::SetEmulatedMedia) => Some(start_emulated_media_command(conn, cmd)),
+        Some(EmulationAction::SetEmulatedVisionDeficiency) => {
+            Some(start_vision_deficiency_command(conn, cmd))
+        }
         Some(EmulationAction::SetDefaultBackgroundColorOverride) => Some(
             EmulationCommandTaskStep::Complete(default_background_color_command(conn, cmd)),
         ),
@@ -930,16 +933,46 @@ fn start_emulated_media_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let overrides = media::emulated_media_overrides_from_params(params);
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_emulated_media(overrides.clone());
-        }
-    }) {
+    update_media_overrides(conn, cmd, |mut state| state.set_emulated_media(overrides))
+}
+
+fn start_vision_deficiency_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> EmulationCommandTaskStep {
+    #[derive(serde::Deserialize)]
+    struct Params {
+        r#type: moli_page_types::VisionDeficiency,
+    }
+
+    let Ok(Some(params)) = cmd.get_params::<Params>() else {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32602,
+            "InvalidParams",
+        ));
+    };
+    update_media_overrides(conn, cmd, |mut state| {
+        state.set_vision_deficiency(params.r#type)
+    })
+}
+
+fn update_media_overrides(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+    update: impl FnOnce(
+        crate::conn::TargetEmulationStateUpdate<'_>,
+    ) -> crate::conn::EmulatedMediaOverrides,
+) -> EmulationCommandTaskStep {
+    let mut overrides = None;
+    conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
+        overrides = state.map(update);
+    });
+    let Some(overrides) = overrides else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
         ));
-    }
+    };
     let page_overrides: moli_core::page::EmulatedMediaOverrides = (&overrides).into();
     if !emulation_command_is_context_wide(conn, cmd.session_id)
         && let Some(step) = native_configuration::try_start(
