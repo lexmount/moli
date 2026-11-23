@@ -40,6 +40,7 @@ static NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuxiliaryNavigationOwner {
     Browser,
+    #[cfg(feature = "molio")]
     Renderer,
 }
 

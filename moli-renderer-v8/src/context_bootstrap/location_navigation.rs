@@ -154,6 +154,7 @@ fn navigate_top_level_same_document<'s>(
     true
 }
 
+#[cfg(feature = "molio")]
 pub(crate) fn queue_related_popup_navigation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
