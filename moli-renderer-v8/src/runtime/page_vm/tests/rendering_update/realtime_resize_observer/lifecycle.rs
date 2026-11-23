@@ -712,10 +712,10 @@ fn realtime_file_input_commits_schedule_validity_resize_without_capture() {
                 .get_element_by_id("upload")
                 .unwrap();
             let chosen = crate::dom::native::SelectedFile {
-                relative_path: String::new(),
                 data: b"abc".to_vec().into(),
                 mime_type: "text/plain".to_owned(),
                 name: "chosen.txt".to_owned(),
+                relative_path: String::new(),
                 last_modified: 7.0,
             };
 

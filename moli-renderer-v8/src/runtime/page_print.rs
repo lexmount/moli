@@ -1,6 +1,7 @@
 //! Native PDF requests, replies and isolated print-layout lifecycle.
 
 use super::PageVm;
+use crate::native_bridge::LayoutPublicationRequest;
 use crate::style_engine::StyloStyleEnvironment;
 use moli_layout::{PaintCaptureRequest, PaintViewport};
 use moli_page_types::LayoutPolicy;
@@ -58,7 +59,7 @@ impl PageVm {
                 include_backgrounds: request.print_background,
                 ..PaintCaptureRequest::print_document()
             },
-            crate::native_bridge::LayoutPublicationRequest::Transient,
+            LayoutPublicationRequest::Transient,
             environment_override,
         );
         Ok(match result? {

@@ -255,6 +255,29 @@ impl CssImageResourceStore {
         })
     }
 
+    pub(super) fn ready_for_capture(
+        &self,
+        document_handle: DomHandle,
+        resolved_url: &str,
+    ) -> Option<super::CaptureReadyImage> {
+        let key = CssImageResourceKey {
+            document_handle,
+            request_key: ImageRequestKey::with_density(
+                resolved_url.to_owned(),
+                ImageRequestCorsMode::NoCors,
+                1.0,
+            ),
+        };
+        let inner = self.inner.lock();
+        let slot = inner.slots.get(&key)?;
+        let CssImageResourceState::Ready(resource) = &slot.state else {
+            return None;
+        };
+        Some(super::CaptureReadyImage::from_resource(Arc::clone(
+            resource,
+        )))
+    }
+
     pub(super) fn retire_document(&self, document_handle: DomHandle) -> usize {
         let mut inner = self.inner.lock();
         let before = inner.slots.len();
