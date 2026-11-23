@@ -637,6 +637,21 @@ impl DocumentRuntime {
         self.connected_style_load_is_queued(handle)
     }
 
+    #[cfg(test)]
+    pub(crate) fn pending_style_import_binding_for_test(
+        &self,
+        handle: DomHandle,
+    ) -> Option<(usize, bool)> {
+        let operation = self
+            .stylesheet_lifecycle
+            .owner_states
+            .pending_operation(handle)?;
+        let ConnectedLoadParameters::StyleImports { roots, .. } = &operation.parameters else {
+            return None;
+        };
+        Some((roots.len(), operation.blocking_operation.is_some()))
+    }
+
     pub(super) fn push_ready_connected_style_load(&mut self, ready: ReadyConnectedStyleLoad) {
         let producer = self
             .stylesheet_lifecycle
@@ -728,11 +743,17 @@ impl DocumentRuntime {
         if !node.flags().parser_created() || !node.is_html_element_named("style") {
             return false;
         }
-        document_owned_blocking_stylesheet_candidate_for_node(
+        let Some(candidate) = document_owned_blocking_stylesheet_candidate_for_node(
             &self.dom_host,
             NodeId::new(handle.index()),
-        )
-        .is_some()
+        ) else {
+            return false;
+        };
+        let signature = DocumentBlockingStylesheetSignature::from_candidate(&candidate);
+        self.stylesheet_lifecycle
+            .fetches
+            .blocking_operation(NodeId::new(handle.index()), &signature)
+            .is_none()
     }
 
     pub(crate) fn has_pending_style_loads(&self) -> bool {
