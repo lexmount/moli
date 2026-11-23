@@ -75,7 +75,8 @@ where
     let mut projection = OutputProjection::new(world, viewport);
     projection.build_local_box_geometry(&overflow);
     projection.build_scroll_extents(&overflow);
-    let scroll_projection = projection.build_coordinate_spaces(retain_scroll_projection)?;
+    let scroll_projection =
+        projection.build_coordinate_spaces(paint_capture.is_some(), retain_scroll_projection)?;
     for object in &mut object_geometry {
         let owner = object.owner.index();
         let content = projection.boxes[owner].content_box;
@@ -594,6 +595,7 @@ where
 
     fn build_coordinate_spaces(
         &mut self,
+        paint: bool,
         retain: bool,
     ) -> Result<Option<Box<ScrollProjection<N>>>, LayoutError> {
         let world = self.world;
@@ -618,7 +620,7 @@ where
             world.root,
             self.viewport_scroll,
             world.boxes.len(),
-            true,
+            paint,
             |index| match &retained {
                 Some(retained) => Ok(retained.placement(index)),
                 None => placements(index),
@@ -1276,7 +1278,7 @@ mod dependency_tests {
                 scrollbar_colors: None,
             })
             .collect();
-        projection.build_coordinate_spaces(false).unwrap();
+        projection.build_coordinate_spaces(false, false).unwrap();
         let sticky = &projection.coordinate_spaces[2].layout;
         assert_eq!(
             sticky.local_to_viewport.map_point(LayoutPoint::ZERO).y,
