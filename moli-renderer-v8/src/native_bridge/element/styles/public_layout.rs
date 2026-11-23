@@ -1,7 +1,7 @@
 use moli_layout::LayoutError;
 
 use super::declaration::{
-    StyleObservation, native_value_uses_container_geometry, property_uses_container_geometry,
+    StyleObservation, property_uses_container_geometry,
     style_property_value_for_pseudo_with_context, style_property_value_with_context,
 };
 use super::{
@@ -74,12 +74,7 @@ fn size_container_dependency_needs_layout<'a>(
                 pass.depends_on_size_container_query(handle, pseudo)
                     || properties.into_iter().any(|property| {
                         let property = canonical_style_property_name(property);
-                        pass.property_uses_container_units(
-                            handle,
-                            pseudo,
-                            &property,
-                            native_value_uses_container_geometry,
-                        )
+                        pass.property_uses_container_units(handle, pseudo, &property)
                     })
             })
         })

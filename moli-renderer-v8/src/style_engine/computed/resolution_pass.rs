@@ -7,17 +7,14 @@ use selectors::matching::{
 use style::{
     Atom,
     animation::DocumentAnimationSet,
-    applicable_declarations::{ApplicableDeclarationList, CascadePriority, RevertKind},
+    applicable_declarations::ApplicableDeclarationList,
     computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
     },
     dom::{TElement, TNode},
-    properties::{
-        CSSWideKeyword, ComputedValues, LonghandId, PropertyDeclaration, PropertyDeclarationBlock,
-        PropertyDeclarationId, PropertyId,
-    },
+    properties::ComputedValues,
     selector_parser::{PseudoElement, SelectorImpl, SnapshotMap},
     servo_arc::Arc as ServoArc,
     shared_lock::StylesheetGuards,
@@ -274,19 +271,12 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         false
     }
 
-    /// Inspect the winning native declaration for the requested property.
-    /// Stylo's container-unit flag describes the whole style, so it only
-    /// gates the value probe once we know which declaration the read uses.
     pub(crate) fn property_uses_container_units(
         &mut self,
         handle: DomHandle,
         pseudo: Option<&str>,
         property: &str,
-        value_uses_container_units: impl Fn(&str, &ComputedValues) -> bool,
     ) -> bool {
-        let Ok(property) = PropertyId::parse_enabled_for_all_content(property) else {
-            return false;
-        };
         let Some(element) = self.prepare(handle) else {
             return false;
         };
@@ -304,85 +294,17 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                 element.borrow_data()?.styles.pseudos.get(pseudo).cloned()
             }
         });
-        let probe = |longhand: LonghandId| {
-            let mut candidate = element;
-            let mut pseudo = pseudo.as_ref().zip(pseudo_style.as_deref());
-            loop {
-                let primary = candidate
-                    .borrow_data()
-                    .and_then(|data| data.styles.get_primary().cloned());
-                let Some(style) = pseudo.map(|(_, style)| style).or(primary.as_deref()) else {
-                    return false;
-                };
-                if !style
-                    .flags
-                    .contains(ComputedValueFlags::SELF_OR_ANCESTOR_HAS_SIZE_CONTAINER_TYPE)
-                {
-                    return false;
-                }
-                match native_property_declaration(
-                    style,
-                    pseudo.map(|(pseudo, _)| pseudo),
-                    longhand,
-                    &self.context.shared.guards,
-                ) {
-                    Some((declaration, block)) => match declaration.get_css_wide_keyword() {
-                        Some(CSSWideKeyword::Inherit) => {}
-                        Some(CSSWideKeyword::Unset) if longhand.inherited() => {}
-                        Some(_) => return false,
-                        None => {
-                            if !style
-                                .flags
-                                .contains(ComputedValueFlags::USES_CONTAINER_UNITS)
-                            {
-                                return false;
-                            }
-                            let mut value = String::new();
-                            if declaration.to_css(&mut value).is_err() {
-                                return true;
-                            }
-                            if value.is_empty()
-                                && matches!(declaration, PropertyDeclaration::WithVariables(_))
-                            {
-                                // Pending substitutions from shorthands serialize
-                                // at the shorthand, rather than on each longhand.
-                                for shorthand in declaration
-                                    .id()
-                                    .as_longhand()
-                                    .into_iter()
-                                    .flat_map(LonghandId::shorthands)
-                                {
-                                    let _ = block.property_value_to_css(
-                                        &PropertyId::NonCustom(shorthand.into()),
-                                        &mut value,
-                                    );
-                                    if !value.is_empty() {
-                                        break;
-                                    }
-                                }
-                                if value.is_empty() {
-                                    return true;
-                                }
-                            }
-                            return value_uses_container_units(&value, style);
-                        }
-                    },
-                    None if longhand.inherited() => {}
-                    None => return false,
-                }
-                if pseudo.take().is_none() {
-                    let Some(parent) = candidate.traversal_parent() else {
-                        return false;
-                    };
-                    candidate = parent;
-                }
-            }
+        let (style, pseudo) = match pseudo.as_ref().zip(pseudo_style) {
+            Some((pseudo, style)) => (style, Some(pseudo)),
+            None => (primary, None),
         };
-        match property.as_shorthand() {
-            Ok(shorthand) => shorthand.longhands().any(probe),
-            Err(PropertyDeclarationId::Longhand(longhand)) => probe(longhand),
-            Err(PropertyDeclarationId::Custom(_)) => false,
-        }
+        super::container_units::property_uses_container_units(
+            self.context.shared,
+            element,
+            style,
+            pseudo,
+            property,
+        )
     }
 
     #[cfg(feature = "devtools")]
@@ -564,52 +486,6 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         }
         Some(element)
     }
-}
-
-fn native_property_declaration<'a>(
-    style: &'a ComputedValues,
-    pseudo: Option<&PseudoElement>,
-    property: LonghandId,
-    guards: &'a StylesheetGuards<'a>,
-) -> Option<(&'a PropertyDeclaration, &'a PropertyDeclarationBlock)> {
-    let physical = property.to_physical(style.writing_mode);
-    let restriction = pseudo.and_then(|pseudo| pseudo.property_restriction());
-    let mut reverted: Option<(CascadePriority, RevertKind)> = None;
-    for node in style.rules().self_and_ancestors() {
-        let priority = node.cascade_priority();
-        let level = priority.cascade_level();
-        let origin = level.origin();
-        if !priority.flags().is_empty()
-            || reverted.is_some_and(|(from, kind)| !from.allows_when_reverted(&priority, kind))
-        {
-            continue;
-        }
-        let Some(source) = node.style_source() else {
-            continue;
-        };
-        let block = source.read(origin.guard(guards));
-        for (declaration, importance) in block.declaration_importance_iter().rev() {
-            let Some(longhand) = declaration.id().as_longhand() else {
-                continue;
-            };
-            if longhand.to_physical(style.writing_mode) != physical
-                || importance.important() != level.is_important()
-                || restriction.is_some_and(|flags| !longhand.flags().contains(flags))
-                    && origin != style::rule_tree::CascadeOrigin::UA
-            {
-                continue;
-            }
-            if let Some(kind) = declaration
-                .get_css_wide_keyword()
-                .and_then(CSSWideKeyword::revert_kind)
-            {
-                reverted = Some((priority, kind));
-                break;
-            }
-            return Some((declaration, block));
-        }
-    }
-    None
 }
 
 impl Drop for StyleResolutionPass<'_, '_> {
