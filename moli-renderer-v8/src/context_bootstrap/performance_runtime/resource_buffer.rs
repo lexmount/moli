@@ -78,8 +78,9 @@ pub(super) fn add_resource_timing_entry<'s>(
     else {
         return;
     };
-    // Count a full primary buffer when the entry is queued, including
-    // entries later rescued by a buffer-full handler.
+    // Performance Timeline counts a full primary buffer when the entry is
+    // queued, even if a later buffer-full handler rescues it from secondary.
+    // A pending full task alone does not mean that the primary buffer is full.
     registry.note_resource_timing_entry_queued(buffer_id);
     if registry.resource_timing_buffer_can_add_immediately(buffer_id) {
         append_resource_timing_to_primary(scope, &registry, performance, entry, buffer_id);
