@@ -32,38 +32,28 @@ use std::sync::Arc;
 /// Maximum estimated RGBA bytes simultaneously owned by the output and nested
 /// filter surfaces in one raster call.
 pub const MAX_TRANSIENT_RASTER_BYTES: usize = 256 * 1024 * 1024;
+
+/// The device-pixel dimensions and storage size of a tightly packed 32-bit target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RasterDimensions {
-    width: u32,
-    height: u32,
-    byte_len: usize,
+pub struct RasterBufferLayout {
+    pub width: u32,
+    pub height: u32,
+    pub byte_len: usize,
+}
+
+/// The channel order of a caller's straight-alpha pixel buffer.
+#[derive(Clone, Copy)]
+pub enum RasterPixelFormat {
+    Rgba8,
+    Bgra8,
 }
 
 /// Rasterizes an owned snapshot to row-major, straight-alpha RGBA8 pixels with Vello CPU.
 pub fn raster_snapshot(snapshot: &PaintSnapshot) -> Result<RasterImage, PaintError> {
-    let dimensions = validate_dimensions(snapshot.surface)?;
-    let max_filter_depth = validate_fragment_stream(snapshot)?;
-    validate_resource_budget(dimensions, max_filter_depth)?;
-    let scale = f64::from(snapshot.surface.device_scale);
-
-    let mut renderer = VelloCpuImageRenderer::new(dimensions.width, dimensions.height);
-    let mut rgba = Vec::new();
-    renderer.render_to_vec(
-        |scene| {
-            paint_canvas(scene, snapshot.canvas_color, dimensions);
-            paint_fragment_stream(scene, snapshot, &snapshot.fragments, scale, dimensions);
-        },
-        &mut rgba,
-    );
-
-    if rgba.len() != dimensions.byte_len {
-        return Err(PaintError::UnexpectedBufferLength {
-            expected: dimensions.byte_len,
-            actual: rgba.len(),
-        });
-    }
-    unpremultiply_rgba(&mut rgba);
-
+    let dimensions = validated_snapshot_layout(snapshot)?;
+    let mut rgba = vec![0; dimensions.byte_len];
+    render_snapshot(snapshot, dimensions, &mut rgba);
+    unpremultiply::<false>(&mut rgba);
     Ok(RasterImage {
         width: dimensions.width,
         height: dimensions.height,
@@ -71,9 +61,66 @@ pub fn raster_snapshot(snapshot: &PaintSnapshot) -> Result<RasterImage, PaintErr
     })
 }
 
+/// Computes the required device-pixel buffer layout before storage is allocated.
+pub fn raster_buffer_layout(
+    css_width: f32,
+    css_height: f32,
+    device_scale: f32,
+) -> Result<RasterBufferLayout, PaintError> {
+    let dimensions = validate_dimensions(PaintCaptureSurface::new(
+        css_width,
+        css_height,
+        device_scale,
+    ))?;
+    validate_resource_budget(dimensions, 0)?;
+    Ok(dimensions)
+}
+
+/// Paints directly into the caller's tightly packed pixel buffer.
+/// The slice must contain exactly the number of bytes required by the snapshot.
+pub fn raster_snapshot_into(
+    snapshot: &PaintSnapshot,
+    pixels: &mut [u8],
+    format: RasterPixelFormat,
+) -> Result<RasterBufferLayout, PaintError> {
+    let dimensions = validated_snapshot_layout(snapshot)?;
+    if pixels.len() != dimensions.byte_len {
+        return Err(PaintError::UnexpectedBufferLength {
+            expected: dimensions.byte_len,
+            actual: pixels.len(),
+        });
+    }
+    render_snapshot(snapshot, dimensions, pixels);
+    match format {
+        RasterPixelFormat::Rgba8 => unpremultiply::<false>(pixels),
+        RasterPixelFormat::Bgra8 => unpremultiply::<true>(pixels),
+    }
+    Ok(dimensions)
+}
+
+fn validated_snapshot_layout(snapshot: &PaintSnapshot) -> Result<RasterBufferLayout, PaintError> {
+    let dimensions = validate_dimensions(snapshot.surface)?;
+    validate_resource_budget(dimensions, validate_fragment_stream(snapshot)?)?;
+    Ok(dimensions)
+}
+
+/// Paints premultiplied RGBA into the supplied pixel buffer.
+fn render_snapshot(snapshot: &PaintSnapshot, dimensions: RasterBufferLayout, pixels: &mut [u8]) {
+    let scale = f64::from(snapshot.surface.device_scale);
+
+    let mut renderer = VelloCpuImageRenderer::new(dimensions.width, dimensions.height);
+    renderer.render(
+        |scene| {
+            paint_canvas(scene, snapshot.canvas_color, dimensions);
+            paint_fragment_stream(scene, snapshot, &snapshot.fragments, scale, dimensions);
+        },
+        pixels,
+    );
+}
+
 // Vello's Pixmap stores premultiplied channels; RasterImage and our software
 // color filters consume straight-alpha RGBA. Convert at each backend readback.
-fn unpremultiply_rgba(rgba: &mut [u8]) {
+fn unpremultiply<const BGRA: bool>(rgba: &mut [u8]) {
     for pixel in rgba.as_chunks_mut::<4>().0 {
         let alpha = u16::from(pixel[3]);
         if alpha == 0 {
@@ -83,11 +130,14 @@ fn unpremultiply_rgba(rgba: &mut [u8]) {
                 *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
             }
         }
+        if BGRA {
+            pixel.swap(0, 2);
+        }
     }
 }
 
 fn validate_resource_budget(
-    dimensions: RasterDimensions,
+    dimensions: RasterBufferLayout,
     max_filter_depth: usize,
 ) -> Result<(), PaintError> {
     // Backend filters may crop allocations to content bounds, whereas the
@@ -104,7 +154,7 @@ fn validate_resource_budget(
     Ok(())
 }
 
-fn validate_dimensions(surface: PaintCaptureSurface) -> Result<RasterDimensions, PaintError> {
+fn validate_dimensions(surface: PaintCaptureSurface) -> Result<RasterBufferLayout, PaintError> {
     if !surface.css_width.is_finite()
         || !surface.css_height.is_finite()
         || surface.css_width <= 0.0
@@ -146,7 +196,7 @@ fn validate_dimensions(surface: PaintCaptureSurface) -> Result<RasterDimensions,
         .and_then(|pixels| pixels.checked_mul(4))
         .ok_or(PaintError::BufferLengthOverflow { width, height })?;
 
-    Ok(RasterDimensions {
+    Ok(RasterBufferLayout {
         width,
         height,
         byte_len,
@@ -156,7 +206,7 @@ fn validate_dimensions(surface: PaintCaptureSurface) -> Result<RasterDimensions,
 fn paint_canvas(
     scene: &mut impl PaintScene,
     canvas_color: PaintColor,
-    dimensions: RasterDimensions,
+    dimensions: RasterBufferLayout,
 ) {
     let canvas = Rect::new(
         0.0,
@@ -178,7 +228,7 @@ fn paint_fragment_stream(
     snapshot: &PaintSnapshot,
     fragments: &[PaintFragment],
     scale: f64,
-    dimensions: RasterDimensions,
+    dimensions: RasterBufferLayout,
 ) {
     let mut index = 0usize;
     while index < fragments.len() {
@@ -227,7 +277,7 @@ fn paint_fragment_stream(
             },
             &mut filtered_rgba,
         );
-        unpremultiply_rgba(&mut filtered_rgba);
+        unpremultiply::<false>(&mut filtered_rgba);
         apply_software_color_filter(&mut filtered_rgba, filter);
 
         let clip = to_backend_shape(clip);

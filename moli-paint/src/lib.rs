@@ -15,4 +15,7 @@ mod validation;
 
 pub use error::PaintError;
 pub use moli_image::RgbaImage as RasterImage;
-pub use raster::{MAX_TRANSIENT_RASTER_BYTES, raster_snapshot};
+pub use raster::{
+    MAX_TRANSIENT_RASTER_BYTES, RasterBufferLayout, RasterPixelFormat, raster_buffer_layout,
+    raster_snapshot, raster_snapshot_into,
+};

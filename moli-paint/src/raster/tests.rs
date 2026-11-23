@@ -25,6 +25,34 @@ fn snapshot(width: u32, height: u32, scale: f32) -> PaintSnapshot {
 }
 
 #[test]
+fn rasterizes_into_existing_bgra_storage_with_straight_alpha() {
+    let snapshot = PaintSnapshot::new(
+        PaintViewport::new(2, 1, 2.),
+        PaintColor::new(0.75, 0.5, 0.25, 0.5),
+    );
+    let layout = raster_buffer_layout(2., 1., 2.).unwrap();
+    let expected = raster_snapshot(&snapshot).unwrap();
+    let mut bytes = vec![255; layout.byte_len];
+    let supplied_address = bytes.as_ptr();
+
+    assert!(matches!(
+        raster_snapshot_into(&snapshot, &mut bytes[..4], RasterPixelFormat::Bgra8),
+        Err(PaintError::UnexpectedBufferLength { .. })
+    ));
+    assert_eq!(
+        raster_snapshot_into(&snapshot, &mut bytes, RasterPixelFormat::Bgra8).unwrap(),
+        layout
+    );
+    assert_eq!(supplied_address, bytes.as_ptr());
+    let expected_pixels = expected.rgba.as_chunks::<4>().0;
+    let actual_pixels = bytes.as_chunks::<4>().0;
+    for (rgba, bgra) in expected_pixels.iter().zip(actual_pixels) {
+        assert_eq!(*bgra, [rgba[2], rgba[1], rgba[0], rgba[3]]);
+    }
+    assert!(bytes[3] < 255);
+}
+
+#[test]
 fn maximum_corner_radii_leave_pill_corners_unpainted() {
     let mut snapshot = snapshot(120, 40, 1.0);
     snapshot.push_fragment(PaintFragment::Fill {
