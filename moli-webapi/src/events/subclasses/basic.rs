@@ -83,6 +83,31 @@ impl<'s> CompositionEventInit<'s> {
     }
 }
 
+pub fn construct_native_composition_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    text: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let init = CompositionEventInit {
+        ui: UiEventInit::from_native(
+            EventInit {
+                bubbles: true,
+                cancelable: event_type == "compositionstart",
+                composed: true,
+            },
+            0,
+            None,
+        ),
+        data: webidl::DomString16(text.encode_utf16().collect()),
+    };
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::CompositionEvent,
+        event_type,
+        SubclassInit::Basic(BasicEventInit::Composition(init)),
+    )
+}
+
 // Legacy createEvent("TextEvent") uses an empty, internal dictionary.
 pub fn initialize_text_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,

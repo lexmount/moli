@@ -978,6 +978,8 @@ fn live_page_command_should_follow_pending_navigation(command: &RendererPageComm
         command,
         RendererPageCommand::EvaluateExpressionAndFollowPendingNavigation { .. }
             | RendererPageCommand::EvaluateExpressionInExecutionContextAndFollowPendingNavigation { .. }
+            | RendererPageCommand::NavigateViewport(..)
+            | RendererPageCommand::TraverseViewportHistory(..)
     )
 }
 

@@ -107,7 +107,11 @@ impl PageVm {
                 .map(RendererPageReply::Bool),
             RendererPageCommand::QueueTopLevelHistoryTraversalByDelta(delta) => self
                 .vm_mut()
-                .queue_top_level_history_traversal_by_delta(delta)
+                .queue_top_level_history_traversal_by_delta(delta, false)
+                .map(RendererPageReply::Bool),
+            RendererPageCommand::TraverseViewportHistory(delta) => self
+                .vm_mut()
+                .queue_top_level_history_traversal_by_delta(delta, true)
                 .map(RendererPageReply::Bool),
             RendererPageCommand::RunPageSurfaceOverrideScript { source } => {
                 self.run_page_surface_override_script(&source)?;
@@ -339,6 +343,31 @@ impl PageVm {
                 self.set_viewport_surface(viewport_surface)?;
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::SubscribeViewportFrames(subscription) => {
+                self.subscribe_viewport_frames(subscription)?;
+                Ok(RendererPageReply::Unit)
+            }
+            RendererPageCommand::WakeViewportFrames => {
+                self.wake_viewport_frames();
+                Ok(RendererPageReply::Unit)
+            }
+            RendererPageCommand::NavigateViewport(target) => {
+                let navigated = self.vm_mut().navigate_top_level_from_browser(target)?;
+                self.wake_viewport_frames();
+                Ok(RendererPageReply::Bool(navigated))
+            }
+            #[cfg(feature = "devtools")]
+            RendererPageCommand::ReadViewportEditor => Ok(RendererPageReply::ViewportEditor(self.read_viewport_editor())),
+            #[cfg(feature = "devtools")]
+            RendererPageCommand::ReadViewportSelection(document) => self
+                .read_viewport_selection(document)
+                .map(RendererPageReply::OptionalString),
+            #[cfg(feature = "devtools")]
+            RendererPageCommand::ApplyViewportEdit(edit) => self.apply_viewport_edit(edit).map(RendererPageReply::ViewportEdit),
+            #[cfg(feature = "devtools")]
+            RendererPageCommand::DropViewportFiles { document, x, y, files, modifiers } => self
+                .drop_viewport_files(document, x, y, files, modifiers)
+                .map(RendererPageReply::Bool),
             RendererPageCommand::SetNetworkOffline(offline) => {
                 self.set_network_offline(offline);
                 Ok(RendererPageReply::Unit)
@@ -388,6 +417,7 @@ fn renderer_page_command_action_barrier(
         RendererPageCommand::CaptureScreenshot(_) => {
             Some(moli_action_window::ActionBarrier::Screenshot)
         }
+        RendererPageCommand::WakeViewportFrames => None,
         _ => Some(moli_action_window::ActionBarrier::Explicit),
     }
 }

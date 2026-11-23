@@ -50,11 +50,15 @@ pub(crate) enum TextEditInputType {
     None,
     InsertText,
     #[cfg(feature = "devtools")]
+    InsertCompositionText,
+    #[cfg(feature = "devtools")]
     InsertLineBreak,
     #[cfg(feature = "devtools")]
     InsertParagraph,
     #[cfg(feature = "devtools")]
     InsertFromDrop,
+    #[cfg(feature = "devtools")]
+    InsertFromPaste,
     #[cfg(feature = "devtools")]
     DeleteContentBackward,
     #[cfg(feature = "devtools")]
@@ -67,11 +71,15 @@ impl TextEditInputType {
             Self::None => "",
             Self::InsertText => "insertText",
             #[cfg(feature = "devtools")]
+            Self::InsertCompositionText => "insertCompositionText",
+            #[cfg(feature = "devtools")]
             Self::InsertLineBreak => "insertLineBreak",
             #[cfg(feature = "devtools")]
             Self::InsertParagraph => "insertParagraph",
             #[cfg(feature = "devtools")]
             Self::InsertFromDrop => "insertFromDrop",
+            #[cfg(feature = "devtools")]
+            Self::InsertFromPaste => "insertFromPaste",
             #[cfg(feature = "devtools")]
             Self::DeleteContentBackward => "deleteContentBackward",
             #[cfg(feature = "devtools")]
@@ -83,7 +91,9 @@ impl TextEditInputType {
         match self {
             Self::InsertText => Some(text),
             #[cfg(feature = "devtools")]
-            Self::InsertFromDrop => Some(text),
+            Self::InsertCompositionText => Some(text),
+            #[cfg(feature = "devtools")]
+            Self::InsertFromDrop | Self::InsertFromPaste => Some(text),
             Self::None => None,
             #[cfg(feature = "devtools")]
             Self::InsertLineBreak

@@ -1,5 +1,7 @@
 mod click;
 mod default_action;
+#[cfg(feature = "devtools")]
+pub(crate) use default_action::replace_contenteditable_selection_after_beforeinput;
 mod targets;
 #[cfg(feature = "devtools")]
 mod text_input;

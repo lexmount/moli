@@ -104,6 +104,7 @@ mod page_surface;
 mod worker_inspector_error;
 pub use worker_inspector_error::WorkerInspectorError;
 mod page_turn_scheduler;
+mod page_viewport;
 mod page_vm;
 pub(crate) use page_vm::dom_agent_state::RendererDomAgentState;
 mod phase_one;
@@ -439,6 +440,11 @@ pub(crate) use self::page_surface::{
 };
 pub use self::page_surface::{
     RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder,
+};
+pub use self::page_viewport::{
+    RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
+    RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
+    RendererViewportSubscription,
 };
 pub(crate) use self::page_vm::PageVm;
 use self::page_vm::PageVmDropTracker;

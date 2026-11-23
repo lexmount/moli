@@ -47,6 +47,10 @@ pub use moli_renderer_v8::{
     RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate,
 };
 pub use moli_renderer_v8::{RendererPageAccessError, RendererPageCommand, RendererPageReply};
+pub use moli_renderer_v8::{
+    RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
+    RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
+};
 
 /// ACE page tasks executed on the renderer owner thread.
 #[cfg(feature = "ace-protocol")]

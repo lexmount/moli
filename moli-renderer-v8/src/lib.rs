@@ -355,6 +355,11 @@ pub use runtime::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
 };
 pub use runtime::{RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder};
+pub use runtime::{
+    RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
+    RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
+    RendererViewportSubscription,
+};
 pub use service_worker_runtime::{
     SharedServiceWorkerResourceStore, new_shared_json_service_worker_resource_store,
     new_shared_service_worker_resource_store,

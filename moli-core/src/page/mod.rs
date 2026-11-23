@@ -27,6 +27,7 @@ mod same_document_navigation_support;
 mod settings_support;
 mod subresource_support;
 mod testing_support;
+mod viewport;
 mod wait_support;
 
 use std::fmt;
@@ -46,6 +47,7 @@ pub use devtools::{
     decode_input_dispatch_outcome_completion, decode_insert_text_completion,
 };
 pub use moli_renderer_v8::RendererPageRequestPolicyUpdate;
+pub use viewport::ViewportFrames;
 
 #[cfg(all(test, debug_assertions))]
 use crate::network::ResourceRequestClient;

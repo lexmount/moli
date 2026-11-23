@@ -339,9 +339,12 @@ impl ImageResourceStore {
         self.ready_by_request.prune_dead();
     }
 
-    #[cfg(feature = "devtools")]
     pub(super) fn visual_generation(&self) -> u64 {
         self.visual_generation.current()
+    }
+
+    pub(super) fn set_viewport_resource_wake(&self, wake: &std::sync::Arc<tokio::sync::Notify>) {
+        self.visual_generation.set_viewport_wake(wake);
     }
 
     #[cfg(all(test, feature = "devtools"))]
