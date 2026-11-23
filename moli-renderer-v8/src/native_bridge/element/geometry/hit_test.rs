@@ -6,9 +6,8 @@ use moli_layout::{
 #[cfg(test)]
 use moli_layout::LayoutScrollbarHit;
 
-use super::provider::{
-    is_live_hit_source, live_interaction_target, observable_hit_test, observable_hit_test_all,
-};
+use super::mock::mock_input_hit_test;
+use super::provider::{is_live_hit_source, live_interaction_target};
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
@@ -85,10 +84,8 @@ pub(crate) fn input_surface_hit_test(
     mode: InputHitTestMode,
 ) -> Result<InputSurfaceHit, LayoutError> {
     if !runtime.layout_policy().uses_real_layout() {
-        let target =
-            input_hit_test_via_documents(runtime, document, point, ignore_pointer_events_none, 0)?;
         return Ok(InputSurfaceHit {
-            target,
+            target: mock_input_hit_test(runtime, document, point, ignore_pointer_events_none),
             control: None,
         });
     }
@@ -123,34 +120,6 @@ pub(crate) fn observable_deep_hit_test(
         InputHitTestMode::Dom,
     )?
     .target)
-}
-
-fn input_hit_test_via_documents(
-    runtime: &PageScriptHost,
-    document: DomHandle,
-    point: LayoutPoint,
-    ignore_pointer_events_none: bool,
-    depth: usize,
-) -> Result<Option<DomHandle>, LayoutError> {
-    let Some((layout_hit, target)) =
-        live_hit_in_document(runtime, document, point, ignore_pointer_events_none)?
-    else {
-        return Ok(None);
-    };
-    if depth < CHILD_FRAME_DEPTH_LIMIT
-        && let Some(child) = runtime.child_browsing_context_document_handle(target)
-        && let Some(transform) = layout_hit.embedded_viewport_hit_transform()
-    {
-        let child_target = input_hit_test_via_documents(
-            runtime,
-            child,
-            transform.map_point(point),
-            ignore_pointer_events_none,
-            depth + 1,
-        )?;
-        return Ok(child_target.or(Some(target)));
-    }
-    Ok(Some(target))
 }
 
 fn input_surface_hit_test_in_tree(
@@ -209,10 +178,9 @@ fn input_surface_hit_test_in_tree(
         live_hit_in_tree(runtime, tree, point, ignore_pointer_events_none)
     };
     let Some((layout_hit, target)) = live_dom_hit else {
-        // A mouse hit inside a frame still belongs to its viewport when all
-        // of its painted DOM candidates are inert.
-        let use_viewport_target = mode == InputHitTestMode::Wheel
-            || (mode == InputHitTestMode::Mouse && tree.viewport.contains(point));
+        // The viewport still belongs to this document when all its painted
+        // candidates are inert.
+        let use_viewport_target = mode == InputHitTestMode::Wheel || tree.viewport.contains(point);
         return Ok(InputSurfaceHit {
             target: use_viewport_target.then_some(tree.source_root()),
             control: None,
@@ -276,28 +244,4 @@ fn live_hit_in_tree(
     tree.hit_test_all(point, ignore_pointer_events_none)
         .into_iter()
         .find_map(resolve_hit)
-}
-
-fn live_hit_in_document(
-    runtime: &PageScriptHost,
-    document: DomHandle,
-    point: LayoutPoint,
-    ignore_pointer_events_none: bool,
-) -> Result<Option<(LayoutHit<DomHandle>, DomHandle)>, LayoutError> {
-    let (_, first_hit) = observable_hit_test(runtime, document, point, ignore_pointer_events_none)?;
-    let resolve_hit = |hit: LayoutHit<DomHandle>| {
-        live_interaction_target(runtime, hit.source, ignore_pointer_events_none)
-            .map(|target| (hit, target))
-    };
-    let live_first_hit = first_hit.and_then(resolve_hit);
-    // A latest-layout snapshot may still contain a text fragment whose DOM
-    // node was replaced after publication, and `inert` can change without
-    // changing geometry. Walk the sampled paint stack only when the live DOM
-    // rejects the foremost candidate. This check neither refreshes nor
-    // invalidates layout; the common case retains the single-hit fast path.
-    if live_first_hit.is_some() || first_hit.is_none() {
-        return Ok(live_first_hit);
-    }
-    let (_, hits) = observable_hit_test_all(runtime, document, point, ignore_pointer_events_none)?;
-    Ok(hits.into_iter().find_map(resolve_hit))
 }

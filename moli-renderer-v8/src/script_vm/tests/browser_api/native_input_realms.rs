@@ -127,6 +127,55 @@ fn mouse_input_in_an_inert_child_viewport_targets_its_document_root() {
 }
 
 #[test]
+fn touch_input_in_an_inert_child_viewport_targets_its_document_root() {
+    use moli_page_types::LayoutPolicy;
+
+    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        let mut vm = new_storage_html_test_vm("https://inert-child-touch-input.test/");
+        vm.set_layout_policy(policy);
+        vm.eval(
+            r#"
+            const frame = document.createElement('iframe');
+            frame.style.cssText = 'position:absolute;left:65px;top:45px;width:320px;height:240px;border:0';
+            document.body.appendChild(frame);
+            const inner = frame.contentDocument;
+            inner.body.innerHTML = '<button>child</button>';
+            window.inputEvents = [];
+            for (const [doc, source] of [[document, 'parent'], [inner, 'child']]) {
+                for (const type of ['pointerdown', 'touchstart', 'pointerup', 'touchend', 'click']) {
+                    doc.addEventListener(type, event => {
+                        const point = event.changedTouches?.[0] ?? event;
+                        inputEvents.push([source, type, event.target.nodeName, point.clientX, point.clientY]);
+                    });
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        publish_layout_for_test(&mut vm);
+        vm.eval("inner.documentElement.inert = true").unwrap();
+
+        vm.dispatch_touch_event_at_point(110.0, 105.0, "touchstart", false)
+            .unwrap();
+        vm.dispatch_touch_event_at_points(&[], "touchend", false)
+            .unwrap();
+        let outside = vm
+            .dispatch_touch_event_at_point(-1.0, 105.0, "touchstart", false)
+            .unwrap();
+        assert!(!outside.handled, "{policy:?}");
+        assert_eq!(
+            vm.eval("JSON.stringify(inputEvents)").unwrap(),
+            concat!(
+                r#"[["child","pointerdown","HTML",45,60],["child","touchstart","HTML",45,60],"#,
+                r#"["child","pointerup","HTML",45,60],["child","touchend","HTML",45,60],"#,
+                r#"["child","click","HTML",45,60]]"#,
+            ),
+            "{policy:?}",
+        );
+    }
+}
+
+#[test]
 fn mouse_boundary_events_leave_and_reenter_after_an_inert_hit_miss() {
     let mut vm = new_rendered_test_vm(
         "https://inert-mouse-boundary.test/",

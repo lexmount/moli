@@ -1399,6 +1399,122 @@ async fn get_node_for_location_can_hit_inert_overlay() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn get_node_for_location_stays_in_the_inert_viewport_document() {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
+        let mut ctx = TestContext::new_with_layout_policy(policy);
+        load_bc(&mut ctx, "BID-A");
+        navigate_to_data_html_async(
+            &mut ctx,
+            1,
+            r#"<!doctype html><style>html,body{margin:0}</style>
+            <iframe id="frame" style="position:absolute;left:65px;top:45px;width:80px;height:64px;border:8px solid"
+                srcdoc="<!doctype html><style>html,body{margin:0}button{width:58px;height:24px}</style><button>child</button>"></iframe>"#,
+        )
+        .await;
+        if policy.uses_real_layout() {
+            ctx.capture_fixture_layout(None).await;
+        }
+        let child_frame = child_frame_id_for_single_iframe_async(&mut ctx, 2).await;
+        let parent_root = renderer_backend_node_id_for_live_expression(
+            &mut ctx,
+            3,
+            4,
+            "document.documentElement",
+        )
+        .await;
+        let child_root = renderer_backend_node_id_for_live_expression(
+            &mut ctx,
+            5,
+            6,
+            "frame.contentDocument.documentElement",
+        )
+        .await;
+        let child_button = renderer_backend_node_id_for_live_expression(
+            &mut ctx,
+            7,
+            8,
+            "frame.contentDocument.querySelector('button')",
+        )
+        .await;
+        let owner = renderer_backend_node_id_for_live_expression(&mut ctx, 9, 10, "frame").await;
+        let geometry = ctx
+            .evaluate_fixture_expression(
+                r#"
+                frame.contentDocument.documentElement.inert = true;
+                const rect = frame.getBoundingClientRect();
+                [Math.round(rect.left), Math.round(rect.top), innerWidth]
+                "#,
+                false,
+            )
+            .await
+            .unwrap();
+        let left = geometry["value"][0].as_i64().unwrap();
+        let top = geometry["value"][1].as_i64().unwrap();
+        let viewport_width = geometry["value"][2].as_i64().unwrap();
+        // Mock's 300px owner box extends beyond its child's 80px viewport.
+        // With real layout, the corresponding owner hit is on the border.
+        let (inset, outside_child) = if policy.uses_real_layout() {
+            (8, 2)
+        } else {
+            (0, 85)
+        };
+        let x = left + inset + 10;
+        let y = top + inset + 10;
+
+        for (id, x, ignore, expected_node, expected_frame) in [
+            (11, x, false, child_root, child_frame.as_str()),
+            (12, x, true, child_button, child_frame.as_str()),
+            (13, left + outside_child, false, owner, "TID-1"),
+        ] {
+            ctx.process_async(json!({
+                "id": id,
+                "method": "DOM.getNodeForLocation",
+                "params": { "x": x, "y": y, "ignorePointerEventsNone": ignore }
+            }))
+            .await;
+            let response = take_response_by_id(&mut ctx, id);
+            assert_eq!(
+                response["result"]["backendNodeId"],
+                json!(expected_node),
+                "{policy:?}: {response}"
+            );
+            assert_eq!(response["result"]["frameId"], json!(expected_frame));
+        }
+
+        ctx.evaluate_fixture_expression("document.documentElement.inert = true", false)
+            .await
+            .unwrap();
+        ctx.process_async(json!({
+            "id": 14,
+            "method": "DOM.getNodeForLocation",
+            "params": { "x": x, "y": y }
+        }))
+        .await;
+        let response = take_response_by_id(&mut ctx, 14);
+        assert_eq!(
+            response["result"]["backendNodeId"],
+            json!(parent_root),
+            "{policy:?}: {response}"
+        );
+        assert_eq!(response["result"]["frameId"], json!("TID-1"));
+
+        for (id, x) in [(15, -1), (16, viewport_width)] {
+            ctx.process_async(json!({
+                "id": id,
+                "method": "DOM.getNodeForLocation",
+                "params": { "x": x, "y": y }
+            }))
+            .await;
+            ctx.expect_error(id, -32000, "No node found at given location");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn get_node_for_location_hits_atomic_input_in_front_of_wrapping_label() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
