@@ -32,6 +32,13 @@ impl<'s> OpenedRendererWindow<'s> {
 
     /// Admit renderer-owned navigation before returning the WindowProxy to script.
     /// Returns true for a javascript: URL, which is hidden from browser navigation.
+    #[cfg_attr(
+        not(feature = "molio"),
+        expect(
+            unused_variables,
+            reason = "only molio schedules related-popup navigation here"
+        )
+    )]
     pub(crate) fn queue_navigation(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -51,6 +58,7 @@ impl<'s> OpenedRendererWindow<'s> {
             unsafe { &mut *host }.record_pending_location_navigation(url, None);
             return true;
         }
+        #[cfg(feature = "molio")]
         if navigation_owner == AuxiliaryNavigationOwner::Renderer
             && (self.pending_page.is_none() || !moli_url::is_about_blank(&url))
         {

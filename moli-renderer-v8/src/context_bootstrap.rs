@@ -200,9 +200,6 @@ pub(crate) use css_fontface_runtime::{
     check_realtime_document_font_readiness, new_font_face_set, rebuild_font_face_set_faces,
     settle_document_font_face_set_ready, sync_realtime_document_font_face_set,
 };
-#[cfg(feature = "molio")]
-pub(crate) use location_navigation::navigate_top_level_from_browser;
-pub(crate) use location_navigation::queue_related_popup_navigation;
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
     dispatch_top_level_navigation_event_with_source_element,
@@ -211,6 +208,10 @@ pub(crate) use location_navigation::{
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
     sandbox_blocks_ancestor_or_top_navigation_from_source,
+};
+#[cfg(feature = "molio")]
+pub(crate) use location_navigation::{
+    navigate_top_level_from_browser, queue_related_popup_navigation,
 };
 pub(crate) use navigation_cancellation::{
     NavigationCancellationReason, inform_about_canceled_navigation_for_window,
