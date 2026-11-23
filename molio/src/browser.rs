@@ -450,10 +450,14 @@ impl BrowserWindow {
                 .on_drop(
                     cx.listener(move |view, tab: &DraggedTab, _, cx| view.move_tab(tab.id, id, cx)),
                 )
-                .child(glyph(
-                    if busy { Icon::Loading } else { Icon::Page },
-                    if busy { colors.accent } else { colors.muted },
-                ))
+                .child(match (busy, tab.state.favicon.as_ref()) {
+                    (true, _) => glyph(Icon::Loading, colors.accent).into_any_element(),
+                    (false, Some(icon)) => gpui::img(icon.clone())
+                        .size(px(16.))
+                        .flex_shrink_0()
+                        .into_any_element(),
+                    (false, None) => glyph(Icon::Page, colors.muted).into_any_element(),
+                })
                 .child(
                     div()
                         .flex_1()

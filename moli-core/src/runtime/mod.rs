@@ -277,7 +277,8 @@ impl Browser {
             .subscribe_diagnostics()
     }
 
-    fn resource_request_client(&self) -> ResourceRequestClient {
+    /// Returns a client for subresource requests in this browser's network session.
+    pub fn resource_request_client(&self) -> ResourceRequestClient {
         ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
             self.resource_runtime.clone(),
             self.page_network_policy.clone(),

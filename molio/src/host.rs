@@ -29,6 +29,7 @@ pub struct TabConnection {
 pub struct TabState {
     pub navigation: Option<RendererViewportNavigation>,
     pub document: Option<RendererDocumentLifecycleIdentity>,
+    pub favicon: Option<Arc<gpui::RenderImage>>,
     pub pending_url: Option<String>,
     pub loading: bool,
     pub error: Option<String>,
@@ -196,6 +197,7 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
     let mut surface = None;
     let mut capture = None;
     let mut navigation = None;
+    let mut favicon_task: Option<JoinHandle<Option<Arc<gpui::RenderImage>>>> = None;
     let mut queued = None;
     let mut activity = DocumentActivity::new(false, false);
     let _ = page.set_document_activity_async(activity).await;
@@ -214,6 +216,17 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
                     }
                 });
             }
+            icon = async {
+                match favicon_task.as_mut() {
+                    Some(task) => task.await.ok().flatten(),
+                    None => pending().await,
+                }
+            } => {
+                favicon_task = None;
+                if let Some(icon) = icon {
+                    tab.state.send_modify(|state| state.favicon = Some(icon));
+                }
+            }
             event = next_viewport_update(&mut capture) => match event {
                 Some(ViewportUpdate::StateChanged) => {
                     let frame = capture.as_mut().and_then(BufferedViewportFrames::latest_state);
@@ -223,6 +236,22 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
                         });
                         if state.document == document && state.navigation == navigation && state.editor == editor {
                             return false;
+                        }
+                        if state.document != document
+                            || state.navigation.as_ref().map(|nav| &nav.favicon_urls)
+                                != navigation.as_ref().map(|nav| &nav.favicon_urls)
+                        {
+                            if let Some(task) = favicon_task.take() {
+                                task.abort();
+                            }
+                            state.favicon = None;
+                            if let Some(navigation) = navigation.as_ref().filter(|nav| !nav.favicon_urls.is_empty()) {
+                                let navigation = navigation.clone();
+                                let browser = browser.clone();
+                                favicon_task = Some(tokio::task::spawn_local(async move {
+                                    crate::favicon::load(&browser, &navigation).await
+                                }));
+                            }
                         }
                         state.document = document;
                         state.navigation = navigation;
@@ -368,6 +397,9 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
         }
     }
     if let Some(task) = navigation {
+        task.abort();
+    }
+    if let Some(task) = favicon_task {
         task.abort();
     }
 }
@@ -552,6 +584,116 @@ mod tests {
             show_tab(&mut red, "Red", 3, [0, 0, 255, 255]).await?,
             red_document
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tabs_load_declared_and_default_favicons_for_the_current_document() -> Result<()> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let mut ico = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(16, 16, image::Rgba([225, 40, 19, 255]))
+            .write_to(&mut ico, image::ImageFormat::Ico)?;
+        let ico = ico.into_inner();
+        tokio::spawn(async move {
+            while let Ok((connection, _)) = listener.accept().await {
+                let mut connection = BufReader::new(connection);
+                let mut request_line = String::new();
+                if connection.read_line(&mut request_line).await.unwrap_or(0) == 0 {
+                    continue;
+                }
+                let mut header = String::new();
+                while connection.read_line(&mut header).await.unwrap_or(0) > 0 && header != "\r\n" {
+                    header.clear();
+                }
+                let (mime, body): (&str, &[u8]) = match request_line.split_whitespace().nth(1) {
+                    Some("/page") => (
+                        "text/html",
+                        br#"<title>Declared</title><base href="/assets/">
+                        <link rel="shortcut ICON" href="logo.svg">
+                        <link rel="icon" href="broken.svg">"#,
+                    ),
+                    Some("/assets/logo.svg") => (
+                        "image/svg+xml",
+                        br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+                        <rect width="16" height="16" fill="#12a0e0"/></svg>"##,
+                    ),
+                    Some("/next") => ("text/html", b"<title>Default</title>"),
+                    Some("/favicon.ico") => ("image/x-icon", &ico),
+                    _ => ("text/html", b"<p>Invalid icon</p>"),
+                };
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                );
+                let connection = connection.get_mut();
+                if connection.write_all(head.as_bytes()).await.is_ok() {
+                    let _ = connection.write_all(body).await;
+                }
+            }
+        });
+
+        let host = BrowserHost::start(None)?;
+        let mut tab = host.open_tab()?;
+        tab.commands
+            .send(TabCommand::Activity(DocumentActivity::new(true, true)))
+            .map_err(|_| anyhow::anyhow!("show tab"))?;
+        tab.commands
+            .send(TabCommand::Viewport(
+                ViewportSurface {
+                    inner_width: 80,
+                    inner_height: 60,
+                    ..ViewportSurface::default()
+                },
+                1,
+            ))
+            .map_err(|_| anyhow::anyhow!("set viewport"))?;
+
+        for (path, title, pixel) in [
+            ("/page", "Declared", [224, 160, 18, 255]),
+            ("/next", "Default", [19, 40, 225, 255]),
+        ] {
+            tab.commands
+                .send(TabCommand::Navigate(Some(format!(
+                    "http://{address}{path}"
+                ))))
+                .map_err(|_| anyhow::anyhow!("navigate to {path}"))?;
+            let state = tokio::time::timeout(
+                Duration::from_secs(10),
+                tab.state.wait_for(|state| {
+                    state
+                        .navigation
+                        .as_ref()
+                        .is_some_and(|nav| nav.title == title)
+                        && state.favicon.is_some()
+                }),
+            )
+            .await
+            .with_context(|| format!("wait for {title} favicon"))??;
+            assert_eq!(
+                &state.favicon.as_ref().unwrap().as_bytes(0).unwrap()[..4],
+                &pixel
+            );
+        }
+
+        tab.commands
+            .send(TabCommand::Navigate(Some(
+                "data:text/html,<title>Iconless</title>".to_owned(),
+            )))
+            .map_err(|_| anyhow::anyhow!("navigate to iconless page"))?;
+        let state = tokio::time::timeout(
+            Duration::from_secs(5),
+            tab.state.wait_for(|state| {
+                state
+                    .navigation
+                    .as_ref()
+                    .is_some_and(|nav| nav.title == "Iconless")
+            }),
+        )
+        .await??;
+        assert!(state.favicon.is_none());
         Ok(())
     }
 }
