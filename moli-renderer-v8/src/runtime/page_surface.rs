@@ -5070,6 +5070,28 @@ pub enum RendererPageCommand {
     SetBypassContentSecurityPolicy(bool),
     SetEmulatedMedia(crate::protocol_types::EmulatedMediaOverrides),
     SetViewportSurface(Option<crate::protocol_types::ViewportSurface>),
+    #[cfg(feature = "molio")]
+    SubscribeViewportFrames(super::RendererViewportSubscription),
+    #[cfg(feature = "molio")]
+    WakeViewportFrames,
+    #[cfg(feature = "molio")]
+    NavigateViewport(Option<String>),
+    #[cfg(feature = "molio")]
+    TraverseViewportHistory(i64),
+    #[cfg(feature = "molio")]
+    ReadViewportEditor,
+    #[cfg(feature = "molio")]
+    ReadViewportSelection(RendererDocumentLifecycleIdentity),
+    #[cfg(feature = "molio")]
+    ApplyViewportEdit(super::RendererViewportEdit),
+    #[cfg(feature = "molio")]
+    DropViewportFiles {
+        document: RendererDocumentLifecycleIdentity,
+        x: f64,
+        y: f64,
+        files: Vec<RendererDraggedFile>,
+        modifiers: u8,
+    },
     SetNetworkOffline(bool),
     SetBypassServiceWorker(bool),
     SetBlockedUrlPatterns(Vec<String>),
@@ -5317,6 +5339,10 @@ impl RendererRuntimeEvaluationResult {
 
 #[non_exhaustive]
 pub enum RendererPageReply {
+    #[cfg(feature = "molio")]
+    ViewportEditor(Option<super::RendererViewportEditor>),
+    #[cfg(feature = "molio")]
+    ViewportEdit(super::RendererViewportEditReply),
     #[cfg(feature = "devtools")]
     DevTools(RendererDevToolsPageReply),
     ElementClickPreparation(Result<RendererElementClickTarget, RendererElementClickError>),

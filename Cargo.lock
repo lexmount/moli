@@ -2794,6 +2794,7 @@ dependencies = [
  "moli-fetch",
  "moli-indexeddb",
  "moli-page-types",
+ "moli-paint",
  "moli-parser",
  "moli-renderer-v8",
  "moli-selector",

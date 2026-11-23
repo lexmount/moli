@@ -86,6 +86,16 @@ impl RendererPageCommand {
             | Self::SetScrollbarsHidden(..)
             | Self::SetViewportSurface(..) => OwnerOnly,
 
+            #[cfg(feature = "molio")]
+            Self::SubscribeViewportFrames(..)
+            | Self::NavigateViewport(..)
+            | Self::TraverseViewportHistory(..)
+            | Self::ReadViewportEditor
+            | Self::ReadViewportSelection(..)
+            | Self::ApplyViewportEdit(..)
+            | Self::DropViewportFiles { .. }
+            | Self::WakeViewportFrames => OwnerOnly,
+
             #[cfg(test)]
             Self::ObserveRealtimeOpportunityForTesting { .. } => OwnerOnly,
             #[cfg(test)]

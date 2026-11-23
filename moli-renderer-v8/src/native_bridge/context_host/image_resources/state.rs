@@ -344,6 +344,11 @@ impl ImageResourceStore {
         self.visual_generation.current()
     }
 
+    #[cfg(feature = "molio")]
+    pub(super) fn set_viewport_resource_wake(&self, wake: &std::sync::Arc<tokio::sync::Notify>) {
+        self.visual_generation.set_viewport_wake(wake);
+    }
+
     #[cfg(all(test, feature = "devtools"))]
     pub(super) fn visual_generation_handle_for_test(&self) -> VisualResourceGeneration {
         self.visual_generation.clone()

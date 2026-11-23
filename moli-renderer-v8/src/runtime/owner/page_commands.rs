@@ -409,9 +409,17 @@ impl RendererOwnerHandle {
             }
             Some(DocumentLifecycleTurnReadiness::Idle) | None => None,
         };
+        #[cfg(feature = "molio")]
+        let navigation_handoff = if entry.page_vm().viewport_frames.is_some() {
+            entry.renderer_owned_pending_navigation_handoff()
+        } else {
+            entry.pending_javascript_navigation_handoff()
+        };
+        #[cfg(not(feature = "molio"))]
+        let navigation_handoff = entry.pending_javascript_navigation_handoff();
         let post_response_work = RendererPostResponseOwnerWork {
             document_lifecycle: deferred_document,
-            navigation_handoff: entry.pending_javascript_navigation_handoff(),
+            navigation_handoff,
         };
         let post_response_continuation = (!post_response_work.is_empty())
             .then(|| self.post_response_owner_work_continuation(token, post_response_work));

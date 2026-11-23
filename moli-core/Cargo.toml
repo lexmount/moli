@@ -7,6 +7,7 @@ edition = "2024"
 [features]
 default = ["devtools"]
 devtools = ["moli-renderer-v8/devtools"]
+molio = ["devtools", "dep:moli-paint", "moli-renderer-v8/molio"]
 ace-protocol = ["devtools", "moli-renderer-v8/ace-protocol"]
 # Compile renderer-only testing and diagnostic projections. This is not part of
 # normal browser behavior and must stay disabled in production builds.
@@ -22,6 +23,7 @@ moli-browser-profile = { path = "../moli-browser-profile" }
 moli-dom = { path = "../moli-dom" }
 moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-types/moli-page-types" }
+moli-paint = { path = "../moli-paint", optional = true }
 moli-renderer-v8 = { path = "../moli-renderer-v8", default-features = false }
 moli-selector = { path = "../moli-selector" }
 moli-sqlite = { path = "../moli-sqlite" }
@@ -54,6 +56,10 @@ moli-test-support = { path = "../moli-test-support" }
 moli-wpt-compat = { path = "../moli-wpt-compat" }
 strip-ansi-escapes = "0.2.1"
 static_assertions = "1.1.0"
+
+[[test]]
+name = "viewport"
+required-features = ["molio"]
 
 [lints]
 workspace = true
