@@ -1,5 +1,7 @@
 use super::*;
 use crate::native_bridge::LayoutPublicationRequest;
+#[cfg(feature = "devtools")]
+use crate::native_bridge::element::InputHitTestPolicy;
 
 impl moli_dom::accessibility::AccessibilityStyleSource
     for crate::native_bridge::element::StyleObservation<'_>
@@ -551,16 +553,11 @@ impl ScriptVm {
     pub(crate) fn observable_deep_hit_test_for_current_document(
         &mut self,
         point: moli_layout::LayoutPoint,
-        ignore_pointer_events_none: bool,
+        policy: InputHitTestPolicy,
     ) -> Result<Option<DomHandle>, moli_layout::LayoutError> {
         let host = self._context_host.borrow();
         let document = host.document_handle();
-        crate::native_bridge::element::observable_deep_hit_test(
-            &host,
-            document,
-            point,
-            ignore_pointer_events_none,
-        )
+        crate::native_bridge::element::observable_deep_hit_test(&host, document, point, policy)
     }
 
     #[cfg(test)]

@@ -8,9 +8,9 @@ use crate::document_runtime::DomHandle;
 #[cfg(feature = "devtools")]
 use crate::dom::{forms::InputType, native::Node};
 #[cfg(feature = "devtools")]
-use crate::native_bridge::element::read_client_rects;
-#[cfg(feature = "devtools")]
-use crate::native_bridge::element::scroll_node_into_view_at_center;
+use crate::native_bridge::element::{
+    InputHitTestPolicy, read_client_rects, scroll_node_into_view_at_center,
+};
 #[cfg(feature = "devtools")]
 use crate::runtime::RendererElementClickTarget as ClickTarget;
 #[cfg(feature = "devtools")]
@@ -110,7 +110,7 @@ impl ScriptVm {
             .map_err(layout_error)?;
         let point = quad[0].points[0];
         let hit = self
-            .observable_deep_hit_test_for_current_document(point, false)
+            .observable_deep_hit_test_for_current_document(point, InputHitTestPolicy::INTERACTIVE)
             .map_err(layout_error)?
             .ok_or(ClickError::Obscured)?;
         let mut documents = Vec::new();

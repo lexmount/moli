@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::native_bridge::element::InputHitTestPolicy;
 use crate::runtime::page_surface::RendererDocumentHitTestResult;
 use crate::runtime::page_surface::{
     RendererDocumentBoxModel, RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
@@ -153,11 +154,17 @@ impl PageVm {
         // Generated UA shadow nodes are inspector projections rather than
         // layout sources, so their layout hit is already the live host.
         let _ = include_user_agent_shadow_dom;
+        let policy = InputHitTestPolicy {
+            ignore_pointer_events_none,
+            // Chromium treats inert content as having a used pointer-events value of none.
+            ignore_inert: ignore_pointer_events_none,
+            ..InputHitTestPolicy::INTERACTIVE
+        };
         let hit = self
             .vm_mut()
             .observable_deep_hit_test_for_current_document(
                 moli_layout::LayoutPoint::new(x as f32, y as f32),
-                ignore_pointer_events_none,
+                policy,
             )
             .map_err(|error| anyhow::anyhow!("failed to hit test document: {error}"))?;
         let Some(mut handle) = hit else {

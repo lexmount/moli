@@ -6,7 +6,7 @@ use moli_layout::{
 #[cfg(test)]
 use moli_layout::LayoutScrollbarHit;
 
-use super::mock::mock_input_hit_test;
+use super::mock::{MockHitTestOptions, mock_hit_test_handle};
 use super::provider::{is_live_hit_source, live_interaction_target};
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
@@ -26,13 +26,28 @@ pub(crate) enum InputHitTestMode {
     Wheel,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct InputHitTestPolicy {
+    pub(crate) ignore_pointer_events_none: bool,
+    pub(crate) ignore_inert: bool,
+    pub(crate) use_viewport_fallback: bool,
+}
+
+impl InputHitTestPolicy {
+    pub(crate) const INTERACTIVE: Self = Self {
+        ignore_pointer_events_none: false,
+        ignore_inert: false,
+        use_viewport_fallback: true,
+    };
+}
+
 #[cfg(feature = "devtools")]
 pub(crate) fn observable_input_hit_test(
     runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(input_surface_hit_test(runtime, document, point, false, InputHitTestMode::Dom)?.target)
+    observable_deep_hit_test(runtime, document, point, InputHitTestPolicy::INTERACTIVE)
 }
 
 /// Hit tests within an already routed frame. The mouse press can keep that
@@ -47,8 +62,13 @@ pub(crate) fn input_target_in_document(
         .input_frame_transform(document, None)
         .and_then(|transform| {
             runtime.with_latest_layout_tree_for_document(document, |tree| {
-                live_hit_in_tree(runtime, tree, transform.map_point(point), false)
-                    .map(|(_, target)| target)
+                live_hit_in_tree(
+                    runtime,
+                    tree,
+                    transform.map_point(point),
+                    InputHitTestPolicy::INTERACTIVE,
+                )
+                .map(|(_, target)| target)
             })?
         })
         .or_else(|| {
@@ -66,11 +86,16 @@ pub(crate) fn observable_scrollbar_hit_test(
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<LayoutScrollbarHit<DomHandle>>, LayoutError> {
-    input_surface_hit_test(runtime, document, point, false, InputHitTestMode::Mouse).map(|hit| {
-        match hit.control {
-            Some(LayoutControlSurfaceHit::Scrollbar(scrollbar)) => Some(scrollbar),
-            Some(LayoutControlSurfaceHit::ScrollbarCorner(_)) | None => None,
-        }
+    input_surface_hit_test(
+        runtime,
+        document,
+        point,
+        InputHitTestPolicy::INTERACTIVE,
+        InputHitTestMode::Mouse,
+    )
+    .map(|hit| match hit.control {
+        Some(LayoutControlSurfaceHit::Scrollbar(scrollbar)) => Some(scrollbar),
+        Some(LayoutControlSurfaceHit::ScrollbarCorner(_)) | None => None,
     })
 }
 
@@ -80,12 +105,21 @@ pub(crate) fn input_surface_hit_test(
     runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
-    ignore_pointer_events_none: bool,
+    policy: InputHitTestPolicy,
     mode: InputHitTestMode,
 ) -> Result<InputSurfaceHit, LayoutError> {
     if !runtime.layout_policy().uses_real_layout() {
         return Ok(InputSurfaceHit {
-            target: mock_input_hit_test(runtime, document, point, ignore_pointer_events_none),
+            target: mock_hit_test_handle(
+                runtime,
+                document,
+                point,
+                MockHitTestOptions {
+                    ignore_inert: policy.ignore_inert,
+                    clip_to_viewport: true,
+                    use_viewport_fallback: policy.use_viewport_fallback,
+                },
+            ),
             control: None,
         });
     }
@@ -97,7 +131,7 @@ pub(crate) fn input_surface_hit_test(
                 tree,
                 point,
                 LayoutTransform2D::IDENTITY,
-                ignore_pointer_events_none,
+                policy,
                 mode,
                 0,
             )
@@ -110,16 +144,9 @@ pub(crate) fn observable_deep_hit_test(
     runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
-    ignore_pointer_events_none: bool,
+    policy: InputHitTestPolicy,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(input_surface_hit_test(
-        runtime,
-        document,
-        point,
-        ignore_pointer_events_none,
-        InputHitTestMode::Dom,
-    )?
-    .target)
+    Ok(input_surface_hit_test(runtime, document, point, policy, InputHitTestMode::Dom)?.target)
 }
 
 fn input_surface_hit_test_in_tree(
@@ -127,13 +154,13 @@ fn input_surface_hit_test_in_tree(
     tree: &FrozenLayoutTree<DomHandle>,
     point: LayoutPoint,
     root_to_frame: LayoutTransform2D,
-    ignore_pointer_events_none: bool,
+    policy: InputHitTestPolicy,
     mode: InputHitTestMode,
     depth: usize,
 ) -> Result<InputSurfaceHit, LayoutError> {
     let live_dom_hit = if mode == InputHitTestMode::Mouse {
         let mut live_dom_hit = None;
-        for surface in tree.painted_surface_hits(point, ignore_pointer_events_none) {
+        for surface in tree.painted_surface_hits(point, policy.ignore_pointer_events_none) {
             match surface {
                 LayoutPaintedSurfaceHit::Control(mut control) => {
                     let source = match &control {
@@ -161,11 +188,9 @@ fn input_surface_hit_test_in_tree(
                     });
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
-                    let Some(target) = live_interaction_target(
-                        runtime,
-                        layout_hit.source,
-                        ignore_pointer_events_none,
-                    ) else {
+                    let Some(target) =
+                        live_interaction_target(runtime, layout_hit.source, policy.ignore_inert)
+                    else {
                         continue;
                     };
                     live_dom_hit = Some((layout_hit, target));
@@ -175,12 +200,13 @@ fn input_surface_hit_test_in_tree(
         }
         live_dom_hit
     } else {
-        live_hit_in_tree(runtime, tree, point, ignore_pointer_events_none)
+        live_hit_in_tree(runtime, tree, point, policy)
     };
     let Some((layout_hit, target)) = live_dom_hit else {
         // The viewport still belongs to this document when all its painted
         // candidates are inert.
-        let use_viewport_target = mode == InputHitTestMode::Wheel || tree.viewport.contains(point);
+        let use_viewport_target = policy.use_viewport_fallback
+            && (mode == InputHitTestMode::Wheel || tree.viewport.contains(point));
         return Ok(InputSurfaceHit {
             target: use_viewport_target.then_some(tree.source_root()),
             control: None,
@@ -215,7 +241,7 @@ fn input_surface_hit_test_in_tree(
         child_tree,
         frame_to_child.map_point(point),
         frame_to_child.concatenate(root_to_frame),
-        ignore_pointer_events_none,
+        policy,
         mode,
         depth + 1,
     )?;
@@ -230,18 +256,18 @@ fn live_hit_in_tree(
     runtime: &PageScriptHost,
     tree: &FrozenLayoutTree<DomHandle>,
     point: LayoutPoint,
-    ignore_pointer_events_none: bool,
+    policy: InputHitTestPolicy,
 ) -> Option<(LayoutHit<DomHandle>, DomHandle)> {
-    let first_hit = tree.hit_test(point, ignore_pointer_events_none);
+    let first_hit = tree.hit_test(point, policy.ignore_pointer_events_none);
     let resolve_hit = |hit: LayoutHit<DomHandle>| {
-        live_interaction_target(runtime, hit.source, ignore_pointer_events_none)
+        live_interaction_target(runtime, hit.source, policy.ignore_inert)
             .map(|target| (hit, target))
     };
     let live_first_hit = first_hit.and_then(resolve_hit);
     if live_first_hit.is_some() || first_hit.is_none() {
         return live_first_hit;
     }
-    tree.hit_test_all(point, ignore_pointer_events_none)
+    tree.hit_test_all(point, policy.ignore_pointer_events_none)
         .into_iter()
         .find_map(resolve_hit)
 }

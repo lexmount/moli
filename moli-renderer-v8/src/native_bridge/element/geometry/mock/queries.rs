@@ -10,7 +10,7 @@ use moli_layout::{
 
 use super::super::client_rect::{quad_from_client_rect, zero_client_rect};
 use super::layout::{
-    compute_mock_client_rect, compute_mock_offset_parent, mock_hit_test_handle,
+    MockHitTestOptions, compute_mock_client_rect, compute_mock_offset_parent, mock_hit_test_handle,
     mock_layout_client_rect_for_node,
 };
 use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::PageScriptHost};
@@ -147,20 +147,12 @@ pub(crate) fn answer_query(
                 runtime, document, *target, *root,
             ))
         }
-        LayoutQuery::HitTest {
-            point,
-            ignore_pointer_events_none,
-        } => LayoutQueryAnswer::HitTest(mock_layout_hit(
-            runtime,
-            document,
-            *point,
-            *ignore_pointer_events_none,
-        )),
-        LayoutQuery::HitTestAll {
-            point,
-            ignore_pointer_events_none,
-        } => LayoutQueryAnswer::HitTestAll(
-            mock_layout_hit(runtime, document, *point, *ignore_pointer_events_none)
+        // Mock geometry does not have CSS pointer-events data.
+        LayoutQuery::HitTest { point, .. } => {
+            LayoutQueryAnswer::HitTest(mock_layout_hit(runtime, document, *point))
+        }
+        LayoutQuery::HitTestAll { point, .. } => LayoutQueryAnswer::HitTestAll(
+            mock_layout_hit(runtime, document, *point)
                 .into_iter()
                 .collect(),
         ),
@@ -168,9 +160,11 @@ pub(crate) fn answer_query(
             mock_hit_test_handle(
                 runtime,
                 document,
-                f64::from(point.x),
-                f64::from(point.y),
-                true,
+                *point,
+                MockHitTestOptions {
+                    ignore_inert: true,
+                    ..MockHitTestOptions::default()
+                },
             )
             .map(|source| {
                 let model = mock_box_model(runtime, source);
@@ -198,15 +192,8 @@ fn mock_layout_hit(
     runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
-    ignore_pointer_events_none: bool,
 ) -> Option<LayoutHit<DomHandle>> {
-    let source = mock_hit_test_handle(
-        runtime,
-        document,
-        f64::from(point.x),
-        f64::from(point.y),
-        ignore_pointer_events_none,
-    )?;
+    let source = mock_hit_test_handle(runtime, document, point, MockHitTestOptions::default())?;
     Some(LayoutHit {
         source,
         fragment: None,

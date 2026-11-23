@@ -585,38 +585,25 @@ fn document_elements_in_hit_order(
     elements
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct MockHitTestOptions {
+    pub(crate) ignore_inert: bool,
+    pub(crate) clip_to_viewport: bool,
+    pub(crate) use_viewport_fallback: bool,
+}
+
 pub(crate) fn mock_hit_test_handle(
     runtime: &PageScriptHost,
     document_handle: DomHandle,
-    x: f64,
-    y: f64,
-    ignore_pointer_events_none: bool,
-) -> Option<DomHandle> {
-    mock_hit_test_handle_with_child_frames(
-        runtime,
-        document_handle,
-        x,
-        y,
-        ignore_pointer_events_none,
-        false,
-        0,
-    )
-}
-
-#[cfg(any(test, feature = "devtools"))]
-pub(in crate::native_bridge::element::geometry) fn mock_input_hit_test(
-    runtime: &PageScriptHost,
-    document_handle: DomHandle,
     point: LayoutPoint,
-    ignore_pointer_events_none: bool,
+    options: MockHitTestOptions,
 ) -> Option<DomHandle> {
     mock_hit_test_handle_with_child_frames(
         runtime,
         document_handle,
         f64::from(point.x),
         f64::from(point.y),
-        ignore_pointer_events_none,
-        true,
+        options,
         0,
     )
 }
@@ -635,7 +622,7 @@ fn hit_test_shadow_root_handle(
     shadow_root: DomHandle,
     x: f64,
     y: f64,
-    ignore_pointer_events_none: bool,
+    ignore_inert: bool,
     depth: usize,
 ) -> Option<DomHandle> {
     if depth >= HIT_TEST_CHILD_FRAME_DEPTH_LIMIT {
@@ -660,13 +647,13 @@ fn hit_test_shadow_root_handle(
                 nested_shadow_root,
                 x,
                 y,
-                ignore_pointer_events_none,
+                ignore_inert,
                 depth + 1,
             )
         {
             return Some(hit);
         }
-        if is_live_hit_source(runtime, child, ignore_pointer_events_none) {
+        if is_live_hit_source(runtime, child, ignore_inert) {
             return Some(child);
         }
     }
@@ -678,14 +665,13 @@ fn mock_hit_test_handle_with_child_frames(
     document_handle: DomHandle,
     x: f64,
     y: f64,
-    ignore_pointer_events_none: bool,
-    use_viewport_fallback: bool,
+    options: MockHitTestOptions,
     depth: usize,
 ) -> Option<DomHandle> {
     if !x.is_finite() || !y.is_finite() {
         return None;
     }
-    if use_viewport_fallback
+    if options.clip_to_viewport
         && !runtime
             .layout_viewport_for_document(document_handle)
             .contains(LayoutPoint::new(x as f32, y as f32))
@@ -698,7 +684,7 @@ fn mock_hit_test_handle_with_child_frames(
         if !mock_rect_contains_point(rect, x, y) {
             continue;
         }
-        let eligible = is_live_hit_source(runtime, element, ignore_pointer_events_none);
+        let eligible = is_live_hit_source(runtime, element, options.ignore_inert);
         if eligible
             && depth < HIT_TEST_CHILD_FRAME_DEPTH_LIMIT
             && let Some(child_document) = runtime.child_browsing_context_document_handle(element)
@@ -707,8 +693,7 @@ fn mock_hit_test_handle_with_child_frames(
                 child_document,
                 x - rect.left,
                 y - rect.top,
-                ignore_pointer_events_none,
-                use_viewport_fallback,
+                options,
                 depth + 1,
             )
         {
@@ -721,7 +706,7 @@ fn mock_hit_test_handle_with_child_frames(
                 shadow_root,
                 x,
                 y,
-                ignore_pointer_events_none,
+                options.ignore_inert,
                 depth + 1,
             )
         {
@@ -731,7 +716,7 @@ fn mock_hit_test_handle_with_child_frames(
             return Some(element);
         }
     }
-    if use_viewport_fallback {
+    if options.use_viewport_fallback {
         runtime
             .dom_host()
             .dom()
