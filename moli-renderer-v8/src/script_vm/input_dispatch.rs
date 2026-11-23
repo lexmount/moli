@@ -1880,12 +1880,13 @@ impl ScriptVm {
     }
 
     fn finish_active_drag(&mut self, reason: DragFinishReason, modifiers: u8) -> Result<()> {
-        let position = self
-            .active_drag_session
-            .as_ref()
-            .map(|session| session.position)
-            .unwrap_or_default();
-        let sampled = self._context_host.borrow().published_frame_geometry();
+        let (position, sampled, layout) = if let Some(session) = &self.active_drag_session {
+            let host = self._context_host.borrow();
+            let layout = host.ensure_observable_layout();
+            (session.position, host.published_frame_geometry(), layout)
+        } else {
+            (InputPosition::default(), None, Ok(()))
+        };
         let drag_input = DragInput {
             position,
             sampled: sampled.as_deref(),
@@ -1905,7 +1906,13 @@ impl ScriptVm {
                 drag_input,
             );
             Ok(())
-        })
+        })?;
+        // Always finish the session before reporting a layout failure. A page
+        // without a root has no frame coordinates to prepare.
+        match layout {
+            Ok(()) | Err(moli_layout::LayoutError::NoLayoutRoot) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub(crate) fn cancel_dragging(&mut self) -> Result<RendererInputDispatchOutcome> {
