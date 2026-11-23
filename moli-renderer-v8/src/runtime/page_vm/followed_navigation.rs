@@ -17,8 +17,8 @@ use crate::runtime::{
     ExternalRawDocumentBodyStream, PageId, PageVmFollowNavigationTurnOutcome,
     PageVmFollowedNavigationBuildOutcome, PageVmFollowedNavigationMetadata, PageVmInitStage,
     PageVmPendingPhaseOneNavigation, PendingDocumentLifecycleTurn, RendererBrowserContextRuntime,
-    RendererLifecycleStartReason, RendererPendingDownloadActivation,
-    RendererPendingDownloadResponse,
+    RendererCapturedDocumentEnvironment, RendererLifecycleStartReason, RendererNavigationInitiator,
+    RendererPendingDownloadActivation, RendererPendingDownloadResponse,
 };
 
 use super::{PageVm, PageVmEnvConfig, PageVmRuntimeHooks};
@@ -46,19 +46,28 @@ pub(super) enum FollowedLocationNavigationBootstrapBoundary {
     DocumentCommit,
 }
 
-#[cfg(test)]
 impl LoadedFollowedLocationNavigation {
-    fn has_header_for_test(&self, expected_name: &str) -> bool {
-        let headers = match self {
-            Self::NoDocument | Self::Download(_) => return false,
-            Self::StreamingDocument { response, .. } => &response.headers,
+    fn document_response(&self) -> Option<(&Url, &[(String, Vec<u8>)])> {
+        match self {
+            Self::NoDocument | Self::Download(_) => None,
+            Self::StreamingDocument { response, .. } => {
+                Some((&response.final_url, &response.headers))
+            }
             Self::ExternalDocument {
-                response_headers, ..
-            } => response_headers,
-        };
-        headers
-            .iter()
-            .any(|(name, value)| name.eq_ignore_ascii_case(expected_name) && value == b"1")
+                final_url,
+                response_headers,
+                ..
+            } => Some((final_url, response_headers)),
+        }
+    }
+
+    #[cfg(test)]
+    fn has_header_for_test(&self, expected_name: &str) -> bool {
+        self.document_response().is_some_and(|(_, headers)| {
+            headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case(expected_name) && value == b"1")
+        })
     }
 }
 
@@ -70,6 +79,7 @@ pub(super) async fn load_followed_location_navigation(
     request_body: Option<bytes::Bytes>,
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: BrowserNavigationRequestKind,
+    initiator: Option<&RendererNavigationInitiator>,
 ) -> Result<LoadedFollowedLocationNavigation> {
     debug!(%url, "starting pre-commit location navigation fetch");
     if let Some(response) = about_blank_navigation_response(&url)
@@ -116,6 +126,7 @@ pub(super) async fn load_followed_location_navigation(
         request_body,
         request_headers,
         browser_navigation_kind,
+        initiator,
     )
     .map_err(|error| anyhow!("failed to build location navigation request: {error}"))?;
     let mut response = loader
@@ -510,13 +521,22 @@ fn build_followed_location_navigation_request(
     request_body: Option<bytes::Bytes>,
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: BrowserNavigationRequestKind,
+    initiator: Option<&RendererNavigationInitiator>,
 ) -> Result<Request> {
     Request::new_bytes(request_method, url.as_str(), request_body, request_headers).map(|request| {
-        request
+        let request = request
             .with_top_level_navigation_cookie_context()
-            .with_browser_navigation_kind(browser_navigation_kind)
-            .with_initiator_url(initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+            .with_browser_navigation_kind(browser_navigation_kind);
+        if let Some(initiator) = initiator {
+            request
+                .with_initiator_url(initiator.url())
+                .with_request_origin(initiator.origin())
+                .with_subresource_request_metadata(initiator.request_metadata())
+        } else {
+            request
+                .with_initiator_url(initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+        }
     })
 }
 
@@ -570,6 +590,7 @@ pub(in crate::runtime) struct PageVmPreparedFollowedNavigationCommit {
     initiator_url: Url,
     navigation_handoff: crate::page_task_queue::RendererTopLevelNavigationHandoff,
     loaded: LoadedFollowedLocationNavigation,
+    initial_document_environment: Option<RendererCapturedDocumentEnvironment>,
     navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     reserved_service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     service_worker_client_navigate: Option<crate::types::ServiceWorkerClientNavigateContinuation>,
@@ -900,6 +921,7 @@ impl PageVm {
             request_body,
             request_headers,
             browser_navigation_kind,
+            pending.navigation_initiator.as_ref(),
         )
         .await
         {
@@ -953,6 +975,7 @@ impl PageVm {
                 initiator_url,
                 navigation_handoff,
                 loaded,
+                initial_document_environment: pending.initial_document_environment,
                 navigation_bootstrap_entry,
                 reserved_service_worker_client_id,
                 service_worker_client_navigate,
@@ -1083,6 +1106,7 @@ impl PageVm {
             initiator_url,
             navigation_handoff,
             loaded,
+            initial_document_environment,
             navigation_bootstrap_entry,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
@@ -1093,13 +1117,11 @@ impl PageVm {
         let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         runtime_hooks.web_mcp_navigation = web_mcp_invocation.clone();
         #[cfg(test)]
-        let runtime_hooks = {
-            let mut runtime_hooks = runtime_hooks;
+        {
             if loaded.has_header_for_test("x-moli-test-missing-navigation-script-environment") {
                 runtime_hooks.renderer_page_script_environment = None;
             }
-            runtime_hooks
-        };
+        }
         let browser_context_runtime = runtime_hooks.browser_context_runtime.clone();
         let local_executor = self.local_executor.clone();
         let request_client = self.request_client.clone();
@@ -1114,13 +1136,39 @@ impl PageVm {
         #[cfg(not(test))]
         let commit_page_id = page_id;
         let commit_result = (|| {
-            ensure!(
-                runtime_hooks.has_renderer_page_script_environment(),
-                "owner-managed navigation commit requires a renderer Page script environment"
-            );
-            self.prepare_main_window_proxy_navigation(commit_page_id)
+            let environment = runtime_hooks.renderer_page_script_environment.as_ref().ok_or_else(|| {
+                anyhow!("owner-managed navigation commit requires a renderer Page script environment")
+            })?;
+            let (final_url, headers) = loaded
+                .document_response()
+                .expect("validated Document response");
+            let bootstrap = if moli_url::is_about_blank(final_url)
+                && let Some(inherited) = initial_document_environment
+            {
+                let mut bootstrap = environment.bootstrap_replacement_document_isolate()?;
+                bootstrap.initial_document_environment =
+                    Some(inherited.take(environment.isolate_identity_key())?);
+                Some(bootstrap)
+            } else {
+                None
+            };
+            let source_commit = self.prepare_source_document_commit(
+                &mut runtime_hooks,
+                commit_page_id,
+                final_url,
+                headers,
+                bootstrap
+                    .as_ref()
+                    .and_then(|bootstrap| bootstrap.initial_document_environment.as_ref()),
+                self.document_settings.bypass_content_security_policy,
+            )?;
+            if let Some(bootstrap) = bootstrap {
+                runtime_hooks.prepared_renderer_document_isolate_bootstrap =
+                    Some(std::rc::Rc::new(std::cell::RefCell::new(Some(bootstrap))));
+            }
+            Ok(source_commit)
         })();
-        let window_proxy_commit = match commit_result {
+        let source_commit = match commit_result {
             Ok(commit) => commit,
             Err(error) => {
                 if let Some(id) = web_mcp_invocation {
@@ -1155,7 +1203,7 @@ impl PageVm {
             service_worker_client_navigate,
         });
         Ok(PageVmValidatedFollowedNavigationCommit {
-            source_commit: PageVmSourceDocumentCommit::ReplaceWindow(window_proxy_commit),
+            source_commit,
             navigation,
         })
     }
@@ -1210,50 +1258,20 @@ impl PageVm {
         let navigation_handoff = environment
             .page_runtime_task_source()
             .next_top_level_navigation_handoff();
-        let policy = bootstrap
-            .initial_document_environment
-            .as_ref()
-            .map(|environment| environment.policy_container.clone())
-            .unwrap_or_else(|| {
-                crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
-                    &request.response_headers,
-                    &request.final_url,
-                )
-                .with_content_security_policy_bypass(
-                    request.document_settings.bypass_content_security_policy,
-                )
-            });
-        let origin = bootstrap
-            .initial_document_environment
-            .as_ref()
-            .map(|environment| environment.origin().to_owned())
-            .unwrap_or_else(|| moli_url::origin_ascii_serialization(&request.final_url));
-        let local_window_transition = self.vm().initial_window_transition_for_commit(
-            &origin,
-            &policy,
+        let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
+        let page_id = self.page_id;
+        let source_commit = self.prepare_source_document_commit(
+            &mut runtime_hooks,
+            page_id,
+            &request.final_url,
+            &request.response_headers,
             bootstrap.initial_document_environment.as_ref(),
+            request.document_settings.bypass_content_security_policy,
         )?;
-        let mut runtime_hooks = self
-            .runtime_hooks
-            .clone()
-            .for_cross_document_commit()
-            .with_prepared_renderer_document_isolate(bootstrap, reservation)?;
+        let runtime_hooks =
+            runtime_hooks.with_prepared_renderer_document_isolate(bootstrap, reservation)?;
         let browser_context_runtime = runtime_hooks.browser_context_runtime.clone();
         let local_executor = self.local_executor.clone();
-        let page_id = self.page_id;
-        // Prepare the ownership action while the source is live. The local-task
-        // guard publishes Committed before detaching or transferring this Window.
-        let source_commit = if local_window_transition
-            == crate::frame_owner_model::FrameDocumentLocalWindowTransition::ReuseInitialEmptyLocalWindow
-        {
-            let window = std::rc::Rc::new(std::cell::RefCell::new(None));
-            runtime_hooks.reused_initial_window = Some(window.clone());
-            PageVmSourceDocumentCommit::ReuseInitialWindow(window)
-        } else {
-            PageVmSourceDocumentCommit::ReplaceWindow(
-                self.prepare_main_window_proxy_navigation(page_id)?,
-            )
-        };
         let navigation = Box::new(PageVmCommittedNavigationBootstrap {
             payload: Some(PageVmCommittedNavigationBootstrapPayload::PreparedResponse(
                 Box::new(PreparedResponseBootstrapPayload {
@@ -1274,6 +1292,43 @@ impl PageVm {
             source_commit,
             navigation,
         })
+    }
+
+    fn prepare_source_document_commit(
+        &mut self,
+        runtime_hooks: &mut PageVmRuntimeHooks,
+        page_id: PageId,
+        final_url: &Url,
+        headers: &[(String, Vec<u8>)],
+        inherited: Option<&crate::script_vm::ScriptVmInitialDocumentEnvironment>,
+        bypass_content_security_policy: bool,
+    ) -> Result<PageVmSourceDocumentCommit> {
+        let policy = inherited
+            .map(|environment| environment.policy_container.clone())
+            .unwrap_or_else(|| {
+                crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                    headers, final_url,
+                )
+                .with_content_security_policy_bypass(bypass_content_security_policy)
+            });
+        let origin = inherited
+            .map(|environment| environment.origin().to_owned())
+            .unwrap_or_else(|| moli_url::origin_ascii_serialization(final_url));
+        let transition = self
+            .vm()
+            .initial_window_transition_for_commit(&origin, &policy, inherited)?;
+        // Prepare the ownership action while the source is live. The local-task
+        // guard publishes Committed before detaching or transferring this Window.
+        if page_id == self.page_id
+            && transition == crate::frame_owner_model::FrameDocumentLocalWindowTransition::ReuseInitialEmptyLocalWindow
+        {
+            let window = std::rc::Rc::new(std::cell::RefCell::new(None));
+            runtime_hooks.reused_initial_window = Some(window.clone());
+            Ok(PageVmSourceDocumentCommit::ReuseInitialWindow(window))
+        } else {
+            self.prepare_main_window_proxy_navigation(page_id)
+                .map(PageVmSourceDocumentCommit::ReplaceWindow)
+        }
     }
 
     fn prepare_replacement_document_commit(
@@ -1532,7 +1587,7 @@ impl PageVm {
         let env = self.followed_location_navigation_env();
         let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         runtime_hooks.web_mcp_navigation = web_mcp_invocation;
-        if runtime_hooks.has_renderer_page_script_environment() {
+        if runtime_hooks.renderer_page_script_environment.is_some() {
             self.prepare_main_window_proxy_navigation(self.page_id)?
                 .detach();
             self.record_main_navigation_commit();
@@ -1617,6 +1672,7 @@ mod tests {
             None,
             Vec::new(),
             BrowserNavigationRequestKind::Navigate,
+            None,
         )
         .unwrap();
         let headers = outgoing_request_headers(&Default::default(), &request, None);
@@ -1660,6 +1716,7 @@ mod tests {
             None,
             Vec::new(),
             BrowserNavigationRequestKind::Reload,
+            None,
         )
         .unwrap();
         let headers = outgoing_request_headers(&Default::default(), &request, None);
@@ -1693,6 +1750,7 @@ mod tests {
                 "application/x-www-form-urlencoded".to_owned(),
             )],
             BrowserNavigationRequestKind::Navigate,
+            None,
         )
         .unwrap();
 
@@ -1720,6 +1778,7 @@ mod tests {
                 None,
                 Vec::new(),
                 BrowserNavigationRequestKind::Navigate,
+                None,
             )
             .await;
             match result {
@@ -1738,6 +1797,7 @@ mod tests {
             Some(bytes::Bytes::from_static(b"upload")),
             Vec::new(),
             BrowserNavigationRequestKind::Navigate,
+            None,
         )
         .await
         .unwrap();

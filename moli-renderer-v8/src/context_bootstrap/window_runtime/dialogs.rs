@@ -335,7 +335,7 @@ pub(crate) fn window_open_callback<'s>(
         _ if parsed_features.is_popup() => crate::RendererPopupDisposition::NewWindow,
         _ => crate::RendererPopupDisposition::Foreground,
     };
-    if host.has_browser_owned_auxiliary_page_factory() {
+    if let Some(navigation_owner) = host.auxiliary_page_navigation_owner() {
         let creator_child_handle = window_receiver_child_handle(scope, entered_window);
         match host.open_renderer_owned_auxiliary_window(
             scope,
@@ -355,7 +355,6 @@ pub(crate) fn window_open_callback<'s>(
                 {
                     window.set_is_popup(parsed_features.is_popup());
                 }
-                let renderer_navigation = opened.queue_javascript_navigation(scope, &url);
                 let disposition = if opened.pending_page.is_some()
                     || host.protocol_user_gesture_activation()
                     || host.current_input_event().is_some()
@@ -364,14 +363,20 @@ pub(crate) fn window_open_callback<'s>(
                 } else {
                     crate::RendererPopupDisposition::Background
                 };
+                let javascript_navigation = opened.queue_navigation(
+                    scope,
+                    if parsed.raw_url.is_empty() { "" } else { &url },
+                    &navigation_initiator,
+                    navigation_owner,
+                );
                 let window_event = opened.pending_page.is_some().then_some(window_open_event);
-                host.record_pending_popup_activation(
+                unsafe { &mut *host_ptr }.record_pending_popup_activation(
                     RendererPendingPopupActivation::window(
                         root_document,
                         source,
                         !suppress_opener,
                         opened.window.as_ref().map(|window| window.id()),
-                        if renderer_navigation {
+                        if javascript_navigation {
                             "about:blank".to_owned()
                         } else {
                             url
@@ -379,7 +384,7 @@ pub(crate) fn window_open_callback<'s>(
                         parsed.target_name,
                         disposition,
                     )
-                    .with_navigation_requested(!parsed.raw_url.is_empty() && !renderer_navigation)
+                    .with_navigation_requested(!parsed.raw_url.is_empty() && !javascript_navigation)
                     .with_navigation_initiator(navigation_initiator)
                     .with_same_origin_target(opened.same_origin_with_target)
                     .with_initial_document_environment(opened.initial_document_environment)

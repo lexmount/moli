@@ -1,6 +1,6 @@
 pub(crate) use moli_webapi::clipboard_item::{ClipboardPresentationStyle, ClipboardSnapshot};
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::{
@@ -36,6 +36,12 @@ pub use window_name::{
 
 static NEXT_RENDERER_STORAGE_PARTITION_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AuxiliaryNavigationOwner {
+    Browser,
+    Renderer,
+}
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RendererOutputTransportSenderSlot {
@@ -208,7 +214,7 @@ struct RendererBrowserContextRuntimeInner {
     #[cfg(feature = "devtools")]
     shared_worker_pause_on_start_for_devtools: Arc<AtomicBool>,
     javascript_dialog_handler_enabled: AtomicBool,
-    browser_owns_auxiliary_document_responses: AtomicBool,
+    auxiliary_navigation_owner: OnceLock<AuxiliaryNavigationOwner>,
     renderer_output_transport_tx: RendererOutputTransportSenderSlot,
 }
 
@@ -623,7 +629,7 @@ impl RendererBrowserContextRuntime {
                 #[cfg(feature = "devtools")]
                 shared_worker_pause_on_start_for_devtools: Arc::new(AtomicBool::new(false)),
                 javascript_dialog_handler_enabled: AtomicBool::new(false),
-                browser_owns_auxiliary_document_responses: AtomicBool::new(false),
+                auxiliary_navigation_owner: OnceLock::new(),
                 renderer_output_transport_tx,
             }),
         }
@@ -680,15 +686,24 @@ impl RendererBrowserContextRuntime {
     /// Installs the browser's auxiliary navigation owner. Merely observing
     /// renderer output does not transfer responsibility for loading popups.
     pub fn delegate_auxiliary_document_responses_to_browser(&self) {
-        self.inner
-            .browser_owns_auxiliary_document_responses
-            .store(true, Ordering::Release);
+        self.set_auxiliary_navigation_owner(AuxiliaryNavigationOwner::Browser);
     }
 
-    pub(crate) fn browser_owns_auxiliary_document_responses(&self) -> bool {
-        self.inner
-            .browser_owns_auxiliary_document_responses
-            .load(Ordering::Acquire)
+    /// The desktop shell adopts auxiliary Pages while their renderer owns navigation.
+    #[cfg(feature = "molio")]
+    pub fn enable_viewport_auxiliary_pages(&self) {
+        self.set_auxiliary_navigation_owner(AuxiliaryNavigationOwner::Renderer);
+    }
+
+    fn set_auxiliary_navigation_owner(&self, owner: AuxiliaryNavigationOwner) {
+        assert_eq!(
+            *self.inner.auxiliary_navigation_owner.get_or_init(|| owner),
+            owner
+        );
+    }
+
+    pub(crate) fn auxiliary_navigation_owner(&self) -> Option<AuxiliaryNavigationOwner> {
+        self.inner.auxiliary_navigation_owner.get().copied()
     }
 
     pub(crate) fn renderer_output_transport_sender(

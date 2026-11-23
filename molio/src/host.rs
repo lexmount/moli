@@ -342,18 +342,6 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
         }
     };
     navigation_updates.mark_changed();
-    if let Some(popup) = tab.popup.take()
-        && popup.navigation_requested
-        && popup.url != page.final_url().as_str()
-        && !tab.commands.is_closed()
-    {
-        match start_navigation(&page, &tab.state, Some(popup.url)) {
-            Ok(task) => navigation = Some(task),
-            Err(error) => tab
-                .state
-                .send_modify(|state| state.error = Some(format!("{error:#}"))),
-        }
-    }
 
     loop {
         tokio::select! {
@@ -680,6 +668,7 @@ mod tests {
     use super::*;
     use crate::downloads::{Download, DownloadCommand, DownloadState};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpListener;
 
     async fn read_http_request(
         socket: &mut BufReader<tokio::net::TcpStream>,
@@ -1024,6 +1013,67 @@ mod tests {
         Ok(())
     }
 
+    fn click(tab: &TabConnection, modifiers: u8) -> Result<()> {
+        for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+            tab.commands
+                .send(TabCommand::Pointer(PointerInput {
+                    event,
+                    position: (12., 10.),
+                    button: 0,
+                    buttons,
+                    click_count: 1,
+                    delta: (0., 0.),
+                    modifiers,
+                }))
+                .map_err(|_| anyhow::anyhow!("click popup link"))?;
+        }
+        Ok(())
+    }
+
+    async fn next_popup(
+        events: &mut mpsc::UnboundedReceiver<BrowserEvent>,
+    ) -> Result<Box<RendererPopupActivationParts>> {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .context("waiting for popup activation")?
+            .context("browser host closed before the click opened a tab")?;
+        let BrowserEvent::Popup(popup) = event else {
+            anyhow::bail!("expected a popup action from the click");
+        };
+        Ok(popup)
+    }
+
+    async fn wait_for_navigation(
+        tab: &TabConnection,
+        url: &str,
+        title: &str,
+    ) -> Result<RendererDocumentLifecycleIdentity> {
+        let mut updates = tab.state.clone();
+        let result = tokio::time::timeout(
+            Duration::from_secs(8),
+            updates.wait_for(|state| {
+                state.error.is_some()
+                    || state
+                        .navigation
+                        .as_ref()
+                        .is_some_and(|nav| nav.url.as_str() == url && nav.title == title)
+            }),
+        )
+        .await;
+        let state = result.with_context(|| {
+            format!(
+                "waiting for {url} with title {title:?}, saw {:?}",
+                tab.state.borrow().navigation
+            )
+        })??;
+        anyhow::ensure!(
+            state.error.is_none(),
+            "tab failed to navigate: {:?}",
+            state.error
+        );
+        state.document.context("tab has a committed document")
+    }
+
     async fn show_tab(
         tab: &mut TabConnection,
         title: &str,
@@ -1261,26 +1311,8 @@ mod tests {
         ))).map_err(|_| anyhow::anyhow!("load opener"))?;
         let original = show_tab(&mut opener, "Videos", 1, [0, 0, 255, 255]).await?;
 
-        for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
-            opener
-                .commands
-                .send(TabCommand::Pointer(PointerInput {
-                    event,
-                    position: (12., 10.),
-                    button: 0,
-                    buttons,
-                    click_count: 1,
-                    delta: (0., 0.),
-                    modifiers: 0,
-                }))
-                .map_err(|_| anyhow::anyhow!("click video"))?;
-        }
-        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
-            .await?
-            .context("browser host closed before the click opened a tab")?;
-        let BrowserEvent::Popup(popup) = event else {
-            anyhow::bail!("expected a popup action from the click")
-        };
+        click(&opener, 0)?;
+        let popup = next_popup(&mut events).await?;
         assert_eq!(popup.url, "about:blank#video");
         assert!(matches!(
             popup.source,
@@ -1310,6 +1342,230 @@ mod tests {
             "about:blank#video"
         );
         assert_eq!(opener.state.borrow().document, Some(original));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn popup_adoption_keeps_the_fragment_set_by_the_opening_script() -> Result<()> {
+        let (base, _requests) = popup_fixture().await?;
+        let (host, mut events) = BrowserHost::start(None)?;
+        let mut opener = host.open_tab()?;
+        opener
+            .commands
+            .send(TabCommand::Navigate(Some(format!(
+                "{base}/fragment-source"
+            ))))
+            .map_err(|_| anyhow::anyhow!("load opener"))?;
+        show_tab(&mut opener, "Source", 1, [0, 0, 255, 255]).await?;
+        click(&opener, 0)?;
+        let popup = next_popup(&mut events).await?;
+        assert_eq!(popup.url, "about:blank#first");
+        let mut child = host.open_popup(popup)?;
+        show_tab(&mut child, "", 2, [255, 255, 255, 255]).await?;
+        assert_eq!(
+            child
+                .state
+                .borrow()
+                .navigation
+                .as_ref()
+                .unwrap()
+                .url
+                .as_str(),
+            "about:blank#second"
+        );
+        Ok(())
+    }
+
+    const SOURCE_PAGE: &str = r#"<!doctype html><title>Source</title><base href="/base/">
+        <style>html{background:red}body{margin:0}a{display:block;width:36px;height:24px}</style>
+        <a id="open" href="/redirect" target="_blank" referrerpolicy="origin">Open</a>
+        <script>
+        if (location.pathname === "/fragment-source") {
+            document.getElementById("open").onclick = event => {
+                event.preventDefault();
+                const child = window.open("about:blank#first", "child");
+                child.location.hash = "second";
+            };
+        } else if (location.pathname === "/source") {
+            let step = 0;
+            let report;
+            document.getElementById("open").onclick = event => {
+                event.preventDefault();
+                if (step++ === 0) {
+                    report = window.open("/obsolete", "report");
+                    report.bootstrapToken = "retained";
+                    report.location.href = "/report";
+                } else if (step === 2) {
+                    const url = new URL("/reused", location.href);
+                    url.hostname = "localhost";
+                    window.open(url.href, "report");
+                } else {
+                    window.open("about:blank", "report");
+                    const timer = setInterval(() => {
+                        try {
+                            if (report.location.href === "about:blank") {
+                                document.title = report.document.baseURI;
+                                clearInterval(timer);
+                            }
+                        } catch (error) {
+                            document.title = String(error);
+                        }
+                    }, 10);
+                }
+            };
+        }
+        </script>"#;
+
+    async fn popup_fixture() -> Result<(String, mpsc::UnboundedReceiver<(String, Option<String>)>)>
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let (requests_tx, requests_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let requests = requests_tx.clone();
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(socket);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await?;
+                    let path = line
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or_default()
+                        .to_owned();
+                    let mut referrer = None;
+                    loop {
+                        line.clear();
+                        if reader.read_line(&mut line).await? == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                        if let Some((name, value)) = line.split_once(':')
+                            && name.eq_ignore_ascii_case("referer")
+                        {
+                            referrer = Some(value.trim().to_owned());
+                        }
+                    }
+                    let (status, headers, body) = match path.as_str() {
+                        "/source" | "/fragment-source" | "/background-source" => {
+                            ("200 OK", "", SOURCE_PAGE)
+                        }
+                        "/report" => (
+                            "200 OK",
+                            "",
+                            "<script>document.title = window.bootstrapToken ?? 'missing';</script>",
+                        ),
+                        "/reused" => ("200 OK", "", "<title>Reused report</title>"),
+                        "/redirect" => ("302 Found", "Location: /background-report\r\n", ""),
+                        "/background-report" => (
+                            "200 OK",
+                            "",
+                            "<title>Background report</title><script>setTimeout(() => {location.hash = 'done'; document.title = 'Background ready';}, 0);</script>",
+                        ),
+                        _ => ("404 Not Found", "", ""),
+                    };
+                    let _ = requests.send((path, referrer));
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
+                        body.len()
+                    );
+                    reader.into_inner().write_all(response.as_bytes()).await
+                });
+            }
+        });
+        Ok((base, requests_rx))
+    }
+
+    #[tokio::test]
+    async fn popup_navigations_preserve_source_and_initial_window() -> Result<()> {
+        let (base, mut requests) = popup_fixture().await?;
+        let (host, mut events) = BrowserHost::start(None)?;
+        let source = format!("{base}/source");
+        let mut opener = host.open_tab()?;
+        opener
+            .commands
+            .send(TabCommand::Navigate(Some(source.clone())))
+            .map_err(|_| anyhow::anyhow!("load popup source"))?;
+        show_tab(&mut opener, "Source", 1, [0, 0, 255, 255]).await?;
+        click(&opener, 0)?;
+        let popup = next_popup(&mut events).await?;
+        assert_eq!(popup.url, format!("{base}/obsolete"));
+        let report = host.open_popup(popup)?;
+        let first_document =
+            wait_for_navigation(&report, &format!("{base}/report"), "retained").await?;
+        click(&opener, 0)?;
+        let reuse = next_popup(&mut events).await?;
+        assert!(reuse.pending_auxiliary_page.is_none());
+        assert_eq!(
+            reuse.browsing_context_name.as_ref(),
+            Some(report.window_identity.name())
+        );
+        let reused_url = format!("{}/reused", base.replace("127.0.0.1", "localhost"));
+        let reused_document = wait_for_navigation(&report, &reused_url, "Reused report").await?;
+        assert_ne!(first_document, reused_document);
+        click(&opener, 0)?;
+        let blank = next_popup(&mut events).await?;
+        assert!(blank.pending_auxiliary_page.is_none());
+        assert_eq!(blank.url, "about:blank");
+        let blank_document = wait_for_navigation(&report, "about:blank", "").await?;
+        assert_ne!(blank_document, reused_document);
+        wait_for_navigation(&opener, &source, &format!("{base}/base/")).await?;
+        let mut visited = Vec::new();
+        while let Ok((path, referrer)) = requests.try_recv() {
+            assert_ne!(
+                path, "/obsolete",
+                "a newer Location assignment superseded this URL"
+            );
+            let expected_referrer = match path.as_str() {
+                "/report" => source.clone(),
+                "/reused" => format!("{base}/"),
+                _ => continue,
+            };
+            assert_eq!(referrer.as_deref(), Some(expected_referrer.as_str()));
+            visited.push(path);
+        }
+        assert_eq!(visited, ["/report", "/reused"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn background_popup_updates_metadata_through_redirect_and_script() -> Result<()> {
+        let (base, mut requests) = popup_fixture().await?;
+        let (host, mut events) = BrowserHost::start(None)?;
+        let mut opener = host.open_tab()?;
+        opener
+            .commands
+            .send(TabCommand::Navigate(Some(format!(
+                "{base}/background-source"
+            ))))
+            .map_err(|_| anyhow::anyhow!("load background popup source"))?;
+        show_tab(&mut opener, "Source", 1, [0, 0, 255, 255]).await?;
+        let new_tab_modifier = if cfg!(target_os = "macos") {
+            0b100
+        } else {
+            0b010
+        };
+        click(&opener, new_tab_modifier)?;
+        let popup = next_popup(&mut events).await?;
+        assert_eq!(
+            popup.disposition,
+            moli_core::page::RendererPopupDisposition::Background
+        );
+        let report = host.open_popup(popup)?;
+        wait_for_navigation(
+            &report,
+            &format!("{base}/background-report#done"),
+            "Background ready",
+        )
+        .await?;
+        assert!(report.viewport.read(|_| ()).is_none());
+        let mut visited = Vec::new();
+        while let Ok((path, referrer)) = requests.try_recv() {
+            if matches!(path.as_str(), "/redirect" | "/background-report") {
+                assert_eq!(referrer.as_deref(), Some(format!("{base}/").as_str()));
+                visited.push(path);
+            }
+        }
+        assert_eq!(visited, ["/redirect", "/background-report"]);
         Ok(())
     }
 }

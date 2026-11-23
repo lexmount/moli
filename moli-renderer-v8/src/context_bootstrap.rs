@@ -202,6 +202,7 @@ pub(crate) use css_fontface_runtime::{
 };
 #[cfg(feature = "molio")]
 pub(crate) use location_navigation::navigate_top_level_from_browser;
+pub(crate) use location_navigation::queue_related_popup_navigation;
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
     dispatch_top_level_navigation_event_with_source_element,

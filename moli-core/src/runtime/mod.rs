@@ -361,7 +361,7 @@ impl Browser {
         self.set_renderer_output_transport_sender(sender.with_desktop_downloads());
         self.js_runtime
             .browser_context_runtime()
-            .delegate_auxiliary_document_responses_to_browser();
+            .enable_viewport_auxiliary_pages();
         receiver
     }
 
@@ -395,7 +395,11 @@ impl Browser {
             url.as_str(),
             url.clone(),
             PageVmInitStage::DomContentLoaded,
-            RendererReplyBoundary::Stage,
+            if popup.is_some() {
+                RendererReplyBoundary::DocumentCommit
+            } else {
+                RendererReplyBoundary::Stage
+            },
             None,
             String::new(),
             StaticPageCreation {

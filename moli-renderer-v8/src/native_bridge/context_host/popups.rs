@@ -633,9 +633,8 @@ impl PageScriptHost {
         Option<crate::runtime::RendererAuxiliaryDocumentResponse>,
         Option<crate::runtime::AuxiliaryDocumentResponseReceiver>,
     ) {
-        if self
-            .browser_context_runtime()
-            .browser_owns_auxiliary_document_responses()
+        if self.browser_context_runtime().auxiliary_navigation_owner()
+            == Some(crate::runtime::AuxiliaryNavigationOwner::Browser)
             && Url::parse(href).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
         {
             let (producer, receiver) = crate::runtime::RendererAuxiliaryDocumentResponse::channel();
