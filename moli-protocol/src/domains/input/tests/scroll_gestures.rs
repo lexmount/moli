@@ -211,3 +211,77 @@ async fn scroll_gesture_coalesces_progress_when_wheel_handler_is_slow() {
     );
     assert_eq!(value["page"], 0);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_checks_visible_widget_bounds_after_layout_resize() {
+    let mut ctx = fixture("document.addEventListener('wheel',e=>total+=e.deltaY);").await;
+    for (id, width, height) in [(35001, 640, 480), (35002, 1000, 0)] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Emulation.setDeviceMetricsOverride",
+            "params": { "width": width, "height": height, "deviceScaleFactor": 1, "mobile": false }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), None);
+    }
+    assert!(evaluate_bool(&mut ctx, "innerWidth === 1000").await);
+    for (id, x, y) in [(35003, 800, 100), (35004, 640, 100), (35005, 20, 480)] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Input.synthesizeScrollGesture",
+            "params": { "x": x, "y": y, "yDistance": -10 }
+        }))
+        .await;
+        ctx.expect_error(id, -32000, "Position out of bounds");
+    }
+    assert!(evaluate_bool(&mut ctx, "total === 0 && scrollY === 0").await);
+    gesture(&mut ctx, json!({"x":639,"y":100,"yDistance":-10})).await;
+    assert!(evaluate_bool(&mut ctx, "total === 10 && scrollY === 10").await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_preserves_intercepted_drag() {
+    let mut ctx = TestContext::new_with_layout_policy(LayoutPolicy::Realtime);
+    with_loaded_document(&mut ctx, DRAG_PAGE).await;
+    assert!(
+        evaluate_bool(
+            &mut ctx,
+            "target.style.overflow='auto';target.innerHTML='<div style=\"height:500px\"></div>';true",
+        )
+        .await
+    );
+    ctx.capture_fixture_layout(None).await;
+    ctx.process_async(json!({
+        "id": 35001, "method": "Input.setInterceptDrags", "params": { "enabled": true }
+    }))
+    .await;
+    ctx.expect_result(35001, json!({}), None);
+    dispatch_drag_mouse(&mut ctx, 35002, "mousePressed", 20, 1).await;
+    dispatch_drag_mouse(&mut ctx, 35003, "mouseMoved", 120, 1).await;
+    let intercepted = ctx
+        .wait_for_scheduler_message("intercepted drag", |message| {
+            message["method"] == "Input.dragIntercepted"
+        })
+        .await;
+    for (id, kind) in [(35004, "dragEnter"), (35005, "dragOver"), (35006, "drop")] {
+        ctx.process_async(json!({
+            "id": id, "method": "Input.dispatchDragEvent",
+            "params": { "type": kind, "x": INPUT_HIT_X, "y": 120,
+                        "data": intercepted["params"]["data"] }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), None);
+        if kind == "dragEnter" {
+            gesture(&mut ctx, json!({"y":120,"yDistance":-40})).await;
+            assert!(evaluate_bool(&mut ctx, "target.scrollTop === 40").await);
+            assert!(evaluate_bool(&mut ctx, "!window.__drag.includes('dragend')").await);
+        }
+    }
+    assert!(
+        evaluate_bool(
+            &mut ctx,
+            "window.__drag.slice(-2).join('|') === 'drop:custom|dragend'",
+        )
+        .await
+    );
+}

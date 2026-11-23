@@ -43,6 +43,7 @@ pub enum RendererDevToolsPageCommand {
         delta_x: f64,
         delta_y: f64,
         cancelable: bool,
+        intercept_drags: bool,
     },
     DispatchTouchEvent {
         points: Vec<RendererTouchPoint>,

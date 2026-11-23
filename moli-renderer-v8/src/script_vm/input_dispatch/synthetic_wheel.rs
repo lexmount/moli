@@ -12,6 +12,7 @@ impl ScriptVm {
         delta_x: f64,
         delta_y: f64,
         cancelable: bool,
+        intercept_drags: bool,
         gesture: &RendererSyntheticWheelGesture,
     ) -> Result<RendererInputDispatchOutcome> {
         self.dispatch_mouse_input_with_gesture(
@@ -25,7 +26,7 @@ impl ScriptVm {
             delta_y,
             RendererPointerEventProperties::default(),
             0,
-            false,
+            intercept_drags,
             cancelable,
             MouseDispatchCompletion::FinishTurn,
             Some(gesture),
