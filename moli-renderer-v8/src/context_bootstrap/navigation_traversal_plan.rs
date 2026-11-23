@@ -36,10 +36,6 @@ impl<'s> JointTraversalPlan<'s> {
         self.core.target_step()
     }
 
-    pub(super) fn has_cross_document_root(&self, scope: &mut v8::PinScope<'s, '_>) -> bool {
-        self.cross_document_root_index(scope).is_some()
-    }
-
     pub(super) fn cross_document_root_index(
         &self,
         scope: &mut v8::PinScope<'s, '_>,

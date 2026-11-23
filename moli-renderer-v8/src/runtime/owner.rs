@@ -974,11 +974,16 @@ fn live_page_command_should_follow_pending_navigation(command: &RendererPageComm
     // commands, not page-load commands: they may enqueue a pending location
     // navigation, but the browser/protocol navigation pipeline owns starting,
     // loading, and committing that navigation.
-    matches!(
-        command,
+    match command {
         RendererPageCommand::EvaluateExpressionAndFollowPendingNavigation { .. }
-            | RendererPageCommand::EvaluateExpressionInExecutionContextAndFollowPendingNavigation { .. }
-    )
+        | RendererPageCommand::EvaluateExpressionInExecutionContextAndFollowPendingNavigation {
+            ..
+        } => true,
+        #[cfg(feature = "molio")]
+        RendererPageCommand::NavigateViewport(..)
+        | RendererPageCommand::TraverseViewportHistory(..) => true,
+        _ => false,
+    }
 }
 
 fn live_page_command_requires_materialized_child_realms(command: &RendererPageCommand) -> bool {

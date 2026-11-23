@@ -12,6 +12,11 @@ pub(crate) struct RendererSessionHistories {
 }
 
 impl RendererSessionHistories {
+    #[cfg(feature = "molio")]
+    pub(crate) fn main_position(&self) -> moli_session_history::SessionHistoryPosition {
+        self.main.position()
+    }
+
     pub(crate) fn entry_is_current(
         &self,
         owner: OwnerDispatchScope,

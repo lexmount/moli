@@ -10,7 +10,9 @@ use moli_webidl as webidl;
 
 mod accessors;
 mod basic;
-pub use basic::{construct_native_focus_event, initialize_text_event};
+pub use basic::{
+    construct_native_composition_event, construct_native_focus_event, initialize_text_event,
+};
 mod captured_mouse;
 mod clipboard_change;
 mod custom;

@@ -203,6 +203,33 @@ impl ScriptVm {
             .visual_state_token(document, viewport, base_background_color)
     }
 
+    #[cfg(feature = "molio")]
+    pub(crate) fn request_viewport_frame(&self) {
+        self._context_host
+            .borrow()
+            .request_realtime_rendering_opportunity();
+    }
+
+    #[cfg(feature = "molio")]
+    pub(crate) fn viewport_navigation(&self) -> crate::runtime::RendererViewportNavigation {
+        let position = self
+            ._context_host
+            .borrow()
+            .session_histories
+            .main_position();
+        crate::runtime::RendererViewportNavigation {
+            url: self.document_runtime.document_url().clone(),
+            title: self.document_runtime.dom_host().document_title(),
+            can_go_back: position.index() > 0,
+            can_go_forward: position.index() + 1 < position.length(),
+        }
+    }
+
+    #[cfg(feature = "molio")]
+    pub(crate) fn set_viewport_resource_wake(&self, wake: &std::sync::Arc<tokio::sync::Notify>) {
+        self._context_host.borrow().set_viewport_resource_wake(wake);
+    }
+
     #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn visual_resource_generation_handle_for_test(
         &self,

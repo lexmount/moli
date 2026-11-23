@@ -88,6 +88,8 @@ pub(in crate::runtime) struct LivePageEntry {
 pub(in crate::runtime) struct CommittedNavigationEntry {
     entry: LivePageEntry,
     navigation: Box<PageVmCommittedNavigationBootstrap>,
+    #[cfg(feature = "molio")]
+    viewport_frames: Option<Box<crate::runtime::page_viewport::ViewportFrameState>>,
 }
 
 /// A checked-out Page entry whose final active `PageVm` has been consumed by
@@ -106,7 +108,12 @@ impl CommittedNavigationEntry {
         entry: LivePageEntry,
         navigation: Box<PageVmCommittedNavigationBootstrap>,
     ) -> Self {
-        Self { entry, navigation }
+        Self {
+            entry,
+            navigation,
+            #[cfg(feature = "molio")]
+            viewport_frames: None,
+        }
     }
 
     /// Called only after the local-task guard owns this committed residence.
@@ -145,6 +152,13 @@ impl CommittedNavigationEntry {
                 .take()
                 .expect("committed navigation must retain its source PageVm until retirement")
         };
+        #[cfg(feature = "molio")]
+        {
+            self.viewport_frames = page_vm.viewport_frames.take();
+            if let Some(frames) = self.viewport_frames.as_mut() {
+                frames.discard_document();
+            }
+        }
         #[cfg(test)]
         self.navigation
             .inject_commit_panic_for_test("x-moli-test-panic-during-source-retirement");
@@ -174,7 +188,7 @@ impl CommittedNavigationEntry {
         outcome: PageVmFollowedNavigationBuildOutcome,
     ) -> Result<CommittedNavigationBootstrapCompletion> {
         let outcome = self.navigation.finalize_build_outcome(outcome)?;
-        match outcome {
+        let completion = match outcome {
             PageVmFollowedNavigationBuildOutcome::ContinuePostParseLifecycle {
                 page_vm,
                 page_tasks,
@@ -182,28 +196,31 @@ impl CommittedNavigationEntry {
                 started,
             } => {
                 self.entry.install_resumed_phase_one_page_vm(page_vm);
-                Ok(
-                    CommittedNavigationBootstrapCompletion::ContinuePostParseLifecycle {
-                        page_tasks,
-                        stage,
-                        started,
-                    },
-                )
+                CommittedNavigationBootstrapCompletion::ContinuePostParseLifecycle {
+                    page_tasks,
+                    stage,
+                    started,
+                }
             }
             PageVmFollowedNavigationBuildOutcome::PendingPhaseOne(pending) => {
                 let wake_token = self
                     .entry
                     .install_new_pending_phase_one_navigation(pending)?;
-                Ok(CommittedNavigationBootstrapCompletion::PendingPhaseOne { wake_token })
+                CommittedNavigationBootstrapCompletion::PendingPhaseOne { wake_token }
             }
             PageVmFollowedNavigationBuildOutcome::TriggeredNavigation { page_vm, stage } => {
                 self.entry.install_resumed_phase_one_page_vm(page_vm);
-                Ok(CommittedNavigationBootstrapCompletion::TriggeredNavigation { stage })
+                CommittedNavigationBootstrapCompletion::TriggeredNavigation { stage }
             }
             PageVmFollowedNavigationBuildOutcome::Download(_) => unreachable!(
                 "committed bootstrap finalization must reject outcomes without a replacement PageVm"
             ),
+        };
+        #[cfg(feature = "molio")]
+        if let Some(frames) = self.viewport_frames.take() {
+            self.entry.page_vm_mut().restore_viewport_frames(frames);
         }
+        Ok(completion)
     }
 
     pub(super) fn ensure_live_replacement(&self) -> Result<()> {
@@ -359,7 +376,7 @@ impl LivePageEntry {
             .flatten()
     }
 
-    fn renderer_owned_pending_navigation_handoff(
+    pub(in crate::runtime) fn renderer_owned_pending_navigation_handoff(
         &self,
     ) -> Option<crate::page_task_queue::RendererTopLevelNavigationHandoff> {
         if matches!(

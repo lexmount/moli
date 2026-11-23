@@ -125,6 +125,11 @@ impl super::PageScriptHost {
         self.image_resources.visual_generation()
     }
 
+    #[cfg(feature = "molio")]
+    pub(crate) fn set_viewport_resource_wake(&self, wake: &std::sync::Arc<tokio::sync::Notify>) {
+        self.image_resources.set_viewport_resource_wake(wake);
+    }
+
     #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn visual_resource_generation_handle_for_test(
         &self,

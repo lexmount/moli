@@ -7,6 +7,8 @@ edition = "2024"
 [features]
 default = ["devtools"]
 devtools = ["moli-command-types/devtools", "dep:moli-protocol-cdp"]
+# Desktop viewport streaming and native editing use the existing input dispatch.
+molio = ["devtools"]
 # Native ACE page tasks for embedders. Public browser builds leave this disabled.
 ace-protocol = ["devtools"]
 # Diagnostic-only page-created global snapshots. Core integration tests enable

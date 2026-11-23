@@ -168,6 +168,8 @@ mod shared_worker_host;
 mod speech_synthesis;
 mod storage_access;
 mod storage_buckets;
+#[cfg(feature = "molio")]
+pub(crate) mod viewport_edit;
 
 pub(crate) use self::storage_access::request_storage_access_with_types;
 pub(crate) use self::window_runtime::{
@@ -198,6 +200,8 @@ pub(crate) use css_fontface_runtime::{
     check_realtime_document_font_readiness, new_font_face_set, rebuild_font_face_set_faces,
     settle_document_font_face_set_ready, sync_realtime_document_font_face_set,
 };
+#[cfg(feature = "molio")]
+pub(crate) use location_navigation::navigate_top_level_from_browser;
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
     dispatch_top_level_navigation_event_with_source_element, is_native_location,
@@ -469,6 +473,8 @@ pub(crate) use self::navigation_restore::{
     install_navigation_bootstrap_entry_for_holder, install_navigation_entry_view_for_holder,
 };
 pub(crate) use self::navigation_traversal::queue_top_level_history_traversal_by_delta;
+#[cfg(feature = "molio")]
+pub(crate) use self::navigation_traversal::queue_viewport_history_traversal_by_delta;
 pub(crate) use self::navigator_runtime::install_worker_navigator_runtime_state;
 pub(crate) use self::navigator_runtime::{
     bind_window_navigator_identity_seed, navigator_owner_dispatch_scope,

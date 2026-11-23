@@ -31,8 +31,8 @@ use super::navigation_result::{
 };
 use super::navigation_traversal_execution::queue_navigation_traversal_with_result;
 use super::navigation_traversal_plan::{
-    NavigationTraversalPlan, history_delta_traversal_plan, navigation_delta_traversal_plan,
-    navigation_index_traversal_plan,
+    JointTraversalPlan, NavigationTraversalPlan, history_delta_traversal_plan,
+    navigation_delta_traversal_plan, navigation_index_traversal_plan,
 };
 use super::navigation_window::{
     navigation_document_can_update_current_entry, navigation_document_is_active,
@@ -560,21 +560,55 @@ fn queue_browser_owned_top_level_history_traversal<'s>(
     host.record_pending_top_level_history_traversal(delta);
 }
 
+fn top_level_history_delta_traversal_plan<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    delta: i64,
+) -> Option<JointTraversalPlan<'s>> {
+    let global = scope.get_current_context().global(scope);
+    let history = window_history_for_holder(scope, global)?;
+    history_delta_traversal_plan(scope, history, delta)
+}
+
 pub(crate) fn queue_top_level_history_traversal_by_delta(
     scope: &mut v8::PinScope<'_, '_>,
     delta: i64,
 ) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let Some(history) = window_history_for_holder(scope, global) else {
+    let Some(plan) = top_level_history_delta_traversal_plan(scope, delta) else {
         return false;
     };
-    let Some(plan) = history_delta_traversal_plan(scope, history, delta) else {
-        return false;
-    };
-    if plan.has_cross_document_root(scope) {
+    if plan.cross_document_root_index(scope).is_some() {
         return false;
     }
     super::navigation_traversal_coordinator::queue_plan(scope, plan);
+    true
+}
+
+#[cfg(feature = "molio")]
+pub(crate) fn queue_viewport_history_traversal_by_delta(
+    scope: &mut v8::PinScope<'_, '_>,
+    delta: i64,
+) -> bool {
+    let Some(plan) = top_level_history_delta_traversal_plan(scope, delta) else {
+        return false;
+    };
+    if let Some(index) = plan.cross_document_root_index(scope) {
+        let target = &plan.targets[index];
+        let Some((url, mut seed)) = super::navigation_seed::history_entry_seed_for_traversal(
+            scope,
+            target.owner,
+            target.current_index,
+            target.target_index,
+        ) else {
+            return false;
+        };
+        seed.session_history.target_step = Some(plan.step());
+        let Some(host) = context_host_ptr_from_global_bridge(scope) else {
+            return false;
+        };
+        unsafe { &mut *host }.record_pending_location_navigation(url, Some(seed));
+    } else {
+        super::navigation_traversal_coordinator::queue_plan(scope, plan);
+    }
     true
 }
 

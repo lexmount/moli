@@ -865,6 +865,38 @@ fn prepare_touch_point<'s>(
     })
 }
 
+#[cfg(feature = "molio")]
+impl ScriptVm {
+    pub(crate) fn viewport_selected_text(&mut self) -> Result<Option<String>> {
+        self.with_default_context_scope(|scope, host| {
+            Ok(crate::context_bootstrap::viewport_edit::selected_viewport_text(scope, host))
+        })
+    }
+
+    pub(crate) fn viewport_editor_snapshot(
+        &mut self,
+        editing: &crate::context_bootstrap::viewport_edit::ViewportEditing,
+    ) -> Option<crate::runtime::RendererViewportEditor> {
+        self.with_current_main_world_scope(|scope, host| {
+            unsafe { &*host }.ensure_observable_layout()?;
+            Ok(editing.snapshot(scope, host))
+        })
+        .ok()
+        .flatten()
+        .flatten()
+    }
+
+    pub(crate) fn apply_viewport_editor_input(
+        &mut self,
+        editing: &mut crate::context_bootstrap::viewport_edit::ViewportEditing,
+        edit: crate::runtime::RendererViewportEdit,
+    ) -> Result<bool> {
+        let result =
+            self.with_default_context_scope(|scope, host| Ok(editing.apply(scope, host, edit)));
+        self.finish_input_command_checkpoint(result)
+    }
+}
+
 impl ScriptVm {
     /// Native keyboard delivery has no outer JavaScript invocation. Checkpoint
     /// when each outermost callback returns, including between listeners and

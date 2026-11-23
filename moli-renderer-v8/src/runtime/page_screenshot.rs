@@ -332,8 +332,7 @@ impl PageVm {
             viewport,
             request.base_background_color,
         );
-        let visual_state =
-            visual_state_for_captured_screencast_frame(visual_state_before, visual_state_after);
+        let visual_state = visual_state_for_rendered_frame(visual_state_before, visual_state_after);
         Ok(RendererCaptureScreencastFrameReply::Captured(
             RendererCapturedScreencastFrame {
                 viewport_size: surface.visible_size(),
@@ -475,7 +474,7 @@ impl RendererImageCaptureOutcome {
 }
 
 #[cfg(feature = "devtools")]
-fn visual_state_for_captured_screencast_frame(
+pub(super) fn visual_state_for_rendered_frame(
     before: RendererVisualStateToken,
     after: RendererVisualStateToken,
 ) -> RendererVisualStateToken {

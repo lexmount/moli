@@ -1,6 +1,18 @@
 use super::*;
 
 impl ScriptVm {
+    #[cfg(feature = "molio")]
+    pub(crate) fn navigate_top_level_from_browser(
+        &mut self,
+        target: Option<String>,
+    ) -> Result<bool> {
+        self.with_default_context_scope(|scope, _| {
+            Ok(crate::context_bootstrap::navigate_top_level_from_browser(
+                scope, target,
+            ))
+        })
+    }
+
     pub(crate) fn navigate_child_browsing_context_frame_to_url(
         &mut self,
         frame_id: &str,

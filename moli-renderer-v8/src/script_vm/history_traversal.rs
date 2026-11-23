@@ -19,6 +19,13 @@ impl ScriptVm {
         })
     }
 
+    #[cfg(feature = "molio")]
+    pub(crate) fn queue_viewport_history_traversal_by_delta(&mut self, delta: i64) -> Result<bool> {
+        self.with_default_context_scope(|scope, _host_ptr| {
+            Ok(crate::context_bootstrap::queue_viewport_history_traversal_by_delta(scope, delta))
+        })
+    }
+
     pub(crate) fn current_pending_history_traversal_owner(
         &self,
         task_id: RendererPageHistoryTraversalTaskId,

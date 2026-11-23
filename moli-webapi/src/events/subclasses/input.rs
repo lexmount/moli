@@ -40,9 +40,10 @@ pub fn construct_native_input_event<'s>(
     data: Option<&str>,
     data_transfer: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let is_composing = input_type == "insertCompositionText";
     let base = EventInit {
         bubbles: true,
-        cancelable: event_type == "beforeinput",
+        cancelable: event_type == "beforeinput" && !is_composing,
         composed: true,
     };
     let init = InputEventValues {
@@ -59,7 +60,7 @@ pub fn construct_native_input_event<'s>(
             },
         )?,
         input_type: webidl::DomString16(input_type.encode_utf16().collect()),
-        is_composing: false,
+        is_composing,
     };
     construct_trusted_subclass(
         scope,
