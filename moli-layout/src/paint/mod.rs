@@ -32,9 +32,9 @@ use text::{
 
 use crate::{
     LayoutBox, LayoutBoxId, LayoutClipChainId, LayoutClipKind, LayoutElementCategory,
-    LayoutFormControlKind, LayoutInputControlKind, LayoutReplacedKind, LayoutWorld, PaintColor,
-    PaintDiagnostic, PaintDiagnosticSeverity, PaintEdgeSizes, PaintFragment, PaintShape,
-    PaintSnapshot,
+    LayoutFormControlKind, LayoutInputControlKind, LayoutOutputBoxId, LayoutReplacedKind,
+    LayoutWorld, PaintColor, PaintDiagnostic, PaintDiagnosticSeverity, PaintEdgeSizes,
+    PaintFragment, PaintShape, PaintSnapshot,
     capture::ResolvedPaintCapture,
     projection::{OutputProjection, PaintSpace},
     stacking::PaintOrderEvent,
@@ -43,6 +43,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, Default)]
 struct ContextPaintState {
     effect_layers: usize,
+    filter_output_clips: usize,
     mask_layer: bool,
     clip_path_layer: bool,
 }
@@ -60,7 +61,7 @@ pub(crate) struct PaintProjectionResult {
     pub(crate) metrics: PaintProjectionMetrics,
 }
 
-/// Paint-property-tree cursor for ordinary overflow clips.
+/// Paint-property-tree cursor for clips within a stacking context.
 ///
 /// `OutputProjection` already interns every clip as a stable chain node. Keep
 /// the common prefix active across adjacent paint-order events instead of
@@ -70,6 +71,7 @@ pub(crate) struct PaintProjectionResult {
 #[derive(Default)]
 struct ActivePaintClipChain {
     nodes: Vec<LayoutClipChainId>,
+    filter_output_clips: Vec<LayoutOutputBoxId>,
 }
 
 impl ActivePaintClipChain {
@@ -81,7 +83,7 @@ impl ActivePaintClipChain {
     ) where
         N: Copy + Debug + Eq + Hash,
     {
-        let next = paint_clip_chain(projection, clip);
+        let next = paint_clip_chain(projection, clip, &self.filter_output_clips);
         let common_prefix = self
             .nodes
             .iter()
@@ -101,6 +103,31 @@ impl ActivePaintClipChain {
     fn clear(&mut self, snapshot: &mut PaintSnapshot) {
         pop_clips(self.nodes.len(), snapshot);
         self.nodes.clear();
+    }
+
+    fn push_filter_output_clips<N>(
+        &mut self,
+        projection: &OutputProjection<'_, N>,
+        clip: Option<LayoutClipChainId>,
+        snapshot: &mut PaintSnapshot,
+    ) -> usize
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        let previous_count = self.filter_output_clips.len();
+        for id in paint_clip_chain(projection, clip, &self.filter_output_clips) {
+            if let LayoutClipKind::CssRect(owner) = projection.clip_chain[id.index()].kind {
+                push_clip_node(projection, id, snapshot);
+                self.filter_output_clips.push(owner);
+            }
+        }
+        self.filter_output_clips.len() - previous_count
+    }
+
+    fn pop_filter_output_clips(&mut self, count: usize, snapshot: &mut PaintSnapshot) {
+        pop_clips(count, snapshot);
+        self.filter_output_clips
+            .truncate(self.filter_output_clips.len() - count);
     }
 }
 
@@ -174,6 +201,7 @@ where
             project_background_text_clip_mask(
                 projection,
                 background,
+                &[],
                 TextClipMaskScope::AllGlyphs,
                 current_cull,
                 &mut metrics,
@@ -197,7 +225,7 @@ where
     while event_index < projection.paint_events.len() {
         let event = projection.paint_events[event_index];
         if let PaintOrderEvent::PushStackingContext(_) = event {
-            // Context boundaries reset ordinary overflow clips even when the
+            // Context boundaries reset per-fragment clips even when the
             // complete balanced range is outside this capture.
             active_clips.clear(&mut snapshot);
             if cull_plan.event_misses(event_index, current_cull)
@@ -243,6 +271,19 @@ where
                 .local_transform();
                 let transform = capture.viewport_to_surface.concatenate(viewport_transform);
                 let areas = BoxAreas::for_box(projection, id);
+                let filters = project_filters(style);
+                // Filter source paint may sample outside a CSS clip. Keep the
+                // rectangle around the filtered output and omit it from the
+                // per-fragment clip chain until this context closes.
+                let filter_output_clips = if filters.effects.is_empty() {
+                    0
+                } else {
+                    active_clips.push_filter_output_clips(
+                        projection,
+                        projection.background_clips[id.index()],
+                        &mut snapshot,
+                    )
+                };
                 let clip_path_layer = match project_clip_path(style, areas) {
                     Ok(Some(shape)) => {
                         snapshot.push_fragment(PaintFragment::PushClip { shape, transform });
@@ -304,7 +345,6 @@ where
                         false
                     }
                 };
-                let filters = project_filters(style);
                 if filters.skipped_url {
                     push_diagnostic_once(
                         &mut snapshot,
@@ -368,6 +408,7 @@ where
                 }
                 context_layers.push(ContextPaintState {
                     effect_layers,
+                    filter_output_clips,
                     mask_layer,
                     clip_path_layer,
                 });
@@ -386,6 +427,7 @@ where
                 project_box_background(
                     projection,
                     id,
+                    &active_clips.filter_output_clips,
                     propagated_background,
                     embedded_frames.contains_key(&id),
                     capture.include_backgrounds,
@@ -431,6 +473,7 @@ where
                 project_inline_contents(
                     projection,
                     id,
+                    &active_clips.filter_output_clips,
                     None,
                     capture.include_backgrounds,
                     current_cull,
@@ -483,6 +526,7 @@ where
                 project_inline_contents(
                     projection,
                     owner,
+                    &active_clips.filter_output_clips,
                     Some(fragment),
                     capture.include_backgrounds,
                     current_cull,
@@ -576,6 +620,7 @@ where
                 if state.clip_path_layer {
                     snapshot.push_fragment(PaintFragment::PopLayer);
                 }
+                active_clips.pop_filter_output_clips(state.filter_output_clips, &mut snapshot);
                 debug_assert!(
                     projection.world.boxes[id.index()].creates_stacking_context(
                         id == projection.world.root,
@@ -596,6 +641,7 @@ where
         event_index += 1;
     }
     active_clips.clear(&mut snapshot);
+    debug_assert!(active_clips.filter_output_clips.is_empty());
     debug_assert!(context_layers.is_empty());
     debug_assert!(context_cull_regions.is_empty());
     if capture.clip_to_viewport {
@@ -607,6 +653,7 @@ where
 fn paint_clip_chain<N>(
     projection: &OutputProjection<'_, N>,
     clip: Option<LayoutClipChainId>,
+    filter_output_clips: &[LayoutOutputBoxId],
 ) -> Vec<LayoutClipChainId>
 where
     N: Copy + Debug + Eq + Hash,
@@ -615,9 +662,13 @@ where
     let mut current = clip;
     while let Some(id) = current {
         let node = &projection.clip_chain[id.index()];
-        // The capture applies its own viewport clip. Include rectangular CSS
-        // clips as well as rounded clips owned by overflow boxes.
-        if node.kind != LayoutClipKind::Viewport {
+        // The viewport and any hoisted CSS clips already wrap this paint.
+        let needed = match node.kind {
+            LayoutClipKind::Viewport => false,
+            LayoutClipKind::CssRect(owner) => !filter_output_clips.contains(&owner),
+            LayoutClipKind::Overflow(_) => true,
+        };
+        if needed {
             chain.push(id);
         }
         current = node.parent;
@@ -673,12 +724,13 @@ fn push_clip_node<N>(
 fn push_clip_chain<N>(
     projection: &OutputProjection<'_, N>,
     clip: Option<LayoutClipChainId>,
+    filter_output_clips: &[LayoutOutputBoxId],
     snapshot: &mut PaintSnapshot,
 ) -> usize
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let chain = paint_clip_chain(projection, clip);
+    let chain = paint_clip_chain(projection, clip, filter_output_clips);
     for id in &chain {
         push_clip_node(projection, *id, snapshot);
     }
@@ -769,6 +821,7 @@ fn style_has_canvas_background(style: &crate::ResolvedLayoutStyle) -> bool {
 fn project_box_background<N>(
     projection: &OutputProjection<'_, N>,
     id: LayoutBoxId,
+    filter_output_clips: &[LayoutOutputBoxId],
     propagated_background: Option<LayoutBoxId>,
     has_embedded_frame: bool,
     include_backgrounds: bool,
@@ -827,6 +880,7 @@ fn project_box_background<N>(
             project_background_text_clip_mask(
                 projection,
                 id,
+                filter_output_clips,
                 TextClipMaskScope::AllGlyphs,
                 cull,
                 metrics,
@@ -884,6 +938,7 @@ fn project_box_background<N>(
 fn project_background_text_clip_mask<N>(
     projection: &OutputProjection<'_, N>,
     root: LayoutBoxId,
+    filter_output_clips: &[LayoutOutputBoxId],
     scope: TextClipMaskScope,
     cull: PaintCullRegion,
     metrics: &mut PaintProjectionMetrics,
@@ -891,7 +946,15 @@ fn project_background_text_clip_mask<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    project_box_text_clip_mask(projection, root, scope, cull, metrics, snapshot);
+    project_box_text_clip_mask(
+        projection,
+        root,
+        filter_output_clips,
+        scope,
+        cull,
+        metrics,
+        snapshot,
+    );
 
     // A block/background root owns every descendant IFC. A flattened inline
     // instead selects its runs from the shared root IFC, then includes only
@@ -916,6 +979,7 @@ fn project_background_text_clip_mask<N>(
         project_box_text_clip_mask(
             projection,
             id,
+            filter_output_clips,
             TextClipMaskScope::AllGlyphs,
             cull,
             metrics,
@@ -927,6 +991,7 @@ fn project_background_text_clip_mask<N>(
 fn project_box_text_clip_mask<N>(
     projection: &OutputProjection<'_, N>,
     id: LayoutBoxId,
+    filter_output_clips: &[LayoutOutputBoxId],
     scope: TextClipMaskScope,
     cull: PaintCullRegion,
     metrics: &mut PaintProjectionMetrics,
@@ -944,7 +1009,12 @@ fn project_box_text_clip_mask<N>(
         .local_transform();
     let local_cull = cull.local_rect(viewport_transform);
     let transform = snapshot.viewport_to_surface.concatenate(viewport_transform);
-    let clip_count = push_clip_chain(projection, projection.content_clips[id.index()], snapshot);
+    let clip_count = push_clip_chain(
+        projection,
+        projection.content_clips[id.index()],
+        filter_output_clips,
+        snapshot,
+    );
     project_text_clip_mask(layout_box, transform, local_cull, metrics, snapshot, scope);
     pop_clips(clip_count, snapshot);
 }
@@ -1050,6 +1120,7 @@ fn project_box_contents<N>(
 fn project_inline_contents<N>(
     projection: &OutputProjection<'_, N>,
     id: LayoutBoxId,
+    filter_output_clips: &[LayoutOutputBoxId],
     selected_fragment: Option<usize>,
     include_backgrounds: bool,
     cull: PaintCullRegion,
@@ -1066,7 +1137,15 @@ fn project_inline_contents<N>(
     let local_cull = cull.local_rect(space.paint.local_transform());
     let paint_space = space.paint_space(snapshot.viewport_to_surface);
     let mut text_clip_mask = |scope: TextClipMaskScope, snapshot: &mut PaintSnapshot| {
-        project_background_text_clip_mask(projection, id, scope, cull, metrics, snapshot);
+        project_background_text_clip_mask(
+            projection,
+            id,
+            filter_output_clips,
+            scope,
+            cull,
+            metrics,
+            snapshot,
+        );
     };
     project_inline_box_fragments(
         projection.world,
