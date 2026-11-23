@@ -630,12 +630,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         );
     }
     let top_level_history = |destination: &str| {
-        top_level_form_history_mutation(
-            unsafe { &*runtime_ptr },
-            submitting_document,
-            &initiator,
-            destination,
-        )
+        top_level_form_history_mutation(unsafe { &*runtime_ptr }, submitting_document, destination)
     };
     match target_name.as_deref() {
         Some(target_name) if special_target.is_none() => {
@@ -779,13 +774,10 @@ pub(in crate::native_bridge) fn submit_form_default_action(
 fn top_level_form_history_mutation(
     runtime: &PageScriptHost,
     form_document: DomHandle,
-    initiator: &RendererNavigationInitiator,
     destination: &str,
 ) -> NavigationHistoryMutation {
-    let active_document = runtime.document_handle();
-    let form_is_active_document = form_document == active_document;
     // The Complete ready state precedes delivery of the window load event.
-    let form_is_loading = form_is_active_document
+    let form_is_loading = form_document == runtime.document_handle()
         && runtime.current_main_document_task_owner().map_or_else(
             || runtime.host_document().ready_state() != DocumentReadyState::Complete,
             |owner| {
@@ -793,18 +785,7 @@ fn top_level_form_history_mutation(
                     != Some(MainDocumentLoadCompletionState::Completed)
             },
         );
-    let same_url_and_origin = destination == runtime.document_url().as_str()
-        && (form_is_active_document
-            || initiator
-                .origin()
-                .same_origin(&moli_url::WebOrigin::from_serialized(
-                    &runtime
-                        .document_security_origin(active_document)
-                        .ascii_serialization(),
-                )));
-
     if form_is_loading
-        || same_url_and_origin
         || runtime.main_document_is_initial_empty()
         || destination.starts_with("javascript:")
     {

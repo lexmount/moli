@@ -239,18 +239,25 @@ async fn viewport_history_survives_link_and_form_navigation() -> Result<()> {
 #[tokio::test]
 async fn viewport_history_keeps_the_page_before_scripted_form_submission() -> Result<()> {
     let server = moli_test_support::FixtureServer::spawn().await?;
-    let original = server.url("/static");
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
 
-    for method in ["GET", "POST"] {
+    for (method, source, destination) in [
+        ("GET", "/static", "/net/echo?q=hello"),
+        ("POST", "/static", "/net/echo"),
+        ("GET", "/net/echo?q=hello", "/net/echo?q=hello"),
+        ("POST", "/net/echo", "/net/echo"),
+    ] {
         for submit in ["submit", "requestSubmit"] {
-            let mut page = browser.fetch(&original).await?;
+            let case = format!("{method} {submit} from {source}");
+            let mut page = browser.fetch(&server.url(source)).await?;
             let mut frames = page
                 .subscribe_viewport_frames(ViewportSurface::default(), 1)
                 .await?;
-            let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
-            assert!(!first.navigation.can_go_back, "{method} {submit}");
+            let first = frame(&mut frames, |frame| frame.snapshot.is_some())
+                .await
+                .with_context(|| format!("{case} initial frame"))?;
+            assert!(!first.navigation.can_go_back, "{case}");
 
             let setup = format!(
                 r#"
@@ -261,33 +268,48 @@ async fn viewport_history_keeps_the_page_before_scripted_form_submission() -> Re
                     sessionStorage.setItem('form-navigation',
                         event.navigationType + ':' + event.userInitiated);
                 }});
-                document.readyState
+                [document.readyState, history.length]
                 "#
             );
-            let loaded = page.evaluate_runtime_expression_async(&setup).await?;
-            assert_eq!(loaded["value"], "complete", "{method} {submit}");
+            let before = page
+                .evaluate_runtime_expression_by_value_async(&setup)
+                .await?;
+            assert_eq!(before["value"][0], "complete", "{case}");
+            let history_length = before["value"][1].as_u64().context("history.length")?;
             page.evaluate_runtime_expression_async(&format!(
                 "document.querySelector('form').{submit}()"
             ))
             .await?;
-            let next = frame(&mut frames, |frame| frame.document != first.document).await?;
-            assert_eq!(next.navigation.url.path(), "/net/echo", "{method} {submit}");
-            let types = page
-                .evaluate_runtime_expression_async(
-                    "sessionStorage.getItem('form-navigation') + ':' + navigation.activation.navigationType",
+            let next = frame(&mut frames, |frame| frame.document != first.document)
+                .await
+                .with_context(|| format!("{case} submitted frame"))?;
+            assert_eq!(
+                next.navigation.url.as_str(),
+                server.url(destination),
+                "{case}"
+            );
+            let after = page
+                .evaluate_runtime_expression_by_value_async(
+                    r#"[
+                        sessionStorage.getItem('form-navigation') + ':' + navigation.activation.navigationType,
+                        history.length,
+                        navigation.canGoBack
+                    ]"#,
                 )
                 .await?;
-            assert_eq!(types["value"], "push:false:push", "{method} {submit}");
-            assert!(next.navigation.can_go_back, "{method} {submit}");
-            assert!(
-                page.traverse_viewport_history(-1).await?,
-                "{method} {submit}"
+            assert_eq!(
+                after["value"],
+                serde_json::json!(["push:false:push", history_length + 1, true]),
+                "{case}"
             );
+            assert!(next.navigation.can_go_back, "{case}");
+            assert!(page.traverse_viewport_history(-1).await?, "{case}");
             let back = frame(&mut frames, |frame| {
-                frame.navigation.url == first.navigation.url
+                frame.document != next.document && frame.navigation.url == first.navigation.url
             })
-            .await?;
-            assert!(back.navigation.can_go_forward, "{method} {submit}");
+            .await
+            .with_context(|| format!("{case} back frame"))?;
+            assert!(back.navigation.can_go_forward, "{case}");
         }
     }
     Ok(())
