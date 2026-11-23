@@ -48,8 +48,9 @@ fn consume_wheel_axis(
     if !allows_user_scroll || remaining == 0.0 {
         return (current, remaining);
     }
-    let target = (current + remaining).clamp(minimum, maximum);
-    (target, remaining - (target - current))
+    let requested = current + remaining;
+    let target = requested.clamp(minimum, maximum);
+    (target, requested - target)
 }
 
 /// Run the uncancelled default action for one pixel-mode WheelEvent.
@@ -157,4 +158,16 @@ pub(crate) fn perform_wheel_scroll_default_action(
         }
     }
     Ok(changed)
+}
+
+#[cfg(test)]
+#[test]
+fn wheel_scroll_chains_only_when_the_inner_scroll_position_is_clamped() {
+    let distance = 300.0 / 23.0;
+    let (_, remaining) = consume_wheel_axis(40.0, 0.0, 100.0, distance, true);
+    assert_eq!(remaining, 0.0);
+    assert_eq!(
+        consume_wheel_axis(95.0, 0.0, 100.0, 12.0, true),
+        (100.0, 7.0)
+    );
 }
