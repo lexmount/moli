@@ -1,7 +1,7 @@
 use moli_layout::LayoutError;
 
 use super::declaration::{
-    StyleObservation, property_uses_container_geometry,
+    StyleObservation, native_value_uses_container_geometry, property_uses_container_geometry,
     style_property_value_for_pseudo_with_context, style_property_value_with_context,
 };
 use super::{
@@ -38,7 +38,7 @@ fn style_read_needs_layout<'a>(
     runtime: &PageScriptHost,
     handle: DomHandle,
     observes_used_geometry: impl FnOnce() -> bool,
-    properties: impl IntoIterator<Item = &'a str>,
+    properties: impl IntoIterator<Item = &'a str> + Clone,
     pseudo: Option<&str>,
 ) -> bool {
     runtime.dom_host().is_connected_to_document(handle)
@@ -52,15 +52,17 @@ fn style_read_needs_layout<'a>(
                         .is_some()
                 })
             || properties
+                .clone()
                 .into_iter()
                 .any(|property| property_uses_container_geometry(runtime, handle, property))
-            || size_container_query_needs_layout(runtime, handle, pseudo))
+            || size_container_dependency_needs_layout(runtime, handle, pseudo, properties))
 }
 
-fn size_container_query_needs_layout(
+fn size_container_dependency_needs_layout<'a>(
     runtime: &PageScriptHost,
     handle: DomHandle,
     pseudo: Option<&str>,
+    properties: impl IntoIterator<Item = &'a str>,
 ) -> bool {
     if runtime.realtime_screen_layout_is_current() {
         return false;
@@ -70,6 +72,15 @@ fn size_container_query_needs_layout(
         .is_some_and(|document| {
             StyleObservation::new(runtime).with_resolution_pass(document, |pass| {
                 pass.depends_on_size_container_query(handle, pseudo)
+                    || properties.into_iter().any(|property| {
+                        let property = canonical_style_property_name(property);
+                        pass.property_uses_container_units(
+                            handle,
+                            pseudo,
+                            &property,
+                            native_value_uses_container_geometry,
+                        )
+                    })
             })
         })
 }
