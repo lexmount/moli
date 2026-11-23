@@ -28,6 +28,7 @@ mod settings_support;
 mod subresource_support;
 mod testing_support;
 mod viewport;
+mod viewport_buffer;
 mod wait_support;
 
 use std::fmt;
@@ -48,6 +49,10 @@ pub use devtools::{
 };
 pub use moli_renderer_v8::RendererPageRequestPolicyUpdate;
 pub use viewport::ViewportFrames;
+pub use viewport_buffer::{
+    BufferedViewportFrames, ViewportBuffers, ViewportFrameRef, ViewportOutput, ViewportState,
+    ViewportUpdate,
+};
 
 #[cfg(all(test, debug_assertions))]
 use crate::network::ResourceRequestClient;

@@ -22,6 +22,7 @@ moli-browser-profile = { path = "../moli-browser-profile" }
 moli-dom = { path = "../moli-dom" }
 moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-types/moli-page-types" }
+moli-paint = { path = "../moli-paint" }
 moli-renderer-v8 = { path = "../moli-renderer-v8", default-features = false }
 moli-selector = { path = "../moli-selector" }
 moli-sqlite = { path = "../moli-sqlite" }

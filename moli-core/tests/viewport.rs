@@ -1,9 +1,9 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use moli_core::{
     LayoutPolicy, RendererViewportFrame,
-    page::ViewportFrames,
+    page::{ViewportBuffers, ViewportFrames, ViewportOutput},
     protocol_types::{DocumentActivity, ViewportSurface},
     runtime::{Browser, BrowserConfig},
 };
@@ -92,6 +92,67 @@ async fn viewport_frames_follow_realtime_animation_and_document_replacement() ->
     assert_eq!(resumed_surface.css_width, 410.);
     assert_eq!(resumed_surface.css_height, 250.);
     assert_eq!(resumed_surface.device_scale, 1.25);
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_paints_into_caller_buffers_without_waiting_for_control_updates() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser.fetch(&html_url(r#"
+        <style>html{background:red} #box{width:8px;height:8px;background:blue}</style><div id="box"></div>
+        <script>
+          let offset = 0;
+          function update() { box.style.marginLeft = (++offset % 20) + 'px'; requestAnimationFrame(update); }
+          requestAnimationFrame(update);
+        </script>
+    "#)).await?;
+    let surface = ViewportSurface {
+        inner_width: 40,
+        inner_height: 30,
+        device_pixel_ratio: 2.,
+        ..ViewportSurface::default()
+    };
+    let layout = ViewportBuffers::layout_for(surface)?;
+    let storage = std::array::from_fn(|_| Vec::with_capacity(layout.byte_len));
+    let addresses = storage.each_ref().map(|bytes| bytes.as_ptr());
+    let output = Arc::new(ViewportOutput::default());
+    let mut ready = output.subscribe();
+    let binding = page
+        .subscribe_viewport_buffer(
+            surface,
+            7,
+            ViewportBuffers::new(layout, storage)?,
+            output.clone(),
+        )
+        .await?;
+
+    let mut sequence = 0;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for _ in 0..5 {
+            loop {
+                if let Some(Some(next)) = output.read(|frame| {
+                    let pixels = frame.pixels?;
+                    if frame.sequence <= sequence {
+                        return None;
+                    }
+                    assert_eq!(frame.viewport_revision, 7);
+                    assert_eq!(frame.layout, layout);
+                    assert!(addresses.contains(&pixels.as_ptr()));
+                    assert_eq!(pixels[..4], [0, 0, 255, 255]);
+                    Some(frame.sequence)
+                }) {
+                    sequence = next;
+                    break;
+                }
+                ready.changed().await?;
+            }
+        }
+        Ok::<_, tokio::sync::watch::error::RecvError>(())
+    })
+    .await??;
+    drop(binding);
+    assert!(output.read(|_| ()).is_none());
     Ok(())
 }
 
