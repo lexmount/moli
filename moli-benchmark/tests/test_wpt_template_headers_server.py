@@ -7,6 +7,7 @@ from http.client import HTTPConnection
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlencode
+from uuid import UUID
 
 from moli_benchmark.wpt_cross.server import WptFixtureServer
 
@@ -106,6 +107,22 @@ class TemplateHeaderFixtureTests(unittest.TestCase):
                     self.assertEqual(status, 500)
                     if method == "HEAD":
                         self.assertEqual(body, b"")
+
+    def test_uuid_templates_in_body_and_headers_generate_fresh_values(self) -> None:
+        (self.root / "uuid.sub.html").write_bytes(
+            b"{{uuid()}} {{$id:uuid()}} {{uuid()}} {{$id}}"
+        )
+        (self.root / "uuid.sub.html.sub.headers").write_bytes(b"X-Request-Id: {{uuid()}}\n")
+        values = []
+        for _ in range(2):
+            status, headers, body = self.request("/uuid.sub.html")
+            self.assertEqual(status, 200)
+            first, named, second, reference = body.decode("ascii").split()
+            self.assertEqual(reference, named)
+            values.extend((first, named, second, headers["X-Request-Id"]))
+        self.assertEqual(len(set(values)), len(values))
+        for value in values:
+            self.assertEqual(UUID(value).version, 4)
 
     def test_request_values_are_not_interpreted_as_more_templates(self) -> None:
         (self.root / "page.sub.txt").write_bytes(

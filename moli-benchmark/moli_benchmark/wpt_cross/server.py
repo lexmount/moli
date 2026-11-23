@@ -635,7 +635,7 @@ _REQUEST_TEMPLATE_RE = re.compile(
     rb"(?i:header_or_default)\(\s*(?P<optional_header>[^,()]+?)\s*,"
     rb"\s*(?P<default>[^()]*)\))\}\}",
 )
-_UUID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*):uuid\(\)\}\}")
+_UUID_TEMPLATE_RE = re.compile(rb"\{\{(?:\$([A-Za-z_][A-Za-z0-9_]*):)?uuid\(\)\}\}")
 _ID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*)\}\}")
 _HOST_TEMPLATE_RE = re.compile(
     rb"\{\{(?:domains\[(?P<domain>[^\]\r\n]*)\]|"
@@ -1471,7 +1471,8 @@ def _substitute_wpt_template_variables(
     def replace_uuid(match: re.Match[bytes]) -> bytes:
         name = match.group(1)
         value = str(uuid.uuid4()).encode("ascii")
-        template_ids[name] = value
+        if name is not None:
+            template_ids[name] = value
         return value
 
     body = _UUID_TEMPLATE_RE.sub(replace_uuid, body)
