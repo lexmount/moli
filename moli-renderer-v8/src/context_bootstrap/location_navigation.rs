@@ -310,6 +310,8 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     };
     // Entering the destination realm must not turn it into the initiator.
     // Freeze the incumbent Document before navigation events can run script.
+    let child_navigation_initiator = child_browsing_context_handle_for_runtime_owner(scope, owner)
+        .and_then(|_| location_navigation_initiator(scope));
     let navigation_source = if matches!(kind, LocationNavigationKind::Reload) {
         None
     } else {
@@ -685,12 +687,14 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                     scope,
                     handle,
                     resolved.as_str(),
+                    child_navigation_initiator,
                 );
             } else {
                 host.queue_child_browsing_context_navigation_without_seed_update(
                     scope,
                     handle,
                     resolved.as_str(),
+                    child_navigation_initiator,
                 );
             }
         }
@@ -1127,6 +1131,39 @@ fn history_entry_seed_for_cross_document_location<'s>(
     );
     super::session_history::capture_for_navigation(scope, owner, &mut seed);
     Some(seed)
+}
+
+fn location_navigation_initiator(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<crate::runtime::RendererNavigationInitiator> {
+    use crate::native_bridge::OwnerDispatchScope;
+
+    let context = scope
+        .get_incumbent_context()
+        .unwrap_or_else(|| scope.get_current_context());
+    let host_ptr = crate::util::context_host_ptr_from_context_slot(context)?;
+    let host = unsafe { &*host_ptr };
+    let dispatch = if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope)
+    {
+        OwnerDispatchScope::LightweightPopup(popup_id)
+    } else {
+        host.window_execution_context_identity_for_access_check(context)?
+            .dispatch_scope()
+    };
+    let loader = host.document_resource_loader_for_dispatch_scope(dispatch)?;
+    let url = host.document_referrer_source_url_for_dispatch_scope(dispatch)?;
+    let document = match dispatch {
+        OwnerDispatchScope::Top => host.document_handle(),
+        OwnerDispatchScope::Child(handle) => host.child_browsing_context_document_handle(handle)?,
+        OwnerDispatchScope::LightweightPopup(id) => host.lightweight_popup_document_handle(id)?,
+    };
+    let referrer_policy =
+        super::navigation_serialize::document_referrer_policy_for_native_document(host, document);
+    Some(crate::runtime::RendererNavigationInitiator::new(
+        url,
+        loader.fetch_context().request_origin(),
+        referrer_policy,
+    ))
 }
 
 #[cfg(test)]

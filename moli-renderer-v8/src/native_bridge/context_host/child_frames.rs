@@ -12,6 +12,7 @@ use crate::{
         ChildFrameOwnerSnapshot, FrameDocumentTaskOwner, FrameId, FrameRealmId, FrameScriptJob,
         FrameScriptJobKind,
     },
+    runtime::RendererNavigationInitiator,
     service_worker_runtime::ServiceWorkerClientId,
     types::ServiceWorkerClientNavigateContinuation,
 };
@@ -50,6 +51,7 @@ pub(super) struct ChildBrowsingContextEntry {
     attribute_bootstrap: ChildBrowsingContextBootstrap,
     pending_attribute_bootstrap_commit: bool,
     pending_live_navigation: Option<ChildBrowsingContextBootstrap>,
+    pending_live_navigation_initiator: Option<RendererNavigationInitiator>,
     pending_live_navigation_reflects_window_state: bool,
     live_bootstrap: ChildBrowsingContextBootstrap,
     navigation_entry_seed: NavigationHistoryEntrySeed,
@@ -401,6 +403,7 @@ impl ChildBrowsingContextEntry {
     pub(super) fn commit_pending_child_document_load(
         &mut self,
         final_url: &Url,
+        document_referrer: Option<String>,
         policy_container: &ChildDocumentPolicyContainer,
         sandbox: DocumentSandboxPolicy,
         credentialless: bool,
@@ -410,6 +413,9 @@ impl ChildBrowsingContextEntry {
         self.reset_performance_time_origin();
         self.clear_document_runtime_state();
         self.rewrite_current_navigation_url_after_load(final_url);
+        if let Some(document_referrer) = document_referrer {
+            self.document_policy_container.document_referrer = document_referrer;
+        }
         self.apply_loaded_referrer_policy_to_current_document(
             policy_container.referrer_policy.clone(),
         );
@@ -886,6 +892,7 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn clear_pending_form_submission_navigation(&mut self) {
         self.pending_live_navigation = None;
+        self.pending_live_navigation_initiator = None;
     }
 
     pub(super) fn has_pending_live_navigation(&self) -> bool {
@@ -950,6 +957,19 @@ impl ChildBrowsingContextEntry {
             .flatten()
     }
 
+    pub(super) fn pending_live_navigation_initiator(&self) -> Option<RendererNavigationInitiator> {
+        self.pending_live_navigation_initiator.clone()
+    }
+
+    pub(super) fn pending_live_navigation_initiator_for_refresh(
+        &self,
+        attribute_bootstrap_changed: bool,
+    ) -> Option<RendererNavigationInitiator> {
+        (!attribute_bootstrap_changed)
+            .then(|| self.pending_live_navigation_initiator())
+            .flatten()
+    }
+
     pub(super) fn pending_live_navigation_reflects_window_state(&self) -> bool {
         self.pending_live_navigation_reflects_window_state
     }
@@ -970,10 +990,12 @@ impl ChildBrowsingContextEntry {
     pub(super) fn set_pending_navigation(
         &mut self,
         bootstrap: ChildBrowsingContextBootstrap,
+        navigation_initiator: Option<RendererNavigationInitiator>,
         reflects_window_state: bool,
     ) {
         self.pending_attribute_bootstrap_commit = false;
         self.pending_live_navigation = Some(bootstrap);
+        self.pending_live_navigation_initiator = navigation_initiator;
         self.pending_live_navigation_reflects_window_state = reflects_window_state;
     }
 
@@ -981,6 +1003,7 @@ impl ChildBrowsingContextEntry {
         self.pending_download_policy = None;
         self.pending_attribute_bootstrap_commit = false;
         self.pending_live_navigation = None;
+        self.pending_live_navigation_initiator = None;
         self.pending_live_navigation_reflects_window_state = false;
     }
 
