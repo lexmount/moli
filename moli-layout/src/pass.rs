@@ -299,7 +299,12 @@ where
                 let container_type = computed.clone_container_type();
                 if !container_type.is_size_container_type()
                     || layout_box.inline_flattened
-                    || layout_box.style.display().is_table()
+                    || layout_box.kind.is_internal_table_box()
+                    || matches!(
+                        layout_box.kind,
+                        crate::LayoutBoxKind::TableWrapper
+                            | crate::LayoutBoxKind::InlineTableWrapper
+                    )
                 {
                     return None;
                 }
