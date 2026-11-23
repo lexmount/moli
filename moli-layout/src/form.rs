@@ -285,6 +285,21 @@ fn mask_password(
     text_transform: TextTransform,
     selection: Option<LayoutTextSelection>,
 ) -> (String, Option<LayoutTextSelection>) {
+    let selection = selection.map(|selection| {
+        if !selection.is_caret() || text_transform == TextTransform::None {
+            return selection;
+        }
+        // Case conversion can split a source grapheme across several bullets.
+        // Snap the paint caret to a source boundary before applying that mapping.
+        let mut boundary = 0;
+        for grapheme in value.graphemes(true) {
+            if boundary >= selection.start {
+                break;
+            }
+            boundary += grapheme.encode_utf16().count();
+        }
+        LayoutTextSelection::new(boundary, boundary)
+    });
     let (value, case_source_lengths) =
         transform_password(value, text_transform, selection.is_some());
     let Some(selection) = selection else {
