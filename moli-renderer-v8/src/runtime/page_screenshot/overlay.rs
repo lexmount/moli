@@ -178,37 +178,42 @@ fn fill_quad(
     if color[3] == 0 {
         return;
     }
-    let points = outer.points.map(|coordinate| coordinate as f32);
-    let pairs = points.as_chunks::<2>().0;
-    let min_x = pairs.iter().map(|[x, _]| *x).fold(f32::INFINITY, f32::min);
-    let max_x = pairs
-        .iter()
-        .map(|[x, _]| *x)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_y = pairs.iter().map(|[_, y]| *y).fold(f32::INFINITY, f32::min);
-    let max_y = pairs
-        .iter()
-        .map(|[_, y]| *y)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let mut elements = Vec::with_capacity(if inner.is_some() { 10 } else { 5 });
-    for quad in [Some(outer), inner].into_iter().flatten() {
-        let [x1, y1, x2, y2, x3, y3, x4, y4] = quad.points.map(|coordinate| coordinate as f32);
-        elements.extend([
+    let mut path = quad_path(outer);
+    let transform = snapshot.viewport_to_surface;
+    if let Some(inner) = inner {
+        // The clip bounds the ring even when the inner quad crosses its edges.
+        snapshot.push_fragment(PaintFragment::PushClip {
+            shape: PaintShape::Path(path.clone()),
+            transform,
+        });
+        path.elements.extend(quad_path(inner).elements);
+    }
+    let [r, g, b, a] = color.map(|channel| f32::from(channel) / 255.0);
+    snapshot.push_fragment(PaintFragment::Fill {
+        shape: PaintShape::Path(path),
+        fill_rule: PaintFillRule::EvenOdd,
+        brush: PaintBrush::Solid(PaintColor::new(r, g, b, a)),
+        transform,
+    });
+    if inner.is_some() {
+        snapshot.push_fragment(PaintFragment::PopLayer);
+    }
+}
+
+fn quad_path(quad: RendererGeometryQuad) -> PaintPath {
+    let [x1, y1, x2, y2, x3, y3, x4, y4] = quad.points.map(|coordinate| coordinate as f32);
+    let min_x = x1.min(x2).min(x3).min(x4);
+    let max_x = x1.max(x2).max(x3).max(x4);
+    let min_y = y1.min(y2).min(y3).min(y4);
+    let max_y = y1.max(y2).max(y3).max(y4);
+    PaintPath {
+        elements: vec![
             PaintPathElement::MoveTo(PaintPoint::new(x1, y1)),
             PaintPathElement::LineTo(PaintPoint::new(x2, y2)),
             PaintPathElement::LineTo(PaintPoint::new(x3, y3)),
             PaintPathElement::LineTo(PaintPoint::new(x4, y4)),
             PaintPathElement::Close,
-        ]);
+        ],
+        bounds: PaintRect::new(min_x, min_y, max_x - min_x, max_y - min_y),
     }
-    let [r, g, b, a] = color.map(|channel| f32::from(channel) / 255.0);
-    snapshot.push_fragment(PaintFragment::Fill {
-        shape: PaintShape::Path(PaintPath {
-            elements,
-            bounds: PaintRect::new(min_x, min_y, max_x - min_x, max_y - min_y),
-        }),
-        fill_rule: PaintFillRule::EvenOdd,
-        brush: PaintBrush::Solid(PaintColor::new(r, g, b, a)),
-        transform: snapshot.viewport_to_surface,
-    });
 }
