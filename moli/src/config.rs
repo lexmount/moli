@@ -69,6 +69,7 @@ impl AppConfig {
             Commands::Serve(args) => {
                 apply_common_args(&mut config, &args.common)?;
                 config.browser.set_debugger_enabled(args.debugger);
+                config.server.enable_automation = args.enable_automation;
                 config.server.host = args.host.clone();
                 config.server.port = args.port;
                 config.server.timeout_secs = args.timeout;

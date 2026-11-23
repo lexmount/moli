@@ -93,7 +93,8 @@ impl ProtocolServer {
         input: impl AsyncRead + Unpin,
         output: impl AsyncWrite + Unpin + Send + 'static,
     ) -> Result<()> {
-        let control = BrowserInstanceControl::new();
+        let mut control = BrowserInstanceControl::new();
+        control.expose_command_line = self.config.enable_automation;
         let state = AppState::new_with_storage_partition_and_runtime_config(
             ([127, 0, 0, 1], 0).into(),
             self.storage_partition.clone(),

@@ -39,7 +39,7 @@ pub const IMPLEMENTED_COMMANDS: &[DomainMembers] = &[
 ];
 
 /// Commands handled by the server without an action enum.
-pub const SERVER_COMMANDS: &[DomainMembers] = &[("Browser", &["close"])];
+pub const SERVER_COMMANDS: &[DomainMembers] = &[("Browser", &["close", "getBrowserCommandLine"])];
 
 pub const FORWARDED_COMMAND_DOMAINS: &[&str] = &["Debugger"];
 pub const FORWARDED_EVENT_DOMAINS: &[&str] =

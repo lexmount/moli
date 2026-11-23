@@ -144,6 +144,8 @@ impl ProtocolServer {
     /// Serve one instance with a protocol-independent lifecycle control handle.
     /// Use a fresh handle for each instance; shutdown requests are persistent.
     pub async fn serve_with_control(&self, control: BrowserInstanceControl) -> Result<()> {
+        let mut control = control;
+        control.expose_command_line = self.config.enable_automation;
         let listener = TcpListener::bind(self.config.bind_target())
             .await
             .with_context(|| {

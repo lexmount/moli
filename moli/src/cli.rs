@@ -447,6 +447,10 @@ pub struct ServeArgs {
     #[arg(long)]
     pub debugger: bool,
 
+    /// Expose the browser process command line through CDP.
+    #[arg(long)]
+    pub enable_automation: bool,
+
     /// Serve one CDP session over inherited pipes instead of a TCP listener,
     /// matching Chromium's `--remote-debugging-pipe`: the client writes
     /// NUL-terminated JSON messages to file descriptor 3 and reads replies from
