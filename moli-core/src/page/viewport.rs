@@ -41,6 +41,22 @@ impl Page {
         }
     }
 
+    /// Cancels a pressed pointer for the given viewport, even without usable geometry.
+    pub async fn cancel_viewport_pointer(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+        viewport_revision: u64,
+    ) -> Result<()> {
+        self.dispatch_unit_page_command_async(
+            RendererPageCommand::CancelViewportPointer {
+                document,
+                viewport_revision,
+            },
+            "cancel viewport pointer",
+        )
+        .await
+    }
+
     /// Queues desktop wheel input on the renderer owner without waiting for DOM dispatch.
     pub fn enqueue_viewport_wheel(&self, input: RendererViewportWheelInput) -> Result<()> {
         self.handle.enqueue_viewport_wheel(input)

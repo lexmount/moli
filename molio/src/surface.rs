@@ -81,6 +81,7 @@ impl MoliSurface {
         cx: &mut Context<Self>,
     ) {
         self.finish_composition();
+        self.clear_frame(window, cx);
         self.send(TabCommand::Activity(DocumentActivity::new(false, false)));
         self.commands = connection.map(|tab| tab.commands.clone());
         self.output = connection.map(|tab| tab.viewport.clone());
@@ -88,9 +89,7 @@ impl MoliSurface {
         self.viewport = None;
         self.document = document;
         self.zoom = zoom;
-        self.clear_frame(window, cx);
         self.sync_activity(window);
-        cx.notify();
     }
 
     pub fn set_zoom(&mut self, zoom: f64, cx: &mut Context<Self>) {
@@ -99,8 +98,8 @@ impl MoliSurface {
     }
 
     pub fn clear_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_pointer();
         self.presented = None;
-        self.buttons = 0;
         self.drop_image(window);
         cx.notify();
     }
@@ -156,9 +155,9 @@ impl MoliSurface {
             return Ok(false);
         }
         let Some(pixels) = frame.pixels else {
+            self.cancel_pointer();
             self.drop_image(window);
             self.presented = Some((frame.document, frame.sequence));
-            self.buttons = 0;
             return Ok(false);
         };
         let image = BgraImage::new(size(frame.layout.width.into(), frame.layout.height.into()))?;
@@ -243,6 +242,17 @@ impl MoliSurface {
         }
     }
 
+    fn cancel_pointer(&mut self) {
+        if std::mem::take(&mut self.buttons) != 0
+            && let Some((document, _)) = self.presented
+        {
+            self.send(TabCommand::CancelPointer {
+                document,
+                viewport_revision: self.revision,
+            });
+        }
+    }
+
     fn measure(&mut self, bounds: Bounds<Pixels>, window: &Window, app: &App) {
         let moved = self
             .bounds
@@ -272,6 +282,7 @@ impl MoliSurface {
             surface.screen_avail_height = surface.screen_height;
         }
         if self.viewport != Some(surface) {
+            self.cancel_pointer();
             self.viewport = Some(surface);
             self.revision += 1;
             self.presented = None;
@@ -356,8 +367,8 @@ impl MoliSurface {
         if self.buttons & mask == 0 {
             return;
         }
-        self.buttons &= !mask;
         if let Some((document, position)) = self.viewport_input_position(event.position) {
+            self.buttons &= !mask;
             self.send(TabCommand::Pointer(RendererViewportPointerInput {
                 document,
                 viewport_revision: self.revision,
@@ -368,6 +379,8 @@ impl MoliSurface {
                 click_count: event.click_count as i32,
                 modifiers: modifiers(event.modifiers),
             }));
+        } else {
+            self.cancel_pointer();
         }
     }
 

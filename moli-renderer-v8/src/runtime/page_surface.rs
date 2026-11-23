@@ -5101,6 +5101,11 @@ pub enum RendererPageCommand {
     #[cfg(feature = "molio")]
     DispatchViewportPointer(super::RendererViewportPointerInput),
     #[cfg(feature = "molio")]
+    CancelViewportPointer {
+        document: RendererDocumentLifecycleIdentity,
+        viewport_revision: u64,
+    },
+    #[cfg(feature = "molio")]
     DispatchViewportWheel(super::RendererViewportWheelInput),
     #[cfg(feature = "molio")]
     SetViewportPointerPosition {

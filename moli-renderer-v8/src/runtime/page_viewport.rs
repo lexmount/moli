@@ -174,12 +174,14 @@ pub(super) struct ViewportFrameState {
     editing: crate::context_bootstrap::viewport_edit::ViewportEditing,
     pointer: Option<(f64, f64)>,
     sampled_pointer: Option<(f64, f64)>,
+    pressed_pointer: Option<RendererViewportPointerInput>,
 }
 
 impl ViewportFrameState {
     pub(super) fn discard_document(&mut self) {
         self.painted = None;
         self.editing = Default::default();
+        self.pressed_pointer = None;
         self.subscription.updates.send_replace(None);
         self.clear_cursor();
     }
@@ -248,9 +250,59 @@ impl PageVm {
 
     pub(super) fn dispatch_viewport_pointer(
         &mut self,
-        input: RendererViewportPointerInput,
+        mut input: RendererViewportPointerInput,
     ) -> anyhow::Result<Option<RendererInputDispatchOutcome>> {
-        self.dispatch_viewport_mouse(input, (0., 0.))
+        if self
+            .viewport_frames
+            .as_ref()
+            .is_none_or(|state| state.pressed_pointer.is_none())
+        {
+            if input.event == "mouseup" {
+                return Ok(None);
+            }
+            if input.event == "mousemove" {
+                input.buttons = 0;
+            }
+        }
+        let outcome = self.dispatch_viewport_mouse(input, (0., 0.))?;
+        if outcome.is_some() {
+            self.viewport_frames
+                .as_mut()
+                .expect("input requires a viewport subscription")
+                .pressed_pointer = (input.buttons != 0).then_some(input);
+        } else if input.event == "mouseup" {
+            self.cancel_viewport_pointer(input.document, input.viewport_revision)?;
+        }
+        Ok(outcome)
+    }
+
+    pub(super) fn cancel_viewport_pointer(
+        &mut self,
+        document: RendererDocumentLifecycleIdentity,
+        viewport_revision: u64,
+    ) -> anyhow::Result<()> {
+        if document == self.document_lifecycle.identity()
+            && self
+                .viewport_frames
+                .as_ref()
+                .is_some_and(|state| state.subscription.viewport_revision == viewport_revision)
+        {
+            self.cancel_active_viewport_pointer()?;
+        }
+        Ok(())
+    }
+
+    fn cancel_active_viewport_pointer(&mut self) -> anyhow::Result<()> {
+        if let Some(input) = self
+            .viewport_frames
+            .as_mut()
+            .and_then(|state| state.pressed_pointer.take())
+        {
+            self.vm_mut()
+                .cancel_viewport_mouse(input.position, input.modifiers)?;
+            self.wake_viewport_frames();
+        }
+        Ok(())
     }
 
     fn dispatch_viewport_mouse(
@@ -412,6 +464,9 @@ impl PageVm {
             self.layout_configuration.policy.is_realtime(),
             "Viewport frames require the Realtime layout policy"
         );
+        if let Err(error) = self.cancel_active_viewport_pointer() {
+            tracing::warn!(%error, "could not cancel the previous viewport's pointer input");
+        }
         self.set_viewport_surface(Some(subscription.surface))?;
         let pointer = visible_pointer_position(
             subscription.surface,
@@ -433,6 +488,7 @@ impl PageVm {
             editing,
             pointer,
             sampled_pointer: None,
+            pressed_pointer: None,
         }));
         Ok(())
     }

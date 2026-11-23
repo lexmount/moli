@@ -577,6 +577,115 @@ async fn viewport_pointer_requires_a_current_rendered_document() -> Result<()> {
 }
 
 #[tokio::test]
+async fn viewport_resize_cancels_a_pressed_pointer_and_releases_capture() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let html = r#"<!doctype html><style>body { margin: 0; } #target { width: 120px; height: 100px; }</style>
+        <div id="target"></div>
+        <script>
+            const target = document.getElementById('target');
+            window.events = [];
+            target.addEventListener('pointerdown', event => {
+                window.pressedId = event.pointerId;
+                target.setPointerCapture(pressedId);
+            });
+            for (const type of ['gotpointercapture', 'pointercancel', 'lostpointercapture', 'pointerup', 'click']) {
+                target.addEventListener(type, () => events.push(type));
+            }
+            window.statusText = () => events.join(',') + ':' + target.hasPointerCapture(pressedId);
+        </script>"#;
+    let mut page = browser.fetch(&html_url(html)).await?;
+    let surface = ViewportSurface::default();
+    let mut frames = page.subscribe_viewport_frames(surface, 1).await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+    let mut press = RendererViewportPointerInput {
+        document,
+        viewport_revision: 1,
+        position: (16., 16.),
+        event: "mousedown",
+        button: 0,
+        buttons: 1,
+        click_count: 1,
+        modifiers: 0,
+    };
+    let capture_move = RendererViewportPointerInput {
+        event: "mousemove",
+        button: -1,
+        ..press
+    };
+    assert!(page.dispatch_viewport_pointer(press).await?.is_some());
+    assert!(
+        page.dispatch_viewport_pointer(capture_move)
+            .await?
+            .is_some()
+    );
+    page.cancel_viewport_pointer(document, 0).await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async("statusText()")
+            .await?["value"],
+        "gotpointercapture:true"
+    );
+
+    // The UI cancels before sending the new viewport, so this also works if
+    // allocating the replacement frame buffers fails.
+    page.cancel_viewport_pointer(document, 1).await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async("statusText()")
+            .await?["value"],
+        "gotpointercapture,pointercancel,lostpointercapture:false"
+    );
+    let release = RendererViewportPointerInput {
+        event: "mouseup",
+        buttons: 0,
+        ..press
+    };
+    assert!(page.dispatch_viewport_pointer(release).await?.is_none());
+
+    // A renderer rebind also ends a press when the caller replaces its
+    // frame subscription directly.
+    page.evaluate_runtime_expression_async("events.length = 0")
+        .await?;
+    assert!(page.dispatch_viewport_pointer(press).await?.is_some());
+    let mut resized = page
+        .subscribe_viewport_frames(
+            ViewportSurface {
+                inner_width: surface.inner_width + 10,
+                ..surface
+            },
+            2,
+        )
+        .await?;
+    assert!(page.dispatch_viewport_pointer(release).await?.is_none());
+    assert_eq!(
+        page.evaluate_runtime_expression_async("statusText()")
+            .await?["value"],
+        "gotpointercapture,pointercancel,lostpointercapture:false"
+    );
+
+    frame(&mut resized, |frame| frame.snapshot.is_some()).await?;
+    page.evaluate_runtime_expression_async("events.length = 0")
+        .await?;
+    press.viewport_revision = 2;
+    assert!(page.dispatch_viewport_pointer(press).await?.is_some());
+    assert!(
+        page.dispatch_viewport_pointer(RendererViewportPointerInput {
+            viewport_revision: 2,
+            ..release
+        })
+        .await?
+        .is_some()
+    );
+    assert_eq!(
+        page.evaluate_runtime_expression_async("statusText()")
+            .await?["value"],
+        "gotpointercapture,pointerup,lostpointercapture,click:false"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_frames_follow_realtime_animation_and_document_replacement() -> Result<()> {
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
