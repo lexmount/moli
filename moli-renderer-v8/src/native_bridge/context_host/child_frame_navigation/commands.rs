@@ -84,6 +84,17 @@ impl PageScriptHost {
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
+    pub(crate) fn queue_child_browsing_context_request_without_seed_update(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        request: ChildBrowsingContextNavigationRequest,
+    ) -> bool {
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
+        let queued = self.queue_child_browsing_context_navigation_request(handle, request);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
+    }
+
     pub(crate) fn queue_child_browsing_context_navigation_without_seed_update(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
