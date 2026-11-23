@@ -49,7 +49,7 @@ pub struct PaintCaptureRequest {
     /// browsing contexts use transparent black so their owner element remains
     /// visible unless the child document supplies its own canvas background.
     pub base_background_color: PaintColor,
-    /// Additional source neighborhood for post-processing a page clip, in CSS pixels.
+    /// Additional source neighborhood for filtering a clipped capture, in viewport CSS pixels.
     pub clip_filter_outset: f32,
     /// Maximum encoded image width in device pixels.
     pub max_width: Option<u32>,
@@ -284,42 +284,48 @@ impl PaintCaptureRequest {
             paint_root_scrollbars: self.include_viewport_controls,
             base_background_color: self.base_background_color,
         };
-        if self.clip_filter_outset > 0.0
-            && matches!(self.region, PaintCaptureRegion::PageClip { .. })
-        {
-            let source_bounds = if self.include_viewport_controls {
-                viewport_bounds
-            } else {
-                LayoutRect::new(
+        if self.clip_filter_outset > 0.0 {
+            let source_bounds = match self.region {
+                PaintCaptureRegion::TransformedViewport { .. } => Some(viewport_bounds),
+                PaintCaptureRegion::PageClip { .. } if self.include_viewport_controls => {
+                    Some(viewport_bounds)
+                }
+                PaintCaptureRegion::PageClip { .. } => Some(LayoutRect::new(
                     -viewport_scroll.x,
                     -viewport_scroll.y,
                     content_size.width,
                     content_size.height,
-                )
+                )),
+                _ => None,
             };
-            capture.outset_page_clip(source_bounds, self.clip_filter_outset)?;
+            if let Some(source_bounds) = source_bounds {
+                capture.outset_filter_raster(source_bounds, self.clip_filter_outset)?;
+            }
         }
         Ok(capture)
     }
 }
 
 impl ResolvedPaintCapture {
-    fn outset_page_clip(&mut self, bounds: LayoutRect, outset: f32) -> Result<(), LayoutError> {
+    fn outset_filter_raster(&mut self, bounds: LayoutRect, outset: f32) -> Result<(), LayoutError> {
         let scale = f64::from(self.surface.device_scale);
-        let max_padding = (f64::from(outset) * scale).ceil();
+        let raster_scale = self
+            .surface
+            .viewport_to_raster_scale(self.viewport_to_surface);
+        let max_padding = (f64::from(outset) * raster_scale).ceil();
         if !max_padding.is_finite() || max_padding > f64::from(u32::MAX) {
             return Err(invalid_capture("capture filter neighborhood is too large"));
         }
-        let rect = self.viewport_rect;
+        let bounds = self.viewport_to_surface.map_rect(bounds).bounding_rect();
         let padding = |available: f32| {
             (f64::from(available) * scale)
                 .floor()
                 .clamp(0.0, max_padding)
         };
-        let left = padding(rect.x - bounds.x);
-        let top = padding(rect.y - bounds.y);
-        let right = padding(bounds.x + bounds.width - rect.x - rect.width);
-        let bottom = padding(bounds.y + bounds.height - rect.y - rect.height);
+        let left = padding(-bounds.x);
+        let top = padding(-bounds.y);
+        let right = padding(bounds.right() - self.surface.css_width);
+        let bottom = padding(bounds.bottom() - self.surface.css_height);
         if left + top + right + bottom == 0.0 {
             return Ok(());
         }
@@ -334,20 +340,25 @@ impl ResolvedPaintCapture {
         self.viewport_to_surface.coefficients[4] += left / scale;
         self.viewport_to_surface.coefficients[5] += top / scale;
         self.surface.css_width =
-            (((f64::from(rect.width) * scale).ceil() + left + right) / scale) as f32;
+            (((f64::from(self.surface.css_width) * scale).ceil() + left + right) / scale) as f32;
         self.surface.css_height =
-            (((f64::from(rect.height) * scale).ceil() + top + bottom) / scale) as f32;
+            (((f64::from(self.surface.css_height) * scale).ceil() + top + bottom) / scale) as f32;
         validate_extent(
             "padded capture surface",
             self.surface.css_width,
             self.surface.css_height,
         )?;
-        self.viewport_rect = LayoutRect::new(
-            rect.x - (left / scale) as f32,
-            rect.y - (top / scale) as f32,
-            self.surface.css_width,
-            self.surface.css_height,
-        );
+        // A transformed capture still clips to the live viewport. Page clips
+        // also need to include the padded source area when culling page paint.
+        if !self.clip_to_viewport {
+            let rect = self.viewport_rect;
+            self.viewport_rect = LayoutRect::new(
+                rect.x - (left / scale) as f32,
+                rect.y - (top / scale) as f32,
+                self.surface.css_width,
+                self.surface.css_height,
+            );
+        }
         Ok(())
     }
 }
