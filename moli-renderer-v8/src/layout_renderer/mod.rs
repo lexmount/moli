@@ -8,8 +8,9 @@ mod style_resolver;
 use std::collections::HashMap;
 
 use moli_layout::{
-    DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
-    LayoutViewport, finish_measured_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
+    AutoScrollbars, DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest,
+    LayoutPassResult, LayoutViewport, finish_measured_layout_pass, measure_prepared_layout_pass,
+    prepare_layout_pass,
 };
 use moli_selector::QueryContainerSizes;
 
@@ -125,6 +126,11 @@ fn build_native_layout_pass_recursive(
             let mut measured = measure_prepared_layout_pass(prepared, services)?;
             let mut iterations = 0;
             let mut largest_container_count = 0;
+            let mut previous_scrollbars = None;
+            let mut scrollbar_transitions =
+                Vec::<(QueryContainerSizes, AutoScrollbars<DomHandle>)>::new();
+            let mut frozen_scrollbars = AutoScrollbars::default();
+            let mut froze_a_scrollbar = false;
             loop {
                 let sizes: QueryContainerSizes = measured
                     .query_container_sizes()
@@ -139,26 +145,55 @@ fn build_native_layout_pass_recursive(
                     })
                     .collect();
                 largest_container_count = largest_container_count.max(sizes.len());
+                let repeated = scrollbar_transitions
+                    .iter()
+                    .rposition(|(earlier, _)| earlier == &sizes);
                 let Some(previous) = runtime.replace_layout_container_sizes(document, sizes) else {
                     break;
                 };
                 largest_container_count = largest_container_count.max(previous.len());
-                frames
-                    .original_container_sizes
-                    .entry(document)
-                    .or_insert(previous);
+                let scrollbars = measured.auto_scrollbars();
+                // Keep only the size tables measured at a change in scrollbar
+                // visibility. An exact repeat identifies a feedback cycle, and
+                // only the gutters that toggled within it need to be frozen.
+                let changed = previous_scrollbars
+                    .as_ref()
+                    .is_none_or(|(earlier, _)| earlier != &scrollbars);
+                match previous_scrollbars.replace((scrollbars, changed)) {
+                    Some((earlier, true)) => scrollbar_transitions.push((previous, earlier)),
+                    Some((_, false)) => {}
+                    None => {
+                        frames
+                            .original_container_sizes
+                            .entry(document)
+                            .or_insert(previous);
+                    }
+                }
+                if let Some(start) = repeated
+                    && let Some((current, record_current)) = &mut previous_scrollbars
+                {
+                    for (_, earlier) in scrollbar_transitions.drain(start..) {
+                        froze_a_scrollbar |= frozen_scrollbars.freeze_changed(current, &earlier);
+                    }
+                    scrollbar_transitions.clear();
+                    // The next pass starts a new history with the frozen gutters.
+                    *record_current = false;
+                }
                 // A chain can advance by one nested container per feedback
                 // pass. Allow work proportional to the number of containers,
-                // including newly revealed boxes, and fail without publishing
-                // if the measured sizes still change at the budget limit.
-                let budget = largest_container_count.saturating_mul(2).saturating_add(1);
+                // including newly revealed boxes. A corrective scrollbar pass
+                // gets a second bounded chance to propagate stable sizes.
+                let budget = largest_container_count
+                    .saturating_mul(2)
+                    .saturating_add(1)
+                    .saturating_mul(1 + usize::from(froze_a_scrollbar));
                 if iterations >= budget {
                     return Err(
                         moli_layout::LayoutError::ContainerQuerySizesDidNotConverge { iterations },
                     );
                 }
                 iterations += 1;
-                measured = measured.remeasure(services, &mut prepare)?;
+                measured = measured.remeasure(services, &frozen_scrollbars, &mut prepare)?;
             }
             finish_measured_layout_pass(measured, &source, &mut frames)
         };

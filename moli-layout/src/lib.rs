@@ -73,10 +73,11 @@ pub use normalize_source::{
     NormalizedLayoutSourceNode, NormalizedLayoutSourceTree, normalize_layout_source,
 };
 pub use pass::{
-    EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutFrameCoverage, LayoutPassRequest,
-    MeasuredLayoutPass, PreparedLayoutPass, ScreenshotLayoutRequest, build_layout_pass,
-    build_layout_pass_with_embedded_frames, build_screenshot_snapshot, finish_measured_layout_pass,
-    finish_prepared_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
+    AutoScrollbars, EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutFrameCoverage,
+    LayoutPassRequest, MeasuredLayoutPass, PreparedLayoutPass, ScreenshotLayoutRequest,
+    build_layout_pass, build_layout_pass_with_embedded_frames, build_screenshot_snapshot,
+    finish_measured_layout_pass, finish_prepared_layout_pass, measure_prepared_layout_pass,
+    prepare_layout_pass,
 };
 pub use scrollbar::{
     LayoutControlSurfaceHit, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarCornerHit,

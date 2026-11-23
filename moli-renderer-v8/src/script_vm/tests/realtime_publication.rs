@@ -81,6 +81,32 @@ fn realtime_publication_temporary_viewport_preserves_screen_container_query_size
 }
 
 #[test]
+fn realtime_publication_container_query_auto_scrollbars_stabilize_on_reflow() {
+    let (mut vm, viewport) = fixture(
+        r#"<!doctype html><style>
+        .scroller { width: 200px; height: 100px; overflow-y: auto }
+        .query { container-type: inline-size }
+        .content { height: 200px }
+        @container (width < 190px) { #content { height: 50px } }
+        @container (width >= 180px) { #short { height: 50px } }
+        </style>
+        <div id=scroller class=scroller><div id=query class=query><div id=content class=content></div></div></div>
+        <div id=other class=scroller><div class=query><div id=short class=content></div></div></div>"#,
+    );
+    let read = "JSON.stringify([scroller.clientWidth, query.offsetWidth, getComputedStyle(content).height, other.clientWidth])";
+    let initial = vm.eval(read).unwrap();
+    assert_eq!(initial, r#"[185,185,"50px",200]"#);
+    let builds = vm.layout_pass_observability_for_test().1;
+    vm.eval("content.style.borderBottom = '2px solid';")
+        .unwrap();
+    assert_eq!(vm.eval(read).unwrap(), initial);
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+    vm.eval("content.style.height = '40px'").unwrap();
+    assert_eq!(vm.eval(read).unwrap(), r#"[200,200,"40px",200]"#);
+}
+
+#[test]
 fn realtime_publication_transient_intent_does_not_publish_even_with_screenshot_reason() {
     let (mut vm, viewport) = fixture("<!doctype html><div id=target style='width:100px'></div>");
     assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "100");
