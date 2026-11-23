@@ -15,7 +15,7 @@ use super::{PageScriptHost, WindowDocumentTaskTarget};
 #[cfg(feature = "devtools")]
 pub(crate) struct PublishedFrameGeometry {
     root_owner: Option<WindowDocumentTaskTarget>,
-    frames: HashMap<DomHandle, (WindowDocumentTaskTarget, Option<LayoutTransform2D>)>,
+    frames: HashMap<DomHandle, (WindowDocumentTaskTarget, LayoutTransform2D)>,
 }
 
 #[cfg(feature = "devtools")]
@@ -31,7 +31,7 @@ impl PublishedFrameGeometry {
         &mut self,
         document: DomHandle,
         owner: WindowDocumentTaskTarget,
-        root_to_viewport: Option<LayoutTransform2D>,
+        root_to_viewport: LayoutTransform2D,
     ) {
         self.frames.insert(document, (owner, root_to_viewport));
     }
@@ -49,7 +49,7 @@ impl PublishedFrameGeometry {
         if host.input_document_for_owner(owner) != Some(document) {
             return None;
         }
-        transform
+        Some(transform)
     }
 }
 

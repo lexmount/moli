@@ -11,53 +11,10 @@ use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct InputHit {
-    pub(crate) handle: DomHandle,
-    /// Converts a root-frame input position into the viewport of `handle`'s
-    /// owner frame. Keeping the affine map lets boundary and capture events
-    /// convert a new root position into a previously targeted child frame.
-    pub(crate) root_to_frame: LayoutTransform2D,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct InputSurfaceHit {
-    pub(crate) input: Option<InputHit>,
+    pub(crate) target: Option<DomHandle>,
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
-}
-
-#[derive(Clone, Copy)]
-struct FrameHitTest {
-    document: DomHandle,
-    point: LayoutPoint,
-    root_to_frame: LayoutTransform2D,
-}
-
-impl FrameHitTest {
-    fn root(document: DomHandle, point: LayoutPoint) -> Self {
-        Self {
-            document,
-            point,
-            root_to_frame: LayoutTransform2D::IDENTITY,
-        }
-    }
-
-    /// Blink performs the equivalent conversion through LocalFrameView when
-    /// an input hit crosses an embedded-content boundary.
-    fn child(
-        self,
-        runtime: &PageScriptHost,
-        frame: DomHandle,
-        hit: LayoutHit<DomHandle>,
-    ) -> Option<Self> {
-        let document = runtime.child_browsing_context_document_handle(frame)?;
-        let frame_to_child = hit.embedded_viewport_hit_transform()?;
-        Some(Self {
-            document,
-            point: frame_to_child.map_point(self.point),
-            root_to_frame: frame_to_child.concatenate(self.root_to_frame),
-        })
-    }
 }
 
 #[cfg(feature = "devtools")]
@@ -65,8 +22,8 @@ pub(crate) fn observable_input_hit_test(
     runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
-) -> Result<Option<InputHit>, LayoutError> {
-    input_surface_hit_test(runtime, document, point, false, false).map(|hit| hit.input)
+) -> Result<Option<DomHandle>, LayoutError> {
+    Ok(input_surface_hit_test(runtime, document, point, false, false)?.target)
 }
 
 /// Hit tests within an already routed frame. The mouse press can keep that
@@ -116,11 +73,12 @@ pub(crate) fn input_surface_hit_test(
     include_scrollbars: bool,
 ) -> Result<InputSurfaceHit, LayoutError> {
     if !runtime.layout_policy().uses_real_layout() {
-        return input_hit_test_via_documents(runtime, document, point, ignore_pointer_events_none)
-            .map(|input| InputSurfaceHit {
-                input,
-                control: None,
-            });
+        let target =
+            input_hit_test_via_documents(runtime, document, point, ignore_pointer_events_none, 0)?;
+        return Ok(InputSurfaceHit {
+            target,
+            control: None,
+        });
     }
     runtime.ensure_observable_layout()?;
     runtime
@@ -145,11 +103,7 @@ pub(crate) fn observable_deep_hit_test(
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(
-        input_surface_hit_test(runtime, document, point, ignore_pointer_events_none, false)?
-            .input
-            .map(|hit| hit.handle),
-    )
+    Ok(input_surface_hit_test(runtime, document, point, ignore_pointer_events_none, false)?.target)
 }
 
 fn input_hit_test_via_documents(
@@ -157,39 +111,27 @@ fn input_hit_test_via_documents(
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
-) -> Result<Option<InputHit>, LayoutError> {
-    input_hit_test_in_frame(
-        runtime,
-        FrameHitTest::root(document, point),
-        ignore_pointer_events_none,
-        0,
-    )
-}
-
-fn input_hit_test_in_frame(
-    runtime: &PageScriptHost,
-    frame: FrameHitTest,
-    ignore_pointer_events_none: bool,
     depth: usize,
-) -> Result<Option<InputHit>, LayoutError> {
-    let Some((layout_hit, target)) = live_hit_in_frame(runtime, frame, ignore_pointer_events_none)?
+) -> Result<Option<DomHandle>, LayoutError> {
+    let Some((layout_hit, target)) =
+        live_hit_in_document(runtime, document, point, ignore_pointer_events_none)?
     else {
         return Ok(None);
     };
-    let target_hit = InputHit {
-        handle: target,
-        root_to_frame: frame.root_to_frame,
-    };
-    if depth >= CHILD_FRAME_DEPTH_LIMIT {
-        return Ok(Some(target_hit));
+    if depth < CHILD_FRAME_DEPTH_LIMIT
+        && let Some(child) = runtime.child_browsing_context_document_handle(target)
+        && let Some(transform) = layout_hit.embedded_viewport_hit_transform()
+    {
+        let child_target = input_hit_test_via_documents(
+            runtime,
+            child,
+            transform.map_point(point),
+            ignore_pointer_events_none,
+            depth + 1,
+        )?;
+        return Ok(child_target.or(Some(target)));
     }
-    let Some(child) = frame.child(runtime, target, layout_hit) else {
-        return Ok(Some(target_hit));
-    };
-    Ok(
-        input_hit_test_in_frame(runtime, child, ignore_pointer_events_none, depth + 1)?
-            .or(Some(target_hit)),
-    )
+    Ok(Some(target))
 }
 
 fn input_surface_hit_test_in_tree(
@@ -217,7 +159,7 @@ fn input_surface_hit_test_in_tree(
                         }
                     }
                     return Ok(InputSurfaceHit {
-                        input: None,
+                        target: None,
                         control: Some(control),
                     });
                 }
@@ -239,27 +181,18 @@ fn input_surface_hit_test_in_tree(
     let Some((layout_hit, target)) = live_dom_hit else {
         return Ok(InputSurfaceHit::default());
     };
-    let target_hit = InputHit {
-        handle: target,
-        root_to_frame,
+    let target_hit = InputSurfaceHit {
+        target: Some(target),
+        control: None,
     };
     if depth >= CHILD_FRAME_DEPTH_LIMIT {
-        return Ok(InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        });
+        return Ok(target_hit);
     }
     let Some(child_document) = runtime.child_browsing_context_document_handle(target) else {
-        return Ok(InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        });
+        return Ok(target_hit);
     };
     let Some(frame_to_child) = layout_hit.embedded_viewport_hit_transform() else {
-        return Ok(InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        });
+        return Ok(target_hit);
     };
     let child_tree = tree
         .embedded_frame_tree(target)
@@ -281,13 +214,10 @@ fn input_surface_hit_test_in_tree(
         include_scrollbars,
         depth + 1,
     )?;
-    if child_hit.input.is_some() || child_hit.control.is_some() {
+    if child_hit.target.is_some() || child_hit.control.is_some() {
         Ok(child_hit)
     } else {
-        Ok(InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        })
+        Ok(target_hit)
     }
 }
 
@@ -319,17 +249,13 @@ fn live_hit_in_tree(
         })
 }
 
-fn live_hit_in_frame(
+fn live_hit_in_document(
     runtime: &PageScriptHost,
-    frame: FrameHitTest,
+    document: DomHandle,
+    point: LayoutPoint,
     ignore_pointer_events_none: bool,
 ) -> Result<Option<(LayoutHit<DomHandle>, DomHandle)>, LayoutError> {
-    let (_, first_hit) = observable_hit_test(
-        runtime,
-        frame.document,
-        frame.point,
-        ignore_pointer_events_none,
-    )?;
+    let (_, first_hit) = observable_hit_test(runtime, document, point, ignore_pointer_events_none)?;
     let live_first_hit = first_hit.and_then(|hit| {
         let target = element_for_hit_source(runtime, hit.source)?;
         runtime
@@ -345,12 +271,7 @@ fn live_hit_in_frame(
     if live_first_hit.is_some() || first_hit.is_none() {
         return Ok(live_first_hit);
     }
-    let (_, hits) = observable_hit_test_all(
-        runtime,
-        frame.document,
-        frame.point,
-        ignore_pointer_events_none,
-    )?;
+    let (_, hits) = observable_hit_test_all(runtime, document, point, ignore_pointer_events_none)?;
     Ok(hits.into_iter().find_map(|hit| {
         let target = element_for_hit_source(runtime, hit.source)?;
         runtime

@@ -212,9 +212,25 @@ async fn captured_pointer_remains_deliverable_without_an_invertible_frame_mappin
         let mut vm = captured_child_vm(false, false).await;
         dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);
         dispatch(&mut vm, "mousemove", 131.0, 91.0, 1);
+        let (document, fallback_sample) = {
+            let host = vm._context_host.borrow();
+            let frame = host.child_browsing_context_handles_in_document_order()[0];
+            let document = host.child_browsing_context_document_handle(frame).unwrap();
+            let sample = host.published_frame_geometry().unwrap();
+            assert!(sample.root_to_viewport(&host, document).is_some());
+            (document, sample)
+        };
         vm.eval(&format!("frame.style.cssText+=';{style}';'unprojectable'"))
             .unwrap();
         vm.publish_layout_for_test().unwrap();
+        {
+            let host = vm._context_host.borrow();
+            assert!(fallback_sample.root_to_viewport(&host, document).is_some());
+            assert!(
+                host.input_frame_transform(document, Some(&fallback_sample))
+                    .is_none()
+            );
+        }
         let builds = vm.layout_pass_observability_for_test().1;
         dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
         dispatch(&mut vm, "mouseup", 20.0, 20.0, 0);
