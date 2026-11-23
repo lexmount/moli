@@ -124,13 +124,14 @@ fn build_native_layout_pass_recursive(
         };
         let finish = |services: &mut DocumentLayoutServices| {
             let mut measured = measure_prepared_layout_pass(prepared, services)?;
-            let mut iterations = 0;
+            let mut iterations = 0usize;
             let mut largest_container_count = 0;
             let mut previous_scrollbars = None;
             let mut scrollbar_transitions =
                 Vec::<(QueryContainerSizes, AutoScrollbars<DomHandle>)>::new();
             let mut frozen_scrollbars = AutoScrollbars::default();
-            let mut froze_a_scrollbar = false;
+            let mut changed_scrollbar_axes = AutoScrollbars::default();
+            let mut last_scrollbar_progress = 0;
             loop {
                 let sizes: QueryContainerSizes = measured
                     .query_container_sizes()
@@ -153,6 +154,11 @@ fn build_native_layout_pass_recursive(
                 };
                 largest_container_count = largest_container_count.max(previous.len());
                 let scrollbars = measured.auto_scrollbars();
+                if let Some((earlier, _)) = &previous_scrollbars
+                    && changed_scrollbar_axes.extend_changed_axes(earlier, &scrollbars)
+                {
+                    last_scrollbar_progress = iterations;
+                }
                 // Keep only the size tables measured at a change in scrollbar
                 // visibility. An exact repeat identifies a feedback cycle, and
                 // only the gutters that toggled within it need to be frozen.
@@ -173,21 +179,19 @@ fn build_native_layout_pass_recursive(
                     && let Some((current, record_current)) = &mut previous_scrollbars
                 {
                     for (_, earlier) in scrollbar_transitions.drain(start..) {
-                        froze_a_scrollbar |= frozen_scrollbars.freeze_changed(current, &earlier);
+                        if frozen_scrollbars.extend_changed_axes(current, &earlier) {
+                            last_scrollbar_progress = iterations;
+                        }
                     }
                     scrollbar_transitions.clear();
                     // The next pass starts a new history with the frozen gutters.
                     *record_current = false;
                 }
-                // A chain can advance by one nested container per feedback
-                // pass. Allow work proportional to the number of containers,
-                // including newly revealed boxes. A corrective scrollbar pass
-                // gets a second bounded chance to propagate stable sizes.
-                let budget = largest_container_count
-                    .saturating_mul(2)
-                    .saturating_add(1)
-                    .saturating_mul(1 + usize::from(froze_a_scrollbar));
-                if iterations >= budget {
+                // Each new scrollbar axis or frozen gutter can start another
+                // propagation through the container chain. Observing the same
+                // axis toggle again grants no additional rounds.
+                let budget = largest_container_count.saturating_mul(2).saturating_add(1);
+                if iterations.saturating_sub(last_scrollbar_progress) >= budget {
                     return Err(
                         moli_layout::LayoutError::ContainerQuerySizesDidNotConverge { iterations },
                     );

@@ -314,8 +314,8 @@ impl<N: Eq + Hash> Default for AutoScrollbars<N> {
 }
 
 impl<N: Copy + Eq + Hash> AutoScrollbars<N> {
-    /// Keep each axis that changed visibility within a repeated query-size cycle.
-    pub fn freeze_changed(&mut self, first: &Self, second: &Self) -> bool {
+    /// Record changed visibility and report whether it introduced any new axes.
+    pub fn extend_changed_axes(&mut self, first: &Self, second: &Self) -> bool {
         let previous_count = self.0.len();
         self.0
             .extend(first.0.symmetric_difference(&second.0).copied());

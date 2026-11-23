@@ -107,6 +107,30 @@ fn realtime_publication_container_query_auto_scrollbars_stabilize_on_reflow() {
 }
 
 #[test]
+fn realtime_publication_container_query_can_reveal_three_scrollable_ancestors() {
+    let (mut vm, viewport) = fixture(
+        r#"<!doctype html><style>
+        .scroll { overflow-y: auto }
+        #outer { width: 200px; max-height: 100px }
+        #middle { max-height: 200px }
+        #inner { max-height: 300px }
+        #query { container: q / inline-size }
+        #content { height: 50px }
+        @container q (width >= 195px) { #content { height: 150px } }
+        @container q (width < 195px) { #content { height: 250px } }
+        @container q (width < 180px) { #content { height: 350px } }
+        </style><div id=outer class=scroll><div id=middle class=scroll><div id=inner class=scroll>
+        <div id=query><div id=content></div></div></div></div></div>"#,
+    );
+    let read = "JSON.stringify([outer.clientWidth, middle.clientWidth, inner.clientWidth, query.offsetWidth, content.offsetHeight])";
+    assert_eq!(vm.eval(read).unwrap(), "[185,170,155,155,350]");
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(vm.eval(read).unwrap(), "[185,170,155,155,350]");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+}
+
+#[test]
 fn realtime_publication_transient_intent_does_not_publish_even_with_screenshot_reason() {
     let (mut vm, viewport) = fixture("<!doctype html><div id=target style='width:100px'></div>");
     assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "100");
