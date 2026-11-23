@@ -29,6 +29,7 @@ pub(super) enum LoadedFollowedLocationNavigation {
     StreamingDocument {
         requested_url: Url,
         response: Box<StreamingRawResponse>,
+        document_referrer: String,
     },
     ExternalDocument {
         requested_url: Url,
@@ -36,6 +37,7 @@ pub(super) enum LoadedFollowedLocationNavigation {
         response_status: u16,
         response_headers: Vec<(String, Vec<u8>)>,
         raw_body: ExternalRawDocumentBodyStream,
+        document_referrer: String,
     },
 }
 
@@ -47,6 +49,18 @@ pub(super) enum FollowedLocationNavigationBootstrapBoundary {
 }
 
 impl LoadedFollowedLocationNavigation {
+    fn document_referrer(&self) -> &str {
+        match self {
+            Self::NoDocument | Self::Download(_) => "",
+            Self::StreamingDocument {
+                document_referrer, ..
+            }
+            | Self::ExternalDocument {
+                document_referrer, ..
+            } => document_referrer,
+        }
+    }
+
     fn document_response(&self) -> Option<(&Url, &[(String, Vec<u8>)])> {
         match self {
             Self::NoDocument | Self::Download(_) => None,
@@ -111,12 +125,16 @@ pub(super) async fn load_followed_location_navigation(
         }
         let (final_url, response_status, response_headers, raw_body) =
             external_raw_document_body_from_materialized_response(response)?;
+        let document_referrer = initiator
+            .map(|source| source.document_referrer(&final_url))
+            .unwrap_or_default();
         return Ok(LoadedFollowedLocationNavigation::ExternalDocument {
             requested_url: url,
             final_url,
             response_status,
             response_headers,
             raw_body,
+            document_referrer,
         });
     }
     let request = build_followed_location_navigation_request(
@@ -129,6 +147,7 @@ pub(super) async fn load_followed_location_navigation(
         initiator,
     )
     .map_err(|error| anyhow!("failed to build location navigation request: {error}"))?;
+    let referrer_request = initiator.map(|source| (source, request.clone()));
     let mut response = loader
         .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
         .await?;
@@ -170,9 +189,25 @@ pub(super) async fn load_followed_location_navigation(
             ),
         ));
     }
+    let document_referrer = referrer_request
+        .map(|(source, mut request)| {
+            if response.redirect_chain.is_empty() {
+                return source.document_referrer(&response.final_url);
+            }
+            for redirect in &response.redirect_chain {
+                if redirect.source != moli_fetch::RedirectSource::Internal {
+                    request.update_referrer_for_redirect(&redirect.from_url, &redirect.headers);
+                }
+            }
+            request
+                .referrer_header_value(&response.final_url)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
     Ok(LoadedFollowedLocationNavigation::StreamingDocument {
         requested_url: url,
         response: Box::new(response),
+        document_referrer,
     })
 }
 
@@ -208,11 +243,14 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
     {
         update_history_entry_after_redirect(seed, &response.final_url);
     }
-    let env_for_bootstrap = page_vm_env_for_navigation_bootstrap(
-        &env,
+    let mut env_for_bootstrap = page_vm_env_for_navigation_bootstrap(
+        env,
         navigation_bootstrap_entry,
         reserved_service_worker_client_id,
     );
+    env_for_bootstrap
+        .document_policy_container
+        .document_referrer = loaded.document_referrer().to_owned();
     let local_executor_clone = local_executor.clone();
     let loader_for_bootstrap = loader.clone();
     let (
@@ -245,6 +283,7 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
         LoadedFollowedLocationNavigation::StreamingDocument {
             requested_url,
             response,
+            ..
         } => {
             let navigation_redirected = response.redirected;
             let navigation_redirect_chain = response
@@ -300,6 +339,7 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
             response_status,
             response_headers,
             raw_body,
+            ..
         } => {
             let bootstrap = Box::pin(async move {
                 let started = Instant::now();
@@ -396,11 +436,10 @@ fn update_history_entry_after_redirect(
 }
 
 fn page_vm_env_for_navigation_bootstrap(
-    env: &PageVmEnvConfig,
+    mut env: PageVmEnvConfig,
     navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     reserved_service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
 ) -> PageVmEnvConfig {
-    let mut env = env.clone();
     env.document_policy_container
         .response_content_security_policies
         .clear();

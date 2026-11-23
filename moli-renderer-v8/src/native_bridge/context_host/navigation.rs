@@ -75,6 +75,12 @@ pub(crate) struct PendingLocationNavigation {
     pub(crate) web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
 }
 
+pub(crate) struct LocationNavigationSource {
+    pub(crate) initiator: crate::runtime::RendererNavigationInitiator,
+    pub(crate) initial_document_environment:
+        Option<crate::runtime::RendererCapturedDocumentEnvironment>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PendingLocationNavigationKind {
     JavascriptUrl,
@@ -143,6 +149,7 @@ impl PageScriptHost {
             url,
             entry_seed,
             BrowserNavigationRequestKind::Navigate,
+            None,
         );
     }
 
@@ -151,6 +158,7 @@ impl PageScriptHost {
         url: Url,
         entry_seed: Option<NavigationHistoryEntrySeed>,
         browser_navigation_kind: BrowserNavigationRequestKind,
+        source: Option<LocationNavigationSource>,
     ) {
         self.record_pending_location_navigation_request(
             url,
@@ -159,6 +167,7 @@ impl PageScriptHost {
             Vec::new(),
             entry_seed,
             browser_navigation_kind,
+            source,
         );
     }
 
@@ -170,11 +179,16 @@ impl PageScriptHost {
         request_headers: Vec<(String, String)>,
         entry_seed: Option<NavigationHistoryEntrySeed>,
         browser_navigation_kind: BrowserNavigationRequestKind,
+        source: Option<LocationNavigationSource>,
     ) {
         self.clear_pending_top_level_navigation();
         let handoff = self.top_level_navigation_handoff_tx.next_handoff();
         let reserved_service_worker_client =
             self.pending_reserved_service_worker_top_level_client_for_navigation(&url);
+        let (navigation_initiator, initial_document_environment) = source
+            .map_or((None, None), |source| {
+                (Some(source.initiator), source.initial_document_environment)
+            });
         self.pending_top_level_navigation = Some(PendingTopLevelNavigation::Location(Box::new(
             PendingLocationNavigation {
                 handoff,
@@ -188,8 +202,8 @@ impl PageScriptHost {
                 request_body,
                 request_headers,
                 browser_navigation_kind,
-                navigation_initiator: None,
-                initial_document_environment: None,
+                navigation_initiator,
+                initial_document_environment,
                 entry_seed,
                 history_mutation: None,
                 reserved_service_worker_client,
@@ -242,19 +256,6 @@ impl PageScriptHost {
             self.pending_top_level_navigation.as_mut()
         {
             pending.history_mutation = Some(mutation);
-        }
-    }
-
-    pub(crate) fn set_pending_location_navigation_source(
-        &mut self,
-        initiator: crate::runtime::RendererNavigationInitiator,
-        environment: Option<crate::runtime::RendererCapturedDocumentEnvironment>,
-    ) {
-        if let Some(PendingTopLevelNavigation::Location(pending)) =
-            self.pending_top_level_navigation.as_mut()
-        {
-            pending.navigation_initiator = Some(initiator);
-            pending.initial_document_environment = environment;
         }
     }
 

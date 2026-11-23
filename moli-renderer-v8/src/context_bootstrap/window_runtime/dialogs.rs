@@ -368,39 +368,33 @@ pub(crate) fn window_open_callback<'s>(
                     if parsed.raw_url.is_empty() { "" } else { &url },
                     &navigation_initiator,
                     navigation_owner,
+                    None,
+                    false,
                 );
                 let window_event = opened.pending_page.is_some().then_some(window_open_event);
+                let window_proxy = opened.window_proxy;
+                let activation = RendererPendingPopupActivation::window(
+                    root_document,
+                    source,
+                    !suppress_opener,
+                    opened.window.as_ref().map(|window| window.id()),
+                    if javascript_navigation {
+                        "about:blank".to_owned()
+                    } else {
+                        url
+                    },
+                    parsed.target_name,
+                    disposition,
+                )
+                .with_navigation_requested(!parsed.raw_url.is_empty() && !javascript_navigation);
                 unsafe { &mut *host_ptr }.record_pending_popup_activation(
-                    RendererPendingPopupActivation::window(
-                        root_document,
-                        source,
-                        !suppress_opener,
-                        opened.window.as_ref().map(|window| window.id()),
-                        if javascript_navigation {
-                            "about:blank".to_owned()
-                        } else {
-                            url
-                        },
-                        parsed.target_name,
-                        disposition,
-                    )
-                    .with_navigation_requested(!parsed.raw_url.is_empty() && !javascript_navigation)
-                    .with_navigation_initiator(navigation_initiator)
-                    .with_same_origin_target(opened.same_origin_with_target)
-                    .with_initial_document_environment(opened.initial_document_environment)
-                    .with_browsing_context_name(opened.name)
-                    .with_auxiliary_window(opened.window)
-                    .with_pending_auxiliary_page(opened.pending_page)
-                    .with_initial_auxiliary_state(
-                        opened.session_storage,
-                        opened.initial_storage_key,
-                    ),
+                    opened.into_activation(activation, navigation_initiator),
                     window_event,
                 );
                 if suppress_opener {
                     rv.set_null();
                 } else {
-                    rv.set(opened.window_proxy.into());
+                    rv.set(window_proxy.into());
                 }
             }
             Err(error) => {

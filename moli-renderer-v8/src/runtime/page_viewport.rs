@@ -14,7 +14,6 @@ pub struct RendererViewportFrame {
     pub document: RendererDocumentLifecycleIdentity,
     pub viewport_revision: u64,
     pub sequence: u64,
-    pub navigation: RendererViewportNavigation,
     pub editor: Option<RendererViewportEditor>,
     pub snapshot: Option<Arc<PaintSnapshot>>,
 }
@@ -351,7 +350,6 @@ impl PageVm {
             return;
         }
         let after = self.vm().visual_state_token(document, viewport, [255; 4]);
-        let navigation = self.vm().viewport_navigation();
         let editor = self.read_viewport_editor();
         let state = self
             .viewport_frames
@@ -368,7 +366,6 @@ impl PageVm {
                 document,
                 viewport_revision: state.subscription.viewport_revision,
                 sequence: state.sequence,
-                navigation,
                 editor,
                 snapshot: snapshot.map(Arc::new),
             }));

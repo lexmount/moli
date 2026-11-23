@@ -1057,9 +1057,12 @@ fn submit_post_form_to_top_level_browsing_context(
         vec![("Content-Type".to_owned(), content_type)],
         None,
         moli_fetch::BrowserNavigationRequestKind::Navigate,
+        Some(crate::native_bridge::LocationNavigationSource {
+            initiator,
+            initial_document_environment: None,
+        }),
     );
     runtime.set_pending_location_navigation_history(history);
-    runtime.set_pending_location_navigation_source(initiator, None);
     crate::context_bootstrap::web_mcp::bind_root_navigation(
         unsafe { &mut *runtime_ptr },
         form_handle,

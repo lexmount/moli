@@ -311,13 +311,16 @@ fn start_favicon_load(
 }
 
 async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
-    let initial = tokio::time::timeout(
-        Duration::from_secs(20),
-        browser.open_viewport_page(tab.window_identity, tab.popup.as_deref()),
-    )
-    .await
-    .context("opening the tab timed out")
-    .and_then(|result| result);
+    let initial = {
+        let popup = tab.popup.take();
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            browser.open_viewport_page(tab.window_identity, popup.as_deref()),
+        )
+        .await
+        .context("opening the tab timed out")
+        .and_then(|result| result)
+    };
     let mut page = match initial {
         Ok(page) => page,
         Err(error) => {
@@ -1386,6 +1389,24 @@ mod tests {
                 const child = window.open("about:blank#first", "child");
                 child.location.hash = "second";
             };
+        } else if (location.pathname === "/event-source") {
+            let step = 0;
+            const link = document.getElementById("open");
+            link.target = "report";
+            link.rel = "opener";
+            link.href = "/intercept";
+            link.onclick = event => {
+                switch (step++) {
+                    case 0:
+                        event.preventDefault();
+                        window.open("/navigation-events", "report");
+                        break;
+                    case 1:
+                        event.preventDefault();
+                        window.open("/cancel", "report");
+                        break;
+                }
+            };
         } else if (location.pathname === "/source") {
             let step = 0;
             let report;
@@ -1414,6 +1435,23 @@ mod tests {
                 }
             };
         }
+        </script>"#;
+
+    const POPUP_NAVIGATION_EVENTS: &str = r#"<!doctype html><title>Navigation events</title>
+        <script>
+        navigation.addEventListener("navigate", event => {
+            const path = new URL(event.destination.url).pathname;
+            if (path === "/cancel") {
+                event.preventDefault();
+                opener.document.title = event.defaultPrevented && event.sourceElement === null
+                    ? "Popup navigation canceled" : "Unexpected window.open event";
+            } else if (path === "/intercept") {
+                event.intercept({handler() {
+                    document.title = event.sourceElement === opener.document.getElementById("open")
+                        && event.userInitiated ? "Popup navigation intercepted" : "Unexpected link event";
+                }});
+            }
+        });
         </script>"#;
 
     async fn popup_fixture() -> Result<(String, mpsc::UnboundedReceiver<(String, Option<String>)>)>
@@ -1446,20 +1484,29 @@ mod tests {
                         }
                     }
                     let (status, headers, body) = match path.as_str() {
-                        "/source" | "/fragment-source" | "/background-source" => {
+                        "/source" | "/fragment-source" | "/event-source" | "/background-source" => {
                             ("200 OK", "", SOURCE_PAGE)
                         }
+                        "/navigation-events" => ("200 OK", "", POPUP_NAVIGATION_EVENTS),
                         "/report" => (
                             "200 OK",
                             "",
-                            "<script>document.title = window.bootstrapToken ?? 'missing';</script>",
+                            "<script>document.title = (window.bootstrapToken ?? 'missing') + '|' + document.referrer;</script>",
                         ),
-                        "/reused" => ("200 OK", "", "<title>Reused report</title>"),
-                        "/redirect" => ("302 Found", "Location: /background-report\r\n", ""),
+                        "/reused" => (
+                            "200 OK",
+                            "",
+                            "<script>document.title = 'Reused report|' + document.referrer; navigation.addEventListener('navigate', event => event.preventDefault());</script>",
+                        ),
+                        "/redirect" => (
+                            "302 Found",
+                            "Location: /background-report\r\nReferrer-Policy: no-referrer\r\n",
+                            "",
+                        ),
                         "/background-report" => (
                             "200 OK",
                             "",
-                            "<title>Background report</title><script>setTimeout(() => {location.hash = 'done'; document.title = 'Background ready';}, 0);</script>",
+                            "<title>Background report</title><script>setTimeout(() => {location.hash = 'done'; document.title = 'Background ready|' + document.referrer;}, 0);</script>",
                         ),
                         _ => ("404 Not Found", "", ""),
                     };
@@ -1490,8 +1537,12 @@ mod tests {
         let popup = next_popup(&mut events).await?;
         assert_eq!(popup.url, format!("{base}/obsolete"));
         let report = host.open_popup(popup)?;
-        let first_document =
-            wait_for_navigation(&report, &format!("{base}/report"), "retained").await?;
+        let first_document = wait_for_navigation(
+            &report,
+            &format!("{base}/report"),
+            &format!("retained|{source}"),
+        )
+        .await?;
         click(&opener, 0)?;
         let reuse = next_popup(&mut events).await?;
         assert!(reuse.pending_auxiliary_page.is_none());
@@ -1500,7 +1551,8 @@ mod tests {
             Some(report.window_identity.name())
         );
         let reused_url = format!("{}/reused", base.replace("127.0.0.1", "localhost"));
-        let reused_document = wait_for_navigation(&report, &reused_url, "Reused report").await?;
+        let reused_document =
+            wait_for_navigation(&report, &reused_url, &format!("Reused report|{base}/")).await?;
         assert_ne!(first_document, reused_document);
         click(&opener, 0)?;
         let blank = next_popup(&mut events).await?;
@@ -1524,6 +1576,46 @@ mod tests {
             visited.push(path);
         }
         assert_eq!(visited, ["/report", "/reused"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reused_popup_applies_navigation_event_cancellation_and_interception() -> Result<()> {
+        let (base, mut requests) = popup_fixture().await?;
+        let (host, mut events) = BrowserHost::start(None)?;
+        let source = format!("{base}/event-source");
+        let mut opener = host.open_tab()?;
+        opener
+            .commands
+            .send(TabCommand::Navigate(Some(source.clone())))
+            .map_err(|_| anyhow::anyhow!("load popup navigation event source"))?;
+        show_tab(&mut opener, "Source", 1, [0, 0, 255, 255]).await?;
+        click(&opener, 0)?;
+        let report = host.open_popup(next_popup(&mut events).await?)?;
+        let report_url = format!("{base}/navigation-events");
+        let document = wait_for_navigation(&report, &report_url, "Navigation events").await?;
+
+        click(&opener, 0)?;
+        let canceled = next_popup(&mut events).await?;
+        assert_eq!(canceled.url, format!("{base}/cancel"));
+        assert!(canceled.pending_auxiliary_page.is_none());
+        wait_for_navigation(&opener, &source, "Popup navigation canceled").await?;
+        assert_eq!(
+            wait_for_navigation(&report, &report_url, "Navigation events").await?,
+            document,
+        );
+
+        click(&opener, 0)?;
+        let intercepted = next_popup(&mut events).await?;
+        assert_eq!(intercepted.url, format!("{base}/intercept"));
+        assert!(intercepted.pending_auxiliary_page.is_none());
+        assert_eq!(
+            wait_for_navigation(&report, &intercepted.url, "Popup navigation intercepted").await?,
+            document,
+        );
+        while let Ok((path, _)) = requests.try_recv() {
+            assert!(!matches!(path.as_str(), "/cancel" | "/intercept"), "{path}");
+        }
         Ok(())
     }
 
@@ -1554,16 +1646,20 @@ mod tests {
         wait_for_navigation(
             &report,
             &format!("{base}/background-report#done"),
-            "Background ready",
+            "Background ready|",
         )
         .await?;
         assert!(report.viewport.read(|_| ()).is_none());
         let mut visited = Vec::new();
+        let expected_referrer = format!("{base}/");
         while let Ok((path, referrer)) = requests.try_recv() {
-            if matches!(path.as_str(), "/redirect" | "/background-report") {
-                assert_eq!(referrer.as_deref(), Some(format!("{base}/").as_str()));
-                visited.push(path);
-            }
+            let expected = match path.as_str() {
+                "/redirect" => Some(expected_referrer.as_str()),
+                "/background-report" => None,
+                _ => continue,
+            };
+            assert_eq!(referrer.as_deref(), expected, "{path}");
+            visited.push(path);
         }
         assert_eq!(visited, ["/redirect", "/background-report"]);
         Ok(())

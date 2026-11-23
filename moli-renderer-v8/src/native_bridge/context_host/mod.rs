@@ -229,7 +229,8 @@ pub(crate) use moli_page_types::{
 };
 pub(crate) use moli_session_history::{NavigationHistoryDocumentId, NavigationHistoryEntryKey};
 pub(crate) use navigation::{
-    PendingLocationNavigation, PendingLocationNavigationKind, PendingTopLevelNavigation,
+    LocationNavigationSource, PendingLocationNavigation, PendingLocationNavigationKind,
+    PendingTopLevelNavigation,
 };
 pub(crate) use popups::{
     LightweightPopupClassicScriptFetchTarget, LightweightPopupDocumentFetchTarget,
