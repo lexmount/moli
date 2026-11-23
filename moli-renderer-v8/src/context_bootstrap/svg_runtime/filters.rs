@@ -1,10 +1,10 @@
 use moli_webapi_declare::WebApiFunctionTemplate;
 
-use super::SVG_URI_HREF_SLOT;
 use super::callbacks::{
-    svg_animated_string_attribute_getter, svg_filter_primitive_animated_length_getter,
-    svg_fit_to_view_box_getter,
+    svg_animated_string_attribute_getter, svg_animated_value_list_attribute_getter,
+    svg_filter_primitive_animated_length_getter, svg_fit_to_view_box_getter,
 };
+use super::{SVG_URI_HREF_SLOT, SvgListKind};
 use crate::{
     native_bridge::node_runtime_and_handle_from_object_or_detached,
     util::{callback_data_index_value, callback_data_item},
@@ -101,6 +101,27 @@ fn set_std_deviation<'s>(
     let _ = runtime.set_attribute(scope, runtime_ptr, handle, "stdDeviation", &value);
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGComponentTransferFunctionElement, enumerable)]
+struct ComponentTransferFunctionDeclaration {
+    #[webapi(accessor_property = "tableValues", getter = animated_number_list_getter, data = callback_data_index_value(scope, 0))]
+    table_values: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEColorMatrixElement, enumerable)]
+struct ColorMatrixNumberListDeclaration {
+    #[webapi(accessor_property = "values", getter = animated_number_list_getter, data = callback_data_index_value(scope, 1))]
+    values: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEConvolveMatrixElement, enumerable)]
+struct ConvolveMatrixNumberListDeclaration {
+    #[webapi(accessor_property = "kernelMatrix", getter = animated_number_list_getter, data = callback_data_index_value(scope, 2))]
+    kernel_matrix: (),
+}
+
 pub(super) fn install_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -108,6 +129,15 @@ pub(super) fn install_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match name {
+        "SVGComponentTransferFunctionElement" => {
+            ComponentTransferFunctionDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "SVGFEColorMatrixElement" => {
+            ColorMatrixNumberListDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "SVGFEConvolveMatrixElement" => {
+            ConvolveMatrixNumberListDeclaration::initialize_prototype_template(scope, prototype)
+        }
         "SVGFEComponentTransferElement" => {
             ComponentTransferDeclaration::initialize_prototype_template(scope, prototype)
         }
@@ -176,4 +206,33 @@ fn preserve_aspect_ratio_getter<'s>(
     };
     let scope = &mut v8::ContextScope::new(scope, context);
     svg_fit_to_view_box_getter(scope, args, rv);
+}
+
+fn animated_number_list_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some((slot, attribute)) = callback_data_item(
+        scope,
+        &args,
+        &[
+            ("__moliSvgFilterNumberListTableValues", "tableValues"),
+            ("__moliSvgFilterNumberListValues", "values"),
+            ("__moliSvgFilterNumberListKernelMatrix", "kernelMatrix"),
+        ],
+        "SVG filter number list attributes",
+    ) else {
+        return;
+    };
+    let owner = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("filter receiver validated by WebIDL");
+    svg_animated_value_list_attribute_getter(
+        scope,
+        owner,
+        rv,
+        slot,
+        attribute,
+        SvgListKind::Number,
+    );
 }

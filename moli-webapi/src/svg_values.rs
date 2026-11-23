@@ -44,6 +44,7 @@ pub const SVG_LENGTH_VALUE_AS_STRING_SLOT: &str = "__moliSvgLengthValueAsString"
 pub const SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT: &str = "__moliSvgLengthValueInSpecifiedUnits";
 pub const SVG_LENGTH_VALUE_SLOT: &str = "__moliSvgLengthValue";
 pub const SVG_NUMBER_VALUE_SLOT: &str = "__moliSvgNumberValue";
+pub const SVG_NUMBER_READ_ONLY_SLOT: &str = "__moliSvgNumberReadOnly";
 pub const SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT: &str = "__moliSvgPreserveAspectRatioAlign";
 pub const SVG_PRESERVE_ASPECT_RATIO_MEET_OR_SLICE_SLOT: &str =
     "__moliSvgPreserveAspectRatioMeetOrSlice";
@@ -105,6 +106,8 @@ struct SvgAnimatedIntegerObjectDeclaration {
 struct SvgNumberObjectDeclaration {
     #[webapi(slot = SVG_NUMBER_VALUE_SLOT)]
     value: f64,
+    #[webapi(slot = SVG_NUMBER_READ_ONLY_SLOT)]
+    read_only: bool,
 }
 
 #[derive(WebApiObject)]
@@ -302,7 +305,7 @@ pub fn build_svg_number<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: f64,
 ) -> v8::Local<'s, v8::Object> {
-    SvgNumberObjectDeclaration::new(value)
+    SvgNumberObjectDeclaration::new(f64::from(value as f32), false)
         .bind(scope)
         .expect("SVGNumber declaration should bind")
 }
