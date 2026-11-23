@@ -1,6 +1,5 @@
 use super::super::*;
 use crate::native_bridge::document::detached_native_handle_for_runtime;
-use crate::native_bridge::element::forms::text_control::normalize_textarea_api_value;
 use crate::util::utf16_len;
 
 fn textarea_string_attribute_getter<'s>(
@@ -117,23 +116,20 @@ pub(in crate::native_bridge) fn textarea_default_value_setter_function<'s>(
     ) else {
         return;
     };
-    let (old_default, current) = {
-        let runtime = unsafe { &*runtime_ptr };
-        (
-            node_direct_text_content(runtime, handle).unwrap_or_default(),
-            text_control_value(runtime, handle),
-        )
-    };
     if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
         set_reflected_attribute(scope, runtime_ptr, handle, "value", &next);
     }
     let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &next);
-    if current == normalize_textarea_api_value(&old_default) {
-        let _ = unsafe { &mut *runtime_ptr }.set_input_value_with_dirty(
-            handle,
-            &normalize_textarea_api_value(&next),
-            false,
-        );
+    // Child removal reactions can set .value and make the control dirty.
+    let runtime = unsafe { &mut *runtime_ptr };
+    if runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| !element.input_value_dirty())
+    {
+        let value = text_control_value(runtime, handle);
+        let _ = runtime.set_input_value_with_dirty(handle, &value, false);
     }
     rv.set_undefined();
 }
