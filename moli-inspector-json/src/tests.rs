@@ -412,3 +412,96 @@ fn inspector_protocol_surrogate_recovery_keeps_malformed_json_invalid() {
         assert!(decode_lossy_json(raw.as_bytes()).is_err(), "{raw}");
     }
 }
+
+#[test]
+fn escaped_utf16_payload_survives_envelope_rewrites_and_metadata_reads() {
+    let mut message = crate::InspectorJson::from_slice((r#"{"id":7,"result":{"result":{"type":"object","objectId":"native-id","description":"\ud800"},"nested":{"value":"\ud800","\udc00":"\ud801","objectId":"author-id"}}}"#).as_bytes()).unwrap();
+    assert!(!message.is_materialized());
+    #[derive(serde::Deserialize)]
+    struct NativeRemote {
+        #[serde(rename = "objectId")]
+        object_id: String,
+        description: Box<serde_json::value::RawValue>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ResponseMetadata {
+        result: NativeRemote,
+        nested: Box<serde_json::value::RawValue>,
+    }
+    // Scalar consumers decode their declared native result path; arbitrary
+    // author values remain opaque and cannot register Browser-side handles.
+    let metadata: ResponseMetadata = message.deserialize_field("result").unwrap().unwrap();
+    assert_eq!(metadata.result.object_id, "native-id");
+    assert_eq!(metadata.result.description.get(), r#""\ud800""#);
+    assert!(metadata.nested.get().contains("author-id"));
+    assert!(metadata.nested.get().contains(r#""\udc00":"\ud801""#));
+    assert!(!message.is_materialized());
+    message.set_id(41);
+    message.set_session_id(Some("session"));
+    let text = serde_json::to_string(&message).unwrap();
+    assert!(text.contains(r#""value":"\ud800""#));
+    assert!(text.contains(r#""\udc00":"\ud801""#));
+    let decoded = crate::InspectorJson::from_slice(text.as_bytes()).unwrap();
+    assert_eq!(decoded.id_u64(), Some(41));
+    assert_eq!(decoded.session_id(), Some("session"));
+}
+
+#[test]
+fn valid_unicode_business_view_and_malformed_json_are_distinct() {
+    let message = crate::InspectorJson::from_slice(
+        (r#"{"id":7,"result":{"value":"\ud83d\ude00"}}"#).as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(message.value()["result"]["value"], "😀");
+    for text in [
+        r#"{"id":7,"result":"\ud800",}"#,
+        r#"{"method":4,"params":"\ud800"}"#,
+        r#"{"params":"\uG000"}"#,
+    ] {
+        assert!(
+            crate::InspectorJson::from_slice((text).as_bytes()).is_err(),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn typed_field_reads_preserve_raw_wire_and_distinguish_lone_surrogates() {
+    #[derive(serde::Deserialize)]
+    struct ErrorText {
+        code: i32,
+        message: String,
+    }
+    for (wire, expected) in [
+        (
+            r#"{"id":7,"sessionId":"native-session","error":{"code":-32042,"message":"�"}}"#,
+            Some("�"),
+        ),
+        (
+            r#"{"id":7,"sessionId":"native-session","error":{"code":-32042,"message":"\ud800"}}"#,
+            None,
+        ),
+    ] {
+        let message = InspectorJson::from_slice(wire.as_bytes()).unwrap();
+        let before = message.to_string();
+        let text = message.deserialize_field::<ErrorText>("error");
+        match expected {
+            Some(expected) => {
+                let text = text.unwrap().unwrap();
+                assert_eq!(text.code, -32042);
+                assert_eq!(text.message, expected);
+            }
+            None => assert!(text.is_err()),
+        }
+        assert_eq!(message.deserialize_field::<u64>("id").unwrap(), Some(7));
+        assert_eq!(
+            message
+                .deserialize_field::<String>("sessionId")
+                .unwrap()
+                .as_deref(),
+            Some("native-session")
+        );
+        assert!(!message.is_materialized());
+        assert_eq!(message.to_string(), before);
+    }
+}
