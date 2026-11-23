@@ -59,11 +59,11 @@ mod bidi_handles;
 pub(crate) use bidi_handles::BidiHandleRelease;
 mod body_spool;
 mod browser_context;
+mod command_admission;
 mod command_owner_scope;
 mod command_view;
 mod command_wait_lifetime;
 mod command_workflow;
-mod session_command_admission;
 pub(crate) use command_workflow::{
     CommandWorkflowContext, CommandWorkflowContextReturn, CommandWorkflowFailureCleanup,
     CompletedCommandWorkflow, PreparedCommandWorkflow,

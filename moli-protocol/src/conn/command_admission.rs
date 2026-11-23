@@ -2,27 +2,27 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use super::CommandWaitLifetimeOwner;
 
-/// Bridges admission before a Page exists. Only the queue head can redispatch;
-/// the native ingress owns FIFO after that synchronous admission turn.
+/// Reserves turns in admission order. Dropping a reservation removes it from
+/// the queue and wakes its successor if it held the turn.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SessionCommandAdmissionQueue(Rc<RefCell<VecDeque<Rc<Admission>>>>);
+pub(crate) struct CommandAdmissionQueue(Rc<RefCell<VecDeque<Rc<Admission>>>>);
 
 #[derive(Debug)]
 struct Admission {
     ready: CommandWaitLifetimeOwner,
 }
 
-pub(crate) struct SessionCommandAdmission {
-    queue: SessionCommandAdmissionQueue,
+pub(crate) struct CommandAdmission {
+    queue: CommandAdmissionQueue,
     entry: Rc<Admission>,
 }
 
-impl SessionCommandAdmissionQueue {
+impl CommandAdmissionQueue {
     pub(crate) fn has_pending(&self) -> bool {
         !self.0.borrow().is_empty()
     }
 
-    pub(crate) fn reserve(&self) -> SessionCommandAdmission {
+    pub(crate) fn reserve(&self) -> CommandAdmission {
         let mut queue = self.0.borrow_mut();
         let entry = Rc::new(Admission {
             ready: Default::default(),
@@ -31,14 +31,14 @@ impl SessionCommandAdmissionQueue {
             entry.ready.revoke();
         }
         queue.push_back(entry.clone());
-        SessionCommandAdmission {
+        CommandAdmission {
             queue: self.clone(),
             entry,
         }
     }
 }
 
-impl SessionCommandAdmission {
+impl CommandAdmission {
     pub(crate) fn waits_for_predecessor(&self) -> bool {
         self.entry.ready.lifetime().is_active()
     }
@@ -48,7 +48,7 @@ impl SessionCommandAdmission {
     }
 }
 
-impl Drop for SessionCommandAdmission {
+impl Drop for CommandAdmission {
     fn drop(&mut self) {
         let mut queue = self.queue.0.borrow_mut();
         let position = queue
@@ -71,8 +71,8 @@ mod tests {
 
     #[tokio::test]
     async fn admission_keeps_fifo_through_cancellation_and_page_readiness() {
-        let main = SessionCommandAdmissionQueue::default();
-        let io = SessionCommandAdmissionQueue::default();
+        let main = CommandAdmissionQueue::default();
+        let io = CommandAdmissionQueue::default();
         let first = main.reserve();
         let canceled = main.reserve();
         let mut third = main.reserve();
@@ -105,7 +105,7 @@ mod tests {
 
     #[tokio::test]
     async fn canceling_the_tail_preserves_its_live_predecessor_and_churn_reclaims_the_chain() {
-        let queue = SessionCommandAdmissionQueue::default();
+        let queue = CommandAdmissionQueue::default();
         let held = queue.reserve();
         for _ in 0..4096 {
             drop(queue.reserve());
