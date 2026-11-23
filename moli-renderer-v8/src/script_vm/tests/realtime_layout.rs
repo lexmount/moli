@@ -276,6 +276,47 @@ fn realtime_plain_scroll_matches_a_fresh_layout_without_rebuilding() {
 }
 
 #[test]
+fn realtime_zoomed_rtl_scroll_matches_a_fresh_layout_without_rebuilding() {
+    let mut vm = realtime_vm(
+        "<!doctype html><div id=scroller style='direction:rtl;zoom:1.25;width:160px;\
+         height:50px;overflow:auto'><div id=target style='width:400px;height:20px'></div></div>",
+    );
+    let sample = "JSON.stringify([scroller.scrollLeft,target.getBoundingClientRect().left])";
+    let initial = vm.eval(sample).unwrap();
+    let (_, initial_left): (f64, f64) = serde_json::from_str(&initial).unwrap();
+    let mut builds = vm.layout_pass_observability_for_test().1;
+    let mut previous_left = initial_left;
+    for requested in [-37, -10_000, 0] {
+        let projected = vm
+            .eval(&format!("scroller.scrollLeft={requested};{sample}"))
+            .unwrap();
+        let (scroll_left, left): (f64, f64) = serde_json::from_str(&projected).unwrap();
+        match requested {
+            -37 => {
+                assert_eq!(scroll_left, -37.0);
+                assert!(left > initial_left);
+            }
+            -10_000 => {
+                assert!((-10_000.0..-37.0).contains(&scroll_left));
+                assert!(left > previous_left);
+            }
+            0 => assert_eq!(projected, initial),
+            _ => unreachable!(),
+        }
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+        let fresh = vm
+            .eval(&format!(
+                "target.dataset.layoutCheck='{requested}';{sample}"
+            ))
+            .unwrap();
+        assert_eq!(projected, fresh);
+        builds += 1;
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+        previous_left = left;
+    }
+}
+
+#[test]
 fn legacy_layout_modes_do_not_allocate_realtime_state_or_refresh_after_writes() {
     for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
         let mut vm = new_parsed_test_vm(

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, FrozenLayoutTree, LayoutError, LayoutPoint, LayoutViewport,
+    ScrollProjectionRefresh,
 };
 
 use super::layout_snapshot::LatestLayoutTreeCache;
@@ -239,7 +240,7 @@ impl DocumentLayoutState {
         #[cfg(feature = "devtools")] frame_geometry: impl FnOnce(
             &FrozenLayoutTree<DomHandle>,
         ) -> PublishedFrameGeometry,
-    ) -> Result<bool, LayoutError> {
+    ) -> Result<ScrollProjectionRefresh, LayoutError> {
         self.latest_layout.refresh_scroll_projection(
             document,
             offset,

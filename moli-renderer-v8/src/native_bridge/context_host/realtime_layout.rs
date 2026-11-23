@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 
 use moli_layout::{
     LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, LayoutViewport,
+    ScrollProjectionRefresh,
 };
 
 use super::realtime_animation_frames::RealtimeAnimationFrames;
@@ -282,20 +283,22 @@ impl PageScriptHost {
             .as_ref()
             .expect("Realtime policy installs its document state");
         let inputs = self.screen_layout_inputs(state)?;
-        if inputs.permits_reuse()
-            && state.published.borrow().as_ref() == Some(&inputs)
-            && (inputs.documents[0].root.is_none()
-                || self
-                    .document_layout_state
+        let document = self.document_handle();
+        if inputs.permits_reuse() && state.published.borrow().as_ref() == Some(&inputs) {
+            let reused = if inputs.documents[0].root.is_none() {
+                true
+            } else if state.scroll_projection_dirty.get() {
+                self.refresh_published_scroll_projection()? != ScrollProjectionRefresh::Unavailable
+            } else {
+                self.document_layout_state
                     .borrow()
-                    .latest_layout(self.document_handle())
-                    .is_some())
-            && (!state.scroll_projection_dirty.get()
-                || inputs.documents[0].root.is_none()
-                || self.refresh_published_scroll_projection()?)
-        {
-            state.scroll_projection_dirty.set(false);
-            return Ok(());
+                    .latest_layout(document)
+                    .is_some()
+            };
+            if reused {
+                state.scroll_projection_dirty.set(false);
+                return Ok(());
+            }
         }
 
         // Native invalidation/geometry only: no input dispatch, callbacks,
@@ -304,7 +307,6 @@ impl PageScriptHost {
         let request = LayoutPassRequest::new(inputs.viewport, reason)
             .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
             .with_scroll_projection(true);
-        let document = self.document_handle();
         let Some(pass) = self.build_layout_pass_for_document(document, request)? else {
             if self.screen_layout_inputs(state)? != inputs {
                 return Err(LayoutError::source_contract(
