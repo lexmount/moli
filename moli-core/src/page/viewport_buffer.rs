@@ -7,7 +7,6 @@ use moli_paint::{
 };
 use moli_renderer_v8::{
     RendererDocumentLifecycleIdentity, RendererViewportEditor, RendererViewportFrame,
-    RendererViewportNavigation,
 };
 use parking_lot::Mutex;
 use tokio::{sync::watch, task::JoinHandle};
@@ -162,10 +161,9 @@ impl ViewportOutput {
     }
 }
 
-/// Control-plane state associated with the subscribed viewport.
+/// Editor state associated with the subscribed viewport's painted document.
 pub struct ViewportState {
     pub document: RendererDocumentLifecycleIdentity,
-    pub navigation: RendererViewportNavigation,
     pub editor: Option<RendererViewportEditor>,
 }
 
@@ -174,7 +172,7 @@ pub enum ViewportUpdate {
     ResourceChanged,
 }
 
-/// Keeps the buffer binding active and exposes navigation and editing updates.
+/// Keeps the buffer binding active and exposes viewport editing updates.
 pub struct BufferedViewportFrames {
     frames: ViewportFrames,
     output: Arc<ViewportOutput>,
@@ -197,7 +195,6 @@ impl BufferedViewportFrames {
             .as_ref()
             .map(|frame| ViewportState {
                 document: frame.document,
-                navigation: frame.navigation.clone(),
                 editor: frame.editor.clone(),
             })
     }

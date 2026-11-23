@@ -2,11 +2,13 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use moli_core::{
-    LayoutPolicy, RendererViewportFrame, RendererViewportWheelInput, RendererViewportWheelPhase,
+    LayoutPolicy, RendererPageNavigationState, RendererViewportFrame, RendererViewportWheelInput,
+    RendererViewportWheelPhase,
     page::{PageInputExt, ViewportBuffers, ViewportFrames, ViewportOutput},
     protocol_types::{DocumentActivity, ViewportSurface},
     runtime::{Browser, BrowserConfig},
 };
+use tokio::sync::watch;
 
 fn html_url(html: &str) -> String {
     let html: String = url::form_urlencoded::byte_serialize(html.as_bytes()).collect();
@@ -26,6 +28,19 @@ async fn frame(
     .await??
     .clone()
     .context("viewport frame disappeared")
+}
+
+async fn page_state(
+    states: &mut watch::Receiver<Option<RendererPageNavigationState>>,
+    condition: impl Fn(&RendererPageNavigationState) -> bool,
+) -> Result<RendererPageNavigationState> {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        states.wait_for(|state| state.as_ref().is_some_and(&condition)),
+    )
+    .await??
+    .clone()
+    .context("viewport page state disappeared")
 }
 
 #[tokio::test]
@@ -111,9 +126,11 @@ async fn viewport_frames_follow_realtime_animation_and_document_replacement() ->
         device_pixel_ratio: 2.,
         ..ViewportSurface::default()
     };
+    let mut states = page.subscribe_navigation_state().await?;
     let mut frames = page.subscribe_viewport_frames(surface, 7).await?;
     let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
-    assert_eq!(first.navigation.title, "First");
+    let initial = page_state(&mut states, |state| state.document == first.document).await?;
+    assert_eq!(initial.navigation.title, "First");
     assert_eq!(first.viewport_revision, 7);
     let first_surface = first.snapshot.as_ref().context("first paint")?.surface;
     assert_eq!(first_surface.css_width, 320.);
@@ -126,13 +143,14 @@ async fn viewport_frames_follow_realtime_animation_and_document_replacement() ->
     let next_url = html_url("<title>Second</title><p>Document replacement</p>");
     let pending = page.start_viewport_navigation(Some(next_url.clone()))?;
     assert!(page.finish_viewport_navigation(pending.wait().await?)?);
-    let replacement = frame(&mut frames, |frame| frame.document != first.document).await?;
-    assert_eq!(replacement.navigation.title, "Second");
-    assert_eq!(replacement.navigation.url.as_str(), next_url);
-    assert!(replacement.navigation.can_go_back);
+    let state = page_state(&mut states, |state| state.navigation.title == "Second").await?;
+    assert_ne!(state.document, first.document);
+    assert_eq!(state.navigation.url.as_str(), next_url);
+    assert!(state.navigation.can_go_back);
+    let replacement = frame(&mut frames, |frame| frame.document == state.document).await?;
     assert_eq!(replacement.viewport_revision, 7);
     assert!(page.traverse_viewport_history(-1).await?);
-    let back = frame(&mut frames, |frame| frame.navigation.title == "First").await?;
+    let back = page_state(&mut states, |state| state.navigation.title == "First").await?;
     assert!(back.navigation.can_go_forward);
 
     page.set_document_activity_async(DocumentActivity::new(false, false))
@@ -194,17 +212,19 @@ async fn viewport_history_survives_link_and_form_navigation() -> Result<()> {
     ] {
         let original = html_url(&format!("<title>First</title>{control}"));
         let mut page = browser.fetch(&original).await?;
+        let mut states = page.subscribe_navigation_state().await?;
         let mut frames = page
             .subscribe_viewport_frames(ViewportSurface::default(), 1)
             .await?;
-        let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+        let initial = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+        let first = page_state(&mut states, |state| state.document == initial.document).await?;
         assert!(!first.navigation.can_go_back, "{label}");
 
         page.dispatch_mouse_event_at_point_async(16., 16., "mousedown", 0, Some(1), 0., 0.)
             .await?;
         page.dispatch_mouse_event_at_point_async(16., 16., "mouseup", 0, Some(0), 0., 0.)
             .await?;
-        let next = frame(&mut frames, |frame| frame.document != first.document).await?;
+        let next = page_state(&mut states, |state| state.document != first.document).await?;
         assert_eq!(next.navigation.url.path(), destination_path, "{label}");
         assert!(next.navigation.can_go_back, "{label}");
         assert!(!next.navigation.can_go_forward, "{label}");
@@ -218,16 +238,16 @@ async fn viewport_history_survives_link_and_form_navigation() -> Result<()> {
         );
 
         assert!(page.traverse_viewport_history(-1).await?, "{label}");
-        let back = frame(&mut frames, |frame| {
-            frame.navigation.url == first.navigation.url
+        let back = page_state(&mut states, |state| {
+            state.navigation.url == first.navigation.url
         })
         .await?;
         assert!(!back.navigation.can_go_back, "{label}");
         assert!(back.navigation.can_go_forward, "{label}");
 
         assert!(page.traverse_viewport_history(1).await?, "{label}");
-        let forward = frame(&mut frames, |frame| {
-            frame.navigation.url == next.navigation.url
+        let forward = page_state(&mut states, |state| {
+            state.navigation.url == next.navigation.url
         })
         .await?;
         assert!(forward.navigation.can_go_back, "{label}");
@@ -257,11 +277,17 @@ async fn viewport_history_uses_the_link_source_origin_for_same_url_navigation() 
         let mut page = browser.fetch(&previous).await?;
         page.evaluate_runtime_expression_async(&format!("location.assign({current:?})"))
             .await?;
+        let mut states = page.subscribe_navigation_state().await?;
         let mut frames = page
             .subscribe_viewport_frames(ViewportSurface::default(), 1)
             .await?;
-        let first = frame(&mut frames, |frame| {
-            frame.navigation.url.as_str() == current && frame.snapshot.is_some()
+        let first = page_state(&mut states, |state| {
+            state.navigation.url.as_str() == current
+        })
+        .await
+        .with_context(|| format!("{case} initial state"))?;
+        frame(&mut frames, |frame| {
+            frame.document == first.document && frame.snapshot.is_some()
         })
         .await
         .with_context(|| format!("{case} initial frame"))?;
@@ -317,9 +343,9 @@ async fn viewport_history_uses_the_link_source_origin_for_same_url_navigation() 
             .await?;
         page.dispatch_mouse_event_at_point_async(16., 16., "mouseup", 0, Some(0), 0., 0.)
             .await?;
-        let next = frame(&mut frames, |frame| frame.document != first.document)
+        let next = page_state(&mut states, |state| state.document != first.document)
             .await
-            .with_context(|| format!("{case} committed frame"))?;
+            .with_context(|| format!("{case} committed state"))?;
         assert_eq!(next.navigation.url.as_str(), current, "{case}");
         assert!(next.navigation.can_go_back, "{case}");
         let after = page
@@ -347,9 +373,9 @@ async fn viewport_history_uses_the_link_source_origin_for_same_url_navigation() 
         }
 
         assert!(page.traverse_viewport_history(-1).await?, "{case}");
-        let back = frame(&mut frames, |frame| frame.document != next.document)
+        let back = page_state(&mut states, |state| state.document != next.document)
             .await
-            .with_context(|| format!("{case} back frame"))?;
+            .with_context(|| format!("{case} back state"))?;
         assert_eq!(
             back.navigation.url.as_str(),
             if adds_entry { &current } else { &previous },
@@ -374,12 +400,13 @@ async fn viewport_history_keeps_the_page_before_scripted_form_submission() -> Re
         for submit in ["submit", "requestSubmit"] {
             let case = format!("{method} {submit} from {source}");
             let mut page = browser.fetch(&server.url(source)).await?;
-            let mut frames = page
+            let mut states = page.subscribe_navigation_state().await?;
+            let _frames = page
                 .subscribe_viewport_frames(ViewportSurface::default(), 1)
                 .await?;
-            let first = frame(&mut frames, |frame| frame.snapshot.is_some())
+            let first = page_state(&mut states, |_| true)
                 .await
-                .with_context(|| format!("{case} initial frame"))?;
+                .with_context(|| format!("{case} initial state"))?;
             assert!(!first.navigation.can_go_back, "{case}");
 
             let setup = format!(
@@ -403,9 +430,9 @@ async fn viewport_history_keeps_the_page_before_scripted_form_submission() -> Re
                 "document.querySelector('form').{submit}()"
             ))
             .await?;
-            let next = frame(&mut frames, |frame| frame.document != first.document)
+            let next = page_state(&mut states, |state| state.document != first.document)
                 .await
-                .with_context(|| format!("{case} submitted frame"))?;
+                .with_context(|| format!("{case} submitted state"))?;
             assert_eq!(
                 next.navigation.url.as_str(),
                 server.url(destination),
@@ -427,11 +454,11 @@ async fn viewport_history_keeps_the_page_before_scripted_form_submission() -> Re
             );
             assert!(next.navigation.can_go_back, "{case}");
             assert!(page.traverse_viewport_history(-1).await?, "{case}");
-            let back = frame(&mut frames, |frame| {
-                frame.document != next.document && frame.navigation.url == first.navigation.url
+            let back = page_state(&mut states, |state| {
+                state.document != next.document && state.navigation.url == first.navigation.url
             })
             .await
-            .with_context(|| format!("{case} back frame"))?;
+            .with_context(|| format!("{case} back state"))?;
             assert!(back.navigation.can_go_forward, "{case}");
         }
     }
@@ -458,11 +485,12 @@ async fn viewport_form_submission_during_load_replaces_the_current_entry() -> Re
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
     let mut page = browser.fetch(source.as_str()).await?;
-    let mut frames = page
+    let mut states = page.subscribe_navigation_state().await?;
+    let _frames = page
         .subscribe_viewport_frames(ViewportSurface::default(), 1)
         .await?;
-    let next = frame(&mut frames, |frame| {
-        frame.navigation.url.path() == "/net/echo"
+    let next = page_state(&mut states, |state| {
+        state.navigation.url.path() == "/net/echo"
     })
     .await?;
     let types = page
@@ -490,6 +518,7 @@ async fn viewport_history_honors_the_source_document_referrer_policy() -> Result
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
     let mut page = browser.fetch(source.as_str()).await?;
+    let mut states = page.subscribe_navigation_state().await?;
     let mut frames = page
         .subscribe_viewport_frames(ViewportSurface::default(), 1)
         .await?;
@@ -499,7 +528,7 @@ async fn viewport_history_honors_the_source_document_referrer_policy() -> Result
         .await?;
     page.dispatch_mouse_event_at_point_async(16., 16., "mouseup", 0, Some(0), 0., 0.)
         .await?;
-    let next = frame(&mut frames, |frame| frame.document != first.document).await?;
+    let next = page_state(&mut states, |state| state.document != first.document).await?;
     assert_eq!(next.navigation.url.path(), "/static");
     assert!(next.navigation.can_go_back);
     let urls = page
@@ -551,10 +580,11 @@ async fn viewport_navigation_activation_uses_the_final_redirect_origin() -> Resu
         );
 
         let mut page = browser.fetch(source.as_str()).await?;
-        let mut frames = page
+        let mut states = page.subscribe_navigation_state().await?;
+        let _frames = page
             .subscribe_viewport_frames(ViewportSurface::default(), 1)
             .await?;
-        let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+        let first = page_state(&mut states, |_| true).await?;
         let previous = page
             .evaluate_runtime_expression_async("navigation.currentEntry.key")
             .await?;
@@ -566,7 +596,7 @@ async fn viewport_navigation_activation_uses_the_final_redirect_origin() -> Resu
             "document.querySelector('a').click()".to_owned()
         };
         page.evaluate_runtime_expression_async(&navigate).await?;
-        let next = frame(&mut frames, |frame| frame.document != first.document).await?;
+        let next = page_state(&mut states, |state| state.document != first.document).await?;
         assert_eq!(next.navigation.url.as_str(), destination, "{case}");
         assert_eq!(next.navigation.can_go_back, !replace, "{case}");
 
@@ -601,43 +631,30 @@ async fn navigation_state_updates_without_painting_a_static_document() -> Result
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
     let mut page = browser.fetch(&server.url("/static")).await?;
-    let mut navigation = page.subscribe_navigation_state().await?;
+    let mut states = page.subscribe_navigation_state().await?;
     let mut frames = page
         .subscribe_viewport_frames(ViewportSurface::default(), 1)
         .await?;
-    let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+    let initial_frame = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+    let first = page_state(&mut states, |state| {
+        state.document == initial_frame.document
+    })
+    .await?;
     assert!(!first.navigation.can_go_back);
 
     page.evaluate_runtime_expression_async("history.pushState(null, '', '/pushed')")
         .await?;
-    let pushed = tokio::time::timeout(
-        Duration::from_secs(5),
-        navigation.wait_for(|state| {
-            state
-                .as_ref()
-                .is_some_and(|state| state.navigation.url.path() == "/pushed")
-        }),
-    )
-    .await??
-    .clone()
-    .context("pushed navigation state")?;
+    let pushed = page_state(&mut states, |state| {
+        state.navigation.url.path() == "/pushed"
+    })
+    .await?;
     assert_eq!(pushed.document, first.document);
     assert!(pushed.navigation.can_go_back);
     assert!(!pushed.navigation.can_go_forward);
     assert!(!frames.updates.has_changed()?);
 
     assert!(page.traverse_viewport_history(-1).await?);
-    let back = tokio::time::timeout(
-        Duration::from_secs(5),
-        navigation.wait_for(|state| {
-            state
-                .as_ref()
-                .is_some_and(|state| state.navigation.can_go_forward)
-        }),
-    )
-    .await??
-    .clone()
-    .context("traversed navigation state")?;
+    let back = page_state(&mut states, |state| state.navigation.can_go_forward).await?;
     assert_eq!(back.document, first.document);
     assert_eq!(back.navigation.url, first.navigation.url);
     assert!(!back.navigation.can_go_back);
@@ -645,9 +662,9 @@ async fn navigation_state_updates_without_painting_a_static_document() -> Result
 
     page.evaluate_runtime_expression_async("document.body.style.backgroundColor = 'red'")
         .await?;
-    let repainted = frame(&mut frames, |frame| frame.sequence > first.sequence).await?;
+    let repainted = frame(&mut frames, |frame| frame.sequence > initial_frame.sequence).await?;
     assert_eq!(repainted.document, first.document);
-    assert_ne!(repainted.snapshot, first.snapshot);
+    assert_ne!(repainted.snapshot, initial_frame.snapshot);
     Ok(())
 }
 
@@ -907,6 +924,7 @@ async fn viewport_file_drop_and_link_activation_use_the_current_document() -> Re
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
     let mut page = browser.fetch(&html_url(&html)).await?;
+    let mut states = page.subscribe_navigation_state().await?;
     let mut frames = page
         .subscribe_viewport_frames(ViewportSurface::default(), 1)
         .await?;
@@ -921,12 +939,12 @@ async fn viewport_file_drop_and_link_activation_use_the_current_document() -> Re
         page.drop_viewport_files(first.document, (16., 16.), vec![file.clone()], 0)
             .await?
     );
-    frame(&mut frames, |frame| frame.navigation.title == file.name).await?;
+    page_state(&mut states, |state| state.navigation.title == file.name).await?;
     page.dispatch_mouse_event_at_point_async(16., 16., "mousedown", 0, Some(1), 0., 0.)
         .await?;
     page.dispatch_mouse_event_at_point_async(16., 16., "mouseup", 0, Some(0), 0., 0.)
         .await?;
-    let navigated = frame(&mut frames, |frame| frame.document != first.document).await?;
+    let navigated = page_state(&mut states, |state| state.document != first.document).await?;
     assert_eq!(navigated.navigation.url.as_str(), next);
     assert!(
         !page

@@ -1143,6 +1143,8 @@ impl PageVmEnvConfig {
         final_url: &Url,
         headers: &[(String, Vec<u8>)],
     ) {
+        let document_referrer =
+            std::mem::take(&mut self.document_policy_container.document_referrer);
         self.document_policy_container =
             crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
                 headers, final_url,
@@ -1150,6 +1152,7 @@ impl PageVmEnvConfig {
             .with_content_security_policy_bypass(
                 self.document_settings.bypass_content_security_policy,
             );
+        self.document_policy_container.document_referrer = document_referrer;
         self.apply_main_document_commit_referrer();
         debug_assert!(
             self.document_policy_container

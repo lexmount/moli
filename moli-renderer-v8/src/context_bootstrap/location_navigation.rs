@@ -40,7 +40,7 @@ use super::navigation_window::{
     url_is_about_blank_document, window_history_for_holder, window_location_for_holder,
 };
 use super::*;
-use crate::native_bridge::NavigationHistoryEntrySeed;
+use crate::native_bridge::{LocationNavigationSource, NavigationHistoryEntrySeed};
 use crate::util::context_host_ptr_for_navigation_owner;
 use moli_page_types::{NavigationHistoryMutation, cross_document_navigation_seed};
 
@@ -134,8 +134,9 @@ pub(crate) fn queue_related_popup_navigation<'s>(
     window: v8::Local<'s, v8::Object>,
     target: url::Url,
     same_origin: bool,
-    initiator: crate::runtime::RendererNavigationInitiator,
-    environment: Option<crate::runtime::RendererCapturedDocumentEnvironment>,
+    navigation_source: LocationNavigationSource,
+    source_element: Option<v8::Local<'s, v8::Object>>,
+    user_initiated: bool,
 ) {
     let Some(context) = window.get_creation_context(scope) else {
         return;
@@ -143,11 +144,17 @@ pub(crate) fn queue_related_popup_navigation<'s>(
     let Some(host) = crate::util::context_host_ptr_from_context_slot(context) else {
         return;
     };
+    let can_dispatch_navigate_event =
+        same_origin && crate::native_bridge::caller_can_access_window(scope, window);
     let scope = &mut v8::ContextScope::new(scope, context);
     let window = context.global(scope);
-    let replace_current =
-        super::navigation_window::navigation_document_is_initial_empty(scope, window)
-            || (same_origin && unsafe { &*host }.document_url() == &target);
+    if navigation_unload_event_active(scope, window) {
+        return;
+    }
+    let current_url = unsafe { &*host }.document_url().clone();
+    let initial_empty =
+        super::navigation_window::navigation_document_is_initial_empty(scope, window);
+    let replace_current = initial_empty || (same_origin && current_url == target);
     if same_origin
         && navigate_top_level_same_document_from_browser(scope, target.to_string(), replace_current)
     {
@@ -158,10 +165,33 @@ pub(crate) fn queue_related_popup_navigation<'s>(
     } else {
         LocationNavigationKind::Assign
     };
-    let entry_seed = history_entry_seed_for_cross_document_location(scope, window, &target, kind);
-    let host = unsafe { &mut *host };
-    host.record_pending_location_navigation(target, entry_seed);
-    host.set_pending_location_navigation_source(initiator, environment);
+    // Same-origin access is checked in the source realm before entering the
+    // target context. The initial about:blank Document has no navigate event.
+    let navigate_event = (can_dispatch_navigate_event
+        && !initial_empty
+        && matches!(
+            target.scheme(),
+            "about" | "blob" | "data" | "file" | "http" | "https"
+        ))
+    .then(|| LocationNavigateEvent {
+        source_element,
+        user_initiated,
+        can_intercept: urls_equal_ignoring_fragment(&current_url, &target)
+            || (matches!(current_url.scheme(), "http" | "https")
+                && moli_url::same_origin(&current_url, &target)
+                && current_url.username() == target.username()
+                && current_url.password() == target.password()),
+    });
+    navigate_top_level_cross_document_location(
+        scope,
+        window,
+        None,
+        current_url.as_str(),
+        target,
+        kind,
+        navigate_event,
+        Some(navigation_source),
+    );
 }
 
 #[cfg(feature = "molio")]
@@ -617,59 +647,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     } else {
         child_browsing_context_handle_for_runtime_owner(scope, owner)
     };
-    if child_handle.is_none()
-        && let Some(navigation) =
-            super::navigation_window::window_navigation_for_holder(scope, owner)
-    {
-        let _ = cancel_active_navigation_event(scope, navigation);
-        cancel_active_intercepted_same_document_navigation(scope, navigation);
-        cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
-        let navigation_type = match kind {
-            LocationNavigationKind::Assign => "push",
-            LocationNavigationKind::Replace => "replace",
-            LocationNavigationKind::Reload => "reload",
-        };
-        let destination_state = if matches!(kind, LocationNavigationKind::Reload) {
-            navigation_current_entry(scope, owner)
-                .and_then(|entry| clone_navigation_entry_state(scope, entry))
-        } else {
-            None
-        };
-        let outcome = dispatch_navigation_navigate_event_with_outcome(
-            scope,
-            navigation,
-            resolved.as_str(),
-            navigation_type,
-            false,
-            false,
-            true,
-            false,
-            None,
-            destination_state,
-            None,
-            source_element,
-        );
-        if outcome.abort_error.is_some() {
-            return;
-        }
-        if !outcome.proceed {
-            finish_location_navigation_canceled(scope, navigation, &outcome, &current_href);
-            return;
-        }
-        cancel_pending_same_document_navigation_finishes(scope, navigation);
-        if outcome.intercepted {
-            commit_intercepted_location_navigation(
-                scope,
-                navigation,
-                outcome,
-                resolved.as_str(),
-                kind,
-                &current_href,
-            );
-            return;
-        }
-    }
-
     if let Some(handle) = child_handle {
         let is_javascript_url = resolved.scheme() == "javascript";
         let host_ptr = context_host_ptr_for_navigation_owner(scope, owner);
@@ -727,7 +704,94 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         return;
     }
 
-    if resolved.scheme() != "javascript" {
+    navigate_top_level_cross_document_location(
+        scope,
+        owner,
+        Some(location),
+        &current_href,
+        resolved,
+        kind,
+        Some(LocationNavigateEvent {
+            source_element,
+            user_initiated: false,
+            can_intercept: true,
+        }),
+        navigation_source,
+    );
+}
+
+struct LocationNavigateEvent<'s> {
+    source_element: Option<v8::Local<'s, v8::Object>>,
+    user_initiated: bool,
+    can_intercept: bool,
+}
+
+fn navigate_top_level_cross_document_location<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    location: Option<v8::Local<'s, v8::Object>>,
+    current_href: &str,
+    resolved: url::Url,
+    kind: LocationNavigationKind,
+    navigate_event: Option<LocationNavigateEvent<'s>>,
+    navigation_source: Option<LocationNavigationSource>,
+) {
+    if let Some(event) = navigate_event
+        && let Some(navigation) =
+            super::navigation_window::window_navigation_for_holder(scope, owner)
+    {
+        let _ = cancel_active_navigation_event(scope, navigation);
+        cancel_active_intercepted_same_document_navigation(scope, navigation);
+        cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
+        let navigation_type = match kind {
+            LocationNavigationKind::Assign => "push",
+            LocationNavigationKind::Replace => "replace",
+            LocationNavigationKind::Reload => "reload",
+        };
+        let destination_state = if matches!(kind, LocationNavigationKind::Reload) {
+            navigation_current_entry(scope, owner)
+                .and_then(|entry| clone_navigation_entry_state(scope, entry))
+        } else {
+            None
+        };
+        let outcome = dispatch_navigation_navigate_event_with_outcome(
+            scope,
+            navigation,
+            resolved.as_str(),
+            navigation_type,
+            false,
+            false,
+            event.can_intercept,
+            event.user_initiated,
+            None,
+            destination_state,
+            None,
+            event.source_element,
+        );
+        if outcome.abort_error.is_some() {
+            return;
+        }
+        if !outcome.proceed {
+            finish_location_navigation_canceled(scope, navigation, &outcome, current_href);
+            return;
+        }
+        cancel_pending_same_document_navigation_finishes(scope, navigation);
+        if outcome.intercepted {
+            commit_intercepted_location_navigation(
+                scope,
+                navigation,
+                outcome,
+                resolved.as_str(),
+                kind,
+                current_href,
+            );
+            return;
+        }
+    }
+
+    if let Some(location) = location
+        && resolved.scheme() != "javascript"
+    {
         sync_location_object(scope, location, resolved.as_str());
     }
 
@@ -757,10 +821,8 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         } else {
             moli_fetch::BrowserNavigationRequestKind::Navigate
         },
+        navigation_source,
     );
-    if let Some((initiator, environment)) = navigation_source {
-        unsafe { &mut *host_ptr }.set_pending_location_navigation_source(initiator, environment);
-    }
 }
 
 /// Cross-origin Location functions are borrowable onto any concrete Location.
@@ -804,10 +866,7 @@ fn capture_location_navigation_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     url: &url::Url,
-) -> Option<(
-    crate::runtime::RendererNavigationInitiator,
-    Option<crate::runtime::RendererCapturedDocumentEnvironment>,
-)> {
+) -> Option<LocationNavigationSource> {
     let source_context = scope.get_incumbent_context()?;
     let source_host = crate::util::context_host_ptr_from_context_slot(source_context)?;
     let target_host = crate::util::context_host_ptr_from_window_object(scope, target)?;
@@ -858,7 +917,10 @@ fn capture_location_navigation_source<'s>(
         policy,
         target_sandbox,
     ) {
-        Ok(environment) => Some((initiator, environment)),
+        Ok(initial_document_environment) => Some(LocationNavigationSource {
+            initiator,
+            initial_document_environment,
+        }),
         Err(error) => {
             tracing::debug!(%error, "Location initiator environment capture failed");
             None

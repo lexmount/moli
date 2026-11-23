@@ -15,6 +15,21 @@ pub(crate) struct OpenedRendererWindow<'s> {
 }
 
 impl<'s> OpenedRendererWindow<'s> {
+    pub(crate) fn into_activation(
+        self,
+        activation: RendererPendingPopupActivation,
+        initiator: crate::runtime::RendererNavigationInitiator,
+    ) -> RendererPendingPopupActivation {
+        activation
+            .with_navigation_initiator(initiator)
+            .with_browsing_context_name(self.name)
+            .with_same_origin_target(self.same_origin_with_target)
+            .with_initial_document_environment(self.initial_document_environment)
+            .with_auxiliary_window(self.window)
+            .with_pending_auxiliary_page(self.pending_page)
+            .with_initial_auxiliary_state(self.session_storage, self.initial_storage_key)
+    }
+
     /// Admit renderer-owned navigation before returning the WindowProxy to script.
     /// Returns true for a javascript: URL, which is hidden from browser navigation.
     pub(crate) fn queue_navigation(
@@ -23,6 +38,8 @@ impl<'s> OpenedRendererWindow<'s> {
         href: &str,
         initiator: &crate::runtime::RendererNavigationInitiator,
         navigation_owner: AuxiliaryNavigationOwner,
+        source_element: Option<v8::Local<'s, v8::Object>>,
+        user_initiated: bool,
     ) -> bool {
         let Ok(url) = Url::parse(href) else {
             return false;
@@ -42,8 +59,12 @@ impl<'s> OpenedRendererWindow<'s> {
                 self.window_proxy,
                 url,
                 self.same_origin_with_target == Some(true),
-                initiator.clone(),
-                self.initial_document_environment.clone(),
+                crate::native_bridge::LocationNavigationSource {
+                    initiator: initiator.clone(),
+                    initial_document_environment: self.initial_document_environment.clone(),
+                },
+                source_element,
+                user_initiated,
             );
         }
         false

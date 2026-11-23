@@ -276,13 +276,15 @@ fn hyperlink_popup_creator<'s>(
     None
 }
 
-fn navigate_hyperlink_popup_target(
-    scope: &mut v8::PinScope<'_, '_>,
+fn navigate_hyperlink_popup_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut PageScriptHost,
     source_handle: DomHandle,
     target_name: &str,
     resolved_url: &str,
     disposition: RendererPopupDisposition,
+    source_element: Option<v8::Local<'s, v8::Object>>,
+    user_initiated: bool,
 ) -> bool {
     let relations = hyperlink_popup_relations(unsafe { &*runtime_ptr }, source_handle, target_name);
     let Some(dispatch_scope) =
@@ -359,45 +361,42 @@ fn navigate_hyperlink_popup_target(
                 return false;
             }
         };
+        let user_gesture = runtime.protocol_user_gesture_activation();
         let disposition = if opened.pending_page.is_some()
-            || runtime.protocol_user_gesture_activation()
+            || user_gesture
             || runtime.current_input_event().is_some()
         {
             disposition
         } else {
             RendererPopupDisposition::Background
         };
-        let javascript_navigation =
-            opened.queue_navigation(scope, resolved_url, &navigation_initiator, navigation_owner);
         let window_open_event = opened.pending_page.is_some().then(|| {
-            RendererPendingWindowOpenEvent::browser_window(
-                resolved_url,
-                target_name,
-                runtime.protocol_user_gesture_activation(),
-            )
+            RendererPendingWindowOpenEvent::browser_window(resolved_url, target_name, user_gesture)
         });
+        let javascript_navigation = opened.queue_navigation(
+            scope,
+            resolved_url,
+            &navigation_initiator,
+            navigation_owner,
+            source_element,
+            user_initiated,
+        );
+        let activation = RendererPendingPopupActivation::window(
+            root_document,
+            source,
+            !relations.suppress_opener,
+            opened.window.as_ref().map(|window| window.id()),
+            if javascript_navigation {
+                "about:blank".to_owned()
+            } else {
+                resolved_url.to_owned()
+            },
+            target_name.to_owned(),
+            disposition,
+        )
+        .with_navigation_requested(!javascript_navigation);
         unsafe { &mut *runtime_ptr }.record_pending_popup_activation(
-            RendererPendingPopupActivation::window(
-                root_document,
-                source,
-                !relations.suppress_opener,
-                opened.window.as_ref().map(|window| window.id()),
-                if javascript_navigation {
-                    "about:blank".to_owned()
-                } else {
-                    resolved_url.to_owned()
-                },
-                target_name.to_owned(),
-                disposition,
-            )
-            .with_navigation_requested(!javascript_navigation)
-            .with_browsing_context_name(opened.name)
-            .with_navigation_initiator(navigation_initiator)
-            .with_initial_document_environment(opened.initial_document_environment)
-            .with_same_origin_target(opened.same_origin_with_target)
-            .with_auxiliary_window(opened.window)
-            .with_pending_auxiliary_page(opened.pending_page)
-            .with_initial_auxiliary_state(opened.session_storage, opened.initial_storage_key),
+            opened.into_activation(activation, navigation_initiator),
             window_open_event,
         );
         return true;
@@ -701,6 +700,8 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
             "_blank",
             resolved_url,
             popup_disposition,
+            source_element,
+            user_initiated,
         );
     }
     if let Some(target_name) = target_name
@@ -724,6 +725,8 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
             target_name,
             resolved_url,
             popup_disposition,
+            source_element,
+            user_initiated,
         );
     }
     let Some(dispatch_scope) =
