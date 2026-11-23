@@ -207,14 +207,20 @@ async fn run_lifecycle_without_followup_commands(
     messages
 }
 
-fn assert_cast_pixels(frame: &serde_json::Value, color: [u8; 4], inside_x: u32, outside_x: u32) {
+fn cast_pixels(frame: &serde_json::Value, inside_x: u32, outside_x: u32) -> ([u8; 4], [u8; 4]) {
     let bytes = BASE64_STANDARD
         .decode(frame["params"]["data"].as_str().unwrap())
         .unwrap();
     let (width, height, pixels) = decode_png(&bytes);
     assert_eq!((width, height), (64, 64));
-    assert_eq!(pixel(&pixels, width, inside_x, 10), color);
-    assert_eq!(pixel(&pixels, width, outside_x, 10), [255, 255, 255, 255]);
+    (
+        pixel(&pixels, width, inside_x, 10),
+        pixel(&pixels, width, outside_x, 10),
+    )
+}
+
+fn assert_cast_pixels(frame: &serde_json::Value, color: [u8; 4], inside_x: u32, outside_x: u32) {
+    assert_eq!(cast_pixels(frame, inside_x, outside_x), (color, [255; 4]));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -439,6 +445,152 @@ async fn websocket_realtime_screencast_updates_for_overlay_only_changes() {
         .await,
         15,
     );
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn websocket_screencast_discovers_css_image_after_debugger_resume() {
+    const WHITE: [u8; 4] = [255; 4];
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    let mut red_image = Vec::new();
+    let mut encoder = png::Encoder::new(&mut red_image, 1, 1);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&RED)
+        .unwrap();
+
+    let (image_requests, mut requested) = tokio::sync::mpsc::unbounded_channel();
+    let fixture = Router::new()
+        .route(
+            "/",
+            get(|| async {
+                axum::response::Html(
+                    "<!doctype html><style>body{margin:0;background:white} #target{width:20px;height:20px}</style><div id=target></div>",
+                )
+            }),
+        )
+        .route(
+            "/red.png",
+            get(move || {
+                let image_requests = image_requests.clone();
+                let red_image = red_image.clone();
+                async move {
+                    let _ = image_requests.send(());
+                    ([(header::CONTENT_TYPE, "image/png")], red_image)
+                }
+            }),
+        );
+    let (fixture_addr, _fixture_server) = spawn_dedicated_fixture_server(fixture, "paused-cast");
+    let (addr, server) = spawn_test_protocol_server_with_image_fetch_enabled(true).await;
+    let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let target = open_screenshot_target(&mut socket, &format!("http://{fixture_addr}/")).await;
+    let session = target.session_id.as_str();
+    for (id, method, params) in [
+        (
+            7,
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width":64,"height":64,"deviceScaleFactor":1,"mobile":false}),
+        ),
+        (8, "Debugger.enable", json!({})),
+    ] {
+        assert_cdp_success(
+            &send_cdp_command(&mut socket, id, method, Some(session), params).await,
+            id,
+        );
+    }
+    let started = send_cdp_command(
+        &mut socket,
+        9,
+        "Page.startScreencast",
+        Some(session),
+        json!({"format":"png","maxWidth":64,"maxHeight":64,"everyNthFrame":1}),
+    )
+    .await;
+    assert_cdp_success(&started, 9);
+    let (frame, _) = receive_cast(&mut socket, session, started).await;
+    assert_cast_pixels(&frame, WHITE, 10, 30);
+    let ack = send_cdp_command(
+        &mut socket,
+        10,
+        "Page.screencastFrameAck",
+        Some(session),
+        json!({"sessionId":frame["params"]["sessionId"]}),
+    )
+    .await;
+    assert_cdp_success(&ack, 10);
+
+    send_cdp_command_without_wait(
+        &mut socket,
+        11,
+        "Runtime.evaluate",
+        Some(session),
+        json!({"expression":"document.getElementById('target').style.backgroundImage = 'url(/red.png)'; debugger;"}),
+    )
+    .await;
+    let paused = recv_until_match(&mut socket, |message| {
+        message["sessionId"] == session && message["method"] == "Debugger.paused"
+    })
+    .await;
+    let (frame, paused) = receive_cast(&mut socket, session, paused).await;
+    assert_cast_pixels(&frame, WHITE, 10, 30);
+    assert!(!paused.iter().any(|message| message["id"] == 11));
+    let mut messages = send_cdp_command(
+        &mut socket,
+        12,
+        "Page.screencastFrameAck",
+        Some(session),
+        json!({"sessionId":frame["params"]["sessionId"]}),
+    )
+    .await;
+    assert_cdp_success(&messages, 12);
+    assert!(
+        matches!(
+            requested.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ),
+        "paused screencast must defer the image request"
+    );
+
+    let resumed =
+        send_cdp_command(&mut socket, 13, "Debugger.resume", Some(session), json!({})).await;
+    assert_cdp_success(&resumed, 13);
+    messages.extend(resumed);
+    // Keep the page static. The scheduled poll must get past the visual-state
+    // check and discover the image without an explicit capture.
+    timeout(Duration::from_secs(10), requested.recv())
+        .await
+        .expect("screencast should request the CSS image after resuming")
+        .expect("image fixture is still running");
+    timeout(Duration::from_secs(10), async {
+        let mut ack_id = 14;
+        loop {
+            let (frame, _) = receive_cast(&mut socket, session, messages).await;
+            let (inside, outside) = cast_pixels(&frame, 10, 30);
+            assert_eq!(outside, WHITE);
+            if inside == RED {
+                break;
+            }
+            assert_eq!(inside, WHITE);
+            messages = send_cdp_command(
+                &mut socket,
+                ack_id,
+                "Page.screencastFrameAck",
+                Some(session),
+                json!({"sessionId":frame["params"]["sessionId"]}),
+            )
+            .await;
+            assert_cdp_success(&messages, ack_id);
+            ack_id += 1;
+        }
+    })
+    .await
+    .expect("screencast should paint the CSS image");
+
     let _ = socket.close(None).await;
     abort_test_cdp_server(server).await;
 }
