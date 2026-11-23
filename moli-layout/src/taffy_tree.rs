@@ -2007,25 +2007,31 @@ where
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
         let id = LayoutBoxId::from_taffy(node_id);
-        if inputs.run_mode == RunMode::ComputeSize
-            && !self.measure_baselines
-            && matches!(
-                inputs.sizing_purpose,
-                SizingPurpose::IntrinsicContribution | SizingPurpose::ContentProbe
-            )
-            && let Some(output) = self.measure_contained_intrinsic_size(id, inputs)
-        {
-            return output;
-        }
         let layout_box = &self.boxes[id.index()];
         let kind = layout_box.kind;
         let display = layout_box.style.display();
         let inline_formatting_context = layout_box.inline_formatting_context;
         let is_replaced = layout_box.is_replaced();
-
         if is_replaced {
             return self.compute_leaf(id, inputs);
         }
+        let inputs = if let Some(axes) = layout_box.size_query_axes() {
+            let contains_requested_axes = match inputs.axis {
+                taffy::RequestedAxis::Horizontal => axes.width,
+                taffy::RequestedAxis::Vertical => axes.height,
+                taffy::RequestedAxis::Both => axes.width && axes.height,
+            };
+            if inputs.run_mode == RunMode::ComputeSize
+                && !self.measure_baselines
+                && inputs.sizing_purpose != SizingPurpose::Layout
+                && contains_requested_axes
+            {
+                return self.measure_size_contained_box(id, inputs, axes);
+            }
+            self.resolve_size_contained_layout(id, inputs, axes)
+        } else {
+            inputs
+        };
 
         if inline_formatting_context {
             return self.compute_inline_formatting_context(id, inputs, block_context);
@@ -2427,7 +2433,10 @@ where
             block_auto_behavior: AutoSizeBehavior::FitContent,
             vertical_margins_are_collapsible: Line::FALSE,
         };
-        if self.table_cell_percentage_height == Some((owner, false)) {
+        if self.table_cell_percentage_height == Some((owner, false))
+            || (inputs.known_dimensions.height.is_some()
+                && !inputs.known_dimensions_are_definite.height)
+        {
             child_inputs.parent_size.height = None;
         }
         // A float's max-content contribution is measured independently from

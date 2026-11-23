@@ -150,6 +150,50 @@ fn realtime_publication_inline_block_query_size_excludes_child_intrinsic_width()
 }
 
 #[test]
+fn realtime_publication_query_size_containment_keeps_explicit_grid_tracks() {
+    let (mut vm, _) = fixture(
+        r#"<!doctype html><style>
+        .grid { display: inline-grid; container-type: size;
+                grid-template-columns: 100px auto; grid-template-rows: 50px auto }
+        #item { grid-area: 2 / 2; width: 200px; height: 150px }
+        #fallback { contain-intrinsic-width: 25px }
+        </style>
+        <div id=empty class=grid></div>
+        <div id=populated class=grid><div id=item></div></div>
+        <div id=fallback class=grid></div>"#,
+    );
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([empty, populated, item, fallback].map(el => [el.offsetWidth, el.offsetHeight]))",
+        )
+        .unwrap(),
+        "[[100,50],[100,50],[200,150],[25,50]]"
+    );
+}
+
+#[test]
+fn realtime_publication_query_size_containment_excludes_children_from_auto_block_size() {
+    let (mut vm, viewport) = fixture(
+        r#"<!doctype html><style>
+        .box { container-type: size; width: 200px }
+        #child { height: 300px }
+        @container (height >= 200px) { #child { height: 100px } }
+        #fallback { contain-intrinsic-height: 40px; padding: 2px; border: 1px solid }
+        #overflow, #ratioChild { height: 50% }
+        #ratio { aspect-ratio: 2 }
+        </style>
+        <div id=box class=box><div id=child></div></div>
+        <div id=fallback class=box><div id=overflow><div style="height:80px"></div></div></div>
+        <div id=ratio class=box><div id=ratioChild></div></div>"#,
+    );
+    let read = "JSON.stringify([box, child, fallback, overflow, ratio, ratioChild].map(el => el.offsetHeight))";
+    assert_eq!(vm.eval(read).unwrap(), "[0,300,46,80,100,50]");
+    vm.eval("child.style.height = '400px'").unwrap();
+    assert_eq!(vm.eval(read).unwrap(), "[0,400,46,80,100,50]");
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+}
+
+#[test]
 fn realtime_publication_transient_intent_does_not_publish_even_with_screenshot_reason() {
     let (mut vm, viewport) = fixture("<!doctype html><div id=target style='width:100px'></div>");
     assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "100");
