@@ -137,6 +137,17 @@ pub struct RendererPopupActivationParts {
     pub initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
 }
 
+#[cfg(feature = "molio")]
+impl RendererPopupActivationParts {
+    /// Returns the Window identity captured for the selected browsing context.
+    pub fn window_identity(&self) -> Option<super::RendererPageWindowIdentity> {
+        Some(super::RendererPageWindowIdentity::new(
+            self.browsing_context_name.clone()?,
+            self.auxiliary_window.clone(),
+        ))
+    }
+}
+
 impl RendererPendingPopupActivation {
     pub(crate) fn with_same_origin_target(mut self, same_origin: Option<bool>) -> Self {
         self.parts.same_origin_with_target = same_origin;
