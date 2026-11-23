@@ -102,15 +102,22 @@ pub struct LayoutScrollIntoViewGeometry<N> {
     pub scroll_containers: Vec<LayoutScrollContainerMetrics<N>>,
 }
 
+/// An ancestor clip mapped into viewport CSS pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayoutIntersectionClip {
+    pub rect: LayoutQuad,
+    pub is_scrollport: bool,
+}
+
 /// Owned inputs for one IntersectionObserver target/root pair.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutIntersectionGeometry {
     pub target_rects: Vec<LayoutQuad>,
     pub root_rect: LayoutQuad,
-    pub ancestor_clips: Vec<LayoutQuad>,
+    pub ancestor_clips: Vec<LayoutIntersectionClip>,
     pub target_has_layout: bool,
     pub target_visible: bool,
-    pub root_clips_overflow: bool,
+    pub root_is_scroll_container: bool,
     pub root_is_layout_ancestor: bool,
 }
 

@@ -25,6 +25,61 @@ async fn notify(page: &mut PageVm, loader: &crate::network::ResourceRequestClien
 }
 
 #[test]
+fn realtime_io_css_clip_respects_root_boundary_and_scroll_margin() {
+    run_page_vm_large_stack_async_test("realtime-io-css-clip", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        page.vm_mut()
+            .eval(
+                r#"
+                document.body.innerHTML = `<style>
+                #outer, #own-root, #scroller, #non-scroller {
+                    position: absolute; top: 10px; width: 100px; height: 100px;
+                }
+                #outer { left: 20px; clip: rect(0, 30px, 100px, 0) }
+                #root { position: relative; width: 100px; height: 100px }
+                #own-root { left: 180px; clip: rect(0, 20px, 100px, 0) }
+                #scroller { left: 20px; top: 140px; width: 60px; overflow: hidden }
+                #non-scroller { left: 180px; top: 140px; width: 60px; overflow: clip }
+                .target { position: absolute; left: 40px; top: 15px; width: 20px; height: 20px }
+                #scroller .target, #non-scroller .target { left: 70px }
+                </style>
+                <div id=outer><div id=root><div id=target class=target></div></div></div>
+                <div id=own-root><div id=own-target class=target></div></div>
+                <div id=scroller><div id=scroll-target class=target></div></div>
+                <div id=non-scroller><div id=non-scroll-target class=target></div></div>`;
+                const byId = id => document.getElementById(id);
+                const withMargin = {scrollMargin: '100px'};
+                window.results = [];
+                [
+                    ['target', {root: byId('root')}],
+                    ['own-target', {root: byId('own-root')}],
+                    ['own-target', withMargin],
+                    ['scroll-target', withMargin],
+                    ['non-scroll-target', withMargin],
+                    ['non-scroll-target', {...withMargin, root: byId('non-scroller')}],
+                    ['scroll-target', {...withMargin, root: byId('scroller')}],
+                ].forEach(([id, options], index) => {
+                    const observer = new IntersectionObserver(([entry]) => {
+                        results[index] = [entry.intersectionRatio, entry.isIntersecting];
+                        if (options.root === byId('scroller')) results[index].push(entry.rootBounds.width);
+                        observer.disconnect();
+                    }, options);
+                    observer.observe(byId(id));
+                });"#,
+            )
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        notify(&mut page, &loader).await;
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify(results)").unwrap(),
+            "[[1,true],[1,true],[0,false],[1,true],[0,false],[0,false],[1,true,60]]"
+        );
+    });
+}
+
+#[test]
 fn realtime_io_delay_resumes_at_the_earliest_due_sample_without_polling() {
     run_page_vm_large_stack_async_test("realtime-io-delay", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

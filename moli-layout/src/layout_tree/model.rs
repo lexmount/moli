@@ -336,20 +336,32 @@ impl From<LayoutCoordinateSpace> for FrozenCoordinateSpace {
     }
 }
 
+/// Source of a clip in the layout and paint trees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutClipKind {
+    Viewport,
+    /// A box's descendant clip, including overflow and paint containment.
+    Overflow(LayoutOutputBoxId),
+    /// The rectangular CSS `clip` property on a positioned box.
+    CssRect(LayoutOutputBoxId),
+}
+
+impl LayoutClipKind {
+    pub(crate) fn owner(self) -> Option<LayoutOutputBoxId> {
+        match self {
+            Self::Viewport => None,
+            Self::Overflow(owner) | Self::CssRect(owner) => Some(owner),
+        }
+    }
+}
+
 /// One rectangular clip linked to its ancestor clip.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutClipNode {
     pub parent: Option<LayoutClipChainId>,
-    /// The box supplying border radii for an overflow clip.
-    pub owner: Option<LayoutOutputBoxId>,
+    pub kind: LayoutClipKind,
     pub coordinate_space: LayoutCoordinateSpaceId,
     pub rect: LayoutRect,
-}
-
-impl LayoutClipNode {
-    pub(crate) fn is_viewport(&self) -> bool {
-        self.coordinate_space == LayoutCoordinateSpaceId::from_index(0)
-    }
 }
 
 /// Complete physical box model for one tree-local CSS box.

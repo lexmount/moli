@@ -316,7 +316,7 @@ fn mock_intersection_geometry(
         ancestor_clips: Vec::new(),
         target_has_layout: true,
         target_visible: target_rect.width > 0.0 && target_rect.height > 0.0,
-        root_clips_overflow: false,
+        root_is_scroll_container: false,
         root_is_layout_ancestor,
     })
 }

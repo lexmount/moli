@@ -353,20 +353,23 @@ fn real_intersection_entry_metrics(
         &options.root_margin,
         root_rect.width,
     ));
-    if geometry.is_some_and(|geometry| geometry.root_clips_overflow) {
-        root_rect = root_rect.expand_by_margin(super::root_margin_components(
+    let mut clip_bounds = root_rect;
+    if geometry.is_some_and(|geometry| geometry.root_is_scroll_container) {
+        clip_bounds = clip_bounds.expand_by_margin(super::root_margin_components(
             &options.scroll_margin,
-            root_rect.width,
+            clip_bounds.width,
         ));
     }
-    let mut clip_bounds = root_rect;
     if let Some(geometry) = geometry {
         for clip in &geometry.ancestor_clips {
-            let clip = rect_from_quad(*clip).expand_by_margin(super::root_margin_components(
-                &options.scroll_margin,
-                rect_from_quad(*clip).width,
-            ));
-            clip_bounds = clip_bounds.intersection_bounds(clip);
+            let mut rect = rect_from_quad(clip.rect);
+            if clip.is_scrollport {
+                rect = rect.expand_by_margin(super::root_margin_components(
+                    &options.scroll_margin,
+                    rect.width,
+                ));
+            }
+            clip_bounds = clip_bounds.intersection_bounds(rect);
         }
     }
     let observable = target_is_intersection_observable(dom_host, target, options)

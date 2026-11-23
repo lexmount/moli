@@ -31,12 +31,12 @@ use crate::stacking::{PaintOrderEvent, build_paint_order};
 use crate::style::ResolvedLayoutTransform;
 use crate::{
     FrozenCoordinateSpace, FrozenLayoutBox, FrozenLayoutTree, LayoutAnonymousReason,
-    LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId,
-    LayoutError, LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId,
-    LayoutFragmentKind, LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult, LayoutPoint,
-    LayoutRect, LayoutScrollExtent, LayoutScrollbarAxis, LayoutScrollbarGeometry, LayoutSize,
-    LayoutTransform2D, LayoutViewport, LayoutWorld, PaintCaptureRequest, PaintDiagnostic,
-    PaintDiagnosticSeverity,
+    LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId, LayoutClipKind, LayoutClipNode,
+    LayoutCoordinateSpaceId, LayoutError, LayoutFlushReason, LayoutFragment,
+    LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId,
+    LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutRect, LayoutScrollExtent,
+    LayoutScrollbarAxis, LayoutScrollbarGeometry, LayoutSize, LayoutTransform2D, LayoutViewport,
+    LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity,
 };
 
 pub(crate) struct LayoutPassPhaseMetrics {
@@ -777,7 +777,7 @@ where
         let viewport_space = LayoutCoordinateSpaceId::from_index(0);
         let viewport_clip = self.push_clip(
             None,
-            None,
+            LayoutClipKind::Viewport,
             viewport_space,
             self.scroll_extents[self.world.root.index()].scrollport,
         );
@@ -923,7 +923,7 @@ where
                 let mut ancestor = positioned_clip;
                 while let Some(id) = ancestor {
                     let clip = &self.clip_chain[id.index()];
-                    if clip.owner.is_none() && clip.coordinate_space == legacy.coordinate_space {
+                    if clip.kind == legacy.kind {
                         break;
                     }
                     ancestor = clip.parent;
@@ -931,7 +931,7 @@ where
                 if ancestor.is_none() {
                     positioned_clip = Some(self.push_clip(
                         positioned_clip,
-                        None,
+                        legacy.kind,
                         legacy.coordinate_space,
                         legacy.rect,
                     ));
@@ -944,8 +944,14 @@ where
         let legacy_rect = self.world.boxes[index]
             .style
             .legacy_clip_rect(self.boxes[index].border_box);
+        let owner = LayoutOutputBoxId::from_index(index);
         if let Some(rect) = legacy_rect {
-            let clip = self.push_clip(box_clip, None, self.boxes[index].coordinate_space, rect);
+            let clip = self.push_clip(
+                box_clip,
+                LayoutClipKind::CssRect(owner),
+                self.boxes[index].coordinate_space,
+                rect,
+            );
             box_clip = Some(clip);
             legacy_clips.push(clip);
         }
@@ -958,7 +964,7 @@ where
         {
             Some(self.push_clip(
                 box_clip,
-                Some(LayoutOutputBoxId::from_index(index)),
+                LayoutClipKind::Overflow(owner),
                 self.boxes[index].coordinate_space,
                 self.scroll_extents[index].scrollport,
             ))
@@ -1001,14 +1007,14 @@ where
     fn push_clip(
         &mut self,
         parent: Option<LayoutClipChainId>,
-        owner: Option<LayoutOutputBoxId>,
+        kind: LayoutClipKind,
         coordinate_space: LayoutCoordinateSpaceId,
         rect: LayoutRect,
     ) -> LayoutClipChainId {
         let id = LayoutClipChainId::from_index(self.clip_chain.len());
         self.clip_chain.push(LayoutClipNode {
             parent,
-            owner,
+            kind,
             coordinate_space,
             rect,
         });
