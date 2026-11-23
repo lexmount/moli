@@ -68,6 +68,7 @@ from .any_js import (
 from .case_set import (
     ANY_JS_WINDOW_QUERY_NAME,
     ANY_JS_WINDOW_QUERY_VALUE,
+    IMAGE_AND_STASH_PATH,
     WINDOW_JS_WINDOW_QUERY_NAME,
     WINDOW_JS_WINDOW_QUERY_VALUE,
     parse_any_js_meta,
@@ -1675,6 +1676,11 @@ class FetchStash:
             self._values[parsed_key] = value
             return value
 
+    def read_count(self, key: str, *, path: str) -> int:
+        parsed_key = (path, uuid.UUID(key))
+        with self._lock:
+            return int(self._values.get(parsed_key, 0))
+
     def exchange_queue(self, key: str, value: bytes | None = None, *, path: str) -> bytes | None:
         """Atomically append a message or take the oldest message in a stash queue."""
         parsed_key = (path, uuid.UUID(key))
@@ -1956,14 +1962,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return False
             # Like the upstream handler, respond without consuming an upload.
             self.close_connection = True
-            try:
-                operations = _pipe_response_header_operations(parsed.query)
-                pipe_status = _pipe_response_status(parsed.query)
-                delay = _pipe_trickle_delay_seconds(parsed.query)
-                trickle = any(name == "trickle" for name, _ in parse_pipe_commands(parsed.query))
-            except WptPipeError:
-                self.send_error(500)
-                return True
             # 304 deliberately omits TAO/CORS/cache headers: the client must
             # reuse cached metadata unless the request explicitly overrides it.
             if self.headers.get("If-None-Match") == "123abc":
@@ -1983,24 +1981,41 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     ("Timing-Allow-Origin", "*"),
                     ("ETag", "123abc"),
                 ]
+            self._send_piped_fixture_response(parsed.query, status, headers, font)
+            return True
+
+        def _send_piped_fixture_response(
+            self,
+            query: str,
+            status: int,
+            headers: list[tuple[str, str]],
+            body: bytes,
+        ) -> None:
+            try:
+                operations = _pipe_response_header_operations(query)
+                pipe_status = _pipe_response_status(query)
+                delay = _pipe_trickle_delay_seconds(query)
+                trickle = any(name == "trickle" for name, _ in parse_pipe_commands(query))
+            except WptPipeError:
+                self.send_error(500)
+                return
             headers = _apply_header_operations(headers, operations)
             status = pipe_status or status
             emit_body = self.command != "HEAD" and status not in {204, 304}
             self._send_bytes(
-                None, font, emit_body=emit_body and not trickle,
+                None, body, emit_body=emit_body and not trickle,
                 extra_headers=headers, status_code=status, cache_control=None,
                 auto_content_length=status != 304 and not trickle,
             )
             if emit_body and trickle:
-                # The font timestamp test needs headers before the body delay.
+                # Trickle keeps the request pending after sending the headers.
                 self.wfile.flush()
                 if delay:
                     time.sleep(delay)
                 try:
-                    self.wfile.write(font)
+                    self.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
-            return True
 
         def _serve_document_charset_resource(self) -> bool:
             path = unquote(urlsplit(self.path).path)
@@ -2041,6 +2056,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_common_redirect_resource():
                 return
             if self._serve_preload_count_resource():
+                return
+            if self._serve_image_stash_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
@@ -2095,6 +2112,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_common_redirect_resource():
                 return
             if self._serve_preload_count_resource():
+                return
+            if self._serve_image_stash_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
@@ -2191,6 +2210,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_preload_count_resource():
                 return
+            if self._serve_image_stash_resource():
+                return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
             parsed = urlparse(self.path)
@@ -2255,6 +2276,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_common_redirect_resource():
                 return
             if self._serve_preload_count_resource():
+                return
+            if self._serve_image_stash_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
@@ -2448,6 +2471,31 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
             return True
 
+        def _serve_image_stash_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != IMAGE_AND_STASH_PATH:
+                return False
+            self.close_connection = True
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            status, headers = 200, []
+            try:
+                if "increment" in params:
+                    fetch_stash.increment(params["increment"][0], path=parsed.path)
+                    source = (wpt_root / IMAGE_AND_STASH_PATH.lstrip("/")).with_name("image.png").resolve()
+                    source.relative_to(wpt_root)
+                    body = source.read_bytes()
+                    headers = [("Content-Type", "image/png")]
+                elif "read" in params:
+                    count = fetch_stash.read_count(params["read"][0], path=parsed.path)
+                    body = str(count).encode("ascii")
+                else:
+                    status, body = 404, b"Not found"
+            except (OSError, ValueError):
+                self.send_error(500)
+                return True
+            self._send_piped_fixture_response(parsed.query, status, headers, body)
+            return True
+
         def _serve_service_worker_request_headers_resource(self) -> bool:
             parsed = urlsplit(self.path)
             if unquote(parsed.path) != SERVICE_WORKER_REQUEST_HEADERS_PATH:
@@ -2514,6 +2562,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_common_redirect_resource():
                 return
             if self._serve_preload_count_resource():
+                return
+            if self._serve_image_stash_resource():
                 return
             if self._serve_empty_location_resource(emit_body=emit_body):
                 return
@@ -3449,6 +3499,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     return self._serve_remote_context_resource
                 if path == PRELOAD_COUNT_PATH:
                     return self._serve_preload_count_resource
+                if path == IMAGE_AND_STASH_PATH:
+                    return self._serve_image_stash_resource
                 if path == FETCH_EMPTY_LOCATION_PATH:
                     return self._serve_empty_location_resource
                 if path == FETCH_CONTENT_TYPE_PATH:
