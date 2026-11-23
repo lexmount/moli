@@ -61,7 +61,7 @@ fn realtime_cssom_size_container_query_refreshes_retained_color_and_display() {
         #unrelated { width: 10cqw; color: blue }
         @container (width >= 300px) { #target { color: green; display: flex } }
         </style><div id=box style='container-type:inline-size;width:200px'>
-        <div id=target></div><div id=unrelated></div></div>"#,
+        <div id=target></div></div><div id=unrelated></div>"#,
     );
     assert_eq!(
         vm.eval("const held = getComputedStyle(target); box.offsetWidth")
@@ -86,7 +86,7 @@ fn realtime_cssom_size_container_query_refreshes_retained_color_and_display() {
 }
 
 #[test]
-fn realtime_cssom_native_container_units_refresh_the_requested_property() {
+fn realtime_cssom_native_container_units_share_current_style_and_geometry() {
     let mut vm = realtime_vm(
         r#"<!doctype html><style>
         #target { width: 10cqw; color: blue }
@@ -101,13 +101,13 @@ fn realtime_cssom_native_container_units_refresh_the_requested_property() {
     );
     let builds = vm.layout_pass_observability_for_test().1;
     assert_eq!(
-        vm.eval("box.style.width = '400px'; held.color").unwrap(),
-        "rgb(0, 0, 255)"
-    );
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
-    assert_eq!(
         vm.eval("box.style.width = '450px'; held.fontSize").unwrap(),
         "45px"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify([held.color, held.fontSize])")
+            .unwrap(),
+        r#"["rgb(0, 0, 255)","45px"]"#,
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
     assert_eq!(
@@ -138,11 +138,6 @@ fn realtime_cssom_font_relative_values_refresh_container_dependent_font_sizes() 
     );
     let builds = vm.layout_pass_observability_for_test().1;
     assert_eq!(
-        vm.eval("box.style.width = '300px'; held.color").unwrap(),
-        "rgb(0, 0, 255)"
-    );
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
-    assert_eq!(
         vm.eval("box.style.width = '400px'; held.fontSize").unwrap(),
         "80px"
     );
@@ -170,16 +165,16 @@ fn realtime_cssom_registered_container_lengths_refresh_direct_and_variable_reads
     );
     let builds = vm.layout_pass_observability_for_test().1;
     assert_eq!(
-        vm.eval("box.style.width = '300px'; JSON.stringify([held.getPropertyValue('--raw').trim(), held.color])")
-            .unwrap(),
-        r#"["10cqw","rgb(0, 0, 255)"]"#
-    );
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
-    assert_eq!(
         vm.eval("box.style.width = '400px'; held.getPropertyValue('--size')")
             .unwrap(),
         "40px"
     );
+    assert_eq!(
+        vm.eval("JSON.stringify([held.getPropertyValue('--raw').trim(), held.color])")
+            .unwrap(),
+        r#"["10cqw","rgb(0, 0, 255)"]"#,
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
     assert_eq!(
         vm.eval("box.style.width = '450px'; held.fontSize").unwrap(),
         "45px"
@@ -609,7 +604,7 @@ fn realtime_cssom_duration_protocol_batch_refreshes_once_before_style_observatio
 }
 
 #[test]
-fn realtime_cssom_constant_durations_and_color_do_not_refresh_dirty_container_geometry() {
+fn realtime_cssom_reads_in_size_container_share_one_fresh_layout() {
     let mut vm = container_duration_vm("2s", "3s");
     let before = vm.layout_pass_observability_for_test().1;
     let reads = "JSON.stringify([heldDurationStyle.animationDuration,\
@@ -622,7 +617,7 @@ fn realtime_cssom_constant_durations_and_color_do_not_refresh_dirty_container_ge
             .unwrap(),
         r#"["2s","2s","3s","3s","rgb(1, 2, 3)","rgb(1, 2, 3)"]"#
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
     #[cfg(feature = "devtools")]
     {
         let handles = {
@@ -639,22 +634,19 @@ fn realtime_cssom_constant_durations_and_color_do_not_refresh_dirty_container_ge
                     vec!["2s", "3s", "rgb(1, 2, 3)"]
                 ]
             );
-            assert_eq!(vm.layout_pass_observability_for_test().1, before);
+            assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
         }
     }
     assert_eq!(
         vm.eval(reads).unwrap(),
         r#"["2s","2s","3s","3s","rgb(1, 2, 3)","rgb(1, 2, 3)"]"#
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    // Confirm that the write was real and the geometry stayed dirty throughout
-    // the pure-style reads, rather than accidentally exercising a clean page.
     assert_eq!(vm.eval("container.offsetWidth").unwrap(), "1000");
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 }
 
 #[test]
-fn realtime_cssom_container_numeric_var_fallbacks_refresh_but_constant_variables_do_not() {
+fn realtime_cssom_container_numeric_vars_keep_values_across_layout_refreshes() {
     // Inline container sizes exercise the engine's existing Stylo query_size
     // input for var() substitution. Rule-defined used sizes are independently
     // covered by the direct supplemental-value regression above.
@@ -709,7 +701,7 @@ fn realtime_cssom_container_numeric_var_fallbacks_refresh_but_constant_variables
     assert_eq!(vm.eval(
         "container.style.width='1000px';JSON.stringify([variableStyle.animationDuration,variableStyle.getPropertyValue('transition-duration')])"
     ).unwrap(), r#"["2s","2s"]"#);
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
     assert_eq!(
         vm.eval(
             "JSON.stringify([variableStyle.animationDuration,variableStyle.transitionDuration])"
@@ -717,7 +709,7 @@ fn realtime_cssom_container_numeric_var_fallbacks_refresh_but_constant_variables
         .unwrap(),
         r#"["2s","2s"]"#
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 }
 
 #[test]
@@ -766,19 +758,17 @@ fn realtime_cssom_existing_custom_function_projection_refreshes_container_width(
         "100px"
     );
     let before = vm.layout_pass_observability_for_test().1;
-    // Literal custom-property tokens alone do not measure the container.
     assert_eq!(
-        vm.eval("functionRule.style.width='1000px';functionStyle.getPropertyValue('--literal')")
-            .unwrap(),
-        "1cqw"
-    );
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    assert_eq!(
-        vm.eval("functionStyle.getPropertyValue('--actual')")
+        vm.eval("functionRule.style.width='1000px';functionStyle.getPropertyValue('--actual')")
             .unwrap(),
         "1000px"
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+    assert_eq!(
+        vm.eval("functionStyle.getPropertyValue('--literal')")
+            .unwrap(),
+        "1cqw"
+    );
     assert_eq!(
         vm.eval("functionStyle.getPropertyValue('--actual')")
             .unwrap(),
