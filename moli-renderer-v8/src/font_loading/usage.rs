@@ -171,6 +171,7 @@ pub(crate) fn collect_font_uses(
                 kind,
                 &text_control_value(host, node),
                 element.attribute("placeholder").unwrap_or(""),
+                TextTransform::from(style.clone_text_transform().case()),
             );
             let text_style = if is_placeholder {
                 read.pseudo_computed_values("placeholder").unwrap_or(style)
