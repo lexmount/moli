@@ -19,6 +19,7 @@ use moli_encoding::{
     encode_text_for_legacy_web, form_submission_encoding, form_urlencoded_serialize_pairs,
     is_charset_sentinel_name,
 };
+use moli_page_types::NavigationHistoryMutation;
 use url::Url;
 
 /// Runs the control's Enter default action, including its beforeinput gate.
@@ -714,6 +715,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
                 form_handle,
                 target_name.as_deref(),
                 &resolved_url,
+                user_initiated,
             ),
             FormSubmissionMethod::Post {
                 resolved_url,
@@ -1003,19 +1005,24 @@ fn submit_post_form_to_top_level_browsing_context(
     };
     let source_handle = submitter.unwrap_or(form_handle);
     let source_element = wrap_handle_object(scope, runtime_ptr, source_handle);
-    let navigation_type = if user_initiated { "push" } else { "replace" };
+    let history = if user_initiated {
+        NavigationHistoryMutation::Push
+    } else {
+        NavigationHistoryMutation::Replace
+    };
     if !crate::context_bootstrap::dispatch_top_level_form_navigation_event(
         scope,
         window,
         resolved_url.as_str(),
-        navigation_type,
+        history.navigation_type(),
         source_element,
         user_initiated,
         form_data,
     ) {
         return true;
     }
-    unsafe { &mut *runtime_ptr }.record_pending_location_navigation_request(
+    let runtime = unsafe { &mut *runtime_ptr };
+    runtime.record_pending_location_navigation_request(
         resolved_url,
         "POST".to_owned(),
         Some(body),
@@ -1023,7 +1030,8 @@ fn submit_post_form_to_top_level_browsing_context(
         None,
         moli_fetch::BrowserNavigationRequestKind::Navigate,
     );
-    unsafe { &mut *runtime_ptr }.set_pending_location_navigation_source(initiator, None);
+    runtime.set_pending_location_navigation_history(history);
+    runtime.set_pending_location_navigation_source(initiator, None);
     crate::context_bootstrap::web_mcp::bind_root_navigation(
         unsafe { &mut *runtime_ptr },
         form_handle,

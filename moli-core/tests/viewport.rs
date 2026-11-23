@@ -161,6 +161,114 @@ async fn viewport_frames_follow_realtime_animation_and_document_replacement() ->
 }
 
 #[tokio::test]
+async fn viewport_history_survives_link_and_form_navigation() -> Result<()> {
+    let server = moli_test_support::FixtureServer::spawn().await?;
+    let destination = server.url("/net/echo");
+    let redirect = server.url("/redirect");
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let style = "display:block;width:180px;height:60px";
+    for (label, control, destination_path) in [
+        (
+            "link",
+            format!(r#"<a href="{destination}" style="{style}">Next</a>"#),
+            "/net/echo",
+        ),
+        (
+            "redirected link",
+            format!(r#"<a href="{redirect}" style="{style}">Next</a>"#),
+            "/static",
+        ),
+        (
+            "GET form",
+            format!(r#"<form action="{destination}"><button style="{style}">Next</button></form>"#),
+            "/net/echo",
+        ),
+        (
+            "POST form",
+            format!(
+                r#"<form action="{destination}" method="post"><button style="{style}">Next</button></form>"#
+            ),
+            "/net/echo",
+        ),
+    ] {
+        let original = html_url(&format!("<title>First</title>{control}"));
+        let mut page = browser.fetch(&original).await?;
+        let mut frames = page
+            .subscribe_viewport_frames(ViewportSurface::default(), 1)
+            .await?;
+        let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+        assert!(!first.navigation.can_go_back, "{label}");
+
+        page.dispatch_mouse_event_at_point_async(16., 16., "mousedown", 0, Some(1), 0., 0.)
+            .await?;
+        page.dispatch_mouse_event_at_point_async(16., 16., "mouseup", 0, Some(0), 0., 0.)
+            .await?;
+        let next = frame(&mut frames, |frame| frame.document != first.document).await?;
+        assert_eq!(next.navigation.url.path(), destination_path, "{label}");
+        assert!(next.navigation.can_go_back, "{label}");
+        assert!(!next.navigation.can_go_forward, "{label}");
+        let current_entry = page
+            .evaluate_runtime_expression_async("navigation.currentEntry.url")
+            .await?;
+        assert_eq!(
+            current_entry["value"],
+            next.navigation.url.as_str(),
+            "{label}"
+        );
+
+        assert!(page.traverse_viewport_history(-1).await?, "{label}");
+        let back = frame(&mut frames, |frame| {
+            frame.navigation.url == first.navigation.url
+        })
+        .await?;
+        assert!(!back.navigation.can_go_back, "{label}");
+        assert!(back.navigation.can_go_forward, "{label}");
+
+        assert!(page.traverse_viewport_history(1).await?, "{label}");
+        let forward = frame(&mut frames, |frame| {
+            frame.navigation.url == next.navigation.url
+        })
+        .await?;
+        assert!(forward.navigation.can_go_back, "{label}");
+        assert!(!forward.navigation.can_go_forward, "{label}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_reports_history_updates_on_a_static_document() -> Result<()> {
+    let server = moli_test_support::FixtureServer::spawn().await?;
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser.fetch(&server.url("/static")).await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+    assert!(!first.navigation.can_go_back);
+
+    page.evaluate_runtime_expression_async("history.pushState(null, '', '/pushed')")
+        .await?;
+    let pushed = frame(&mut frames, |frame| {
+        frame.navigation.url.path() == "/pushed"
+    })
+    .await?;
+    assert_eq!(pushed.document, first.document);
+    assert!(pushed.navigation.can_go_back);
+    assert!(!pushed.navigation.can_go_forward);
+
+    assert!(page.traverse_viewport_history(-1).await?);
+    let back = frame(&mut frames, |frame| {
+        frame.navigation.url == first.navigation.url
+    })
+    .await?;
+    assert_eq!(back.document, first.document);
+    assert!(back.navigation.can_go_forward);
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_paints_into_caller_buffers_without_waiting_for_control_updates() -> Result<()> {
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;

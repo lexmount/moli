@@ -704,10 +704,20 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let entry_seed = if matches!(kind, LocationNavigationKind::Reload) {
-        history_entry_seed_for_reload(scope, owner)
-    } else {
-        history_entry_seed_for_cross_document_location(scope, owner, &resolved, kind)
+    let entry_seed = match kind {
+        LocationNavigationKind::Assign => history_entry_seed_for_cross_document_location(
+            scope,
+            owner,
+            &resolved,
+            NavigationHistoryMutation::Push,
+        ),
+        LocationNavigationKind::Replace => history_entry_seed_for_cross_document_location(
+            scope,
+            owner,
+            &resolved,
+            NavigationHistoryMutation::Replace,
+        ),
+        LocationNavigationKind::Reload => history_entry_seed_for_reload(scope, owner),
     };
     unsafe { &mut *host_ptr }.record_pending_location_navigation_with_kind(
         resolved,
@@ -1104,20 +1114,15 @@ fn settle_location_intercepted_same_document_navigation<'s>(
     );
 }
 
-fn history_entry_seed_for_cross_document_location<'s>(
+pub(crate) fn history_entry_seed_for_cross_document_location<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     resolved: &url::Url,
-    kind: LocationNavigationKind,
+    mutation: NavigationHistoryMutation,
 ) -> Option<NavigationHistoryEntrySeed> {
     let history = window_history_for_holder(scope, owner)?;
     let current_index = history_index(scope, history);
     let current_navigation_index = navigation_current_entry_index(scope, owner).unwrap_or(0);
-    let mutation = match kind {
-        LocationNavigationKind::Assign => NavigationHistoryMutation::Push,
-        LocationNavigationKind::Replace => NavigationHistoryMutation::Replace,
-        LocationNavigationKind::Reload => return None,
-    };
     let mut seed = cross_document_navigation_seed(
         serialize_history_entries(scope, history),
         current_index,

@@ -171,7 +171,7 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
     loader: ResourceRequestClient,
     env: PageVmEnvConfig,
     runtime_hooks: PageVmRuntimeHooks,
-    navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
+    mut navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     reserved_service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     stage: PageVmInitStage,
     loaded: LoadedFollowedLocationNavigation,
@@ -190,6 +190,12 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
         return Err(anyhow!(
             "injected failure after main navigation commit for testing"
         ));
+    }
+    if let LoadedFollowedLocationNavigation::StreamingDocument { response, .. } = &loaded
+        && response.redirected
+        && let Some(seed) = &mut navigation_bootstrap_entry
+    {
+        update_history_entry_after_redirect(seed, &response.final_url);
     }
     let env_for_bootstrap = page_vm_env_for_navigation_bootstrap(
         &env,
@@ -351,6 +357,37 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
         },
     );
     Ok(page_vm_outcome)
+}
+
+fn update_history_entry_after_redirect(
+    seed: &mut crate::native_bridge::NavigationHistoryEntrySeed,
+    final_url: &Url,
+) {
+    let Some(entry) = seed
+        .entries
+        .iter_mut()
+        .find(|entry| entry.history_index == seed.current_index)
+    else {
+        return;
+    };
+    if entry.url == final_url.as_str() {
+        return;
+    }
+    if !Url::parse(&entry.url).is_ok_and(|url| moli_url::same_origin(&url, final_url)) {
+        entry.inherited_origin = None;
+        entry.history_state = None;
+        entry.navigation_state = None;
+    }
+    entry.url = final_url.to_string();
+    if let Some(activation) = &mut seed.activation {
+        activation.entry = entry.clone();
+        if activation.from.as_ref().is_some_and(|from| {
+            from.url != "about:blank"
+                && !Url::parse(&from.url).is_ok_and(|url| moli_url::same_origin(&url, final_url))
+        }) {
+            activation.from = None;
+        }
+    }
 }
 
 fn page_vm_env_for_navigation_bootstrap(
@@ -780,6 +817,20 @@ impl PageVm {
             )));
         };
         let navigation_kind = pending.kind();
+        let navigation_bootstrap_entry = match (
+            pending.entry_seed,
+            pending.history_mutation,
+            navigation_kind,
+        ) {
+            (
+                None,
+                Some(mutation),
+                crate::native_bridge::PendingLocationNavigationKind::Document,
+            ) => self
+                .vm_mut()
+                .capture_top_level_navigation_history(&pending.url, mutation)?,
+            (seed, _, _) => seed,
+        };
         let initiator_url = self.vm().document_runtime.document_url().clone();
         let navigation_handoff = pending.handoff;
         let url = pending.url.clone();
@@ -908,7 +959,7 @@ impl PageVm {
                 initiator_url,
                 navigation_handoff,
                 loaded,
-                navigation_bootstrap_entry: pending.entry_seed,
+                navigation_bootstrap_entry,
                 reserved_service_worker_client_id,
                 service_worker_client_navigate,
                 web_mcp_invocation,
@@ -1522,10 +1573,42 @@ mod tests {
     use super::{
         LoadedFollowedLocationNavigation, about_blank_navigation_response,
         build_followed_location_navigation_request, load_followed_location_navigation,
+        update_history_entry_after_redirect,
     };
     use crate::network::ResourceRequestClient;
     use moli_fetch::{BrowserNavigationRequestKind, outgoing_request_headers};
     use url::Url;
+
+    #[test]
+    fn redirected_history_preserves_entry_identity_and_hides_cross_origin_activation() {
+        use moli_page_types::{
+            NavigationHistoryMutation, cross_document_navigation_seed,
+            initial_navigation_history_seed,
+        };
+
+        let initial = initial_navigation_history_seed(true, "https://source.test/first");
+        let requested = Url::parse("https://source.test/redirect").unwrap();
+        let final_url = Url::parse("https://destination.test/second").unwrap();
+        let mut seed = cross_document_navigation_seed(
+            initial.entries,
+            initial.current_index,
+            0,
+            &requested,
+            NavigationHistoryMutation::Push,
+        );
+        let activation = seed.activation.as_ref().unwrap();
+        let key = activation.entry.key.clone();
+        assert!(activation.from.is_some());
+
+        update_history_entry_after_redirect(&mut seed, &final_url);
+
+        let current = &seed.entries[seed.current_index as usize];
+        assert_eq!(current.url, final_url.as_str());
+        assert_eq!(current.key, key);
+        let activation = seed.activation.unwrap();
+        assert_eq!(&activation.entry, current);
+        assert!(activation.from.is_none());
+    }
 
     #[test]
     fn followed_location_navigation_request_uses_document_url_as_initiator() {

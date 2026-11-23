@@ -28,6 +28,7 @@ use crate::{
     native_bridge::{CurrentInputEvent, InputNavigationPolicy, navigation_policy_from_event},
     runtime::RendererDocumentLifecycleIdentity,
 };
+use moli_page_types::NavigationHistoryMutation;
 
 use super::super::super::PageScriptHost;
 use super::super::forms::{
@@ -49,7 +50,7 @@ use super::targets::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
     form_navigation_target_document, named_iframe_target_handle_for_navigation,
     navigate_hyperlink_source_browsing_context, navigate_hyperlink_target_browsing_context,
-    navigate_target_browsing_context,
+    navigate_target_browsing_context, queue_top_level_location_navigation,
 };
 
 fn call_node_contains(
@@ -2079,6 +2080,7 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
     form_handle: DomHandle,
     target_name: Option<&str>,
     resolved_url: &str,
+    user_initiated: bool,
 ) -> bool {
     let special_target = target_name.and_then(SpecialBrowsingContextTarget::parse);
     let exposes_opener = {
@@ -2140,22 +2142,26 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
             return false;
         };
         let source_element = node_wrapper_from_handle(scope, form_handle);
+        let history = if user_initiated {
+            NavigationHistoryMutation::Push
+        } else {
+            NavigationHistoryMutation::Replace
+        };
         if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
             scope,
             window,
             resolved_url,
-            "replace",
+            history.navigation_type(),
             source_element,
             true,
-            false,
+            user_initiated,
             None,
         ) {
             return true;
         }
-        let Ok(url) = url::Url::parse(resolved_url) else {
+        if !queue_top_level_location_navigation(runtime_ptr, resolved_url, history) {
             return false;
-        };
-        unsafe { &mut *runtime_ptr }.record_pending_location_navigation(url, None);
+        }
         crate::context_bootstrap::web_mcp::bind_root_navigation(
             unsafe { &mut *runtime_ptr },
             form_handle,

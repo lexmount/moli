@@ -7,7 +7,7 @@ use crate::runtime::{
 };
 use crate::service_worker_runtime::{ServiceWorkerClientId, ServiceWorkerClientNavigateError};
 use moli_fetch::BrowserNavigationRequestKind;
-use moli_page_types::NavigationHistoryEntrySeed;
+use moli_page_types::{NavigationHistoryEntrySeed, NavigationHistoryMutation};
 use url::Url;
 
 pub(crate) struct PendingReservedServiceWorkerClient {
@@ -67,6 +67,8 @@ pub(crate) struct PendingLocationNavigation {
     pub(crate) initial_document_environment:
         Option<crate::runtime::RendererCapturedDocumentEnvironment>,
     pub(crate) entry_seed: Option<NavigationHistoryEntrySeed>,
+    /// Applied by the renderer when it owns the followed navigation.
+    pub(crate) history_mutation: Option<NavigationHistoryMutation>,
     pub(crate) reserved_service_worker_client: Option<PendingReservedServiceWorkerClient>,
     pub(crate) service_worker_client_navigate:
         Option<crate::types::ServiceWorkerClientNavigateContinuation>,
@@ -113,6 +115,9 @@ impl PageScriptHost {
                 update,
             },
         );
+        // History commits also update the viewport's navigation controls.
+        #[cfg(feature = "molio")]
+        self.request_realtime_rendering_opportunity();
     }
 
     /// Replace the dynamically scoped Runtime command cause and return the
@@ -189,6 +194,7 @@ impl PageScriptHost {
                 navigation_initiator: None,
                 initial_document_environment: None,
                 entry_seed,
+                history_mutation: None,
                 reserved_service_worker_client,
                 service_worker_client_navigate: None,
                 web_mcp_invocation: None,
@@ -222,12 +228,24 @@ impl PageScriptHost {
                 navigation_initiator: None,
                 initial_document_environment: None,
                 entry_seed: None,
+                history_mutation: None,
                 reserved_service_worker_client,
                 service_worker_client_navigate: Some(continuation),
                 web_mcp_invocation: None,
             },
         )));
         self.handoff_ordinary_page_turn_navigation(handoff);
+    }
+
+    pub(crate) fn set_pending_location_navigation_history(
+        &mut self,
+        mutation: NavigationHistoryMutation,
+    ) {
+        if let Some(PendingTopLevelNavigation::Location(pending)) =
+            self.pending_top_level_navigation.as_mut()
+        {
+            pending.history_mutation = Some(mutation);
+        }
     }
 
     pub(crate) fn set_pending_location_navigation_source(

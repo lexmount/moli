@@ -1,6 +1,7 @@
 use super::ScriptVm;
 use crate::{context_bootstrap::NavigationHistoryPrunePlan, document_runtime::DomHandle};
 use anyhow::{Result, anyhow};
+use moli_page_types::{NavigationHistoryEntrySeed, NavigationHistoryMutation};
 
 #[derive(Clone, Copy, Debug)]
 enum NavigationHistoryRealm {
@@ -30,6 +31,24 @@ impl NavigationHistoryRealm {
 }
 
 impl ScriptVm {
+    pub(crate) fn capture_top_level_navigation_history(
+        &mut self,
+        destination: &url::Url,
+        mutation: NavigationHistoryMutation,
+    ) -> Result<Option<NavigationHistoryEntrySeed>> {
+        self.with_default_context_scope(|scope, _| {
+            let owner = scope.get_current_context().global(scope);
+            Ok(
+                crate::context_bootstrap::history_entry_seed_for_cross_document_location(
+                    scope,
+                    owner,
+                    destination,
+                    mutation,
+                ),
+            )
+        })
+    }
+
     pub(crate) fn reset_navigation_history(&mut self) -> Result<bool> {
         self.ensure_main_world()?;
         let realms = self.live_navigation_history_realms();
