@@ -281,6 +281,77 @@ fn source_drag_moving_iframe_keeps_destination_coordinates_for_current_update() 
 }
 
 #[test]
+fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation() {
+    let scale = 1.0;
+    let mut vm = cross_document_drag_vm(scale);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.eval(
+        r#"
+        document.getElementById('parent').addEventListener('dragenter',()=>{
+            document.getElementById('frame-b').style.left='520px';
+        }, {once:true});
+        "#,
+    )
+    .unwrap();
+    let data = start_native_drag(&mut vm, "a", scale);
+    dispatch_drag(&mut vm, "dragenter", "parent", scale, &data);
+    assert!(
+        vm._context_host
+            .borrow()
+            .published_frame_geometry()
+            .is_none()
+    );
+    let builds = vm.layout_pass_observability_for_test().1;
+
+    vm.cancel_dragging().unwrap();
+
+    let log = drag_log(&mut vm);
+    let events = log["events"].as_array().unwrap();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0]["type"], "dragenter");
+    assert_eq!(events[1]["type"], "dragleave");
+    assert_eq!(events[2]["type"], "dragend");
+    assert_eq!(events[2]["target"], "a");
+    assert_event_coordinates(&events[2], "a", root_position("parent", scale), scale);
+    assert_eq!(log["viewsDisabled"], true);
+    assert_eq!(log["sourceDisabled"], true);
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+    vm.eval("document.getElementById('frame-b').style.left='530px'")
+        .unwrap();
+    assert!(
+        vm._context_host
+            .borrow()
+            .published_frame_geometry()
+            .is_none()
+    );
+    vm.cancel_dragging().unwrap();
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+}
+
+#[test]
+fn standalone_drag_cancel_clears_the_session_without_a_layout_root() {
+    let scale = 1.0;
+    let mut vm = cross_document_drag_vm(scale);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    let data = start_native_drag(&mut vm, "a", scale);
+    dispatch_drag(&mut vm, "dragenter", "parent", scale, &data);
+    vm.eval(
+        "document.getElementById('frame-b').style.left='520px'; document.documentElement.remove()",
+    )
+    .unwrap();
+    assert!(vm.active_drag_session.is_some());
+    assert!(matches!(
+        vm._context_host.borrow().ensure_observable_layout(),
+        Err(moli_layout::LayoutError::NoLayoutRoot)
+    ));
+
+    vm.cancel_dragging().unwrap();
+
+    assert!(vm.active_drag_session.is_none());
+}
+
+#[test]
 fn drag_cancel_and_drop_reproject_the_source_end_without_reviving_event_views() {
     // Moli projects client coordinates into the receiving Document, including
     // the source's dragend. Chromium currently keeps the destination manager's
