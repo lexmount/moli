@@ -15,9 +15,8 @@ mod devtools;
 pub(crate) use devtools::{
     construct_drag_event_with_related_target, construct_drop_input_event,
     construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target, construct_pointer_event_with_modifiers,
-    construct_pointer_event_with_related_target,
-    construct_pointer_event_with_related_target_and_modifiers, construct_wheel_event_for_target,
+    construct_mouse_event_with_related_target_for_target, construct_pointer_event,
+    construct_wheel_event_for_target,
 };
 
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};

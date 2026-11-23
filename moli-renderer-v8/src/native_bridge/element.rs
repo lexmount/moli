@@ -300,8 +300,6 @@ use event_handlers::{
 pub(crate) use events::construct_focus_event;
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use events::construct_keyboard_event;
-#[cfg(feature = "devtools")]
-pub(crate) use events::construct_pointer_event_with_related_target;
 use events::{ClickEventSource, construct_click_event};
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
@@ -315,8 +313,8 @@ pub(crate) use events::{TouchEventPoint, construct_touch_event_with_points};
 pub(crate) use events::{
     construct_drag_event_with_related_target, construct_drop_input_event,
     construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target, construct_pointer_event_with_modifiers,
-    construct_pointer_event_with_related_target_and_modifiers, construct_wheel_event_for_target,
+    construct_mouse_event_with_related_target_for_target, construct_pointer_event,
+    construct_wheel_event_for_target,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use focus::focus_live_element_for_inspector;
