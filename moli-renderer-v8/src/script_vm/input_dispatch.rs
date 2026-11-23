@@ -692,13 +692,15 @@ impl PreparedPointerEvent<'_> {
         self,
         scope: &mut v8::PinScope<'s, '_>,
         runtime_ptr: *mut PageScriptHost,
-        trigger: v8::Local<'s, v8::Object>,
+        trigger: Option<v8::Local<'s, v8::Object>>,
     ) {
         let id = self.pointer.pointer_id;
         let (lost, pending) = unsafe { &mut *runtime_ptr }.begin_pointer_capture_transition(id);
         let dispatch = move |scope: &mut v8::PinScope<'s, '_>, name, target| {
             if let Some(event) = self.construct(scope, name) {
-                moli_webapi::events::state::inherit_event_time_stamp(scope, event, trigger);
+                if let Some(trigger) = trigger {
+                    moli_webapi::events::state::inherit_event_time_stamp(scope, event, trigger);
+                }
                 let _ = dispatch_public_event(scope, runtime_ptr, target, event);
             }
         };
@@ -721,7 +723,7 @@ impl PreparedPointerEvent<'_> {
         self,
         scope: &mut v8::PinScope<'s, '_>,
         runtime_ptr: *mut PageScriptHost,
-        trigger: v8::Local<'s, v8::Object>,
+        trigger: Option<v8::Local<'s, v8::Object>>,
     ) {
         unsafe { &mut *runtime_ptr }
             .release_pending_pointer_capture_target(self.pointer.pointer_id);
@@ -1016,6 +1018,19 @@ impl ScriptVm {
     ) -> Result<RendererInputDispatchOutcome> {
         let surface_hit = self.mouse_input_surface_hit(x, y, event_name)?;
         let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
+        let is_release = event_name == "mouseup";
+        let full_release = is_release && prepared.buttons == 0;
+        let idle_move = event_name == "mousemove" && prepared.buttons == 0;
+        if full_release || idle_move {
+            // A release can land outside the viewport or on a native control.
+            let mut runtime = self._context_host.borrow_mut();
+            if runtime.pointer_is_known(pointer.pointer_id) {
+                runtime.set_pointer_buttons_active(pointer.pointer_id, false);
+            }
+        }
+        if idle_move {
+            self.suppress_compat_mouse_events = false;
+        }
         let _current_input_event = CurrentInputEventScope::enter(
             Rc::clone(&self._context_host),
             CurrentInputEvent::mouse(event_name, prepared.button, modifiers),
@@ -1033,7 +1048,10 @@ impl ScriptVm {
             modifiers,
             intercept_drags,
         );
-        if event_name == "mouseup" && prepared.buttons == 0 {
+        if is_release {
+            self.suppress_compat_mouse_events = false;
+        }
+        if full_release {
             self.mouse_routed_frame = None;
             self._context_host.borrow_mut().clear_mouse_press();
         }
@@ -1223,6 +1241,7 @@ impl ScriptVm {
             modifiers,
         };
         let pointer_id = pointer.pointer_id;
+        let releases_capture = event_name == "mouseup" && buttons == 0;
 
         if self
             .active_drag_session
@@ -1336,38 +1355,42 @@ impl ScriptVm {
                     runtime.set_mouse_event_target(None);
                     had_target
                 };
-                if let Some(previous) = self.hovered_mouse_handle.take() {
+                let previous = self.hovered_mouse_handle.take();
+                if previous.is_some() || releases_capture {
                     self.with_default_context_scope(|scope, runtime_ptr| {
-                        let coordinates = position.for_target(
-                            unsafe { &*runtime_ptr },
-                            previous,
-                            sampled.as_deref(),
-                        );
-                        if had_pointer_target {
-                            dispatch_pointer_exit_events(
-                                scope,
-                                runtime_ptr,
-                                previous,
-                                PreparedPointerEvent {
-                                    coordinates,
-                                    button,
-                                    buttons,
-                                    pointer: &pointer,
-                                    modifiers,
-                                },
+                        let runtime = unsafe { &*runtime_ptr };
+                        let coordinates = previous
+                            .or_else(|| runtime.active_pointer_capture_target(pointer_id))
+                            .map_or_else(
+                                || position.coordinates(None),
+                                |target| position.for_target(runtime, target, sampled.as_deref()),
                             );
-                        }
-                        dispatch_mouse_boundary_events(
-                            scope,
-                            runtime_ptr,
-                            Some(previous),
-                            None,
-                            coordinates,
+                        let data = PreparedPointerEvent {
                             coordinates,
                             button,
                             buttons,
+                            pointer: &pointer,
                             modifiers,
-                        );
+                        };
+                        if releases_capture {
+                            data.release_capture(scope, runtime_ptr, None);
+                        }
+                        if let Some(previous) = previous {
+                            if had_pointer_target {
+                                dispatch_pointer_exit_events(scope, runtime_ptr, previous, data);
+                            }
+                            dispatch_mouse_boundary_events(
+                                scope,
+                                runtime_ptr,
+                                Some(previous),
+                                None,
+                                coordinates,
+                                coordinates,
+                                button,
+                                buttons,
+                                modifiers,
+                            );
+                        }
                         Ok(())
                     })?;
                 }
@@ -1428,9 +1451,6 @@ impl ScriptVm {
         let mouse_down_allows_drag = Cell::new(true);
 
         let mut suppress_compat_mouse_events = self.suppress_compat_mouse_events;
-        if event_name == "mousemove" && buttons == 0 {
-            suppress_compat_mouse_events = false;
-        }
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
             let drag_start = drag_start.and_then(|gesture| {
@@ -1459,7 +1479,7 @@ impl ScriptVm {
                 // Capture callbacks still see the active Document from the
                 // previous pointerdown, pointermove or pointerup.
                 unsafe { &mut *runtime_ptr }.set_pointer_buttons_active(pointer_id, buttons != 0);
-                pointer_data.process_capture(scope, runtime_ptr, trigger);
+                pointer_data.process_capture(scope, runtime_ptr, Some(trigger));
                 let Some((mut input_document, target)) = initial_document.and_then(|document| {
                     let target = document.target_after_capture(
                         runtime(),
@@ -1530,7 +1550,7 @@ impl ScriptVm {
                     let Some(event) = pointer_data.construct(scope, name) else {
                         return Ok(input_dispatch_outcome(false));
                     };
-                    pointer_data.process_capture(scope, runtime_ptr, event);
+                    pointer_data.process_capture(scope, runtime_ptr, Some(event));
                     let Some(target) = input_document.target_after_capture(
                         runtime(),
                         pointer_id,
@@ -1668,10 +1688,10 @@ impl ScriptVm {
                     }
                 }
             }
-            let captured_click_target = if event_name == "mouseup" && buttons == 0 {
+            let captured_click_target = if releases_capture {
                 let captured = runtime().pointer_capture_target_for_click(pointer_id);
                 if let Some((event, _)) = pointer_event {
-                    pointer_data.release_capture(scope, runtime_ptr, event);
+                    pointer_data.release_capture(scope, runtime_ptr, Some(event));
                 }
                 captured
             } else {
@@ -1766,7 +1786,7 @@ impl ScriptVm {
                     unsafe { &mut *runtime_ptr }.set_pointer_buttons_active(pointer_id, false);
                     if let Some(event) = cancel.construct(scope, "pointercancel") {
                         let _ = dispatch_public_event(scope, runtime_ptr, cancel_target, event);
-                        cancel.release_capture(scope, runtime_ptr, event);
+                        cancel.release_capture(scope, runtime_ptr, Some(event));
                     }
                     dispatch_pointer_exit_events(scope, runtime_ptr, cancel_target, cancel);
                     // Preserve ScriptVm's legacy mouse hover cache while
@@ -1815,9 +1835,6 @@ impl ScriptVm {
             match follow_up {
                 Some(MouseReleaseFollowUp::ActivateViaClick(click_target)) => {
                     let coordinates = coordinates_for(click_target);
-                    if event_name == "mouseup" {
-                        suppress_compat_mouse_events = false;
-                    }
                     let outcome = activate_handle_after_pointer_release(
                         scope,
                         runtime_ptr,
@@ -1849,9 +1866,6 @@ impl ScriptVm {
                     name: follow_up_event_name,
                     target,
                 }) => {
-                    if event_name == "mouseup" {
-                        suppress_compat_mouse_events = false;
-                    }
                     let had_pending_top_level_navigation_before_event =
                         unsafe { &*runtime_ptr }.has_pending_location_navigation();
                     let pending_child_navigations_before_event = unsafe { &*runtime_ptr }
@@ -1892,9 +1906,6 @@ impl ScriptVm {
                     }
                 }
                 None => {}
-            }
-            if event_name == "mouseup" {
-                suppress_compat_mouse_events = false;
             }
             Ok(input_dispatch_outcome(true))
         });
@@ -2269,7 +2280,7 @@ impl ScriptVm {
                     // Pending capture still belongs to the previous active Document.
                     unsafe { &mut *runtime_ptr }
                         .set_pointer_buttons_active(pointer_id, buttons != 0);
-                    data.process_capture(scope, runtime_ptr, event);
+                    data.process_capture(scope, runtime_ptr, Some(event));
                     let Some(input_document) = input_document else {
                         break 'pointer;
                     };
@@ -2310,7 +2321,7 @@ impl ScriptVm {
                         }
                     }
                     if is_end {
-                        data.release_capture(scope, runtime_ptr, event);
+                        data.release_capture(scope, runtime_ptr, Some(event));
                         dispatch_touch_pointer_boundary_events(
                             scope,
                             runtime_ptr,

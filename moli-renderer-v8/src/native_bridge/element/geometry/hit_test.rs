@@ -209,9 +209,12 @@ fn input_surface_hit_test_in_tree(
         live_hit_in_tree(runtime, tree, point, ignore_pointer_events_none)
     };
     let Some((layout_hit, target)) = live_dom_hit else {
-        // Wheel scrolling still belongs to this viewport when its DOM is inert.
+        // A mouse hit inside a frame still belongs to its viewport when all
+        // of its painted DOM candidates are inert.
+        let use_viewport_target = mode == InputHitTestMode::Wheel
+            || (mode == InputHitTestMode::Mouse && tree.viewport.contains(point));
         return Ok(InputSurfaceHit {
-            target: (mode == InputHitTestMode::Wheel).then_some(tree.source_root()),
+            target: use_viewport_target.then_some(tree.source_root()),
             control: None,
         });
     };
