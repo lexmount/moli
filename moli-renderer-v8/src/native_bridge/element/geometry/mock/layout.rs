@@ -1,5 +1,6 @@
 use crate::document_runtime::DomHandle;
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
+use moli_layout::LayoutPoint;
 use std::time::Instant;
 
 use super::super::super::super::PageScriptHost;
@@ -597,6 +598,25 @@ pub(crate) fn mock_hit_test_handle(
         x,
         y,
         ignore_pointer_events_none,
+        false,
+        0,
+    )
+}
+
+#[cfg(any(test, feature = "devtools"))]
+pub(in crate::native_bridge::element::geometry) fn mock_input_hit_test(
+    runtime: &PageScriptHost,
+    document_handle: DomHandle,
+    point: LayoutPoint,
+    ignore_pointer_events_none: bool,
+) -> Option<DomHandle> {
+    mock_hit_test_handle_with_child_frames(
+        runtime,
+        document_handle,
+        f64::from(point.x),
+        f64::from(point.y),
+        ignore_pointer_events_none,
+        true,
         0,
     )
 }
@@ -659,9 +679,17 @@ fn mock_hit_test_handle_with_child_frames(
     x: f64,
     y: f64,
     ignore_pointer_events_none: bool,
+    use_viewport_fallback: bool,
     depth: usize,
 ) -> Option<DomHandle> {
     if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    if use_viewport_fallback
+        && !runtime
+            .layout_viewport_for_document(document_handle)
+            .contains(LayoutPoint::new(x as f32, y as f32))
+    {
         return None;
     }
     let elements = document_elements_in_hit_order(runtime, document_handle);
@@ -680,6 +708,7 @@ fn mock_hit_test_handle_with_child_frames(
                 x - rect.left,
                 y - rect.top,
                 ignore_pointer_events_none,
+                use_viewport_fallback,
                 depth + 1,
             )
         {
@@ -702,5 +731,12 @@ fn mock_hit_test_handle_with_child_frames(
             return Some(element);
         }
     }
-    None
+    if use_viewport_fallback {
+        runtime
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document_handle)
+    } else {
+        None
+    }
 }
