@@ -365,3 +365,80 @@ async fn websocket_realtime_screencast_ack_backpressure_does_not_stop_page_lifec
     socket.close(None).await.unwrap();
     abort_test_cdp_server(server).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_realtime_screencast_updates_for_overlay_only_changes() {
+    let (addr, server) = spawn_realtime_cast_server().await;
+    let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let target = open_screenshot_target(
+        &mut socket,
+        "data:text/html,%3C!doctype%20html%3E%3Cbody%3E",
+    )
+    .await;
+    let session = target.session_id.as_str();
+    for (id, method, params) in [
+        (
+            7,
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width":64,"height":64,"deviceScaleFactor":1,"mobile":false}),
+        ),
+        (8, "DOM.enable", json!({})),
+        (9, "Overlay.enable", json!({})),
+    ] {
+        assert_cdp_success(
+            &send_cdp_command(&mut socket, id, method, Some(session), params).await,
+            id,
+        );
+    }
+    let started = send_cdp_command(
+        &mut socket,
+        10,
+        "Page.startScreencast",
+        Some(session),
+        json!({"format":"png","maxWidth":64,"maxHeight":64,"everyNthFrame":1}),
+    )
+    .await;
+    assert_cdp_success(&started, 10);
+    let (mut frame, _) = receive_cast(&mut socket, session, started).await;
+    assert_cast_pixels(&frame, [255; 4], 10, 30);
+
+    for (id, method, params, color) in [
+        (
+            12,
+            "Overlay.highlightRect",
+            json!({"x":2,"y":2,"width":16,"height":16,"color":{"r":255,"g":0,"b":0}}),
+            [255, 0, 0, 255],
+        ),
+        (14, "Overlay.hideHighlight", json!({}), [255; 4]),
+    ] {
+        let ack = send_cdp_command(
+            &mut socket,
+            id - 1,
+            "Page.screencastFrameAck",
+            Some(session),
+            json!({"sessionId":frame["params"]["sessionId"]}),
+        )
+        .await;
+        assert_cdp_success(&ack, id - 1);
+        let changed = send_cdp_command(&mut socket, id, method, Some(session), params).await;
+        assert_cdp_success(&changed, id);
+        (frame, _) = receive_cast(&mut socket, session, changed).await;
+        assert_cast_pixels(&frame, color, 10, 30);
+    }
+
+    assert_cdp_success(
+        &send_cdp_command(
+            &mut socket,
+            15,
+            "Page.stopScreencast",
+            Some(session),
+            json!({}),
+        )
+        .await,
+        15,
+    );
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}

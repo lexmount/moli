@@ -251,6 +251,67 @@ async fn capture_screenshot_draws_and_clears_devtools_highlights() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn capture_screenshot_draws_only_margin_outside_the_border_box() {
+    let mut ctx = TestContext::new();
+    let session = "SID-MARGIN-OVERLAY";
+    let fixture = screenshot_data_url(
+        "<!doctype html><style>
+        html,body{margin:0;background:white;overflow:hidden}
+        div{position:absolute;top:30px;width:20px;height:20px}
+        #negative{left:30px;margin:-4px}
+        #mixed{left:70px;margin:6px -4px -4px 6px}
+        </style><div id=negative></div><div id=mixed></div>",
+    );
+    install_active_screenshot_page(&mut ctx, "BID", "TID", session, &fixture).await;
+    set_screenshot_viewport(&mut ctx, session, 112, 72, 1.0, 160).await;
+    for (id, method) in [(161, "DOM.enable"), (162, "Overlay.enable")] {
+        ctx.process_async(json!({"id":id,"sessionId":session,"method":method}))
+            .await;
+        ctx.expect_result(id, json!({}), Some(session));
+    }
+    ctx.process_async(
+        json!({"id":163,"sessionId":session,"method":"DOM.getDocument","params":{"depth":0}}),
+    )
+    .await;
+    let root = take_response_by_id(&mut ctx, 163)["result"]["root"]["nodeId"].clone();
+    ctx.process_async(json!({"id":164,"sessionId":session,"method":"Page.captureScreenshot"}))
+        .await;
+    let baseline = screenshot_png_bytes(&take_response_by_id(&mut ctx, 164));
+
+    for (id, selector) in [(165, "#negative"), (168, "#mixed")] {
+        ctx.process_async(json!({
+            "id": id, "sessionId": session, "method": "DOM.querySelector",
+            "params": {"nodeId": root, "selector":selector}
+        }))
+        .await;
+        let node = take_response_by_id(&mut ctx, id)["result"]["nodeId"].clone();
+        ctx.process_async(json!({
+            "id": id + 1, "sessionId":session, "method":"Overlay.highlightNode",
+            "params":{"nodeId":node,"highlightConfig":{"marginColor":{"r":255,"g":0,"b":0}}}
+        }))
+        .await;
+        ctx.expect_result(id + 1, json!({}), Some(session));
+        ctx.process_async(json!({"id":id+2,"sessionId":session,"method":"Page.captureScreenshot"}))
+            .await;
+        let png = screenshot_png_bytes(&take_response_by_id(&mut ctx, id + 2));
+        if selector == "#negative" {
+            assert!(
+                png == baseline,
+                "a fully inset margin must leave the capture unchanged"
+            );
+        } else {
+            // The mixed margin extends six pixels on the top and left and
+            // recedes four pixels inside the border on the bottom and right.
+            assert_eq!(decode_png_pixel(&png, 72, 44), [255, 0, 0, 255]);
+            assert_eq!(decode_png_pixel(&png, 82, 32), [255, 0, 0, 255]);
+            for (x, y) in [(84, 44), (94, 44), (84, 54), (68, 40)] {
+                assert_eq!(decode_png_pixel(&png, x, y), [255; 4], "({x}, {y})");
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_applies_base_background_alpha_clear_and_css_priority() {
     let mut ctx = TestContext::new();
     let fixture = screenshot_data_url(
