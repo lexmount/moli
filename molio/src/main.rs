@@ -9,7 +9,7 @@ mod palette;
 mod surface;
 mod text_input;
 
-use std::path::PathBuf;
+use std::{future, path::PathBuf, rc::Rc};
 
 use gpui::{
     App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, prelude::*, px, size,
@@ -37,9 +37,15 @@ fn main() -> anyhow::Result<()> {
             _ => anyhow::bail!("unexpected argument {argument}"),
         }
     }
-    let host = BrowserHost::start(profile)?;
+    let host = Rc::new(BrowserHost::start(profile)?);
     gpui_platform::application().run(move |cx: &mut App| {
         browser::bind_keys(cx);
+        let quitting_host = Rc::clone(&host);
+        cx.on_app_quit(move |_| {
+            quitting_host.shutdown();
+            future::ready(())
+        })
+        .detach();
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();

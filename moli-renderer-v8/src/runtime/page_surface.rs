@@ -194,7 +194,9 @@ impl RendererSyntheticResponseBody {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererPendingDownloadActivation {
     #[cfg(feature = "molio")]
-    pub initiator_url: Option<Box<Url>>,
+    pub navigation_initiator: Option<RendererNavigationInitiator>,
+    #[cfg(feature = "molio")]
+    pub desktop_failure: Option<&'static str>,
     /// The initiating child frame; absent for a top-level activation.
     pub frame_id: Option<String>,
     pub url: String,
@@ -211,7 +213,9 @@ impl RendererPendingDownloadActivation {
     ) -> Self {
         Self {
             #[cfg(feature = "molio")]
-            initiator_url: None,
+            navigation_initiator: None,
+            #[cfg(feature = "molio")]
+            desktop_failure: None,
             frame_id,
             url,
             suggested_filename,

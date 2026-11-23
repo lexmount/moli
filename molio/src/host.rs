@@ -1,4 +1,6 @@
-use std::{fs, future::pending, path::PathBuf, rc::Rc, sync::Arc, thread, time::Duration};
+use std::{
+    cell::RefCell, fs, future::pending, path::PathBuf, rc::Rc, sync::Arc, thread, time::Duration,
+};
 
 use anyhow::{Context as _, Result};
 use moli_core::{
@@ -24,6 +26,7 @@ use crate::downloads::{DownloadClient, Downloads};
 pub struct BrowserHost {
     tabs: mpsc::UnboundedSender<OpenTab>,
     pub downloads: DownloadClient,
+    worker: RefCell<Option<(oneshot::Sender<()>, thread::JoinHandle<()>)>>,
 }
 
 pub struct TabConnection {
@@ -119,7 +122,8 @@ impl BrowserHost {
         let (sender, mut requests) = mpsc::unbounded_channel::<OpenTab>();
         let (client, mut download_commands, download_entries) =
             DownloadClient::channel(directory.clone());
-        thread::Builder::new()
+        let (shutdown, mut stopping) = oneshot::channel();
+        let worker = thread::Builder::new()
             .name("molio-host".into())
             .spawn(move || {
                 let result = tokio::runtime::Builder::new_current_thread()
@@ -143,20 +147,26 @@ impl BrowserHost {
                     let browser = match Browser::new(config) {
                         Ok(browser) => browser,
                         Err(error) => {
-                            while let Some(tab) = requests.recv().await {
-                                tab.state
-                                    .send_modify(|state| state.error = Some(error.to_string()));
+                            loop {
+                                tokio::select! {
+                                    _ = &mut stopping => break,
+                                    tab = requests.recv() => {
+                                        let Some(tab) = tab else { break };
+                                        tab.state.send_modify(|state| state.error = Some(error.to_string()));
+                                    }
+                                }
                             }
                             return;
                         }
                     };
                     let (output, mut renderer_output) = renderer_output_transport_channel();
-                    browser.set_renderer_output_transport_sender(output);
+                    browser.set_renderer_output_transport_sender(output.with_desktop_downloads());
                     let downloads = Downloads::new(
                         browser.resource_request_client(), download_entries, directory, profile.as_deref(),
                     );
                     loop {
                         tokio::select! {
+                            _ = &mut stopping => break,
                             tab = requests.recv() => {
                                 let Some(tab) = tab else { break };
                                 tokio::task::spawn_local(run_tab(browser.clone(), Rc::clone(&downloads), tab));
@@ -175,13 +185,30 @@ impl BrowserHost {
                             }
                         }
                     }
+                    drop(renderer_output);
+                    download_commands.close();
+                    while let Ok(command) = download_commands.try_recv() {
+                        downloads.command(command);
+                    }
+                    downloads.shutdown().await;
                 });
             })
             .context("start browser host thread")?;
         Ok(Self {
             tabs: sender,
             downloads: client,
+            worker: RefCell::new(Some((shutdown, worker))),
         })
+    }
+
+    pub fn shutdown(&self) {
+        let worker = self.worker.borrow_mut().take();
+        if let Some((shutdown, worker)) = worker {
+            let _ = shutdown.send(());
+            if worker.join().is_err() {
+                eprintln!("Browser host failed while shutting down");
+            }
+        }
     }
 
     pub fn open_tab(&self) -> Result<TabConnection> {
@@ -200,6 +227,12 @@ impl BrowserHost {
             state,
             viewport,
         })
+    }
+}
+
+impl Drop for BrowserHost {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -549,7 +582,32 @@ async fn dispatch_pointer(
 mod tests {
     use super::*;
     use crate::downloads::{Download, DownloadCommand, DownloadState};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    async fn read_http_request(
+        socket: &mut BufReader<tokio::net::TcpStream>,
+    ) -> Result<(String, Option<String>)> {
+        let mut line = String::new();
+        socket.read_line(&mut line).await?;
+        let path = line
+            .split_whitespace()
+            .nth(1)
+            .context("HTTP request target")?
+            .to_owned();
+        let mut referer = None;
+        loop {
+            line.clear();
+            if socket.read_line(&mut line).await? == 0 || line == "\r\n" {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':')
+                && name.eq_ignore_ascii_case("referer")
+            {
+                referer = Some(value.trim().to_owned());
+            }
+        }
+        Ok((path, referer))
+    }
 
     async fn download_matching(
         entries: &mut watch::Receiver<Vec<Download>>,
@@ -565,6 +623,169 @@ mod tests {
             .find(|entry| matches(entry))
             .cloned()
             .context("download entry")
+    }
+
+    fn navigate(tab: &TabConnection, url: impl Into<String>) -> Result<()> {
+        tab.commands
+            .send(TabCommand::Navigate(Some(url.into())))
+            .map_err(|_| anyhow::anyhow!("navigate to download fixture"))
+    }
+
+    #[tokio::test]
+    async fn large_data_download_keeps_cross_tab_download_delivery_available() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let mut entries = host.downloads.entries.clone();
+        let data_tab = host.open_tab()?;
+        navigate(
+            &data_tab,
+            "data:text/html,<body><script>const link=document.createElement('a');link.download='large.bin';link.href='data:application/octet-stream;base64,'+'A'.repeat(16*1024*1024);document.body.append(link);link.click()</script>",
+        )?;
+        let large = download_matching(&mut entries, |entry| {
+            entry.name == "large.bin" && !entry.is_active()
+        })
+        .await
+        .context("large data download")?;
+        let DownloadState::Complete(path) = large.state else {
+            anyhow::bail!("large data download did not complete");
+        };
+        let contents = fs::read(path)?;
+        assert_eq!(contents.len(), 12 * 1024 * 1024);
+        assert!(contents.iter().all(|byte| *byte == 0));
+        drop(data_tab);
+
+        let blob_tab = host.open_tab()?;
+        navigate(
+            &blob_tab,
+            "data:text/html,<body><script>const link=document.createElement('a');link.download='small.txt';link.href=URL.createObjectURL(new Blob(['small']));document.body.append(link);link.click();URL.revokeObjectURL(link.href)</script>",
+        )?;
+        let small = download_matching(&mut entries, |entry| {
+            entry.name == "small.txt" && !entry.is_active()
+        })
+        .await
+        .context("Blob download in a different tab")?;
+        let DownloadState::Complete(path) = small.state else {
+            anyhow::bail!("Blob download after large data download did not complete");
+        };
+        assert_eq!(fs::read(path)?, b"small");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn http_downloads_use_the_effective_link_referrer_policy() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let mut entries = host.downloads.entries.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let origin = format!("http://{}", listener.local_addr()?);
+        let (requests, mut captures) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            for _ in 0..6 {
+                let (socket, _) = listener.accept().await?;
+                let mut socket = BufReader::new(socket);
+                let (path, referer) = read_http_request(&mut socket).await?;
+                let body = match path.as_str() {
+                    "/document?token=secret" => {
+                        r#"<meta name="referrer" content="no-referrer"><a id="d" download="document.txt" href="/export-document"></a><script>d.click()</script>"#
+                    }
+                    "/link?token=secret" => {
+                        r#"<meta name="referrer" content="unsafe-url"><a id="d" referrerpolicy="origin" download="link.txt" href="/export-link"></a><script>d.click()</script>"#
+                    }
+                    "/relation?token=secret" => {
+                        r#"<meta name="referrer" content="unsafe-url"><a id="d" rel="noreferrer" referrerpolicy="unsafe-url" download="relation.txt" href="/export-relation"></a><script>d.click()</script>"#
+                    }
+                    _ => {
+                        assert!(path.starts_with("/export-"), "{path}");
+                        requests.send((path, referer))?;
+                        "export"
+                    }
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+        for (name, expected) in [
+            ("document", None),
+            ("link", Some(format!("{origin}/"))),
+            ("relation", None),
+        ] {
+            let tab = host.open_tab()?;
+            navigate(&tab, format!("{origin}/{name}?token=secret"))?;
+            let (path, referer) = tokio::time::timeout(Duration::from_secs(10), captures.recv())
+                .await?
+                .context("download request")?;
+            assert_eq!(path, format!("/export-{name}"));
+            assert_eq!(referer, expected, "{name} download");
+            let entry = download_matching(&mut entries, |entry| {
+                entry.name == format!("{name}.txt") && !entry.is_active()
+            })
+            .await?;
+            assert!(matches!(entry.state, DownloadState::Complete(_)));
+        }
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn background_navigation_download_works_without_a_viewport_subscription() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let mut tab = host.open_tab()?;
+        let mut entries = host.downloads.entries.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/source", listener.local_addr()?);
+        let (started, gate_requested) = oneshot::channel();
+        let (release, gate) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await?;
+            let mut socket = BufReader::new(socket);
+            assert_eq!(read_http_request(&mut socket).await?.0, "/source");
+            let body = b"<script>fetch('/release').then(r=>r.text()).then(()=>location.assign('/attachment'))</script>";
+            socket.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            ).as_bytes()).await?;
+            socket.write_all(body).await?;
+            drop(socket);
+
+            let (socket, _) = listener.accept().await?;
+            let mut socket = BufReader::new(socket);
+            assert_eq!(read_http_request(&mut socket).await?.0, "/release");
+            started.send(()).expect("notify test of pending fetch");
+            gate.await?;
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await?;
+            drop(socket);
+
+            let (socket, _) = listener.accept().await?;
+            let mut socket = BufReader::new(socket);
+            assert_eq!(read_http_request(&mut socket).await?.0, "/attachment");
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Disposition: attachment; filename=background.txt\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody").await?;
+            Ok::<_, anyhow::Error>(())
+        });
+        navigate(&tab, url)?;
+        tokio::time::timeout(Duration::from_secs(5), gate_requested).await??;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tab.state.wait_for(|state| !state.loading),
+        )
+        .await??;
+        release.send(()).expect("release the background navigation");
+        let entry = download_matching(&mut entries, |entry| {
+            entry.name == "background.txt" && !entry.is_active()
+        })
+        .await?;
+        let DownloadState::Complete(path) = entry.state else {
+            anyhow::bail!("background attachment did not complete");
+        };
+        assert_eq!(fs::read(path)?, b"body");
+        server.await??;
+        Ok(())
     }
 
     #[tokio::test]
@@ -622,10 +843,9 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn canceling_a_download_removes_the_partial_file() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+    async fn start_stalled_download(
+        host: &BrowserHost,
+    ) -> Result<(TabConnection, Download, JoinHandle<std::io::Result<usize>>)> {
         let tab = host.open_tab()?;
         let mut entries = host.downloads.entries.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -637,20 +857,20 @@ mod tests {
             client.write_all(b"HTTP/1.1 200 OK\r\nContent-Disposition: attachment; filename=slow.dat\r\nContent-Length: 8192\r\nConnection: close\r\n\r\npartial").await?;
             client.read(&mut request).await
         });
-        tab.commands
-            .send(TabCommand::Navigate(Some(target)))
-            .map_err(|_| anyhow::anyhow!("navigate to attachment"))?;
+        navigate(&tab, target)?;
         let entry = download_matching(&mut entries, |entry| {
-            entry.name == "slow.dat" && entry.is_active()
+            entry.name == "slow.dat" && entry.is_active() && entry.received == 7
         })
         .await?;
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while fs::read_dir(directory.path())?.next().is_none() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok::<_, std::io::Error>(())
-        })
-        .await??;
+        Ok((tab, entry, server))
+    }
+
+    #[tokio::test]
+    async fn canceling_a_download_removes_the_partial_file() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let (_tab, entry, server) = start_stalled_download(&host).await?;
+        let mut entries = host.downloads.entries.clone();
         host.downloads.send(DownloadCommand::Cancel(entry.id));
         let entry = download_matching(&mut entries, |current| {
             current.id == entry.id && !current.is_active()
@@ -662,6 +882,42 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(5), server).await???,
             0
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn quitting_cancels_partial_downloads_and_flushes_the_latest_history() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let profile = root.path().join("profile");
+        let directory = root.path().join("downloads");
+        let host =
+            BrowserHost::start_with_download_directory(Some(profile.clone()), directory.clone())?;
+        let finished_tab = host.open_tab()?;
+        let mut entries = host.downloads.entries.clone();
+        navigate(
+            &finished_tab,
+            "data:text/html,<body><script>const link=document.createElement('a');link.download='done.txt';link.href='data:,done';document.body.append(link);link.click()</script>",
+        )?;
+        let finished = download_matching(&mut entries, |entry| {
+            entry.name == "done.txt" && !entry.is_active()
+        })
+        .await?;
+        assert!(matches!(finished.state, DownloadState::Complete(_)));
+
+        let (_tab, _, server) = start_stalled_download(&host).await?;
+        host.downloads.send(DownloadCommand::Clear);
+        host.shutdown();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), server).await???,
+            0
+        );
+        assert_eq!(fs::read(directory.join("done.txt"))?, b"done");
+        assert_eq!(fs::read_dir(&directory)?.count(), 1);
+        let restored = BrowserHost::start_with_download_directory(Some(profile), directory)?;
+        let mut entries = restored.downloads.entries.clone();
+        let canceled = download_matching(&mut entries, |entry| entry.name == "slow.dat").await?;
+        assert!(matches!(canceled.state, DownloadState::Canceled));
+        assert_eq!(entries.borrow().len(), 1);
         Ok(())
     }
 

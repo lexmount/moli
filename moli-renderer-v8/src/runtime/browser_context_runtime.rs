@@ -697,6 +697,12 @@ impl RendererBrowserContextRuntime {
         self.inner.renderer_output_transport_tx.sender()
     }
 
+    #[cfg(feature = "molio")]
+    pub(crate) fn has_desktop_download_receiver(&self) -> bool {
+        self.renderer_output_transport_sender()
+            .is_some_and(|sender| sender.receives_desktop_downloads())
+    }
+
     pub(crate) fn storage_partition_identity(&self) -> RendererStoragePartitionIdentity {
         self.inner.storage_partition_identity.clone()
     }
