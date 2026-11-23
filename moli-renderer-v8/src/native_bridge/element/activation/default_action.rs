@@ -2040,6 +2040,7 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
     form_handle: DomHandle,
     target_name: Option<&str>,
     resolved_url: &str,
+    history: NavigationHistoryMutation,
     user_initiated: bool,
 ) -> bool {
     let special_target = target_name.and_then(SpecialBrowsingContextTarget::parse);
@@ -2102,11 +2103,6 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
             return false;
         };
         let source_element = node_wrapper_from_handle(scope, form_handle);
-        let history = if user_initiated {
-            NavigationHistoryMutation::Push
-        } else {
-            NavigationHistoryMutation::Replace
-        };
         if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
             scope,
             window,
