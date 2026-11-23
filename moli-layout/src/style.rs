@@ -1852,12 +1852,20 @@ impl ResolvedLayoutStyle {
         }
         match self.overflow_mode(axis) {
             LayoutOverflowMode::Scroll => true,
-            LayoutOverflowMode::Auto => overflowing,
+            LayoutOverflowMode::Auto => overflowing || self.auto_scrollbar_revealed(axis),
             LayoutOverflowMode::Visible if is_root => overflowing,
             LayoutOverflowMode::Visible | LayoutOverflowMode::Clip | LayoutOverflowMode::Hidden => {
                 false
             }
         }
+    }
+
+    pub(crate) fn auto_scrollbar_revealed(&self, axis: LayoutScrollbarAxis) -> bool {
+        self.overflow_mode(axis) == LayoutOverflowMode::Auto
+            && match axis {
+                LayoutScrollbarAxis::Horizontal => self.revealed_scrollbar_x,
+                LayoutScrollbarAxis::Vertical => self.revealed_scrollbar_y,
+            }
     }
 
     pub(crate) fn overflow_mode(&self, axis: LayoutScrollbarAxis) -> LayoutOverflowMode {

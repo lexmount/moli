@@ -9,7 +9,8 @@ use crate::{
     projection::finish_layout_pass,
     taffy_tree::{compute_prepared_world_layout, prepare_world_layout},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::time::{Duration, Instant};
 
 /// Owned products for one embedded browsing context in the same synchronous
@@ -280,6 +281,48 @@ where
     numeric_metrics: NumericLayoutMetrics,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ScrollbarOwner<N> {
+    Viewport,
+    Element(N),
+    Pseudo(N, crate::LayoutPseudo),
+}
+
+impl<N: Copy> ScrollbarOwner<N> {
+    fn for_box(layout_box: &crate::LayoutBox<N>) -> Option<Self> {
+        if let Some(source) = layout_box.source() {
+            return Some(Self::Element(source));
+        }
+        let (owner, pseudo) = layout_box.owner().zip(layout_box.pseudo())?;
+        Some(Self::Pseudo(owner, pseudo))
+    }
+}
+
+const SCROLLBAR_AXES: [LayoutScrollbarAxis; 2] = [
+    LayoutScrollbarAxis::Horizontal,
+    LayoutScrollbarAxis::Vertical,
+];
+
+/// Revealed automatic scrollbars, keyed by stable sources across box-tree rebuilds.
+#[derive(PartialEq, Eq)]
+pub struct AutoScrollbars<N: Eq + Hash>(HashSet<(ScrollbarOwner<N>, LayoutScrollbarAxis)>);
+
+impl<N: Eq + Hash> Default for AutoScrollbars<N> {
+    fn default() -> Self {
+        Self(HashSet::new())
+    }
+}
+
+impl<N: Copy + Eq + Hash> AutoScrollbars<N> {
+    /// Keep each axis that changed visibility within a repeated query-size cycle.
+    pub fn freeze_changed(&mut self, first: &Self, second: &Self) -> bool {
+        let previous_count = self.0.len();
+        self.0
+            .extend(first.0.symmetric_difference(&second.0).copied());
+        self.0.len() != previous_count
+    }
+}
+
 impl<N> MeasuredLayoutPass<N>
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
@@ -288,6 +331,7 @@ where
     pub fn remeasure(
         self,
         services: &mut DocumentLayoutServices,
+        frozen_scrollbars: &AutoScrollbars<N>,
         prepare: impl FnOnce() -> Result<PreparedLayoutPass<N>, LayoutError>,
     ) -> Result<Self, LayoutError> {
         let Self {
@@ -305,7 +349,8 @@ where
             ..
         } = prepared;
         drop(world);
-        let mut next = measure_prepared_layout_pass(prepare()?, services)?;
+        let mut next =
+            measure_prepared_layout_pass_with_scrollbars(prepare()?, services, frozen_scrollbars)?;
         next.prepared.started = started;
         next.prepared.box_tree_elapsed += box_tree_elapsed;
         next.prepared.list_marker_elapsed += list_marker_elapsed;
@@ -314,6 +359,29 @@ where
         next.numeric_layout_elapsed += numeric_layout_elapsed;
         next.numeric_metrics.accumulate(numeric_metrics);
         Ok(next)
+    }
+
+    pub fn auto_scrollbars(&self) -> AutoScrollbars<N> {
+        let world = &self.prepared.world;
+        let mut scrollbars = AutoScrollbars::default();
+        if world.environment.scrollbars_hidden {
+            return scrollbars;
+        }
+        for axis in SCROLLBAR_AXES {
+            if world.viewport_scroll_policy.auto_scrollbar_revealed(axis) {
+                scrollbars.0.insert((ScrollbarOwner::Viewport, axis));
+            }
+        }
+        for layout_box in &world.boxes {
+            for axis in SCROLLBAR_AXES {
+                if layout_box.style.auto_scrollbar_revealed(axis)
+                    && let Some(owner) = ScrollbarOwner::for_box(layout_box)
+                {
+                    scrollbars.0.insert((owner, axis));
+                }
+            }
+        }
+        scrollbars
     }
 
     /// Untransformed content-box dimensions on the queryable physical axes.
@@ -413,8 +481,19 @@ where
 }
 
 pub fn measure_prepared_layout_pass<N>(
+    prepared: PreparedLayoutPass<N>,
+    services: &mut DocumentLayoutServices,
+) -> Result<MeasuredLayoutPass<N>, LayoutError>
+where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
+    measure_prepared_layout_pass_with_scrollbars(prepared, services, &AutoScrollbars::default())
+}
+
+fn measure_prepared_layout_pass_with_scrollbars<N>(
     mut prepared: PreparedLayoutPass<N>,
     services: &mut DocumentLayoutServices,
+    frozen_scrollbars: &AutoScrollbars<N>,
 ) -> Result<MeasuredLayoutPass<N>, LayoutError>
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
@@ -425,7 +504,8 @@ where
     let inline_preparation_elapsed = phase_started.elapsed();
     world.validate_invariants()?;
     let phase_started = Instant::now();
-    let numeric_metrics = compute_world_layout_with_scrollbars(world, prepared.request.viewport);
+    let numeric_metrics =
+        compute_world_layout_with_scrollbars(world, prepared.request.viewport, frozen_scrollbars);
     let numeric_layout_elapsed = phase_started.elapsed();
     if moli_trace::cpu_profile_enabled() {
         tracing::info!(
@@ -637,6 +717,7 @@ impl NumericLayoutMetrics {
 fn compute_world_layout_with_scrollbars<N>(
     world: &mut crate::LayoutWorld<N>,
     viewport: LayoutViewport,
+    frozen_scrollbars: &AutoScrollbars<N>,
 ) -> NumericLayoutMetrics
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
@@ -647,6 +728,17 @@ where
     world
         .viewport_scroll_policy
         .prepare_scrollbar_layout(scrollbars_hidden);
+    for axis in SCROLLBAR_AXES {
+        if !scrollbars_hidden
+            && frozen_scrollbars
+                .0
+                .contains(&(ScrollbarOwner::Viewport, axis))
+        {
+            world
+                .viewport_scroll_policy
+                .reveal_auto_scrollbar(axis, true);
+        }
+    }
     for (index, layout_box) in world.boxes.iter_mut().enumerate() {
         let id = crate::LayoutBoxId::from_index(index);
         if id == root_id {
@@ -657,6 +749,16 @@ where
             layout_box
                 .style
                 .prepare_scrollbar_layout(false, scrollbars_hidden);
+            if !scrollbars_hidden
+                && !frozen_scrollbars.0.is_empty()
+                && let Some(owner) = ScrollbarOwner::for_box(layout_box)
+            {
+                for axis in SCROLLBAR_AXES {
+                    if frozen_scrollbars.0.contains(&(owner, axis)) {
+                        layout_box.style.reveal_auto_scrollbar(axis, false, true);
+                    }
+                }
+            }
         }
     }
 
