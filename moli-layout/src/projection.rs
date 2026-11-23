@@ -7,9 +7,9 @@
 //! viewport scrolling; viewport mappings include both. Paint derives from the same
 //! placement, with its own snapping and property-space boundaries.
 //!
-//! Overflow feedback stays independent of this output pass. Only the existing
-//! FrozenLayoutTree survives projection; reads neither rebuild layout nor create
-//! paint snapshots. Clip inheritance and paint order remain separate relations.
+//! Overflow feedback stays independent of this output pass. Projection publishes
+//! a FrozenLayoutTree and can retain the inputs for an active screen paint
+//! consumer. Clip inheritance and paint order remain separate relations.
 
 mod coordinates;
 mod paint_space;
@@ -36,7 +36,7 @@ use crate::{
     LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId,
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutRect, LayoutScrollExtent,
     LayoutScrollbarAxis, LayoutScrollbarGeometry, LayoutSize, LayoutTransform2D, LayoutViewport,
-    LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity,
+    LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity, PaintSnapshot,
 };
 
 pub(crate) struct LayoutPassPhaseMetrics {
@@ -56,13 +56,14 @@ pub(crate) struct LayoutPassPhaseMetrics {
 }
 
 pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
-    world: &LayoutWorld<N>,
+    mut world: LayoutWorld<N>,
     source: &S,
     viewport: LayoutViewport,
     reason: LayoutFlushReason,
     started: Instant,
     paint_capture: Option<PaintCaptureRequest>,
     retain_scroll_projection: bool,
+    retain_screen_paint: bool,
     mut object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
     mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
     phase_metrics: LayoutPassPhaseMetrics,
@@ -71,8 +72,8 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let projection_started = Instant::now();
-    let overflow = OverflowProjection::new(world, viewport);
-    let mut projection = OutputProjection::new(world, viewport);
+    let overflow = OverflowProjection::new(&world, viewport);
+    let mut projection = OutputProjection::new(&world, viewport);
     projection.build_local_box_geometry(&overflow);
     projection.build_scroll_extents(&overflow);
     let scroll_projection =
@@ -106,9 +107,10 @@ where
                 .map(|capture| {
                     crate::paint::project_paint_snapshot(
                         &projection,
-                        source,
                         capture,
-                        reason == LayoutFlushReason::Print,
+                        content_size,
+                        (reason == LayoutFlushReason::Print)
+                            .then(|| crate::paint::LinkProjection::new(&projection, source)),
                         &mut embedded_paint,
                     )
                 })
@@ -168,13 +170,20 @@ where
             .filter(|diagnostic| diagnostic.severity == PaintDiagnosticSeverity::Warning)
             .count(),
     };
+    let mut screen_frames = HashMap::new();
     let embedded_frames = embedded_frames
-        .into_values()
-        .map(|(source, snapshot)| crate::FrozenEmbeddedFrame {
-            source,
-            tree: Box::new(snapshot.tree),
+        .into_iter()
+        .map(|(id, (source, snapshot))| {
+            if let Some(paint) = snapshot.screen_paint {
+                screen_frames.insert(source, (id, paint));
+            }
+            crate::FrozenEmbeddedFrame {
+                source,
+                tree: Box::new(snapshot.tree),
+            }
         })
         .collect();
+    let screen_diagnostics = retain_screen_paint.then(|| projection.diagnostics.clone());
     let tree = projection.into_frozen_tree(
         source.root(),
         content_size,
@@ -182,13 +191,108 @@ where
         embedded_frames,
         scroll_projection,
     );
+    let screen_paint = screen_diagnostics.map(|diagnostics| {
+        world.box_caches = Vec::new();
+        world.native_grid_details = HashMap::new();
+        world.resolved_grid_tracks = HashMap::new();
+        world.table_structures = HashMap::new();
+        Box::new(ScreenPaintLayout {
+            world,
+            frames: screen_frames,
+            diagnostics,
+        })
+    });
     Ok(LayoutPassResult::new(
         tree,
         diagnostics,
         metrics,
         paint_snapshot,
         css_image_references,
+        screen_paint,
     ))
+}
+
+/// Owned styles, glyphs and resources for painting one published screen layout.
+/// Paint always takes placement and scroll offsets from that layout's tree.
+pub struct ScreenPaintLayout<N>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    world: LayoutWorld<N>,
+    frames: HashMap<N, (LayoutBoxId, Box<Self>)>,
+    diagnostics: Vec<PaintDiagnostic>,
+}
+
+impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
+    /// Projects the viewport of the paired tree, using its latest scroll offsets.
+    pub fn paint(
+        &self,
+        tree: &FrozenLayoutTree<N>,
+        request: PaintCaptureRequest,
+    ) -> Result<PaintSnapshot, LayoutError> {
+        let scroll = tree.scroll_projection.as_deref().ok_or_else(|| {
+            LayoutError::source_contract("screen paint", "missing published box placements")
+        })?;
+        let world = &self.world;
+        if tree.boxes.len() != world.boxes.len() {
+            return Err(LayoutError::source_contract(
+                "screen paint",
+                "paint inputs and published box placements differ",
+            ));
+        }
+        let mut projection = OutputProjection::new(world, tree.viewport);
+        projection.viewport_scroll = tree.viewport_scroll;
+        projection.diagnostics.clone_from(&self.diagnostics);
+        for (index, layout_box) in tree.boxes.iter().enumerate() {
+            let mut geometry = layout_box.geometry.clone();
+            geometry.fragments.clear();
+            projection.boxes.push(geometry);
+            projection
+                .scroll_extents
+                .push(layout_box.scroll_extent.clone());
+            projection.resolved_transforms[index] = scroll.placement(index).0.transform;
+        }
+        projection.coordinate_spaces = resolve_coordinate_spaces(
+            world.root,
+            tree.viewport_scroll,
+            tree.boxes.len(),
+            true,
+            |index| Ok(scroll.placement(index)),
+            |id| {
+                let extent = &projection.scroll_extents[id.index()];
+                extent.is_scroll_container.then_some(extent.applied_offset)
+            },
+        )?
+        .spaces;
+        projection.build_fragments();
+        projection.assign_clip_and_paint_order();
+
+        let mut embedded_paint = HashMap::new();
+        for frame in tree.embedded_frames() {
+            if frame.tree.viewport.css_width == 0 || frame.tree.viewport.css_height == 0 {
+                continue;
+            }
+            let (id, paint) = self.frames.get(&frame.source).ok_or_else(|| {
+                LayoutError::source_contract("screen paint", "missing embedded paint inputs")
+            })?;
+            let child_request = PaintCaptureRequest {
+                include_backgrounds: request.include_backgrounds,
+                base_background_color: crate::PaintColor::TRANSPARENT,
+                ..PaintCaptureRequest::viewport()
+            };
+            embedded_paint.insert(*id, paint.paint(&frame.tree, child_request)?);
+        }
+
+        let capture = request.resolve(tree.viewport, tree.viewport_scroll, tree.content_size)?;
+        Ok(crate::paint::project_paint_snapshot(
+            &projection,
+            capture,
+            tree.content_size,
+            None,
+            &mut embedded_paint,
+        )
+        .snapshot)
+    }
 }
 
 /// One coordinate space while output and paint projection are both live.

@@ -81,8 +81,8 @@ pub struct LayoutPassMetrics {
 /// Transient products of exactly one complete layout demand.
 ///
 /// Consumers may inspect the tree and take an optional paint snapshot while
-/// handling the demand. Only [`FrozenLayoutTree`] crosses the latest-layout
-/// retention boundary; diagnostics, metrics, and paint remain pass-owned.
+/// handling the demand. Diagnostics, metrics, and the projected paint snapshot
+/// are pass-owned. A screen publication can separately take its requested paint inputs.
 pub struct LayoutPassResult<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -92,6 +92,7 @@ where
     pub metrics: LayoutPassMetrics,
     paint_snapshot: Option<PaintSnapshot>,
     css_image_references: Vec<LayoutCssImageReference<N>>,
+    screen_paint: Option<Box<crate::ScreenPaintLayout<N>>>,
 }
 
 impl<N> Deref for LayoutPassResult<N>
@@ -135,14 +136,17 @@ where
 
     /// Consumes all products needed to compose an embedded frame into its
     /// parent pass, including resource discovery metadata from that child.
-    pub fn into_embedded_parts(
-        self,
-    ) -> (
-        FrozenLayoutTree<N>,
-        Option<PaintSnapshot>,
-        Vec<LayoutCssImageReference<N>>,
-    ) {
-        (self.tree, self.paint_snapshot, self.css_image_references)
+    pub fn into_embedded_snapshot(self) -> crate::EmbeddedFrameSnapshot<N> {
+        crate::EmbeddedFrameSnapshot {
+            tree: self.tree,
+            paint: self.paint_snapshot,
+            css_image_references: self.css_image_references,
+            screen_paint: self.screen_paint,
+        }
+    }
+
+    pub fn take_screen_paint(&mut self) -> Option<Box<crate::ScreenPaintLayout<N>>> {
+        self.screen_paint.take()
     }
 
     pub fn retention_metrics(&self) -> LayoutTreeRetentionMetrics {
@@ -168,6 +172,7 @@ where
         metrics: LayoutPassMetrics,
         paint_snapshot: Option<PaintSnapshot>,
         css_image_references: Vec<LayoutCssImageReference<N>>,
+        screen_paint: Option<Box<crate::ScreenPaintLayout<N>>>,
     ) -> Self {
         Self {
             tree,
@@ -175,6 +180,7 @@ where
             metrics,
             paint_snapshot,
             css_image_references,
+            screen_paint,
         }
     }
 }

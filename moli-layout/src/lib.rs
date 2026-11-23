@@ -79,6 +79,7 @@ pub use pass::{
     finish_measured_layout_pass, finish_prepared_layout_pass, measure_prepared_layout_pass,
     prepare_layout_pass,
 };
+pub use projection::ScreenPaintLayout;
 pub use scrollbar::{
     LayoutControlSurfaceHit, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarCornerHit,
     LayoutScrollbarGeometry, LayoutScrollbarGutter, LayoutScrollbarHit, LayoutScrollbarPart,

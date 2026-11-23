@@ -159,11 +159,13 @@ enum UnavailableReplacedContentPaint {
     TransparentCanvas,
 }
 
-pub(crate) fn project_paint_snapshot<N, S: crate::LayoutSource<NodeId = N>>(
+pub(crate) use links::LinkProjection;
+
+pub(crate) fn project_paint_snapshot<N>(
     projection: &OutputProjection<'_, N>,
-    source: &S,
     capture: ResolvedPaintCapture,
-    retain_text_semantics: bool,
+    content_size: crate::LayoutSize,
+    links: Option<LinkProjection>,
     embedded_frames: &mut HashMap<LayoutBoxId, PaintSnapshot>,
 ) -> PaintProjectionResult
 where
@@ -176,13 +178,12 @@ where
         (capture.base_background_color, None)
     };
     let mut snapshot = PaintSnapshot::new(projection.viewport, canvas_color);
-    snapshot.retain_text_semantics = retain_text_semantics;
+    snapshot.retain_text_semantics = links.is_some();
     snapshot.surface = capture.surface;
     snapshot.raster_crop = capture.raster_crop;
     snapshot.viewport_to_surface = capture.viewport_to_surface;
-    snapshot.content_size = projection.document_content_size();
+    snapshot.content_size = content_size;
     snapshot.diagnostics = projection.diagnostics.clone();
-    let links = retain_text_semantics.then(|| links::LinkProjection::new(projection, source));
     let cull_plan = PaintCullPlan::build(projection);
     let mut metrics = PaintProjectionMetrics {
         event_count: projection.paint_events.len(),
