@@ -91,7 +91,7 @@ fn build_native_layout_pass_recursive(
             request.viewport,
             environment_override,
         ),
-        request.requests_paint(),
+        request.requests_paint() || request.retains_screen_paint(),
     );
     let source_ready = profile_started.map(|_| std::time::Instant::now());
     let mut styles_ready = None;
@@ -119,6 +119,7 @@ fn build_native_layout_pass_recursive(
             environment_override,
             frame_coverage: request.frame_coverage(),
             retain_scroll_projection: request.retains_scroll_projection(),
+            retain_screen_paint: request.retains_screen_paint(),
             document_stack,
             embedded_document_services,
             original_container_sizes,
@@ -216,6 +217,7 @@ struct NativeEmbeddedFrameRenderer<'a> {
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     frame_coverage: moli_layout::LayoutFrameCoverage,
     retain_scroll_projection: bool,
+    retain_screen_paint: bool,
     document_stack: &'a mut Vec<DomHandle>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
     original_container_sizes: &'a mut HashMap<DomHandle, QueryContainerSizes>,
@@ -267,7 +269,10 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             LayoutPassRequest::new(viewport, self.reason)
         }
         .with_frame_coverage(self.frame_coverage)
-        .with_scroll_projection(self.retain_scroll_projection);
+        .with_scroll_projection(self.retain_scroll_projection)
+        .with_screen_paint(
+            self.retain_screen_paint && viewport.css_width > 0 && viewport.css_height > 0,
+        );
         let result = build_native_layout_pass_recursive(
             self.runtime,
             root,
@@ -280,12 +285,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         );
         self.embedded_document_services.insert(document, services);
         let output = result?;
-        let (tree, paint, css_image_references) = output.into_embedded_parts();
-        Ok(Some(moli_layout::EmbeddedFrameSnapshot::new(
-            tree,
-            paint,
-            css_image_references,
-        )))
+        Ok(Some(output.into_embedded_snapshot()))
     }
 }
 

@@ -6,12 +6,12 @@ use crate::{
     PaintSnapshot, projection::OutputProjection,
 };
 
-pub(super) struct LinkProjection {
+pub(crate) struct LinkProjection {
     targets: Vec<Option<PaintLinkTarget>>,
 }
 
 impl LinkProjection {
-    pub(super) fn new<N, S>(projection: &OutputProjection<'_, N>, source: &S) -> Self
+    pub(crate) fn new<N, S>(projection: &OutputProjection<'_, N>, source: &S) -> Self
     where
         N: Copy + Debug + Eq + Hash,
         S: LayoutSource<NodeId = N>,

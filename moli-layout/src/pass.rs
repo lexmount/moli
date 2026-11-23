@@ -22,6 +22,7 @@ where
     pub tree: FrozenLayoutTree<N>,
     pub paint: Option<PaintSnapshot>,
     pub css_image_references: Vec<crate::LayoutCssImageReference<N>>,
+    pub(crate) screen_paint: Option<Box<crate::ScreenPaintLayout<N>>>,
 }
 
 impl<N> EmbeddedFrameSnapshot<N>
@@ -38,6 +39,7 @@ where
             tree,
             paint,
             css_image_references,
+            screen_paint: None,
         }
     }
 }
@@ -96,6 +98,7 @@ pub struct LayoutPassRequest {
     paint_capture: Option<PaintCaptureRequest>,
     frame_coverage: LayoutFrameCoverage,
     retain_scroll_projection: bool,
+    retain_screen_paint: bool,
 }
 
 impl LayoutPassRequest {
@@ -109,6 +112,7 @@ impl LayoutPassRequest {
             paint_capture: None,
             frame_coverage: LayoutFrameCoverage::PositiveViewport,
             retain_scroll_projection: false,
+            retain_screen_paint: false,
         }
     }
 
@@ -151,7 +155,17 @@ impl LayoutPassRequest {
     }
 
     pub const fn retains_scroll_projection(self) -> bool {
-        self.retain_scroll_projection
+        self.retain_scroll_projection || self.retain_screen_paint
+    }
+
+    /// Keep the layout inputs needed to paint this screen publication again.
+    pub const fn with_screen_paint(mut self, retain: bool) -> Self {
+        self.retain_screen_paint = retain;
+        self
+    }
+
+    pub const fn retains_screen_paint(self) -> bool {
+        self.retain_screen_paint
     }
 
     /// Whether this demand also needs immutable software-paint input.
@@ -210,12 +224,9 @@ where
 
 /// Builds one complete layout result from a borrowed source view.
 ///
-/// Box construction, inline shaping, Taffy caches, and all style borrows remain
-/// local to this call. The returned pass value owns one [`crate::FrozenLayoutTree`]
-/// plus pass-only metrics, diagnostics, and an optional DOM-neutral paint
-/// snapshot. Consumers may retain the tree, but not the surrounding pass
-/// value. Several geometry answers should be batched against one tree instead
-/// of triggering a layout per query.
+/// Style borrows and Taffy caches end with the pass. The result owns a frozen
+/// tree, metrics, diagnostics and any requested paint products. A screen
+/// publication can take the owned inputs for another paint projection.
 pub fn build_layout_pass<S, R>(
     source: &S,
     styles: &mut R,
@@ -232,9 +243,9 @@ where
 /// Builds one complete layout result and resolves embedded frame geometry after
 /// the parent numeric layout has established their exact content viewports.
 ///
-/// This is a one-shot composition seam, not a per-Document cache. Child trees
-/// are recursively owned by the one parent snapshot, child paint is consumed
-/// into parent paint, and every working layout world is then dropped.
+/// Child trees belong to the parent snapshot. An immediate paint request
+/// composes the child snapshots into the parent. A retained screen paint
+/// request keeps the child paint inputs alongside the parent inputs.
 pub fn build_layout_pass_with_embedded_frames<S, R, F>(
     source: &S,
     styles: &mut R,
@@ -590,13 +601,14 @@ where
     }
     let embedded_frame_elapsed = phase_started.elapsed();
     finish_layout_pass(
-        &world,
+        world,
         source,
         request.viewport,
         request.reason,
         started,
         request.paint_capture,
-        request.retain_scroll_projection,
+        request.retains_scroll_projection(),
+        request.retains_screen_paint(),
         object_geometry,
         embedded_frames,
         crate::projection::LayoutPassPhaseMetrics {
