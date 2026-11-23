@@ -3994,6 +3994,7 @@ fn trusted_alt_click_downloads_an_anchor_without_a_download_attribute() {
         crate::runtime::RendererPointerEventProperties::default(),
         1,
         false,
+        true,
         MouseDispatchCompletion::FinishTurn,
     )
     .expect("alt mousedown should dispatch");
@@ -4010,6 +4011,7 @@ fn trusted_alt_click_downloads_an_anchor_without_a_download_attribute() {
             crate::runtime::RendererPointerEventProperties::default(),
             1,
             false,
+            true,
             MouseDispatchCompletion::FinishTurn,
         )
         .expect("alt mouseup should dispatch");
@@ -4059,6 +4061,7 @@ fn alt_input_does_not_turn_window_open_into_a_download_or_background_popup() {
         crate::runtime::RendererPointerEventProperties::default(),
         1,
         false,
+        true,
         MouseDispatchCompletion::FinishTurn,
     )
     .expect("Alt mousedown should dispatch");
@@ -4075,6 +4078,7 @@ fn alt_input_does_not_turn_window_open_into_a_download_or_background_popup() {
             crate::runtime::RendererPointerEventProperties::default(),
             1,
             false,
+            true,
             MouseDispatchCompletion::FinishTurn,
         )
         .expect("Alt mouseup should dispatch");
@@ -4133,6 +4137,7 @@ fn window_open_in_click_listener_uses_current_input_event() {
             crate::runtime::RendererPointerEventProperties::default(),
             platform_modifier,
             false,
+            true,
             MouseDispatchCompletion::FinishTurn,
         )
         .expect("new-tab-modified mousedown should dispatch");
@@ -4149,6 +4154,7 @@ fn window_open_in_click_listener_uses_current_input_event() {
             crate::runtime::RendererPointerEventProperties::default(),
             platform_modifier,
             false,
+            true,
             MouseDispatchCompletion::FinishTurn,
         )
         .expect("new-tab-modified mouseup should dispatch");
@@ -4241,6 +4247,7 @@ fn current_mouseup_input_covers_pointer_mouse_click_and_microtask_callbacks() {
         crate::runtime::RendererPointerEventProperties::default(),
         platform_modifier,
         false,
+        true,
         MouseDispatchCompletion::FinishTurn,
     )
     .expect("new-tab-modified mousedown should dispatch");
@@ -4256,6 +4263,7 @@ fn current_mouseup_input_covers_pointer_mouse_click_and_microtask_callbacks() {
         crate::runtime::RendererPointerEventProperties::default(),
         platform_modifier,
         false,
+        true,
         MouseDispatchCompletion::FinishTurn,
     )
     .expect("new-tab-modified mouseup should dispatch");

@@ -779,6 +779,7 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
             crate::runtime::RendererPointerEventProperties::default(),
             0,
             false,
+            true,
             MouseDispatchCompletion::DeferToBatch,
         )
         .expect("batched child wheel step should dispatch");

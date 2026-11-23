@@ -32,6 +32,7 @@ fn pointer_drag_mouse(
         RendererPointerEventProperties::default(),
         2,
         true,
+        true,
         MouseDispatchCompletion::FinishTurn,
     )
     .expect("native pointer drag input")

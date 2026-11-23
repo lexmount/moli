@@ -212,6 +212,7 @@ impl ScriptVm {
                 RendererPointerEventProperties::default(),
                 0,
                 false,
+                true,
                 MouseDispatchCompletion::FinishTurn,
             );
             let next = match dispatched {

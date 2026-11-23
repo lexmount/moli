@@ -180,6 +180,7 @@ impl RendererDevToolsPageCommand {
             Self::WebMcp { .. }
             | Self::DispatchPreparedElementClick(..)
             | Self::DispatchMouseEventAtPoint { .. }
+            | Self::DispatchSyntheticWheel { .. }
             | Self::DispatchTouchEvent { .. }
             | Self::DispatchDragEventAtPoint { .. }
             | Self::CancelDragging

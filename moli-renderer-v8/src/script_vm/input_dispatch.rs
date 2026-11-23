@@ -1050,6 +1050,7 @@ impl ScriptVm {
             pointer,
             0,
             false,
+            true,
             MouseDispatchCompletion::FinishTurn,
         )
     }
@@ -1067,6 +1068,7 @@ impl ScriptVm {
         pointer: RendererPointerEventProperties,
         modifiers: u8,
         intercept_drags: bool,
+        wheel_cancelable: bool,
         completion: MouseDispatchCompletion,
     ) -> Result<RendererInputDispatchOutcome> {
         let surface_hit = self.mouse_input_surface_hit(x, y, event_name)?;
@@ -1108,6 +1110,7 @@ impl ScriptVm {
             pointer,
             modifiers,
             intercept_drags,
+            wheel_cancelable,
         );
         if is_release {
             self.suppress_compat_mouse_events = false;
@@ -1404,6 +1407,7 @@ impl ScriptVm {
         pointer: RendererPointerEventProperties,
         modifiers: u8,
         intercept_drags: bool,
+        wheel_cancelable: bool,
     ) -> Result<RendererInputDispatchOutcome> {
         let PreparedMouseInputDispatch {
             button, buttons, ..
@@ -1813,6 +1817,7 @@ impl ScriptVm {
                         delta_y,
                         buttons,
                         modifiers,
+                        wheel_cancelable,
                     )
                 } else if matches!(event_name, "mousedown" | "mouseup") {
                     construct_mouse_event_with_detail_for_target(
@@ -1849,14 +1854,19 @@ impl ScriptVm {
                     }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
-                    if event_name == "wheel" && dispatched.allows_default() {
-                        let _ = perform_wheel_scroll_default_action(
-                            scope,
-                            runtime_ptr,
-                            pointer_dispatch_handle,
-                            delta_x,
-                            delta_y,
-                        )?;
+                    if event_name == "wheel" {
+                        let mut outcome = input_dispatch_outcome(true);
+                        outcome.wheel_default_prevented = !dispatched.allows_default();
+                        if dispatched.allows_default() {
+                            let _ = perform_wheel_scroll_default_action(
+                                scope,
+                                runtime_ptr,
+                                pointer_dispatch_handle,
+                                delta_x,
+                                delta_y,
+                            )?;
+                        }
+                        return Ok(outcome);
                     }
                     if event_name == "mousedown" && !dispatched.allows_default() {
                         mouse_down_allows_drag.set(false);
@@ -2083,6 +2093,7 @@ impl ScriptVm {
                     if follow_up_event_name == "auxclick" {
                         return Ok(RendererInputDispatchOutcome {
                             handled: true,
+                            wheel_default_prevented: false,
                             triggered_top_level_navigation:
                                 !had_pending_top_level_navigation_before_event
                                     && unsafe { &*runtime_ptr }.has_pending_location_navigation(),

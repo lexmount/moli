@@ -552,6 +552,7 @@ pub struct RendererInterceptedDrag {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RendererInputDispatchOutcome {
     pub handled: bool,
+    pub wheel_default_prevented: bool,
     pub triggered_top_level_navigation: bool,
     pub pending_download: Option<RendererPendingDownloadActivation>,
     pub pending_file_chooser: Option<RendererPendingFileChooserActivation>,

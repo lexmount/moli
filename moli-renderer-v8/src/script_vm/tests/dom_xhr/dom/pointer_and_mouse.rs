@@ -384,6 +384,7 @@ fn pointer_capture_mouse_events_preserve_modifiers() {
         crate::runtime::RendererPointerEventProperties::default(),
         10,
         false,
+        true,
         MouseDispatchCompletion::FinishTurn,
     )
     .expect("mousedown should dispatch pointerdown with modifiers");
@@ -399,6 +400,7 @@ fn pointer_capture_mouse_events_preserve_modifiers() {
         crate::runtime::RendererPointerEventProperties::default(),
         10,
         false,
+        true,
         MouseDispatchCompletion::FinishTurn,
     )
     .expect("mouseup should dispatch pointerup and capture release with modifiers");
@@ -1151,6 +1153,7 @@ fn dispatch_drag_mouse(
         crate::runtime::RendererPointerEventProperties::default(),
         0,
         intercept_drags,
+        true,
         MouseDispatchCompletion::FinishTurn,
     )
     .expect("drag mouse event should dispatch")

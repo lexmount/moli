@@ -30,6 +30,7 @@ fn intercepted_payload(vm: &mut StandaloneScriptVmHarness, point: [f64; 2]) -> R
                 RendererPointerEventProperties::default(),
                 0,
                 true,
+                true,
                 MouseDispatchCompletion::FinishTurn,
             )
             .unwrap();

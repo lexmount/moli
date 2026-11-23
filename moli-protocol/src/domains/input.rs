@@ -51,7 +51,9 @@ pub(crate) mod file_chooser;
 mod key;
 mod mouse;
 mod output_projection;
+mod scroll;
 pub(crate) use output_projection::PreparedInputOutputProjection;
+pub(crate) use scroll::SyntheticWheel;
 #[cfg(test)]
 mod tests;
 
@@ -85,17 +87,20 @@ pub(crate) struct CompletedInputCommandDispatch {
 
 pub(crate) enum InputCommandDispatchStep {
     Pending(PendingInputCommandDispatch),
+    Workflow(crate::conn::PreparedCommandWorkflow),
     Complete(CommandOutputPlan),
 }
 
 struct CompletedInputCommandResult {
     result: Result<AutomationResult, DevToolsError>,
     protocol_events: Vec<BackgroundProtocolEvent>,
+    wheel_canceled: bool,
 }
 
 #[derive(Default)]
 struct InputCommandSideEffects {
     protocol_events: Vec<BackgroundProtocolEvent>,
+    wheel_canceled: bool,
 }
 
 impl InputCommandSideEffects {
@@ -326,6 +331,7 @@ pub(crate) fn try_start_input_command_dispatch(
         ));
     };
     match action {
+        InputAction::SynthesizeScrollGesture => scroll::start(conn, cmd),
         InputAction::CancelDragging => {
             start_input_command_dispatch_after_noop_checks(conn, cmd, action)
         }
@@ -564,6 +570,7 @@ fn validate_coordinate_input_params(
         | InputAction::DispatchKeyEvent
         | InputAction::InsertText
         | InputAction::SetIgnoreInputEvents
+        | InputAction::SynthesizeScrollGesture
         | InputAction::SetInterceptDrags => Ok(()),
     }
 }
@@ -576,6 +583,9 @@ fn coordinate_input_unsupported_message(action: InputAction) -> &'static str {
             EMULATE_TOUCH_FROM_MOUSE_EVENT_UNSUPPORTED_MESSAGE
         }
         InputAction::SynthesizeTapGesture => SYNTHESIZE_TAP_GESTURE_UNSUPPORTED_MESSAGE,
+        InputAction::SynthesizeScrollGesture => {
+            "Input.synthesizeScrollGesture requires layout hit testing."
+        }
         InputAction::DispatchDragEvent => DISPATCH_DRAG_EVENT_UNSUPPORTED_MESSAGE,
         InputAction::CancelDragging
         | InputAction::DispatchKeyEvent
@@ -702,7 +712,9 @@ fn start_pending_input_command(
                 |page| page.start_cancel_dragging(),
             )
         }
-        InputAction::SetIgnoreInputEvents | InputAction::SetInterceptDrags => Ok(None),
+        InputAction::SetIgnoreInputEvents
+        | InputAction::SetInterceptDrags
+        | InputAction::SynthesizeScrollGesture => Ok(None),
     }
 }
 
@@ -956,6 +968,7 @@ fn build_cdp_coordinate_input_command(
         | InputAction::DispatchKeyEvent
         | InputAction::InsertText
         | InputAction::SetIgnoreInputEvents
+        | InputAction::SynthesizeScrollGesture
         | InputAction::SetInterceptDrags => Err(PendingInputCommandStartError::invalid_params()),
     }
 }
@@ -1395,10 +1408,12 @@ async fn complete_input_workflow(
     let result =
         complete_input_operation(driver, completed, command_context, &mut side_effects).await;
     let mut protocol_events = command_context.context_mut().take_deferred_command_events();
+    let wheel_canceled = side_effects.wheel_canceled;
     protocol_events.extend(side_effects.into_events());
     CompletedInputCommandResult {
         result,
         protocol_events,
+        wheel_canceled,
     }
 }
 
@@ -1467,6 +1482,7 @@ async fn complete_input_operation(
             )
         }
     };
+    side_effects.wheel_canceled = outcome.wheel_default_prevented;
     handle_input_dispatch_outcome(
         driver,
         side_effects,

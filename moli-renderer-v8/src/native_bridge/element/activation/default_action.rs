@@ -592,6 +592,7 @@ fn click_handle_internal(
     {
         return RendererInputDispatchOutcome {
             handled: false,
+            wheel_default_prevented: false,
             triggered_top_level_navigation: false,
             pending_download: None,
             pending_file_chooser: None,
@@ -824,6 +825,7 @@ fn click_handle_internal(
     }
     RendererInputDispatchOutcome {
         handled: true,
+        wheel_default_prevented: false,
         triggered_top_level_navigation: false,
         pending_download: None,
         pending_file_chooser: None,
@@ -840,6 +842,7 @@ fn input_dispatch_outcome_after_click(
 ) -> RendererInputDispatchOutcome {
     RendererInputDispatchOutcome {
         handled,
+        wheel_default_prevented: false,
         triggered_top_level_navigation: !had_pending_top_level_navigation_before_click
             && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
         pending_download,
