@@ -170,6 +170,7 @@ impl RendererDevToolsPageCommand {
             | Self::ChildFrameDocumentRootNodeReference { .. }
             | Self::SetFetchSubresourceInterception { .. } => PageAgent,
             Self::WebMcp { .. }
+            | Self::SetOverlayHighlight { .. }
             | Self::DispatchPreparedElementClick(..)
             | Self::DispatchMouseEventAtPoint { .. }
             | Self::DispatchTouchEvent { .. }

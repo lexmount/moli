@@ -24,6 +24,7 @@ pub const IMPLEMENTED_COMMANDS: &[DomainMembers] = &[
     ("IO", IoAction::VARIANTS),
     ("Log", LogAction::VARIANTS),
     ("Network", NetworkAction::VARIANTS),
+    ("Overlay", OverlayAction::VARIANTS),
     ("Page", PageAction::VARIANTS),
     ("Performance", PerformanceAction::VARIANTS),
     ("Profiler", ProfilerAction::VARIANTS),
@@ -62,6 +63,7 @@ mod implemented_commands_tests {
         // Explicit `serialize` overrides and camelCase defaults must both come out as the CDP wire names.
         assert!(get("Accessibility").contains(&"getFullAXTree"));
         assert!(get("DOMStorage").contains(&"getDOMStorageItems"));
+        assert!(get("Overlay").contains(&"highlightNode"));
         assert!(get("Page").contains(&"navigate"));
         assert!(get("Schema").contains(&"getDomains"));
         assert!(get("Profiler").contains(&"startPreciseCoverage"));

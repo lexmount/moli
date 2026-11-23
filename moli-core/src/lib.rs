@@ -45,7 +45,8 @@ pub use moli_renderer_v8::{
     RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
     RendererNativeCommandTerminal, RendererNativeOperation, RendererNativeOperationStep,
     RendererNativeProtocolError, RendererNativeProtocolNotification,
-    RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate,
+    RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate, RendererOverlayHighlight,
+    RendererOverlayNode,
 };
 pub use moli_renderer_v8::{RendererPageAccessError, RendererPageCommand, RendererPageReply};
 #[cfg(feature = "molio")]

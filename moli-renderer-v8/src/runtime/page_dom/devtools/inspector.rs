@@ -1134,6 +1134,7 @@ impl PageVm {
         let session_key = DevToolsSessionKey::from_wire_session_id(
             inspector_session_id.filter(|session_id| !session_id.is_empty()),
         );
+        self.devtools.overlay.clear(&session_key);
         self.runtime_bindings
             .retain(|binding| binding.devtools_session.as_ref() != Some(&session_key));
         let runtime_bindings = self.runtime_bindings.clone();

@@ -198,6 +198,59 @@ async fn capture_screenshot_accepts_default_equivalent_options() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn capture_screenshot_draws_and_clears_devtools_highlights() {
+    let mut ctx = TestContext::new();
+    let session = "SID-OVERLAY";
+    let fixture = screenshot_data_url(
+        "<!doctype html><style>body{margin:0} #box{width:8px;height:8px}</style><div id=box></div>",
+    );
+    install_active_screenshot_page(&mut ctx, "BID-OVERLAY", "TID-OVERLAY", session, &fixture).await;
+    set_screenshot_viewport(&mut ctx, session, 16, 16, 1.0, 150).await;
+    for (id, method) in [(151, "DOM.enable"), (152, "Overlay.enable")] {
+        ctx.process_async(json!({"id":id,"sessionId":session,"method":method}))
+            .await;
+        ctx.expect_result(id, json!({}), Some(session));
+    }
+    ctx.process_async(
+        json!({"id":153,"sessionId":session,"method":"DOM.getDocument","params":{"depth":0}}),
+    )
+    .await;
+    let root = take_response_by_id(&mut ctx, 153)["result"]["root"]["nodeId"].clone();
+    ctx.process_async(json!({"id":154,"sessionId":session,"method":"DOM.querySelector","params":{"nodeId":root,"selector":"#box"}})).await;
+    let node = take_response_by_id(&mut ctx, 154)["result"]["nodeId"].clone();
+    for (id, method, params, pixel) in [
+        (
+            155,
+            "DOM.highlightNode",
+            json!({
+                "nodeId":node, "highlightConfig":{"contentColor":{"r":0,"g":255,"b":0}}
+            }),
+            [0, 255, 0, 255],
+        ),
+        (
+            156,
+            "Overlay.highlightRect",
+            json!({
+                "x":2,"y":2,"width":8,"height":8,"color":{"r":255,"g":0,"b":0}
+            }),
+            [255, 0, 0, 255],
+        ),
+        (157, "DOM.hideHighlight", json!({}), [255; 4]),
+    ] {
+        ctx.process_async(json!({"id":id,"sessionId":session,"method":method,"params":params}))
+            .await;
+        ctx.expect_result(id, json!({}), Some(session));
+        ctx.process_async(
+            json!({"id":id+10,"sessionId":session,"method":"Page.captureScreenshot"}),
+        )
+        .await;
+        let png = screenshot_png_bytes(&take_response_by_id(&mut ctx, id + 10));
+        assert_eq!(decode_png_pixel(&png, 3, 3), pixel, "{method}");
+        assert_eq!(decode_png_pixel(&png, 13, 13), [255; 4]);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_applies_base_background_alpha_clear_and_css_priority() {
     let mut ctx = TestContext::new();
     let fixture = screenshot_data_url(
