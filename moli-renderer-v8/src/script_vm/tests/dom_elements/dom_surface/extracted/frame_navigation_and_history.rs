@@ -2672,6 +2672,143 @@ String(frame.contentWindow.navigation.activation === null)
         r#"[true,true,true,true,"about:blank",-1,"replace"]"#
     );
 }
+#[tokio::test]
+async fn child_activation_snapshot_survives_history_updates_and_isolate_replacement() {
+    for shadow in ["none", "values", "getters", "prototype", "frozen"] {
+        let server = StaticHttpServer::spawn(1).await;
+        let base = server.base_url().origin().ascii_serialization();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(&format!("{base}/parent"), &loader);
+        vm.exec(
+            &format!(
+                r#"
+const frame = document.createElement('iframe');
+let loads = 0;
+frame.addEventListener('load', () => loads++);
+frame.src = {base:?} + '/source';
+(document.body || document.documentElement || document).appendChild(frame);
+"#
+            ),
+            None,
+        )
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(loads)",
+            "1",
+            "activation source Document",
+        )
+        .await;
+        let handle = vm
+            ._context_host
+            .borrow()
+            .child_browsing_context_handles_in_document_order()[0];
+        let mut expected = vm
+            ._context_host
+            .borrow()
+            .child_browsing_context_navigation_seed_snapshot(handle)
+            .unwrap()
+            .committed_navigation_entry_seed
+            .activation
+            .expect("cross-document navigation must have activation");
+        assert!(expected.from.is_none());
+        // Read the initial wrapper tokens before author properties are installed.
+        let [id, key]: [String; 2] = serde_json::from_str(
+            &vm.eval(
+                r#"JSON.stringify((() => {
+                  const {entry} = frame.contentWindow.navigation.activation;
+                  return [entry.id, entry.key];
+                })())"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        expected.entry.id = moli_page_types::NavigationHistoryEntryId::from_serialized(id);
+        expected.entry.key = moli_session_history::NavigationHistoryEntryKey::from_serialized(key);
+        vm.exec(
+            &format!(
+                r#"
+const child = frame.contentWindow;
+const activation = child.navigation.activation;
+let authorReads = 0;
+const shadow = {shadow:?};
+for (const name of ['entry', 'from', 'navigationType']) {{
+  if (shadow === 'values') {{
+Object.defineProperty(activation, name, {{value: null, configurable: true}});
+  }} else if (shadow === 'getters' || shadow === 'prototype') {{
+Object.defineProperty(shadow === 'getters' ? activation : child.NavigationActivation.prototype,
+  name, {{configurable: true, get() {{ authorReads++; throw new Error(name); }}}});
+  }}
+}}
+if (shadow === 'frozen') Object.freeze(activation);
+child.history.pushState({{current: 43}}, '', '#pushed');
+child.history.replaceState({{current: 44}}, '', '#replaced');
+child.navigation.updateCurrentEntry({{state: {{current: 45}}}});
+"#,
+            ),
+            None,
+        )
+        .unwrap();
+        assert_eq!(vm.eval("String(authorReads)").unwrap(), "0", "{shadow}");
+        let seed = vm
+            ._context_host
+            .borrow()
+            .child_browsing_context_navigation_seed_snapshot(handle)
+            .unwrap()
+            .committed_navigation_entry_seed;
+        assert_eq!(seed.activation.as_ref(), Some(&expected), "{shadow}");
+        let url = seed
+            .entries
+            .iter()
+            .find(|entry| entry.history_index == seed.current_index)
+            .unwrap()
+            .url
+            .clone();
+        drop(vm);
+
+        let mut restored = new_storage_test_vm(&url);
+        restored.install_navigation_bootstrap_entry(Some(seed));
+        let expected_view = serde_json::json!([
+            expected.navigation_type,
+            expected.entry.url,
+            expected.entry.id.as_str(),
+            expected.entry.key.as_str(),
+            expected.from.as_ref().map(|entry| &entry.url),
+            false,
+            true,
+            true,
+            44,
+            45,
+        ]);
+        let view = restored
+            .eval(
+                r#"
+JSON.stringify([
+  navigation.activation.navigationType,
+  navigation.activation.entry.url,
+  navigation.activation.entry.id,
+  navigation.activation.entry.key,
+  navigation.activation.from?.url ?? null,
+  navigation.activation.entry === navigation.currentEntry,
+  navigation.activation instanceof NavigationActivation,
+  navigation.activation.entry instanceof NavigationHistoryEntry,
+  history.state.current,
+  navigation.currentEntry.getState().current
+])
+"#,
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&view).unwrap(),
+            expected_view,
+            "restored {shadow}"
+        );
+        assert_eq!(server.finish_targets().await.len(), 1);
+    }
+}
+
 #[test]
 fn non_initial_about_blank_iframe_assign_appends_history_after_replace() {
     for initial_srcdoc in [false, true] {
