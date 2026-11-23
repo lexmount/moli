@@ -5,6 +5,75 @@ use super::*;
 use crate::RendererPopupActivationSource;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn related_popup_initial_document_inherits_layout_configuration() {
+    use moli_page_types::LayoutPolicy;
+
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    for (policy, scrollbars_hidden, client_size) in [
+        (LayoutPolicy::Mock, false, [100, 20]),
+        (LayoutPolicy::OnDemand, false, [185, 85]),
+        (LayoutPolicy::OnDemand, true, [200, 100]),
+        (LayoutPolicy::Realtime, false, [185, 85]),
+        (LayoutPolicy::Realtime, true, [200, 100]),
+    ] {
+        let runtime = JsRuntime::initialize();
+        runtime
+            .browser_context_runtime()
+            .delegate_auxiliary_document_responses_to_browser();
+        runtime
+            .renderer_owner_handle()
+            .configure_layout(policy, scrollbars_hidden)
+            .unwrap();
+        let mut page = create_test_html_page_with_navigation_dispatch(
+            &runtime,
+            &loader,
+            url::Url::parse("https://example.test/popup-layout").unwrap(),
+            "<!doctype html><body>opener</body>",
+            RendererTopLevelNavigationDispatch::DelegateToBrowser,
+        )
+        .await;
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                // Measure the initial document in the turn that opens it.
+                expression: r#"(() => {
+                    const popup = window.open('about:blank', '_blank');
+                    try {
+                        const scroller = popup.document.createElement('div');
+                        scroller.style.cssText =
+                            'position:absolute;left:0;top:0;width:200px;height:100px;overflow:scroll';
+                        scroller.innerHTML = '<div style="width:400px;height:300px"></div>';
+                        popup.document.body.append(scroller);
+                        const client = [scroller.clientWidth, scroller.clientHeight];
+                        scroller.style.width = '240px';
+                        return JSON.stringify([...client, scroller.getBoundingClientRect().width]);
+                    } finally {
+                        popup.close();
+                    }
+                })()"#
+                    .to_owned(),
+                await_promise: false,
+            })
+            .await
+            .expect("initial popup geometry should be readable");
+        page.close_async().await.unwrap();
+
+        let result = renderer_json_value(reply).expect("popup measurement should return a value");
+        let measured: [i64; 3] = serde_json::from_str(result.as_str().unwrap()).unwrap();
+        assert_eq!(
+            measured[..2],
+            client_size,
+            "{policy:?}, scrollbars_hidden={scrollbars_hidden}"
+        );
+        if policy == LayoutPolicy::Realtime {
+            assert_eq!(
+                measured[2], 240,
+                "Realtime popup must update the same-turn read"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn popup_request_context_keeps_the_accepted_source_url_and_referrer_policy() {
     let runtime = JsRuntime::initialize();
     runtime
