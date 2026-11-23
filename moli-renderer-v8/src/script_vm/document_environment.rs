@@ -290,13 +290,17 @@ impl ScriptVm {
             .should_intercept_subresource(resource_type)
     }
 
+    pub(crate) fn viewport_surface(&self) -> Option<crate::protocol_types::ViewportSurface> {
+        self._context_host.borrow().viewport_surface()
+    }
+
     pub(crate) fn set_viewport_surface(
         &mut self,
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> Result<()> {
         {
             let mut host = self._context_host.borrow_mut();
-            if host.viewport_surface() == viewport_surface {
+            if host.configured_viewport_surface() == viewport_surface {
                 return Ok(());
             }
             host.queue_viewport_change(viewport_surface);

@@ -20,6 +20,7 @@ mod meta_refresh;
 mod mutation_commands;
 mod native_events;
 pub(crate) use native_events::NativeEventDispatch;
+mod mobile_viewport;
 mod parser_blocking;
 mod parser_modulepreload;
 mod query_facade;

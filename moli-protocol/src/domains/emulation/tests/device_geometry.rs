@@ -89,9 +89,54 @@ async fn device_metrics_screen_changes_take_effect_after_explicit_capture() {
     }
 }
 
-fn unsupported_modes() -> [(&'static str, serde_json::Value); 7] {
+#[tokio::test(flavor = "multi_thread")]
+async fn mobile_device_metrics_use_the_document_viewport_meta() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+    let geometry = "[innerWidth, innerHeight, outerWidth, outerHeight, devicePixelRatio, visualViewport.scale]";
+    let desktop = evaluate(&mut ctx, geometry).await;
+    set_metrics(
+        &mut ctx,
+        json!({
+            "mobile": true, "width": 375, "height": 667, "deviceScaleFactor": 2,
+            "screenWidth": 375, "screenHeight": 667
+        }),
+    )
+    .await;
+    assert_eq!(
+        evaluate(
+            &mut ctx,
+            "[innerWidth >= 980, innerHeight > innerWidth, outerWidth, outerHeight, devicePixelRatio, visualViewport.scale < 1]"
+        )
+        .await,
+        json!([true, true, 375, 667, 2, true]),
+    );
+    evaluate(
+        &mut ctx,
+        "document.head.innerHTML = '<meta name=viewport content=\"width=device-width, initial-scale=1\">'; undefined",
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut ctx, geometry).await,
+        json!([375, 667, 375, 667, 2, 1]),
+    );
+    assert_eq!(
+        evaluate(&mut ctx, "[visualViewport.width, visualViewport.height]").await,
+        json!([375, 667]),
+    );
+    expect_session_command_result(
+        &mut ctx,
+        88402,
+        "SID-1",
+        "Emulation.clearDeviceMetricsOverride",
+        json!({}),
+    )
+    .await;
+    assert_eq!(evaluate(&mut ctx, geometry).await, desktop);
+}
+
+fn unsupported_modes() -> [(&'static str, serde_json::Value); 6] {
     [
-        ("mobile=true", json!({"mobile": true})),
         (
             "displayFeature",
             json!({"displayFeature": {
