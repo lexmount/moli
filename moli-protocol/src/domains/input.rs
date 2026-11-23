@@ -1000,7 +1000,8 @@ pub(crate) async fn run_automation_input_command(
     let Some(pending) = pending? else {
         return Ok(AutomationResult::Empty);
     };
-    let completed = complete_input_workflow(driver, pending.wait().await, context).await;
+    let completed =
+        complete_input_workflow(driver, pending.wait().await, context.context_mut()).await;
     context
         .context_mut()
         .protocol_events_mut()
@@ -1402,12 +1403,12 @@ fn start_devtools_input_command_for_owner(
 async fn complete_input_workflow(
     driver: &mut ProtocolWorkflowDriver,
     completed: CompletedInputCommandDispatch,
-    command_context: &mut CommandWorkflowContext,
+    command_context: &mut CommandDispatchContext,
 ) -> CompletedInputCommandResult {
     let mut side_effects = InputCommandSideEffects::default();
     let result =
         complete_input_operation(driver, completed, command_context, &mut side_effects).await;
-    let mut protocol_events = command_context.context_mut().take_deferred_command_events();
+    let mut protocol_events = command_context.take_deferred_command_events();
     let wheel_canceled = side_effects.wheel_canceled;
     protocol_events.extend(side_effects.into_events());
     CompletedInputCommandResult {
@@ -1420,7 +1421,7 @@ async fn complete_input_workflow(
 async fn complete_input_operation(
     driver: &mut ProtocolWorkflowDriver,
     completed: CompletedInputCommandDispatch,
-    command_context: &mut CommandWorkflowContext,
+    command_context: &mut CommandDispatchContext,
     side_effects: &mut InputCommandSideEffects,
 ) -> Result<AutomationResult, DevToolsError> {
     let command = match completed.completed {
@@ -1437,15 +1438,12 @@ async fn complete_input_operation(
     let settle_owner = owner.clone();
     let host = completed.host;
     let settle_host = host.clone();
-    let completion = command_context
-        .with_state(driver, move |state, context| {
-            let output =
-                state.settle_input_page_command(&settle_owner, settle_host.as_deref(), command);
-            context
-                .context_mut()
-                .consume_renderer_command_turn_output(output)
+    let completion = driver
+        .with_state(move |state| {
+            state.settle_input_page_command(&settle_owner, settle_host.as_deref(), command)
         })
         .map_err(input_workflow_error)?;
+    let completion = command_context.consume_renderer_command_turn_output(completion);
     let (outcome, result) = match completed.kind {
         PendingInputCommandKind::PrepareElementClick => {
             return decode_element_click_preparation_completion(completion)
@@ -1490,7 +1488,7 @@ async fn complete_input_operation(
         &owner,
         host.as_deref(),
         outcome,
-        command_context.context_mut(),
+        command_context,
     )
     .await
     .map_err(input_workflow_error)?;
@@ -1509,7 +1507,7 @@ fn input_command_workflow(
         let completed = complete_input_workflow(
             &mut ProtocolWorkflowDriver::new(access),
             input.await,
-            &mut context,
+            context.context_mut(),
         )
         .await;
         context.complete(input_command_output_plan(completed))

@@ -350,3 +350,47 @@ async fn scroll_gestures_share_a_page_queue_and_repeats_give_up_the_turn() {
     assert!(value["a"].as_f64().unwrap().abs() < 0.05, "{value}");
     assert_eq!(value["page"], 0);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_releases_document_work_before_its_response() {
+    for (action, messages) in [
+        (
+            r#"location.href = "javascript:void(console.log('wheel javascript'))";"#,
+            &["wheel javascript"][..],
+        ),
+        (
+            r#"document.open();
+               document.write("<script>addEventListener('DOMContentLoaded',()=>console.log('wheel DCL'));addEventListener('load',()=>console.log('wheel load'));<\/script>");
+               document.close();"#,
+            &["wheel DCL", "wheel load"][..],
+        ),
+    ] {
+        let mut ctx = fixture(&format!(
+            "a.addEventListener('wheel',()=>{{{action}}},{{once:true}});"
+        ))
+        .await;
+        ctx.process_async(json!({"id":35001,"method":"Runtime.enable"}))
+            .await;
+        ctx.expect_result(35001, json!({}), None);
+        let response_flush = ctx
+            .process_command_holding_response_flush_for_test(json!({
+                "id":35000,"method":"Input.synthesizeScrollGesture",
+                "params":{"x":20,"y":20,"yDistance":-2,"repeatCount":1,"repeatDelayMs":800}
+            }))
+            .await;
+        let response = ctx.sent.iter().position(|msg| msg["id"] == 35000).unwrap();
+        for message in messages {
+            assert!(
+                ctx.sent[..response].iter().any(|msg| {
+                    msg["method"] == "Runtime.consoleAPICalled"
+                        && msg["params"]["args"][0]["value"] == *message
+                }),
+                "expected {message} before the gesture response, got {:?}",
+                ctx.sent
+            );
+        }
+        ctx.expect_result(35000, json!({}), None);
+        ctx.finish_held_command_response_flush_for_test(response_flush)
+            .await;
+    }
+}

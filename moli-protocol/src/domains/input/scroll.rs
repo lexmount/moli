@@ -137,21 +137,17 @@ fn prepare(
                             let Some(pending) = pending else {
                                 return Ok(());
                             };
-                            let completed = complete_input_workflow(
+                            let canceled = complete_wheel(
                                 &mut driver,
                                 pending.wait().await,
-                                &mut context,
+                                page.target_id().map(str::to_owned),
+                                context.context_mut(),
                             )
-                            .await;
-                            context
-                                .context_mut()
-                                .protocol_events_mut()
-                                .extend(completed.protocol_events);
-                            completed.result?;
+                            .await?;
                             if first {
                                 // Only an unconsumed Began wheel permits later
                                 // wheels to become non-blocking/non-cancelable.
-                                cancelable = completed.wheel_canceled;
+                                cancelable = canceled;
                                 first = false;
                             }
                             sent = position;
@@ -172,6 +168,30 @@ fn prepare(
         })
         .cancel_on_waiter_drop(),
     ))
+}
+
+async fn complete_wheel(
+    driver: &mut ProtocolWorkflowDriver,
+    completed: CompletedInputCommandDispatch,
+    target_id: Option<String>,
+    gesture_context: &mut CommandDispatchContext,
+) -> Result<bool, DevToolsError> {
+    let (permit, response_flush) = driver
+        .with_state(|state| state.begin_command_response_flush_permit())
+        .map_err(input_workflow_error)?;
+    let mut wheel_context = CommandDispatchContext::new(response_flush);
+    let completed = complete_input_workflow(driver, completed, &mut wheel_context).await;
+    wheel_context
+        .protocol_events_mut()
+        .extend(completed.protocol_events);
+    // Keep the wheel's output ordered by its renderer fence. Release its
+    // document work here so neither the next wheel nor repeatDelay holds it.
+    let dependencies = driver
+        .with_state(|state| state.publish_input_step_output(wheel_context, target_id))
+        .map_err(input_workflow_error)?;
+    gesture_context.extend_renderer_output_dependencies(dependencies);
+    permit.finish();
+    completed.result.map(|_| completed.wheel_canceled)
 }
 
 pub(crate) struct SyntheticWheel {
