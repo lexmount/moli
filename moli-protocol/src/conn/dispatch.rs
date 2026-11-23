@@ -68,7 +68,7 @@ impl SessionCommandPageWaiter {
 
 struct PendingSessionCommandAdmission {
     waiter: Option<SessionCommandPageWaiter>,
-    admission: crate::conn::session_command_admission::SessionCommandAdmission,
+    admission: crate::conn::command_admission::CommandAdmission,
     command: ParsedCdpCommand,
     host: ProtocolPageHostScope,
 }
@@ -102,7 +102,7 @@ enum CompletedCdpCommandDispatchKind {
         command: ParsedCdpCommand,
         host: ProtocolPageHostScope,
         result: Result<()>,
-        admission: crate::conn::session_command_admission::SessionCommandAdmission,
+        admission: crate::conn::command_admission::CommandAdmission,
     },
     Workflow(super::command_workflow::CompletedCommandWorkflow),
     Native(crate::domains::native::CompletedNativeCommand),
@@ -807,7 +807,7 @@ impl CdpConnection {
         &mut self,
         command: &ParsedCdpCommand,
         command_context: &mut CommandDispatchContext,
-        admitted: Option<crate::conn::session_command_admission::SessionCommandAdmission>,
+        admitted: Option<crate::conn::command_admission::CommandAdmission>,
     ) -> CdpCommandTaskStep {
         let req = command.request();
         let Some(dot) = req.method().find('.') else {

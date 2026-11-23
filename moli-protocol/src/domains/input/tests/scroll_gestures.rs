@@ -285,3 +285,68 @@ async fn scroll_gesture_preserves_intercepted_drag() {
         .await
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gestures_share_a_page_queue_and_repeats_give_up_the_turn() {
+    let mut ctx = fixture("a.addEventListener('wheel',e=>events.push(e.deltaY));").await;
+    let mut sessions = Vec::new();
+    for id in [35001, 35002] {
+        ctx.process_async(json!({
+            "id": id, "method": "Target.attachToTarget",
+            "params": { "targetId": "TID-1", "flatten": true }
+        }))
+        .await;
+        sessions.push(
+            ctx.take_response_by_id(id)["result"]["sessionId"]
+                .as_str()
+                .expect("attached session ID")
+                .to_owned(),
+        );
+    }
+    let [first, second] = [300, -300].map(|distance| {
+        let first = distance > 0;
+        let raw = json!({
+            "id": if first { 35003 } else { 35004 },
+            "sessionId": sessions[usize::from(!first)],
+            "method": "Input.synthesizeScrollGesture",
+            "params": { "x":20,"y":20,"yDistance":distance,"speed":1200,
+                        "repeatCount":u32::from(first),"repeatDelayMs":150 }
+        })
+        .to_string();
+        match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
+            CdpCommandTaskStep::Pending(pending) => pending,
+            CdpCommandTaskStep::Complete(_) => panic!("a gesture must wait for its wheel events"),
+        }
+    });
+    let (first, second) = ctx
+        .drive_owned_wait(async { tokio::join!(first.wait(), second.wait()) })
+        .await;
+    for (completed, id, session) in [(first, 35003, &sessions[0]), (second, 35004, &sessions[1])] {
+        let outcome = ctx.with_fixture(|conn| {
+            conn.complete_command_dispatch_with_context(
+                completed,
+                &mut CommandDispatchContext::default(),
+            )
+        });
+        let (messages, _) = ctx.complete_command_task_step_for_test(outcome).await;
+        assert!(messages.contains(&json!({"id": id, "result": {}, "sessionId": session})));
+    }
+    let value = snapshot(&mut ctx).await;
+    let mut runs: Vec<f64> = Vec::new();
+    for event in value["events"].as_array().unwrap() {
+        let delta = event.as_f64().unwrap();
+        if let Some(total) = runs.last_mut()
+            && total.signum() == delta.signum()
+        {
+            *total += delta;
+        } else {
+            runs.push(delta);
+        }
+    }
+    assert_eq!(runs.len(), 3, "{runs:?}");
+    for (sum, expected) in runs.into_iter().zip([-300.0, 300.0, -300.0]) {
+        assert!((sum - expected).abs() < 0.001, "{value}");
+    }
+    assert!(value["a"].as_f64().unwrap().abs() < 0.05, "{value}");
+    assert_eq!(value["page"], 0);
+}

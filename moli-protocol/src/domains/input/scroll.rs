@@ -84,17 +84,28 @@ fn prepare(
     let page = conn
         .target_page_residence_identity_for_owner(&owner)
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
+    let admission_queue = conn
+        .synthetic_scroll_admissions_for_owner(&owner)
+        .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
+    // Reserve the first turn during synchronous command admission. Repeats
+    // reserve a new turn after their delay so other sessions can make progress.
+    let first_admission = admission_queue.reserve();
     let x = params.x;
     let y = params.y;
     let access = conn.protocol_state_access();
     Ok(Some(
         crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
             let mut driver = ProtocolWorkflowDriver::new(access);
+            let mut first_admission = Some(first_admission);
             let result = async {
                 for repeat in 0..=repeat_count {
                     if repeat != 0 {
                         tokio::time::sleep(repeat_delay).await;
                     }
+                    let mut admission = first_admission
+                        .take()
+                        .unwrap_or_else(|| admission_queue.reserve());
+                    admission.wait().await;
                     let gesture = RendererSyntheticWheelGesture::default();
                     let mut first = true;
                     let mut cancelable = true;
