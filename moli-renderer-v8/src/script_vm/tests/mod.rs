@@ -2490,3 +2490,5 @@ mod svg_legacy_rectangle_contracts;
 mod indexed_db_prototype_handlers;
 
 mod beacon_receiver_owner;
+
+mod child_history_committed_url;
