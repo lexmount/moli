@@ -61,6 +61,7 @@ fn main() -> anyhow::Result<()> {
                     appears_transparent: cfg!(target_os = "macos"),
                     traffic_light_position: Some(point(px(12.), px(12.))),
                 }),
+                app_owns_titlebar_drag: cfg!(target_os = "macos"),
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(480.), px(300.))),
                 app_id: Some("org.lexmount.molio".into()),
