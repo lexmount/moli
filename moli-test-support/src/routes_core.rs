@@ -5834,8 +5834,16 @@ pub(super) async fn asset_shadow_adopted_modulepreload_css() -> Response {
     css_response(SHADOW_ADOPTED_MODULEPRELOAD_CSS)
 }
 
-pub(super) async fn redirect_page() -> Redirect {
-    Redirect::temporary("/static")
+pub(super) async fn redirect_page(Query(params): Query<HashMap<String, String>>) -> Response {
+    let location = params.get("to").map_or("/static", String::as_str);
+    let Ok(location) = HeaderValue::from_str(location) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    (
+        StatusCode::TEMPORARY_REDIRECT,
+        [(axum::http::header::LOCATION, location)],
+    )
+        .into_response()
 }
 
 pub(super) async fn redirect_cookie_page() -> Response {

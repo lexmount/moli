@@ -76,17 +76,6 @@ pub(super) fn navigation_entry_object_from_snapshot<'s>(
     entry_wrappers::for_window(scope, owner, history_entry_from_snapshot(snapshot))
 }
 
-fn navigation_activation_entry_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    current_entry: v8::Local<'s, v8::Object>,
-    activation: &NavigationActivationSeed,
-) -> v8::Local<'s, v8::Object> {
-    if activation.from.is_none() && activation.navigation_type.as_deref() == Some("replace") {
-        return current_entry;
-    }
-    navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry)
-}
-
 pub(super) fn create_navigation_activation_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Context>,
@@ -97,10 +86,24 @@ pub(super) fn create_navigation_activation_object<'s>(
         return v8::null(scope).into();
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    let entry = navigation_activation_entry_object(scope, current_entry, activation);
-    let from = activation
-        .from
-        .as_ref()
+    let activated_origin_url = activation
+        .entry
+        .inherited_origin
+        .as_deref()
+        .unwrap_or(&activation.entry.url);
+    let from = activation.from.as_ref().filter(|from| {
+        from.url == "about:blank"
+            || moli_url::parsed_same_origin(
+                from.inherited_origin.as_deref().unwrap_or(&from.url),
+                activated_origin_url,
+            )
+    });
+    let entry = if from.is_none() && activation.navigation_type.as_deref() == Some("replace") {
+        current_entry
+    } else {
+        navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry)
+    };
+    let from = from
         .map(|snapshot| navigation_entry_object_from_snapshot(scope, current_entry, snapshot))
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::null(scope).into());

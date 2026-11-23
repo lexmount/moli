@@ -72,6 +72,7 @@ pub struct NavigationHistoryEntrySeed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationActivationSeed {
     pub entry: NavigationHistorySerializedEntry,
+    /// Snapshot of the previous entry. Visibility is decided when the activation is exposed.
     pub from: Option<NavigationHistorySerializedEntry>,
     pub navigation_type: Option<String>,
 }
@@ -251,28 +252,13 @@ pub fn apply_child_browsing_context_navigation_to_entry_seed(
             .find(|entry| entry.history_index == next_index)
             .cloned()
             .unwrap_or_else(|| seed.entries.last().cloned().unwrap()),
-        from: visible_activation_from(
-            seed.entries
-                .iter()
-                .find(|entry| entry.history_index == next_index.saturating_sub(1)),
-            url,
-        ),
+        from: seed
+            .entries
+            .iter()
+            .find(|entry| entry.history_index == next_index.saturating_sub(1))
+            .cloned(),
         navigation_type: Some("push".to_owned()),
     });
-}
-
-fn visible_activation_from(
-    previous_entry: Option<&NavigationHistorySerializedEntry>,
-    destination_url: &Url,
-) -> Option<NavigationHistorySerializedEntry> {
-    previous_entry
-        .filter(|entry| {
-            entry.url == "about:blank"
-                || Url::parse(&entry.url)
-                    .ok()
-                    .is_some_and(|previous_url| same_origin(&previous_url, destination_url))
-        })
-        .cloned()
 }
 
 pub fn replace_child_browsing_context_navigation_in_entry_seed(
@@ -316,7 +302,7 @@ pub fn replace_child_browsing_context_navigation_in_entry_seed(
     }
     seed.activation = Some(NavigationActivationSeed {
         entry: next_entry,
-        from: visible_activation_from(previous_entry.as_ref(), url),
+        from: previous_entry,
         navigation_type: Some("replace".to_owned()),
     });
 }
@@ -416,7 +402,7 @@ pub fn cross_document_navigation_seed(
         current_index: destination_index,
         activation: Some(NavigationActivationSeed {
             entry: destination_entry,
-            from: visible_activation_from(current_entry_snapshot.as_ref(), destination_url),
+            from: current_entry_snapshot,
             navigation_type: Some(mutation.navigation_type().to_owned()),
         }),
     }
@@ -476,7 +462,7 @@ pub fn traversal_navigation_seed_candidate(
             current_index: target_index,
             activation: Some(NavigationActivationSeed {
                 entry: target_entry,
-                from: visible_activation_from(Some(&current_entry), &target_url),
+                from: Some(current_entry),
                 navigation_type: Some("traverse".to_owned()),
             }),
         },
@@ -692,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn child_activation_omits_from_for_cross_origin_navigation() {
+    fn child_activation_seed_retains_the_previous_cross_origin_entry() {
         let first = Url::parse("http://127.0.0.1:1111/common/blank.html").unwrap();
         let second = Url::parse("http://127.0.0.1:2222/common/blank.html").unwrap();
         let mut seed = child_browsing_context_single_entry_seed(Some(&first));
@@ -705,11 +691,12 @@ mod tests {
                 .and_then(|activation| activation.navigation_type.as_deref()),
             Some("push")
         );
-        assert!(
+        assert_eq!(
             seed.activation
                 .as_ref()
                 .and_then(|activation| activation.from.as_ref())
-                .is_none()
+                .map(|entry| entry.url.as_str()),
+            Some(first.as_str())
         );
 
         replace_child_browsing_context_navigation_in_entry_seed(&mut seed, &first);
@@ -720,11 +707,12 @@ mod tests {
                 .and_then(|activation| activation.navigation_type.as_deref()),
             Some("replace")
         );
-        assert!(
+        assert_eq!(
             seed.activation
                 .as_ref()
                 .and_then(|activation| activation.from.as_ref())
-                .is_none()
+                .map(|entry| entry.url.as_str()),
+            Some(second.as_str())
         );
     }
 
