@@ -34,11 +34,13 @@ impl RendererOwnerLocalStore {
         let RendererRelatedInitialEmptyPageInit {
             dom_host,
             loader,
-            env,
+            mut env,
             inherited_origin,
             inherited_security_token,
             opener,
         } = init;
+        // The initial Window can be used synchronously before protocol adoption.
+        env.layout_configuration = owner.layout_configuration();
         ensure!(
             Some(pending.popup_id())
                 == env

@@ -1,5 +1,14 @@
 use super::*;
 
+impl RendererOwnerLocalContext {
+    pub(in crate::runtime) fn layout_configuration(&self) -> moli_page_types::LayoutConfiguration {
+        self.owner_state
+            .layout_configuration
+            .lock()
+            .unwrap_or_default()
+    }
+}
+
 impl RendererOwnerHandle {
     /// Selects the immutable layout policy for this renderer owner.
     ///
