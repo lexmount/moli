@@ -1566,6 +1566,18 @@ impl ScriptVm {
                         buttons,
                         modifiers,
                     )
+                } else if matches!(event_name, "mousedown" | "mouseup") {
+                    construct_mouse_event_with_detail_for_target(
+                        scope,
+                        runtime_ptr,
+                        mouse_dispatch_handle,
+                        event_name,
+                        mouse_coordinates,
+                        click_count.max(0),
+                        button,
+                        buttons,
+                        modifiers,
+                    )
                 } else {
                     construct_mouse_event_for_target(
                         scope,
