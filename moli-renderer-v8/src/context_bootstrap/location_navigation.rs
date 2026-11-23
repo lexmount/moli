@@ -30,7 +30,9 @@ use super::navigation_result::{
     queue_same_document_navigation_success,
 };
 use super::navigation_seed::history_entry_seed_for_reload;
-use super::navigation_serialize::serialize_history_entries;
+use super::navigation_serialize::{
+    apply_current_document_referrer_policy_to_entry_snapshots, serialize_history_entries,
+};
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_can_update_current_entry,
     navigation_document_has_opaque_origin, navigation_unload_event_active,
@@ -1123,8 +1125,15 @@ pub(crate) fn history_entry_seed_for_cross_document_location<'s>(
     let history = window_history_for_holder(scope, owner)?;
     let current_index = history_index(scope, history);
     let current_navigation_index = navigation_current_entry_index(scope, owner).unwrap_or(0);
+    let mut entries = serialize_history_entries(scope, history);
+    apply_current_document_referrer_policy_to_entry_snapshots(
+        scope,
+        owner,
+        current_index,
+        &mut entries,
+    );
     let mut seed = cross_document_navigation_seed(
-        serialize_history_entries(scope, history),
+        entries,
         current_index,
         current_navigation_index,
         resolved,
