@@ -1,5 +1,10 @@
 'use strict';
 
+const ciWorkflowPaths = new Set([
+  '.github/workflows/ci.yml',
+  '.github/workflows/molio-ci.yml',
+]);
+
 function belongsToPr(run, pullRequest) {
   if (run.pull_requests?.length) {
     return run.pull_requests.some((pr) => pr.number === pullRequest.number);
@@ -36,10 +41,9 @@ async function cancelClosedPrCi({ github, context, core }) {
 
   // Collect every page before cancelling: all revisions belong to the PR,
   // including queued runs for older HEADs. A branch name alone is not identity.
-  const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+  const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
     owner,
     repo,
-    workflow_id: 'ci.yml',
     event: 'pull_request',
     branch: current.head.ref,
     created: `${current.created_at}..${current.closed_at}`,
@@ -51,6 +55,7 @@ async function cancelClosedPrCi({ github, context, core }) {
     if (
       run.event !== 'pull_request' ||
       run.status === 'completed' ||
+      !ciWorkflowPaths.has(run.path) ||
       !belongsToPr(run, current)
     ) {
       continue;

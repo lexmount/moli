@@ -8,6 +8,7 @@ function run(id, overrides = {}) {
   return {
     id,
     event: 'pull_request',
+    path: '.github/workflows/ci.yml',
     status: 'in_progress',
     head_branch: 'topic',
     head_sha: `revision-${id}`,
@@ -20,7 +21,7 @@ function run(id, overrides = {}) {
 
 function fixture({ pages = [[]], current = {}, cancel, getRun } = {}) {
   const calls = { cancelled: [], listed: [], notices: [], warnings: [] };
-  const listWorkflowRuns = async () => assert.fail('Use pagination to find older revisions');
+  const listWorkflowRunsForRepo = async () => assert.fail('Use pagination to find older revisions');
   const github = {
     rest: {
       pulls: {
@@ -40,7 +41,7 @@ function fixture({ pages = [[]], current = {}, cancel, getRun } = {}) {
         },
       },
       actions: {
-        listWorkflowRuns,
+        listWorkflowRunsForRepo,
         cancelWorkflowRun: async (args) => {
           calls.cancelled.push(args.run_id);
           assert.equal(args.owner, 'lexmount');
@@ -54,7 +55,7 @@ function fixture({ pages = [[]], current = {}, cancel, getRun } = {}) {
       },
     },
     paginate: async (method, args) => {
-      assert.equal(method, listWorkflowRuns);
+      assert.equal(method, listWorkflowRunsForRepo);
       calls.listed.push(args);
       return pages.flat();
     },
@@ -88,7 +89,6 @@ test('merging a PR cancels every unfinished revision across all pages', async ()
   assert.deepEqual(f.calls.listed, [{
     owner: 'lexmount',
     repo: 'moli',
-    workflow_id: 'ci.yml',
     event: 'pull_request',
     branch: 'topic',
     created: '2026-10-24T10:00:00Z..2026-10-24T12:00:00Z',
@@ -133,7 +133,7 @@ test('closing a fork PR matches the fork repository rather than a same-named loc
   assert.deepEqual(await cancelClosedPrCi(f), [1]);
 });
 
-test('preserves completed runs, other PRs with the same branch, and main or manual runs', async () => {
+test('cancels both CI workflows and preserves unrelated runs', async () => {
   const f = fixture({ pages: [[
     run(1, { status: 'completed' }),
     run(2, { pull_requests: [{ number: 43 }] }),
@@ -142,9 +142,11 @@ test('preserves completed runs, other PRs with the same branch, and main or manu
     run(5, { pull_requests: [], head_repository: undefined }),
     run(6, { pull_requests: undefined, head_repository: undefined }),
     run(7, { pull_requests: [{ number: 43 }, { number: 42 }] }),
+    run(8, { path: '.github/workflows/molio-ci.yml' }),
+    run(9, { path: '.github/workflows/macos-tls.yml' }),
   ]] });
-  assert.deepEqual(await cancelClosedPrCi(f), [7]);
-  assert.deepEqual(f.calls.cancelled, [7]);
+  assert.deepEqual(await cancelClosedPrCi(f), [7, 8]);
+  assert.deepEqual(f.calls.cancelled, [7, 8]);
 });
 
 test('a delayed close event does not cancel a reopened PR', async () => {
