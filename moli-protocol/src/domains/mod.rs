@@ -31,6 +31,7 @@ pub mod performance;
 pub mod profiler;
 pub mod runtime;
 pub(crate) mod runtime_context_events;
+pub(crate) mod schema;
 pub mod security;
 pub mod service_worker;
 pub(crate) mod session;

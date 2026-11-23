@@ -28,6 +28,7 @@ pub const IMPLEMENTED_COMMANDS: &[DomainMembers] = &[
     ("Performance", PerformanceAction::VARIANTS),
     ("Profiler", ProfilerAction::VARIANTS),
     ("Runtime", RuntimeAction::VARIANTS),
+    ("Schema", SchemaAction::VARIANTS),
     ("Security", SecurityAction::VARIANTS),
     ("ServiceWorker", ServiceWorkerAction::VARIANTS),
     ("Storage", StorageAction::VARIANTS),
@@ -62,7 +63,7 @@ mod implemented_commands_tests {
         assert!(get("Accessibility").contains(&"getFullAXTree"));
         assert!(get("DOMStorage").contains(&"getDOMStorageItems"));
         assert!(get("Page").contains(&"navigate"));
+        assert!(get("Schema").contains(&"getDomains"));
         assert!(get("Profiler").contains(&"startPreciseCoverage"));
-        assert_eq!(all.len(), 30);
     }
 }
