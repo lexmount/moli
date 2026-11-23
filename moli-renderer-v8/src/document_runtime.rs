@@ -827,12 +827,26 @@ pub(crate) struct ParserScriptStartPosition {
 struct LiveRuntimeDomHost {
     dom_host: DomHost,
     emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-    viewport_surface: Option<crate::protocol_types::ViewportSurface>,
+    configured_viewport_surface: Option<crate::protocol_types::ViewportSurface>,
+    viewport_surface: std::cell::Cell<Option<crate::protocol_types::ViewportSurface>>,
 }
 
 impl LiveRuntimeDomHost {
+    fn resolve_viewport_surface(
+        &self,
+        surface: crate::protocol_types::ViewportSurface,
+    ) -> crate::protocol_types::ViewportSurface {
+        if surface.mobile_viewport().is_none() {
+            return surface;
+        }
+        let host = self.borrow();
+        let content = host.document_meta_content_for_document(host.document_handle(), "viewport");
+        mobile_viewport::resolve(surface, content)
+    }
+
     fn style_viewport(&self) -> crate::style_engine::StyleViewport {
         self.viewport_surface
+            .get()
             .map(crate::style_engine::StyleViewport::from_viewport_surface)
             .unwrap_or_else(|| {
                 crate::style_engine::StyleViewport::new(
@@ -850,7 +864,8 @@ impl LiveRuntimeDomHost {
         Self {
             dom_host,
             emulated_media: Default::default(),
-            viewport_surface: None,
+            configured_viewport_surface: None,
+            viewport_surface: std::cell::Cell::new(None),
         }
     }
 
@@ -1509,6 +1524,45 @@ mod tests {
         assert!(blocks(&runtime));
         runtime.set_emulated_media(&Default::default());
         assert!(!blocks(&runtime));
+    }
+
+    #[test]
+    fn parser_classifies_stylesheet_media_using_the_resolved_mobile_viewport() {
+        for (meta, expected_blocking) in [
+            ("", true),
+            ("<meta name=viewport content=width=device-width>", false),
+        ] {
+            let document = HtmlParser::SCRIPTING_ENABLED.parse(
+                Url::parse("https://example.test/media").unwrap(),
+                format!("<!doctype html>{meta}<link rel=stylesheet href=app.css media='(min-width: 600px)'>"),
+            );
+            let link = first_element_handle(&document, "link");
+            let mut runtime = DocumentRuntime::from_document(document);
+            runtime.set_viewport_surface(Some(moli_page_types::ViewportSurface {
+                inner_width: 375,
+                inner_height: 667,
+                emulated_view: Some(moli_page_types::EmulatedView {
+                    width: 375,
+                    height: 667,
+                    device_size: (375, 667),
+                    scale: 1.0,
+                    native_device_pixel_ratio: 1.0,
+                    viewport: None,
+                    mobile_viewport: Some(moli_page_types::MobileViewport {
+                        width: 375.0,
+                        height: 667.0,
+                        scale: 1.0,
+                    }),
+                }),
+                ..Default::default()
+            }));
+            let disposition = crate::stylesheet_blocking::stylesheet_link_disposition(
+                &runtime.dom_host,
+                NodeId::new(link.index()),
+            )
+            .expect("stylesheet should have a load operation");
+            assert_eq!(disposition.is_blocking(), expected_blocking, "{meta}");
+        }
     }
 
     #[test]

@@ -3457,8 +3457,11 @@ pub struct ViewportSurface {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EmulatedView {
+    /// Visible widget dimensions after applying the viewport override.
     pub width: u32,
     pub height: u32,
+    /// Emulated device dimensions before resolving the mobile page viewport.
+    pub device_size: (u32, u32),
     pub scale: f64,
     /// The compositor keeps its native DPR even when CSS reports an override.
     pub native_device_pixel_ratio: f64,
@@ -3484,6 +3487,18 @@ pub struct EmulatedViewport {
 }
 
 impl ViewportSurface {
+    pub fn mobile_viewport(self) -> Option<MobileViewport> {
+        self.emulated_view.and_then(|view| view.mobile_viewport)
+    }
+
+    pub fn visual_viewport_geometry(self) -> MobileViewport {
+        self.mobile_viewport().unwrap_or(MobileViewport {
+            width: f64::from(self.inner_width),
+            height: f64::from(self.inner_height),
+            scale: 1.0,
+        })
+    }
+
     pub fn visible_size(self) -> (u32, u32) {
         self.emulated_view
             .map_or((self.inner_width, self.inner_height), |view| {

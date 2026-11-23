@@ -113,6 +113,7 @@ pub(crate) fn notify_native_dom_mutation(
     effects: &DomMutationEffects,
 ) -> MutationNotificationTimings {
     let host = unsafe { &mut *host_ptr };
+    host.refresh_mobile_viewport_after_mutation(effects);
     if !effects.stylesheet_owners().changes().is_empty() {
         host.apply_stylesheet_owner_changes(effects.stylesheet_owners().changes());
     }

@@ -149,6 +149,7 @@ pub(super) fn metrics_from_cdp(
         view: Some(moli_page_types::EmulatedView {
             width: visible_size.0,
             height: visible_size.1,
+            device_size: (width, height),
             scale,
             native_device_pixel_ratio: base.device_pixel_ratio,
             viewport,

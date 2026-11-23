@@ -14,39 +14,58 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn viewport_surface(&self) -> Option<crate::protocol_types::ViewportSurface> {
-        self.configured_viewport_surface().map(|surface| {
-            if surface
-                .emulated_view
-                .is_some_and(|view| view.mobile_viewport.is_some())
-            {
-                let content = self.dom_host.document_meta_content_for_document(
-                    self.dom_host.document_handle(),
-                    "viewport",
-                );
-                super::mobile_viewport::resolve(surface, content)
-            } else {
-                surface
-            }
-        })
+        self.dom_host.viewport_surface.get()
     }
 
     pub(crate) fn configured_viewport_surface(
         &self,
     ) -> Option<crate::protocol_types::ViewportSurface> {
-        self.dom_host.viewport_surface
+        self.dom_host.configured_viewport_surface
     }
 
     pub(crate) fn set_viewport_surface(
         &mut self,
         surface: Option<crate::protocol_types::ViewportSurface>,
     ) {
-        self.dom_host.viewport_surface = surface;
+        self.dom_host.configured_viewport_surface = surface;
+        self.set_resolved_viewport_surface(
+            surface.map(|surface| self.dom_host.resolve_viewport_surface(surface)),
+        );
+    }
+
+    pub(crate) fn mobile_viewport_surface_after_mutation(
+        &self,
+        effects: &crate::dom::native::DomMutationEffects,
+    ) -> Option<crate::protocol_types::ViewportSurface> {
+        let configured = self.configured_viewport_surface()?;
+        configured.mobile_viewport()?;
+        let host = self.dom_host();
+        let head = host.document_head_handle();
+        let root = host.document_element_handle();
+        let style = effects.style();
+        let tree_changed = style.child_list_mutations().iter().any(|change| {
+            let target = change.target();
+            target == host.document_handle() || Some(target) == root || Some(target) == head
+        });
+        let meta_changed = style.attribute_mutations().iter().any(|change| {
+            head.is_some()
+                && change.namespace().is_none()
+                && matches!(change.local_name(), "name" | "content")
+                && host.parent_node(change.target()) == head
+                && host.is_html_element_named(change.target(), "meta")
+        });
+        (tree_changed || meta_changed).then(|| self.dom_host.resolve_viewport_surface(configured))
+    }
+
+    pub(crate) fn set_resolved_viewport_surface(
+        &self,
+        surface: Option<crate::protocol_types::ViewportSurface>,
+    ) {
+        self.dom_host.viewport_surface.set(surface);
     }
 
     pub(crate) fn style_viewport(&self) -> crate::style_engine::StyleViewport {
-        self.viewport_surface()
-            .map(crate::style_engine::StyleViewport::from_viewport_surface)
-            .unwrap_or_else(|| self.dom_host.style_viewport())
+        self.dom_host.style_viewport()
     }
 
     pub(crate) fn stylesheet_media_matches(&self, media: &str) -> bool {
