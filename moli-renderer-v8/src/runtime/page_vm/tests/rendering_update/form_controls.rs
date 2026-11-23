@@ -221,6 +221,100 @@ document.body.innerHTML='<input id=plain><input id=placeholder placeholder=Examp
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn password_inputs_paint_bullets_and_map_the_original_selection() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/password-paint.html")?,
+        );
+        page.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body { margin:0; background:white; }
+input { display:block; appearance:none; width:240px; height:56px; border:0;
+  padding:8px; outline:none; background:white; color:black;
+  caret-color:lime; font:24px/32px sans-serif; }
+::placeholder { color:purple; }
+</style>`;
+document.body.innerHTML = '<input id=field placeholder="Example">';
+'installed'
+"#,
+        )?;
+        page.vm_mut().sync_live_document_style_sources();
+
+        for (label, value, masked, original_selection, masked_selection) in [
+            ("ASCII", "Wi10", "••••", None, None),
+            ("emoji sequences", "👩‍💻🇫🇷", "••", None, None),
+            (
+                "grapheme selection",
+                "A😀e\u{0301}Z",
+                "••••",
+                Some((1, 5)),
+                Some((1, 3)),
+            ),
+            (
+                "grapheme caret",
+                "A😀e\u{0301}Z",
+                "••••",
+                Some((5, 5)),
+                Some((3, 3)),
+            ),
+            ("placeholder", "", "", None, None),
+        ] {
+            let mut reference = None;
+            for (kind, value, selection) in [
+                ("text", masked, masked_selection),
+                ("password", value, original_selection),
+            ] {
+                let focus = match selection {
+                    Some((start, end)) => {
+                        format!("field.focus();field.setSelectionRange({start},{end});")
+                    }
+                    None => "field.blur();".to_owned(),
+                };
+                page.vm_mut().eval(&format!(
+                    "field.type='{kind}';field.value={};{focus}'updated'",
+                    serde_json::to_string(value)?,
+                ))?;
+                let snapshot = page
+                    .vm_mut()
+                    .screenshot_layout_snapshot(moli_layout::PaintViewport::new(260, 62, 1.0))?
+                    .expect("password fixture layout");
+                assert!(
+                    snapshot.fragments.iter().any(|fragment| {
+                        matches!(fragment, moli_layout::PaintFragment::GlyphRun(_))
+                    }),
+                    "{label}: expected text to paint"
+                );
+                let image = moli_paint::raster_snapshot(&snapshot)?;
+                if let Some(expected) = &reference {
+                    assert!(
+                        image.rgba == *expected,
+                        "{label}: password paint should match the bullet or placeholder reference"
+                    );
+                } else {
+                    reference = Some(image.rgba);
+                }
+
+                assert_eq!(page.vm_mut().eval("field.value")?, value);
+                if let Some((start, end)) = selection {
+                    assert_eq!(
+                        page.vm_mut()
+                            .eval("`${field.selectionStart}:${field.selectionEnd}`")?,
+                        format!("{start}:{end}"),
+                    );
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("password rendering fixture");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn contenteditable_atomic_inlines_paint_carets_without_glyphs() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

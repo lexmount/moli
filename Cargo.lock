@@ -3130,6 +3130,7 @@ dependencies = [
  "taffy",
  "thiserror",
  "tracing",
+ "unicode-segmentation",
  "wuff",
 ]
 

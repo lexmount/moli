@@ -19,6 +19,7 @@ stylo_taffy = { git = "https://github.com/DioxusLabs/blitz", rev = "fb8d6c15e9ce
 taffy = { version = "=0.15.0", default-features = false, features = ["std", "block_layout", "flexbox", "grid", "float_layout", "content_size", "calc", "detailed_layout_info"] }
 thiserror = "2.0.17"
 tracing = "0.1.41"
+unicode-segmentation = "1.13.2"
 wuff = { version = "0.2.9", default-features = false, features = ["z"] }
 
 [lints]
