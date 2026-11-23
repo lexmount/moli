@@ -24,11 +24,13 @@ mod script_loading;
 mod script_mime;
 mod thread;
 mod timer_callback;
+mod websocket_events;
 pub(crate) use file_reading_tasks::{
     queue_worker_file_reading_task, take_worker_file_reading_task,
 };
 pub(crate) use networking_tasks::queue_worker_networking_task;
 pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
+pub(crate) use websocket_events::signal_worker_websocket_stream_pull;
 
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
