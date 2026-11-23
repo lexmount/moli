@@ -16,6 +16,13 @@ pub(crate) struct PointerCaptureTarget {
 }
 
 impl PageScriptHost {
+    #[cfg(feature = "molio")]
+    pub(crate) fn pointer_buttons_active(&self, pointer_id: i32) -> bool {
+        self.pointers
+            .get(&pointer_id)
+            .is_some_and(|state| state.buttons_active)
+    }
+
     pub(crate) fn pointer_is_known(&self, pointer_id: i32) -> bool {
         self.pointers.contains_key(&pointer_id)
     }

@@ -361,6 +361,10 @@ impl PageVm {
                     RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(outcome))
                 })),
             #[cfg(feature = "molio")]
+            RendererPageCommand::CancelViewportPointer { document, viewport_revision } => self
+                .cancel_viewport_pointer(document, viewport_revision)
+                .map(|()| RendererPageReply::Unit),
+            #[cfg(feature = "molio")]
             RendererPageCommand::DispatchViewportWheel(input) => self
                 .dispatch_viewport_wheel(input)
                 .map(|()| RendererPageReply::Unit),

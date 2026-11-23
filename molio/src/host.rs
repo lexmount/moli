@@ -68,6 +68,10 @@ pub enum TabCommand {
         viewport_revision: u64,
         position: Option<(f64, f64)>,
     },
+    CancelPointer {
+        document: RendererDocumentLifecycleIdentity,
+        viewport_revision: u64,
+    },
     Wheel(RendererViewportWheelInput),
     Key(KeyInput),
     InsertText(String),
@@ -502,6 +506,9 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                     }
                     TabCommand::PointerPosition { viewport_revision, position } if activity.visible => {
                         page.set_viewport_pointer_position(viewport_revision, position).await
+                    }
+                    TabCommand::CancelPointer { document, viewport_revision } => {
+                        page.cancel_viewport_pointer(document, viewport_revision).await
                     }
                     TabCommand::Wheel(input) if activity.visible => {
                         page.enqueue_viewport_wheel(input)

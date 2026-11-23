@@ -1065,6 +1065,93 @@ impl ScriptVm {
         }
     }
 
+    #[cfg(feature = "molio")]
+    pub(crate) fn cancel_viewport_mouse(
+        &mut self,
+        (x, y): (f64, f64),
+        modifiers: u8,
+    ) -> Result<()> {
+        self.pressed_mouse_buttons = 0;
+        self.mouse_routed_frame = None;
+        self.suppress_compat_mouse_events = false;
+        self.pending_drag_gesture = None;
+        self.active_scrollbar_drag = None;
+
+        let _current_input_event = CurrentInputEventScope::enter(
+            Rc::clone(&self._context_host),
+            CurrentInputEvent::mouse("pointercancel", -1, modifiers),
+        );
+        let active_drag: *mut Option<ActiveDragSession> = &mut self.active_drag_session;
+        let result = self.with_default_context_scope(|scope, runtime_ptr| {
+            let runtime = move || unsafe { &*runtime_ptr };
+            let sampled = runtime().published_frame_geometry();
+            // Native dragging has already canceled the DOM pointer stream.
+            let active_drag = unsafe { &mut *active_drag };
+            if let Some(session) = active_drag.as_ref() {
+                let input = DragInput {
+                    position: session.position,
+                    sampled: sampled.as_deref(),
+                    modifiers: session.modifiers,
+                };
+                finish_drag_session(
+                    scope,
+                    runtime_ptr,
+                    active_drag,
+                    DragFinishReason::Canceled,
+                    input,
+                );
+            }
+
+            let pointer = RendererPointerEventProperties::default();
+            let id = pointer.pointer_id;
+            if runtime().pointer_buttons_active(id) {
+                let position = InputPosition::headless(x, y);
+                let coordinates_for = |target: Option<DomHandle>| {
+                    target.map_or_else(
+                        || position.coordinates(None),
+                        |target| position.for_target(runtime(), target, sampled.as_deref()),
+                    )
+                };
+                let last_target = || {
+                    runtime()
+                        .mouse_event_target()
+                        .or_else(|| runtime().mouse_press_handle())
+                        .filter(|target| runtime().dom_host().is_connected(*target))
+                };
+                let mut cancel = PreparedPointerEvent {
+                    coordinates: coordinates_for(
+                        runtime()
+                            .pending_pointer_capture_target(id)
+                            .or_else(last_target),
+                    ),
+                    button: -1,
+                    buttons: 0,
+                    pointer: &pointer,
+                    modifiers,
+                };
+                unsafe { &mut *runtime_ptr }.set_pointer_buttons_active(id, false);
+                cancel.process_capture(scope, runtime_ptr, None);
+                let target = runtime()
+                    .active_pointer_capture_target(id)
+                    .or_else(last_target);
+                cancel.coordinates = coordinates_for(target);
+                let event = cancel.construct(scope, "pointercancel");
+                if let (Some(target), Some(event)) = (target, event) {
+                    let _ = dispatch_public_event(scope, runtime_ptr, target, event);
+                }
+                cancel.release_capture(scope, runtime_ptr, event);
+                if let Some(target) = target {
+                    dispatch_pointer_exit_events(scope, runtime_ptr, target, cancel);
+                }
+                unsafe { &mut *runtime_ptr }.clear_mouse_input_state();
+            } else {
+                unsafe { &mut *runtime_ptr }.clear_mouse_press();
+            }
+            Ok(())
+        });
+        self.finish_input_event_dispatch_turn(result)
+    }
+
     pub(crate) fn begin_batched_mouse_event_dispatch(&mut self) {
         self._context_host
             .borrow_mut()
