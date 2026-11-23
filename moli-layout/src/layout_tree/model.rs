@@ -340,9 +340,16 @@ impl From<LayoutCoordinateSpace> for FrozenCoordinateSpace {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutClipNode {
     pub parent: Option<LayoutClipChainId>,
+    /// The box supplying border radii for an overflow clip.
     pub owner: Option<LayoutOutputBoxId>,
     pub coordinate_space: LayoutCoordinateSpaceId,
     pub rect: LayoutRect,
+}
+
+impl LayoutClipNode {
+    pub(crate) fn is_viewport(&self) -> bool {
+        self.coordinate_space == LayoutCoordinateSpaceId::from_index(0)
+    }
 }
 
 /// Complete physical box model for one tree-local CSS box.

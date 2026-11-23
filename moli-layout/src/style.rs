@@ -22,9 +22,9 @@ use style::{
     servo_arc::Arc as ServoArc,
     values::{
         computed::{
-            AlignmentBaseline, BorderStyle as StyloBorderStyle, Content, ContentItem, Float,
-            OutlineStyle as StyloOutlineStyle, Overflow, basic_shape::ClipPath as StyloClipPath,
-            length::CSSPixelLength,
+            AlignmentBaseline, BorderStyle as StyloBorderStyle, ClipRectOrAuto, Content,
+            ContentItem, Float, LengthOrAuto, OutlineStyle as StyloOutlineStyle, Overflow,
+            basic_shape::ClipPath as StyloClipPath, length::CSSPixelLength,
         },
         generics::{
             box_::{
@@ -1284,6 +1284,27 @@ impl ResolvedLayoutStyle {
 
     pub fn position(&self) -> LayoutPosition {
         self.position
+    }
+
+    pub(crate) fn legacy_clip_rect(&self, border: LayoutRect) -> Option<LayoutRect> {
+        if !self.position.is_absolute() && self.position != LayoutPosition::Fixed {
+            return None;
+        }
+        let ClipRectOrAuto::Rect(clip) = self.computed.as_ref()?.clone_clip() else {
+            return None;
+        };
+        let edge = |value, auto| match value {
+            LengthOrAuto::Auto => auto,
+            LengthOrAuto::LengthPercentage(length) => length.px(),
+        };
+        let left = edge(clip.left, 0.0);
+        let top = edge(clip.top, 0.0);
+        Some(LayoutRect::new(
+            border.x + left,
+            border.y + top,
+            (edge(clip.right, border.width) - left).max(0.0),
+            (edge(clip.bottom, border.height) - top).max(0.0),
+        ))
     }
 
     pub(crate) fn establishes_positioned_containing_block(

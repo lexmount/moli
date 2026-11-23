@@ -80,7 +80,7 @@ impl ActivePaintClipChain {
     ) where
         N: Copy + Debug + Eq + Hash,
     {
-        let next = owned_clip_chain(projection, clip);
+        let next = paint_clip_chain(projection, clip);
         let common_prefix = self
             .nodes
             .iter()
@@ -603,7 +603,7 @@ where
     PaintProjectionResult { snapshot, metrics }
 }
 
-fn owned_clip_chain<N>(
+fn paint_clip_chain<N>(
     projection: &OutputProjection<'_, N>,
     clip: Option<LayoutClipChainId>,
 ) -> Vec<LayoutClipChainId>
@@ -614,7 +614,9 @@ where
     let mut current = clip;
     while let Some(id) = current {
         let node = &projection.clip_chain[id.index()];
-        if node.owner.is_some() {
+        // The capture applies its own viewport clip. Include rectangular CSS
+        // clips as well as rounded clips owned by overflow boxes.
+        if !node.is_viewport() {
             chain.push(id);
         }
         current = node.parent;
@@ -673,7 +675,7 @@ fn push_clip_chain<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let chain = owned_clip_chain(projection, clip);
+    let chain = paint_clip_chain(projection, clip);
     for id in &chain {
         push_clip_node(projection, *id, snapshot);
     }
