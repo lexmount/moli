@@ -1,5 +1,6 @@
 mod address;
 mod browser;
+mod favicon;
 mod host;
 mod icons;
 mod palette;

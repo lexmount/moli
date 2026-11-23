@@ -220,9 +220,62 @@ impl ScriptVm {
         crate::runtime::RendererViewportNavigation {
             url: self.document_runtime.document_url().clone(),
             title: self.document_runtime.dom_host().document_title(),
+            favicon_urls: self.viewport_favicon_urls(),
             can_go_back: position.index() > 0,
             can_go_forward: position.index() + 1 < position.length(),
         }
+    }
+
+    #[cfg(feature = "molio")]
+    fn viewport_favicon_urls(&self) -> std::sync::Arc<[url::Url]> {
+        use crate::document_runtime::DocumentSubresourceCspKind;
+
+        let runtime = &self.document_runtime;
+        let dom = runtime.dom_host();
+        let document_url = runtime.document_url();
+        let base_url = dom.document_base_url();
+        let base_url = base_url.as_ref().unwrap_or(document_url);
+        let mut urls = Vec::new();
+        if let Some(head) = dom.document_head_handle() {
+            for node in dom.child_handles(head) {
+                let Some(link) = dom.node(node).and_then(|node| node.as_element()) else {
+                    continue;
+                };
+                if !link.is_html_element("link")
+                    || !link.attribute_ns("", "rel").is_some_and(|rel| {
+                        rel.split_ascii_whitespace()
+                            .any(|token| token.eq_ignore_ascii_case("icon"))
+                    })
+                {
+                    continue;
+                }
+                let Some(href) = link.attribute_ns("", "href").map(str::trim_ascii) else {
+                    continue;
+                };
+                if !href.is_empty()
+                    && let Ok(url) = base_url.join(href)
+                    && matches!(url.scheme(), "http" | "https" | "data")
+                {
+                    urls.push(url);
+                }
+            }
+        }
+        if urls.is_empty()
+            && matches!(document_url.scheme(), "http" | "https")
+            && let Ok(url) = document_url.join("/favicon.ico")
+        {
+            urls.push(url);
+        }
+        // Prefer the later declaration when candidates are otherwise equivalent.
+        urls.reverse();
+        urls.retain(|url| {
+            runtime
+                .document_subresource_csp_check(url, DocumentSubresourceCspKind::Image)
+                .into_violations()
+                .1
+                .is_none()
+        });
+        urls.into()
     }
 
     #[cfg(feature = "molio")]

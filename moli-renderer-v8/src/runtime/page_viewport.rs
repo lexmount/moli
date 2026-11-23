@@ -68,6 +68,7 @@ pub struct RendererViewportEditReply {
 pub struct RendererViewportNavigation {
     pub url: url::Url,
     pub title: String,
+    pub favicon_urls: Arc<[url::Url]>,
     pub can_go_back: bool,
     pub can_go_forward: bool,
 }
