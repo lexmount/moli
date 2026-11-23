@@ -2247,6 +2247,12 @@ impl InlineBuildInput {
             1.0,
             quantize,
         );
+        let root_style = &world.boxes[self.root_style.index()].style;
+        builder.set_base_direction(match (root_style.unicode_bidi(), root_style.direction()) {
+            (InlineUnicodeBidi::Plaintext, _) => parley::BaseDirection::Auto,
+            (_, InlineDirection::Ltr) => parley::BaseDirection::Ltr,
+            (_, InlineDirection::Rtl) => parley::BaseDirection::Rtl,
+        });
         let style_indices = styles
             .iter()
             .map(|style| builder.push_style(style.clone()))
