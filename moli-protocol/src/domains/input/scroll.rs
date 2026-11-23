@@ -1,4 +1,6 @@
+use moli_core::page::RendererSyntheticWheelGesture;
 use std::time::Duration;
+use tokio::time::Instant;
 
 use chromiumoxide_cdp::cdp::browser_protocol::input::{
     GestureSourceType, SynthesizeScrollGestureParams,
@@ -70,7 +72,7 @@ fn prepare(
             if ticks > f64::from(u32::MAX) {
                 return Err(invalid());
             }
-            Ok((dx, dy, (ticks as u32).max(1)))
+            Ok(ScrollSegment { dx, dy, duration })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
@@ -93,20 +95,30 @@ fn prepare(
                     if repeat != 0 {
                         tokio::time::sleep(repeat_delay).await;
                     }
+                    let gesture = RendererSyntheticWheelGesture::default();
                     let mut first = true;
-                    'gesture: for &(dx, dy, ticks) in &segments {
-                        for _ in 0..ticks {
-                            if !first {
-                                tokio::time::sleep(WHEEL_INTERVAL).await;
-                            }
+                    let mut cancelable = true;
+                    let mut started = Instant::now();
+                    for segment in &segments {
+                        let mut sent = (0.0, 0.0);
+                        loop {
+                            let elapsed = started.elapsed();
+                            let tick = (elapsed.as_secs_f64() / WHEEL_INTERVAL.as_secs_f64())
+                                .floor()
+                                + 1.0;
+                            let next = WHEEL_INTERVAL.mul_f64(tick).min(segment.duration);
+                            tokio::time::sleep_until(started + next).await;
+                            let elapsed = started.elapsed();
+                            let position = segment.position_at(elapsed);
                             let wheel = SyntheticWheel {
                                 owner: owner.clone(),
                                 page: page.clone(),
                                 x,
                                 y,
-                                delta_x: dx / f64::from(ticks),
-                                delta_y: dy / f64::from(ticks),
-                                cancelable: first,
+                                delta_x: position.0 - sent.0,
+                                delta_y: position.1 - sent.1,
+                                cancelable,
+                                gesture: gesture.clone(),
                             };
                             let pending = driver
                                 .with_state(move |state| state.prepare_synthetic_wheel(wheel))
@@ -125,11 +137,18 @@ fn prepare(
                                 .protocol_events_mut()
                                 .extend(completed.protocol_events);
                             completed.result?;
-                            first = false;
-                            if completed.wheel_canceled {
-                                break 'gesture;
+                            if first {
+                                // Only an unconsumed Began wheel permits later
+                                // wheels to become non-blocking/non-cancelable.
+                                cancelable = completed.wheel_canceled;
+                                first = false;
+                            }
+                            sent = position;
+                            if elapsed >= segment.duration {
+                                break;
                             }
                         }
+                        started += segment.duration;
                     }
                 }
                 Ok(())
@@ -145,6 +164,7 @@ fn prepare(
 }
 
 pub(crate) struct SyntheticWheel {
+    gesture: RendererSyntheticWheelGesture,
     owner: CommandOwnerScope,
     page: TargetPageResidenceIdentity,
     x: f64,
@@ -179,9 +199,51 @@ impl SyntheticWheel {
                     self.delta_x,
                     self.delta_y,
                     self.cancelable,
+                    self.gesture,
                 )
             },
         )
         .map_err(devtools_error_from_input_start_error)
     }
+}
+
+struct ScrollSegment {
+    dx: f64,
+    dy: f64,
+    duration: Duration,
+}
+
+impl ScrollSegment {
+    fn position_at(&self, elapsed: Duration) -> (f64, f64) {
+        if elapsed >= self.duration {
+            (self.dx, self.dy)
+        } else {
+            let progress = elapsed.as_secs_f64() / self.duration.as_secs_f64();
+            (self.dx * progress, self.dy * progress)
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn scroll_gesture_progress_catches_up_after_processing_and_finishes_exactly() {
+    let segment = ScrollSegment {
+        dx: 0.0,
+        dy: 300.0,
+        duration: Duration::from_millis(375),
+    };
+    let first = segment.position_at(Duration::from_millis(16));
+    let next = segment.position_at(Duration::from_millis(80));
+    assert!((first.1 - 12.8).abs() < 0.00001);
+    assert!((next.1 - first.1 - 51.2).abs() < 0.00001);
+    assert_eq!(
+        segment.position_at(Duration::from_millis(500)),
+        (0.0, 300.0)
+    );
+    let zero = ScrollSegment {
+        dx: 1e-30,
+        dy: 0.0,
+        duration: Duration::ZERO,
+    };
+    assert_eq!(zero.position_at(Duration::ZERO), (1e-30, 0.0));
 }

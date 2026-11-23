@@ -109,6 +109,7 @@ pub trait PageInputExt {
         delta_x: f64,
         delta_y: f64,
         cancelable: bool,
+        gesture: crate::page::RendererSyntheticWheelGesture,
     ) -> Result<PendingPageCommand>;
     async fn dispatch_touch_event_at_point_with_outcome_async(
         &mut self,
@@ -322,6 +323,7 @@ impl PageInputExt for Page {
         delta_x: f64,
         delta_y: f64,
         cancelable: bool,
+        gesture: crate::page::RendererSyntheticWheelGesture,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::DevTools(
             RendererDevToolsPageCommand::DispatchSyntheticWheel {
@@ -330,6 +332,7 @@ impl PageInputExt for Page {
                 delta_x,
                 delta_y,
                 cancelable,
+                gesture,
             },
         ))
     }

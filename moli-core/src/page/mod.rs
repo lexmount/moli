@@ -399,3 +399,6 @@ pub use resource_command::{CompletedResourceCommand, PendingResourceCommand};
 pub use moli_renderer_v8::{
     RendererPageInspectorEndpoint, RendererRuntimeInspectorSessionRetirement,
 };
+
+#[cfg(feature = "devtools")]
+pub use moli_renderer_v8::RendererSyntheticWheelGesture;

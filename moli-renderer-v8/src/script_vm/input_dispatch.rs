@@ -13,6 +13,7 @@ mod ace_page_tasks;
 mod cursor;
 mod drag_source;
 mod mouse_boundary;
+mod synthetic_wheel;
 mod touch_tap;
 use drag_source::dispatch_drag_source_event;
 use mouse_boundary::dispatch_mouse_boundary_events;
@@ -34,7 +35,7 @@ use crate::dom::{
 };
 use crate::native_bridge::element::{
     InputEventCoordinates, InputHitTestMode, InputHitTestPolicy, TextEditInputType,
-    TextInputSource, TouchEventPoint, activate_handle_after_pointer_release,
+    TextInputSource, TouchEventPoint, WheelScrollTargets, activate_handle_after_pointer_release,
     activate_handle_after_touch_release, activate_handle_via_keyboard,
     cache_input_files_from_selected_files, construct_drag_event_with_related_target,
     construct_keyboard_event, construct_mouse_event_for_target,
@@ -44,9 +45,9 @@ use crate::native_bridge::element::{
     contenteditable_editing_host, dispatch_public_event, input_surface_hit_test,
     input_target_in_document, is_disabled_form_control, observable_input_hit_test,
     perform_auxiliary_link_default_action, perform_drop_default_action,
-    perform_implicit_submission_from_control, perform_mouse_focus_default_action,
-    perform_scrollbar_scroll_default_action, perform_text_input,
-    perform_wheel_scroll_default_action, replace_contenteditable_selection,
+    perform_implicit_submission_from_control, perform_latched_wheel_scroll_default_action,
+    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
+    perform_text_input, perform_wheel_scroll_default_action, replace_contenteditable_selection,
     replace_text_control_selection, select_contenteditable_contents,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
@@ -1071,7 +1072,51 @@ impl ScriptVm {
         wheel_cancelable: bool,
         completion: MouseDispatchCompletion,
     ) -> Result<RendererInputDispatchOutcome> {
-        let surface_hit = self.mouse_input_surface_hit(x, y, event_name)?;
+        self.dispatch_mouse_input_with_gesture(
+            x,
+            y,
+            event_name,
+            button,
+            buttons,
+            click_count,
+            delta_x,
+            delta_y,
+            pointer,
+            modifiers,
+            intercept_drags,
+            wheel_cancelable,
+            completion,
+            None,
+        )
+    }
+
+    fn dispatch_mouse_input_with_gesture(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        button: i32,
+        buttons: Option<i32>,
+        click_count: i32,
+        delta_x: f64,
+        delta_y: f64,
+        pointer: RendererPointerEventProperties,
+        modifiers: u8,
+        intercept_drags: bool,
+        wheel_cancelable: bool,
+        completion: MouseDispatchCompletion,
+        gesture: Option<&crate::runtime::RendererSyntheticWheelGesture>,
+    ) -> Result<RendererInputDispatchOutcome> {
+        let (surface_hit, wheel_targets) = if let Some(gesture) = gesture {
+            let Some((hit, targets)) =
+                self.prepare_gesture_wheel(gesture, x, y, delta_x, delta_y)?
+            else {
+                return self.finish_input_event_dispatch_turn(Ok(input_dispatch_outcome(false)));
+            };
+            (hit, Some(targets))
+        } else {
+            (self.mouse_input_surface_hit(x, y, event_name)?, None)
+        };
         let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
         let is_release = event_name == "mouseup";
         let full_release = is_release && prepared.buttons == 0;
@@ -1111,7 +1156,23 @@ impl ScriptVm {
             modifiers,
             intercept_drags,
             wheel_cancelable,
+            wheel_targets.as_ref(),
         );
+        if let Some(gesture) = gesture {
+            let mut targets = gesture.targets.lock();
+            match &result {
+                Ok(outcome) if !outcome.wheel_default_prevented => {
+                    if let Some(scroll_targets) = wheel_targets {
+                        targets.scroll_targets = scroll_targets;
+                    }
+                }
+                _ => {
+                    // Blink retargets the next wheel after a canceled event.
+                    targets.wheel = None;
+                    targets.ancestors.clear();
+                }
+            }
+        }
         if is_release {
             self.suppress_compat_mouse_events = false;
         }
@@ -1408,6 +1469,7 @@ impl ScriptVm {
         modifiers: u8,
         intercept_drags: bool,
         wheel_cancelable: bool,
+        wheel_targets: Option<&WheelScrollTargets>,
     ) -> Result<RendererInputDispatchOutcome> {
         let PreparedMouseInputDispatch {
             button, buttons, ..
@@ -1858,13 +1920,23 @@ impl ScriptVm {
                         let mut outcome = input_dispatch_outcome(true);
                         outcome.wheel_default_prevented = !dispatched.allows_default();
                         if dispatched.allows_default() {
-                            let _ = perform_wheel_scroll_default_action(
-                                scope,
-                                runtime_ptr,
-                                pointer_dispatch_handle,
-                                delta_x,
-                                delta_y,
-                            )?;
+                            if let Some(targets) = wheel_targets {
+                                perform_latched_wheel_scroll_default_action(
+                                    scope,
+                                    runtime_ptr,
+                                    targets,
+                                    delta_x,
+                                    delta_y,
+                                )?;
+                            } else {
+                                perform_wheel_scroll_default_action(
+                                    scope,
+                                    runtime_ptr,
+                                    pointer_dispatch_handle,
+                                    delta_x,
+                                    delta_y,
+                                )?;
+                            }
                         }
                         return Ok(outcome);
                     }

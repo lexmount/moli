@@ -37,6 +37,7 @@ pub enum RendererDevToolsPageCommand {
         intercept_drags: bool,
     },
     DispatchSyntheticWheel {
+        gesture: crate::runtime::RendererSyntheticWheelGesture,
         x: f64,
         y: f64,
         delta_x: f64,

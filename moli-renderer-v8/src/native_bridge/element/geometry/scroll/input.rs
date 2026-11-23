@@ -65,18 +65,22 @@ pub(crate) fn perform_wheel_scroll_default_action(
     delta_x: f64,
     delta_y: f64,
 ) -> Result<bool, moli_layout::LayoutError> {
-    let mut remaining_x = if delta_x.is_finite() { delta_x } else { 0.0 };
-    let mut remaining_y = if delta_y.is_finite() { delta_y } else { 0.0 };
-    if remaining_x == 0.0 && remaining_y == 0.0 {
+    if (!delta_x.is_finite() || delta_x == 0.0) && (!delta_y.is_finite() || delta_y == 0.0) {
         return Ok(false);
     }
+    let chain = wheel_scroll_chain(unsafe { &*runtime_ptr }, handle)?;
+    perform_wheel_scroll_chain_default_action(scope, runtime_ptr, &chain, delta_x, delta_y)
+}
 
-    let runtime = unsafe { &*runtime_ptr };
+fn wheel_scroll_chain(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+) -> Result<Vec<moli_layout::LayoutScrollContainerMetrics<DomHandle>>, moli_layout::LayoutError> {
     let Some(target) = resolve_scroll_target(runtime, handle) else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
     let Some(mut geometry) = read_scroll_into_view_geometry(runtime, target)? else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
 
     // ScrollIntoView geometry begins at the target's parent. Include the
@@ -98,26 +102,43 @@ pub(crate) fn perform_wheel_scroll_default_action(
         );
     }
 
+    Ok(geometry.scroll_containers)
+}
+
+fn perform_wheel_scroll_chain_default_action(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    chain: &[moli_layout::LayoutScrollContainerMetrics<DomHandle>],
+    delta_x: f64,
+    delta_y: f64,
+) -> Result<bool, moli_layout::LayoutError> {
+    let mut remaining_x = if delta_x.is_finite() { delta_x } else { 0.0 };
+    let mut remaining_y = if delta_y.is_finite() { delta_y } else { 0.0 };
     let mut changed = false;
-    for container in geometry.scroll_containers {
+    for container in chain {
+        let source = container.source;
+        let metrics = &container.metrics;
         if remaining_x == 0.0 && remaining_y == 0.0 {
             break;
         }
-        let (current_x, current_y) =
-            node_scroll_position(unsafe { &*runtime_ptr }, container.source);
+        let runtime = unsafe { &*runtime_ptr };
+        if !runtime.dom_host().is_connected(source) {
+            continue;
+        }
+        let (current_x, current_y) = node_scroll_position(runtime, source);
         let (target_x, next_remaining_x) = consume_wheel_axis(
             current_x,
-            f64::from(container.metrics.minimum_scroll_offset.x),
-            f64::from(container.metrics.maximum_scroll_offset.x),
+            f64::from(metrics.minimum_scroll_offset.x),
+            f64::from(metrics.maximum_scroll_offset.x),
             remaining_x,
-            container.metrics.allows_user_scroll_x,
+            metrics.allows_user_scroll_x,
         );
         let (target_y, next_remaining_y) = consume_wheel_axis(
             current_y,
-            f64::from(container.metrics.minimum_scroll_offset.y),
-            f64::from(container.metrics.maximum_scroll_offset.y),
+            f64::from(metrics.minimum_scroll_offset.y),
+            f64::from(metrics.maximum_scroll_offset.y),
             remaining_y,
-            container.metrics.allows_user_scroll_y,
+            metrics.allows_user_scroll_y,
         );
         remaining_x = next_remaining_x;
         remaining_y = next_remaining_y;
@@ -127,35 +148,130 @@ pub(crate) fn perform_wheel_scroll_default_action(
 
         let container_document = unsafe { &*runtime_ptr }
             .dom_host()
-            .owner_document_handle(container.source);
+            .owner_document_handle(source);
         let is_document_scroller = container_document.is_some_and(|document| {
             unsafe { &*runtime_ptr }
                 .dom_host()
                 .dom()
                 .document_element_handle_for_document(document)
-                == Some(container.source)
+                == Some(source)
         });
         if is_document_scroller {
             changed |= apply_observable_window_scroll(
                 scope,
                 runtime_ptr,
-                container.source,
+                source,
                 target_x,
                 target_y,
                 current_x,
                 current_y,
             );
         } else {
-            set_node_scroll_position(
-                scope,
-                runtime_ptr,
-                container.source,
-                target_x,
-                target_y,
-                true,
-            );
+            set_node_scroll_position(scope, runtime_ptr, source, target_x, target_y, true);
             changed = true;
         }
+    }
+    Ok(changed)
+}
+
+/// Gesture scroll targets are chosen once per axis. Reaching a boundary or
+/// removing the selected scroller must not hand the active gesture to another
+/// container. An axis first used by a later overscroll segment can start then.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WheelScrollTargets {
+    x: Option<DomHandle>,
+    y: Option<DomHandle>,
+    x_started: bool,
+    y_started: bool,
+}
+
+pub(crate) fn select_wheel_scroll_targets(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+    delta_x: f64,
+    delta_y: f64,
+    mut targets: WheelScrollTargets,
+) -> Result<WheelScrollTargets, moli_layout::LayoutError> {
+    let select_x = !targets.x_started && delta_x != 0.0;
+    let select_y = !targets.y_started && delta_y != 0.0;
+    if !select_x && !select_y {
+        return Ok(targets);
+    }
+    for container in wheel_scroll_chain(runtime, handle)? {
+        let source = container.source;
+        let metrics = container.metrics;
+        let (x, y) = node_scroll_position(runtime, source);
+        let can_scroll = |current, minimum: f32, maximum: f32, delta| {
+            delta > 0.0 && current < f64::from(maximum)
+                || delta < 0.0 && current > f64::from(minimum)
+        };
+        if select_x
+            && targets.x.is_none()
+            && metrics.allows_user_scroll_x
+            && can_scroll(
+                x,
+                metrics.minimum_scroll_offset.x,
+                metrics.maximum_scroll_offset.x,
+                delta_x,
+            )
+        {
+            targets.x = Some(source);
+        }
+        if select_y
+            && targets.y.is_none()
+            && metrics.allows_user_scroll_y
+            && can_scroll(
+                y,
+                metrics.minimum_scroll_offset.y,
+                metrics.maximum_scroll_offset.y,
+                delta_y,
+            )
+        {
+            targets.y = Some(source);
+        }
+    }
+    targets.x_started |= select_x;
+    targets.y_started |= select_y;
+    Ok(targets)
+}
+
+pub(crate) fn perform_latched_wheel_scroll_default_action(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    targets: &WheelScrollTargets,
+    delta_x: f64,
+    delta_y: f64,
+) -> Result<bool, moli_layout::LayoutError> {
+    let mut changed = false;
+    for (source, dx, dy) in [
+        (
+            targets.x,
+            delta_x,
+            if targets.x == targets.y { delta_y } else { 0.0 },
+        ),
+        (
+            targets.y.filter(|target| Some(*target) != targets.x),
+            0.0,
+            delta_y,
+        ),
+    ] {
+        let Some(source) = source else {
+            continue;
+        };
+        let runtime = unsafe { &*runtime_ptr };
+        if !runtime.dom_host().is_connected(source) {
+            continue;
+        }
+        let Some(metrics) = read_element_metrics(runtime, source)? else {
+            continue;
+        };
+        changed |= perform_wheel_scroll_chain_default_action(
+            scope,
+            runtime_ptr,
+            &[moli_layout::LayoutScrollContainerMetrics { source, metrics }],
+            dx,
+            dy,
+        )?;
     }
     Ok(changed)
 }

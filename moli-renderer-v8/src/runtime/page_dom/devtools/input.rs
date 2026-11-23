@@ -50,6 +50,7 @@ impl PageVm {
         delta_x: f64,
         delta_y: f64,
         cancelable: bool,
+        gesture: crate::runtime::RendererSyntheticWheelGesture,
     ) -> Result<RendererInputDispatchOutcome> {
         let surface = self
             .vm()
@@ -63,21 +64,8 @@ impl PageVm {
                 && y < f64::from(surface.inner_height),
             "Position out of bounds",
         );
-        self.vm_mut().dispatch_mouse_input(
-            x,
-            y,
-            "wheel",
-            -1,
-            None,
-            0,
-            delta_x,
-            delta_y,
-            RendererPointerEventProperties::default(),
-            0,
-            false,
-            cancelable,
-            MouseDispatchCompletion::FinishTurn,
-        )
+        self.vm_mut()
+            .dispatch_gesture_wheel(x, y, delta_x, delta_y, cancelable, &gesture)
     }
 
     pub(crate) fn dispatch_touch_event_at_points(
