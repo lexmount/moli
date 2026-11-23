@@ -259,15 +259,19 @@ fn input_surface_hit_test_in_tree(
     let Some(frame_to_child) = layout_hit.embedded_viewport_hit_transform() else {
         return Ok(target_hit);
     };
+    let child_root = runtime
+        .dom_host()
+        .dom()
+        .document_element_handle_for_document(child_document);
+    if runtime.layout_policy().is_realtime() && child_root.is_none() {
+        // A frame can have an outer box while its new Document has no
+        // layout root. Keep the hit on the frame until it has contents.
+        return Ok(target_hit);
+    }
     let child_tree = tree
         .embedded_frame_tree(target)
         .ok_or(LayoutError::NoLayoutSnapshot)?;
-    if runtime
-        .dom_host()
-        .dom()
-        .document_element_handle_for_document(child_document)
-        != Some(child_tree.source_root())
-    {
+    if child_root != Some(child_tree.source_root()) {
         return Err(LayoutError::NoLayoutSnapshot);
     }
     let child_hit = input_surface_hit_test_in_tree(
