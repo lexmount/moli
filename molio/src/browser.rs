@@ -225,15 +225,14 @@ impl BrowserWindow {
                 let existing = popup.browsing_context_name.as_ref().and_then(|name| {
                     self.tabs.iter().find_map(|tab| {
                         let connection = tab.connection.as_ref()?;
-                        (connection.window_identity.name() == name).then_some((tab.id, connection))
+                        (connection.window_identity.name() == name).then_some(tab.id)
                     })
                 });
-                if let Some((id, connection)) = existing {
-                    if popup.navigation_requested {
-                        let _ = connection.commands.send(TabCommand::Navigate(Some(popup.url)));
-                        if popup.disposition != RendererPopupDisposition::Background {
-                            self.select_tab(id, window, cx);
-                        }
+                if let Some(id) = existing {
+                    if popup.navigation_requested
+                        && popup.disposition != RendererPopupDisposition::Background
+                    {
+                        self.select_tab(id, window, cx);
                     }
                 } else if popup.pending_auxiliary_page.is_some() {
                     let disposition = popup.disposition;
@@ -389,7 +388,19 @@ impl BrowserWindow {
         {
             auxiliary.close();
         }
-        self.closed.push(tab.url().to_owned());
+        let url = tab
+            .connection
+            .as_ref()
+            .and_then(|connection| {
+                connection
+                    .state
+                    .borrow()
+                    .navigation
+                    .as_ref()
+                    .map(|navigation| navigation.url.to_string())
+            })
+            .unwrap_or_else(|| tab.url().to_owned());
+        self.closed.push(url);
         if self.closed.len() > 20 {
             self.closed.remove(0);
         }

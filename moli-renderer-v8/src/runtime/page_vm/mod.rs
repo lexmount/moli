@@ -1512,10 +1512,6 @@ impl PageVmRuntimeHooks {
         Ok((journal, identity))
     }
 
-    fn has_renderer_page_script_environment(&self) -> bool {
-        self.renderer_page_script_environment.is_some()
-    }
-
     fn create_renderer_document_isolate_bootstrap(
         &mut self,
         page_runtime_task_source: crate::page_task_queue::PageRuntimeTaskSource,

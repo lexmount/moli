@@ -293,8 +293,8 @@ use self::access::{
 };
 pub(crate) use self::browser_context_runtime::ServiceWorkerControlState;
 pub(crate) use self::browser_context_runtime::{
-    ClipboardPresentationStyle, ClipboardSnapshot, RendererStoragePartitionIdentity,
-    RendererWorkerContextRuntime,
+    AuxiliaryNavigationOwner, ClipboardPresentationStyle, ClipboardSnapshot,
+    RendererStoragePartitionIdentity, RendererWorkerContextRuntime,
 };
 pub use self::browser_context_runtime::{
     DetachedParserScriptFetchContinuation, RendererAuxiliaryNavigationKind,

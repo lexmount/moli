@@ -129,6 +129,41 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
     true
 }
 
+pub(crate) fn queue_related_popup_navigation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    target: url::Url,
+    same_origin: bool,
+    initiator: crate::runtime::RendererNavigationInitiator,
+    environment: Option<crate::runtime::RendererCapturedDocumentEnvironment>,
+) {
+    let Some(context) = window.get_creation_context(scope) else {
+        return;
+    };
+    let Some(host) = crate::util::context_host_ptr_from_context_slot(context) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let window = context.global(scope);
+    let replace_current =
+        super::navigation_window::navigation_document_is_initial_empty(scope, window)
+            || (same_origin && unsafe { &*host }.document_url() == &target);
+    if same_origin
+        && navigate_top_level_same_document_from_browser(scope, target.to_string(), replace_current)
+    {
+        return;
+    }
+    let kind = if replace_current {
+        LocationNavigationKind::Replace
+    } else {
+        LocationNavigationKind::Assign
+    };
+    let entry_seed = history_entry_seed_for_cross_document_location(scope, window, &target, kind);
+    let host = unsafe { &mut *host };
+    host.record_pending_location_navigation(target, entry_seed);
+    host.set_pending_location_navigation_source(initiator, environment);
+}
+
 #[cfg(feature = "molio")]
 pub(crate) fn navigate_top_level_from_browser(
     scope: &mut v8::PinScope<'_, '_>,

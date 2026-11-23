@@ -336,7 +336,7 @@ fn navigate_hyperlink_popup_target(
     };
     let opener = (!relations.suppress_opener).then_some(creator.opener);
     let runtime = unsafe { &mut *runtime_ptr };
-    if runtime.has_browser_owned_auxiliary_page_factory() {
+    if let Some(navigation_owner) = runtime.auxiliary_page_navigation_owner() {
         let child_handle = match dispatch_scope {
             crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
             _ => None,
@@ -367,7 +367,8 @@ fn navigate_hyperlink_popup_target(
         } else {
             RendererPopupDisposition::Background
         };
-        let renderer_navigation = opened.queue_javascript_navigation(scope, resolved_url);
+        let javascript_navigation =
+            opened.queue_navigation(scope, resolved_url, &navigation_initiator, navigation_owner);
         let window_open_event = opened.pending_page.is_some().then(|| {
             RendererPendingWindowOpenEvent::browser_window(
                 resolved_url,
@@ -375,13 +376,13 @@ fn navigate_hyperlink_popup_target(
                 runtime.protocol_user_gesture_activation(),
             )
         });
-        runtime.record_pending_popup_activation(
+        unsafe { &mut *runtime_ptr }.record_pending_popup_activation(
             RendererPendingPopupActivation::window(
                 root_document,
                 source,
                 !relations.suppress_opener,
                 opened.window.as_ref().map(|window| window.id()),
-                if renderer_navigation {
+                if javascript_navigation {
                     "about:blank".to_owned()
                 } else {
                     resolved_url.to_owned()
@@ -389,7 +390,7 @@ fn navigate_hyperlink_popup_target(
                 target_name.to_owned(),
                 disposition,
             )
-            .with_navigation_requested(!renderer_navigation)
+            .with_navigation_requested(!javascript_navigation)
             .with_browsing_context_name(opened.name)
             .with_navigation_initiator(navigation_initiator)
             .with_initial_document_environment(opened.initial_document_environment)

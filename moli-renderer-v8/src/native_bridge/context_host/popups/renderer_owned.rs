@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::AuxiliaryNavigationOwner;
 use crate::types::SubresourceInterceptionClasses;
 
 pub(crate) struct OpenedRendererWindow<'s> {
@@ -13,35 +14,46 @@ pub(crate) struct OpenedRendererWindow<'s> {
         Option<crate::runtime::RendererCapturedDocumentEnvironment>,
 }
 
-impl OpenedRendererWindow<'_> {
-    pub(crate) fn queue_javascript_navigation(
+impl<'s> OpenedRendererWindow<'s> {
+    /// Admit renderer-owned navigation before returning the WindowProxy to script.
+    /// Returns true for a javascript: URL, which is hidden from browser navigation.
+    pub(crate) fn queue_navigation(
         &self,
-        scope: &mut v8::PinScope<'_, '_>,
+        scope: &mut v8::PinScope<'s, '_>,
         href: &str,
+        initiator: &crate::runtime::RendererNavigationInitiator,
+        navigation_owner: AuxiliaryNavigationOwner,
     ) -> bool {
         let Ok(url) = Url::parse(href) else {
             return false;
         };
-        if url.scheme() != "javascript" {
-            return false;
+        if url.scheme() == "javascript" {
+            let host = crate::util::context_host_ptr_from_window_object(scope, self.window_proxy)
+                .expect("a related Window retains its native host");
+            // Run the URL after the opening script returns, without a network load.
+            unsafe { &mut *host }.record_pending_location_navigation(url, None);
+            return true;
         }
-        let host = crate::util::context_host_ptr_from_window_object(scope, self.window_proxy)
-            .expect("a related Window retains its native host");
-        // Javascript URLs belong to the target's renderer task queue. They
-        // must run after the opening script returns, without a network load.
-        unsafe { &mut *host }.record_pending_location_navigation(url, None);
-        true
+        if navigation_owner == AuxiliaryNavigationOwner::Renderer
+            && (self.pending_page.is_none() || !moli_url::is_about_blank(&url))
+        {
+            crate::context_bootstrap::queue_related_popup_navigation(
+                scope,
+                self.window_proxy,
+                url,
+                self.same_origin_with_target == Some(true),
+                initiator.clone(),
+                self.initial_document_environment.clone(),
+            );
+        }
+        false
     }
 }
 
 impl PageScriptHost {
-    pub(crate) fn has_browser_owned_auxiliary_page_factory(&self) -> bool {
-        self.browser_context_runtime
-            .browser_owns_auxiliary_document_responses()
-            && self
-                .page_script_environment()
-                .and_then(|environment| environment.auxiliary_allocator())
-                .is_some()
+    pub(crate) fn auxiliary_page_navigation_owner(&self) -> Option<AuxiliaryNavigationOwner> {
+        self.page_script_environment()?.auxiliary_allocator()?;
+        self.browser_context_runtime.auxiliary_navigation_owner()
     }
 
     /// Capture the source Document before a related Window switches to the
