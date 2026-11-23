@@ -581,10 +581,11 @@ impl PageScriptHost {
                 if let Some(response) = download {
                     self.record_pending_download_activation(
                         crate::runtime::RendererPendingDownloadActivation {
+                            initiator_url: None,
                             frame_id: Some(network_attribution.frame_id().to_owned()),
                             url: response.final_url.clone(),
                             suggested_filename: None,
-                            response: Some(response),
+                            response: Some(Box::new(response)),
                         },
                     );
                 }

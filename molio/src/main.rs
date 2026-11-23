@@ -1,5 +1,7 @@
 mod address;
 mod browser;
+mod download_page;
+mod downloads;
 mod favicon;
 mod host;
 mod icons;

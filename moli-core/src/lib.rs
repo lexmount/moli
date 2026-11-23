@@ -6,6 +6,7 @@
 
 mod config;
 mod dom;
+pub mod download;
 pub mod network;
 pub mod page;
 mod parser;

@@ -7,14 +7,15 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use http::HeaderName;
+use moli_core::download::{
+    content_length_from_headers, download_request, filename_from_headers, filename_from_url,
+    non_empty_filename, sanitize_filename,
+};
 use moli_core::network::ResourceRequestClient;
 use moli_core::page::RendererPendingDownloadActivation;
 use moli_fetch::{FetchCancelHandle, Request};
-use moli_header_field::{split_outside_quoted_strings, unquote_parameter_value};
 use moli_web_mime::response_headers_indicate_attachment_download;
 use parking_lot::Mutex;
-use sanitize_filename::Options;
 use tokio::io::AsyncWriteExt;
 use url::Url;
 
@@ -380,22 +381,8 @@ impl CdpConnection {
             return Ok(None);
         };
 
-        let mut request = Request::get(&activation.url).context("invalid download url")?;
+        let mut request = download_request(&activation.url, owner.initiator_url.as_ref())?;
         request.request_headers = owner.request_headers;
-        request = request
-            .with_top_level_navigation_cookie_context()
-            .with_page_network_policy()
-            .with_request_origin(
-                owner
-                    .initiator_url
-                    .as_ref()
-                    .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
-            );
-        if let Some(ref initiator_url) = owner.initiator_url {
-            request = request
-                .with_initiator_url(initiator_url)
-                .with_request_origin(moli_url::WebOrigin::from_url(initiator_url));
-        }
 
         let loader = self.ensure_resource_request_client()?.clone();
         let guid = generate_download_guid()?;
@@ -519,15 +506,7 @@ impl CdpConnection {
         let response_url = Url::parse(&response.final_url)
             .or_else(|_| Url::parse(&activation.url))
             .context("invalid download url");
-        let response_body = match response.body {
-            moli_core::page::RendererDownloadBody::Buffered(body) => {
-                CompletedDownloadBody::Buffered(body)
-            }
-            moli_core::page::RendererDownloadBody::Blob(body) => CompletedDownloadBody::Blob(body),
-            moli_core::page::RendererDownloadBody::Network(body) => {
-                CompletedDownloadBody::Intercepted(body)
-            }
-        };
+        let response_body = CompletedDownloadBody::from(response.body);
 
         let mut prepared = self.prepare_download_from_response(
             command_owner,
@@ -928,13 +907,7 @@ async fn complete_navigation_download_async(
 
     let mut events = build_navigation_download_will_begin_event(&prepared, &suggested_filename);
     events.extend(build_navigation_download_in_progress_event(&prepared));
-    let cancel = match &prepared.response_body {
-        CompletedDownloadBody::Buffered(_) | CompletedDownloadBody::Blob(_) => {
-            FetchCancelHandle::new()
-        }
-        CompletedDownloadBody::Streaming(response) => response.cancellation_handle(),
-        CompletedDownloadBody::Intercepted(body) => body.cancellation_handle(),
-    };
+    let cancel = prepared.response_body.cancellation_handle();
     prepared
         .registry
         .insert_active(prepared.guid.clone(), cancel.clone());
@@ -982,62 +955,11 @@ async fn write_navigation_download_body_async(
     artifact_path: &Path,
     body: CompletedDownloadBody,
 ) -> Result<u64> {
-    // A protocol body read can have started before ContinueResponse. In the
-    // usual case move the unread transport; otherwise drain the same capture.
-    let mut body = match body {
-        CompletedDownloadBody::Intercepted(body) => match body.take_unread_response().await {
-            Some(response) => CompletedDownloadBody::Streaming(Box::new(response)),
-            None => CompletedDownloadBody::Intercepted(body),
-        },
-        body => body,
-    };
     tokio::fs::create_dir_all(download_root).await?;
     let partial_path = partial_artifact_path(artifact_path);
     let result = async {
         let mut file = tokio::fs::File::create(&partial_path).await?;
-        let mut total_bytes = 0_u64;
-        loop {
-            let chunk = match &mut body {
-                CompletedDownloadBody::Buffered(bytes) => {
-                    if total_bytes != 0 || bytes.is_empty() {
-                        break;
-                    }
-                    std::mem::take(bytes)
-                }
-                CompletedDownloadBody::Blob(data) => {
-                    let offset = usize::try_from(total_bytes)?;
-                    if offset == data.len() {
-                        break;
-                    }
-                    let end = offset.saturating_add(64 * 1024).min(data.len());
-                    let (send, receive) = tokio::sync::oneshot::channel();
-                    data.read(
-                        offset..end,
-                        Box::new(move |result| {
-                            let _ = send.send(result);
-                        }),
-                    );
-                    receive.await.context("Blob download read canceled")??
-                }
-                CompletedDownloadBody::Streaming(response) => match response.next_chunk().await {
-                    Some(chunk) => chunk,
-                    None => {
-                        response.finish().await?;
-                        break;
-                    }
-                },
-                CompletedDownloadBody::Intercepted(body) => {
-                    let (chunk, eof) = body.read_chunk(total_bytes as usize, 64 * 1024).await?;
-                    if eof && chunk.is_empty() {
-                        break;
-                    }
-                    chunk
-                }
-            };
-            file.write_all(&chunk).await?;
-            total_bytes = total_bytes.saturating_add(chunk.len() as u64);
-        }
-        file.flush().await?;
+        let total_bytes = body.write_to(&mut file, |_| {}).await?;
         drop(file);
         finalize_download_artifact(&partial_path, artifact_path).await?;
         Ok(total_bytes)
@@ -1385,152 +1307,8 @@ fn partial_artifact_path(artifact_path: &Path) -> PathBuf {
     artifact_path.with_file_name(format!("{file_name}.crdownload"))
 }
 
-fn content_length_from_headers(headers: &[(String, Vec<u8>)]) -> Option<u64> {
-    headers
-        .iter()
-        .find(|(name, _)| header_name_is(name, &HeaderName::from_static("content-length")))
-        .and_then(|(_, value)| {
-            moli_fetch::decode_header_value(value)
-                .trim()
-                .parse::<u64>()
-                .ok()
-        })
-}
-
 pub(crate) fn response_headers_indicate_download(headers: &[(String, Vec<u8>)]) -> bool {
     response_headers_indicate_attachment_download(headers)
-}
-
-fn filename_from_headers(headers: &[(String, Vec<u8>)]) -> Option<String> {
-    for (name, value) in headers {
-        if !header_name_is(name, &HeaderName::from_static("content-disposition")) {
-            continue;
-        }
-        if let Some(filename) =
-            filename_from_content_disposition(&moli_fetch::decode_header_value(value))
-        {
-            return Some(filename);
-        }
-    }
-    None
-}
-
-fn filename_from_content_disposition(value: &str) -> Option<String> {
-    let mut plain = None;
-    let mut extended = None;
-    let mut saw_extended = false;
-
-    // A `;` inside a quoted string does not start a new parameter. Splitting on
-    // every `;` let text inside a quoted `filename` be read as a parameter of
-    // its own, so a site that echoes an attacker-supplied name into the header
-    // could smuggle a `filename*` and choose the extension the file is saved
-    // under.
-    for part in split_outside_quoted_strings(value, ';').into_iter().skip(1) {
-        let part = part.trim();
-        if let Some(raw) = strip_parameter_name(part, "filename*") {
-            saw_extended = true;
-            extended = decode_extended_filename(raw);
-        } else if let Some(raw) = strip_parameter_name(part, "filename") {
-            plain = Some(unquote_parameter_value(raw.trim()).into_owned());
-        }
-    }
-
-    if extended.is_some() {
-        return extended;
-    }
-    if saw_extended && plain.is_none() {
-        return None;
-    }
-
-    plain
-        .as_deref()
-        .and_then(non_empty_filename)
-        .map(sanitize_filename)
-}
-
-/// Strips a case-insensitive `name=` prefix from one parameter.
-fn strip_parameter_name<'a>(part: &'a str, name: &str) -> Option<&'a str> {
-    let rest = part
-        .get(..name.len())?
-        .eq_ignore_ascii_case(name)
-        .then(|| &part[name.len()..])?;
-    rest.trim_start().strip_prefix('=')
-}
-
-fn decode_extended_filename(raw: &str) -> Option<String> {
-    let raw = raw.trim().trim_matches('"');
-    let mut parts = raw.splitn(3, '\'');
-    let charset = parts.next().unwrap_or_default();
-    let _language = parts.next();
-    let encoded = parts.next().unwrap_or(raw);
-    let decoded = percent_decode_bytes(encoded)?;
-
-    let filename = if charset.is_empty() || charset.eq_ignore_ascii_case("utf-8") {
-        String::from_utf8(decoded).ok()?
-    } else if charset.eq_ignore_ascii_case("iso-8859-1")
-        || charset.eq_ignore_ascii_case("latin1")
-        || charset.eq_ignore_ascii_case("latin-1")
-    {
-        decoded.into_iter().map(char::from).collect()
-    } else {
-        return None;
-    };
-
-    non_empty_filename(&filename).map(sanitize_filename)
-}
-
-fn percent_decode_bytes(input: &str) -> Option<Vec<u8>> {
-    let bytes = input.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            if index + 2 >= bytes.len()
-                || !bytes[index + 1].is_ascii_hexdigit()
-                || !bytes[index + 2].is_ascii_hexdigit()
-            {
-                return None;
-            }
-            index += 3;
-        } else {
-            index += 1;
-        }
-    }
-    Some(percent_encoding::percent_decode(bytes).collect())
-}
-
-fn filename_from_url(url: &Url) -> Option<String> {
-    url.path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .and_then(non_empty_filename)
-        .map(sanitize_filename)
-}
-
-fn non_empty_filename(value: &str) -> Option<&str> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then_some(trimmed)
-}
-
-fn sanitize_filename(value: &str) -> String {
-    let component = Path::new(value)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(non_empty_filename)
-        .unwrap_or("download");
-    let sanitized = sanitize_filename::sanitize_with_options(
-        component,
-        Options {
-            windows: true,
-            truncate: true,
-            replacement: "",
-        },
-    );
-    non_empty_filename(&sanitized)
-        .unwrap_or("download")
-        .to_owned()
-}
-
-fn header_name_is(candidate: &str, expected: &HeaderName) -> bool {
-    HeaderName::from_bytes(candidate.as_bytes()).is_ok_and(|candidate| candidate == *expected)
 }
 
 #[cfg(test)]
@@ -1556,11 +1334,10 @@ mod tests {
     use super::{
         BrowserDownloadObserver, DownloadBehavior, DownloadCommandError, DownloadEventRoute,
         DownloadLifecycle, DownloadRecord, OpenDownloadArtifactOutcome, PageDownloadObserver,
-        SharedDownloadRegistry, artifact_file_name, content_length_from_headers,
-        download_progress_event, download_progress_events, download_will_begin_event,
-        download_will_begin_events, filename_from_content_disposition, format_download_guid,
-        generate_download_guid, partial_artifact_path, response_headers_indicate_download,
-        sanitize_filename,
+        SharedDownloadRegistry, artifact_file_name, download_progress_event,
+        download_progress_events, download_will_begin_event, download_will_begin_events,
+        format_download_guid, generate_download_guid, partial_artifact_path,
+        response_headers_indicate_download,
     };
 
     #[test]
@@ -1679,17 +1456,18 @@ mod tests {
                     .prepare_pending_download_activation_delivery(
                         &owner,
                         RendererPendingDownloadActivation {
+                            initiator_url: None,
                             frame_id: None,
                             url: "blob:https://download.test/retained".to_owned(),
                             suggested_filename: Some("anchor.bin".to_owned()),
-                            response: Some(RendererPendingDownloadResponse {
+                            response: Some(Box::new(RendererPendingDownloadResponse {
                                 final_url: "blob:https://download.test/retained".to_owned(),
                                 status: 200,
                                 headers,
                                 body: moli_core::page::RendererDownloadBody::Blob(
                                     bytes.clone().into(),
                                 ),
-                            }),
+                            })),
                         },
                         false,
                     )
@@ -1729,6 +1507,7 @@ mod tests {
                 .prepare_pending_download_activation_delivery(
                     &owner,
                     RendererPendingDownloadActivation {
+                        initiator_url: None,
                         frame_id: Some("child-frame".to_owned()),
                         url: "blob:https://download.test/revoked".to_owned(),
                         suggested_filename: Some("gone.bin".to_owned()),
@@ -1814,17 +1593,18 @@ mod tests {
                     .prepare_pending_download_activation_delivery(
                         &owner,
                         RendererPendingDownloadActivation {
+                            initiator_url: None,
                             frame_id: None,
                             url: "blob:https://download.test/retained".to_owned(),
                             suggested_filename: Some("large.bin".to_owned()),
-                            response: Some(RendererPendingDownloadResponse {
+                            response: Some(Box::new(RendererPendingDownloadResponse {
                                 final_url: "blob:https://download.test/retained".to_owned(),
                                 status: 200,
                                 headers: Vec::new(),
                                 body: moli_core::page::RendererDownloadBody::Blob(
                                     moli_file_api::BlobData::from_source(source.clone(), size),
                                 ),
-                            }),
+                            })),
                         },
                         false,
                     )
@@ -2262,14 +2042,17 @@ mod tests {
                 let result = conn.prepare_pending_download_activation_delivery(
                     &owner,
                     RendererPendingDownloadActivation {
+                        initiator_url: None,
                         frame_id: None,
                         url: "relative-download-url".to_owned(),
                         suggested_filename: None,
-                        response: prefetched.then(|| RendererPendingDownloadResponse {
-                            final_url: "relative-response-url".to_owned(),
-                            status: 200,
-                            headers: Vec::new(),
-                            body: Vec::new().into(),
+                        response: prefetched.then(|| {
+                            Box::new(RendererPendingDownloadResponse {
+                                final_url: "relative-response-url".to_owned(),
+                                status: 200,
+                                headers: Vec::new(),
+                                body: Vec::new().into(),
+                            })
                         }),
                     },
                     false,
@@ -2618,68 +2401,6 @@ mod tests {
     }
 
     #[test]
-    fn content_length_from_headers_parses_case_insensitive_header_name() {
-        assert_eq!(
-            content_length_from_headers(&[("Content-Length".to_owned(), b"42".to_vec())]),
-            Some(42)
-        );
-        assert_eq!(
-            content_length_from_headers(&[("content-length".to_owned(), b"bad".to_vec())]),
-            None
-        );
-    }
-
-    #[test]
-    fn content_disposition_ignores_filename_star_inside_a_quoted_filename() {
-        // RFC 6266: the whole quoted string is the `filename` value, and there
-        // is no `filename*` parameter here at all. Reading the inner text as
-        // one let a site that echoes an attacker-supplied name into the header
-        // choose the extension the file is saved under.
-        let filename = filename_from_content_disposition(
-            "attachment; filename=\"a;filename*=UTF-8''evil.exe\"",
-        );
-
-        // The saved name is the quoted string itself, with `*` removed by
-        // the Windows-safe sanitizer rather than by the parameter scan.
-        assert_ne!(filename.as_deref(), Some("evil.exe"));
-        assert_eq!(filename.as_deref(), Some("a;filename=UTF-8''evil.exe"));
-    }
-
-    #[test]
-    fn content_disposition_still_reads_a_real_filename_star_after_a_quoted_filename() {
-        let filename = filename_from_content_disposition(
-            "attachment; filename=\"plain;name.txt\"; filename*=UTF-8''%E4%B8%AD%E6%96%87.txt",
-        );
-
-        assert_eq!(filename.as_deref(), Some("中文.txt"));
-    }
-
-    #[test]
-    fn content_disposition_prefers_filename_star_when_present() {
-        let filename = filename_from_content_disposition(
-            "attachment; filename=\"fallback.txt\"; filename*=UTF-8''%E4%B8%AD%E6%96%87.txt",
-        );
-
-        assert_eq!(filename.as_deref(), Some("中文.txt"));
-    }
-
-    #[test]
-    fn content_disposition_falls_back_to_plain_filename_when_extended_decode_fails() {
-        let filename = filename_from_content_disposition(
-            "attachment; filename=\"fallback.txt\"; filename*=UTF-8''%ZZbroken",
-        );
-
-        assert_eq!(filename.as_deref(), Some("fallback.txt"));
-    }
-
-    #[test]
-    fn content_disposition_rejects_invalid_extended_filename_without_plain_fallback() {
-        let filename = filename_from_content_disposition("attachment; filename*=UTF-8''%ZZbroken");
-
-        assert_eq!(filename, None);
-    }
-
-    #[test]
     fn response_headers_indicate_download_uses_web_mime_attachment_helper() {
         assert!(response_headers_indicate_download(&[(
             "Content-Disposition".to_owned(),
@@ -2689,17 +2410,6 @@ mod tests {
             "Content-Disposition".to_owned(),
             b"inline; filename=\"report.txt\"".to_vec(),
         )]));
-    }
-
-    #[test]
-    fn sanitize_filename_strips_path_components() {
-        assert_eq!(sanitize_filename("../nested/report.txt"), "report.txt");
-    }
-
-    #[test]
-    fn sanitize_filename_removes_reserved_filename_characters() {
-        assert_eq!(sanitize_filename("report?.txt"), "report.txt");
-        assert_eq!(sanitize_filename("CON"), "download");
     }
 
     #[test]

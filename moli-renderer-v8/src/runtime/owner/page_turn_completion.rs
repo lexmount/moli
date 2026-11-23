@@ -477,6 +477,21 @@ impl RendererOwnerHandle {
         match completion {
             LivePagePendingNavigationCompletion::Background
             | LivePagePendingNavigationCompletion::PublishedPageCreation { .. } => {
+                #[cfg(feature = "molio")]
+                if entry.page_vm().viewport_frames.is_some() {
+                    entry.page_vm().append_renderer_output_records(vec![
+                        PendingRendererOutputRecord::owner_action(
+                            None,
+                            RendererOwnerAction::Download(download),
+                        ),
+                    ]);
+                    let output = entry.page_vm_mut().settle_renderer_output_publication();
+                    self.restore_live_page_entry(token, entry);
+                    if let Some(output) = output {
+                        self.publish_renderer_output(output);
+                    }
+                    return RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()));
+                }
                 self.restore_live_page_entry(token, entry);
                 drop(download);
                 RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()))
@@ -500,8 +515,19 @@ impl RendererOwnerHandle {
                 reply,
                 capture_policy,
             } => {
-                let reply = *reply;
-                let reply = self.merge_pending_download_into_reply(reply, download);
+                let reply = match *reply {
+                    #[cfg(feature = "molio")]
+                    reply @ RendererPageReply::ViewportNavigation(_) => {
+                        entry.page_vm().append_renderer_output_records(vec![
+                            PendingRendererOutputRecord::owner_action(
+                                None,
+                                RendererOwnerAction::Download(download),
+                            ),
+                        ]);
+                        reply
+                    }
+                    reply => self.merge_pending_download_into_reply(reply, download),
+                };
                 self.finish_live_page_entry_with_page_state_and_continuation(
                     token,
                     entry,

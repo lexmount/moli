@@ -87,15 +87,16 @@ pub(super) async fn load_followed_location_navigation(
                 .map_err(|_| anyhow!("local navigation download body was not materialized"))?;
             return Ok(LoadedFollowedLocationNavigation::Download(
                 RendererPendingDownloadActivation {
+                    initiator_url: None,
                     frame_id: None,
                     url: head.final_url.as_str().to_owned(),
                     suggested_filename: None,
-                    response: Some(RendererPendingDownloadResponse {
+                    response: Some(Box::new(RendererPendingDownloadResponse {
                         final_url: head.final_url.as_str().to_owned(),
                         status: head.status,
                         headers: head.headers,
                         body: body.into(),
-                    }),
+                    })),
                 },
             ));
         }
@@ -127,22 +128,20 @@ pub(super) async fn load_followed_location_navigation(
         return Ok(LoadedFollowedLocationNavigation::NoDocument);
     }
     if response_headers_indicate_download(&response.headers) {
-        let mut body = Vec::new();
-        while let Some(chunk) = response.next_chunk().await {
-            body.extend_from_slice(&chunk);
-        }
-        response.finish().await?;
         return Ok(LoadedFollowedLocationNavigation::Download(
             RendererPendingDownloadActivation {
+                initiator_url: None,
                 frame_id: None,
                 url: response.final_url.as_str().to_owned(),
                 suggested_filename: None,
-                response: Some(RendererPendingDownloadResponse {
+                response: Some(Box::new(RendererPendingDownloadResponse {
                     final_url: response.final_url.as_str().to_owned(),
                     status: response.status,
                     headers: response.headers.clone(),
-                    body: body.into(),
-                }),
+                    body: crate::runtime::RendererDownloadBody::Network(
+                        crate::network::ResourceInterceptionBody::new(response, None),
+                    ),
+                })),
             },
         ));
     }

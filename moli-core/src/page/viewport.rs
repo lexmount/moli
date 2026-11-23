@@ -84,7 +84,7 @@ impl Page {
 
     pub fn finish_viewport_navigation(&mut self, completion: CompletedPageCommand) -> Result<bool> {
         match self.finish_page_command(completion) {
-            RendererPageReply::Bool(navigated) => Ok(navigated),
+            RendererPageReply::ViewportNavigation(navigated) => Ok(navigated),
             _ => anyhow::bail!("unexpected viewport navigation reply"),
         }
     }
@@ -93,7 +93,9 @@ impl Page {
         let reply = self
             .dispatch_page_command_async(RendererPageCommand::TraverseViewportHistory(delta))
             .await?;
-        let traversed = Self::decode_bool_page_reply(reply, "traverse viewport history")?;
+        let RendererPageReply::ViewportNavigation(traversed) = reply else {
+            anyhow::bail!("unexpected viewport history traversal reply");
+        };
         self.wake_viewport_frames().await?;
         Ok(traversed)
     }

@@ -193,11 +193,12 @@ impl RendererSyntheticResponseBody {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererPendingDownloadActivation {
+    pub initiator_url: Option<Box<Url>>,
     /// The initiating child frame; absent for a top-level activation.
     pub frame_id: Option<String>,
     pub url: String,
     pub suggested_filename: Option<String>,
-    pub response: Option<RendererPendingDownloadResponse>,
+    pub response: Option<Box<RendererPendingDownloadResponse>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5341,6 +5342,8 @@ impl RendererRuntimeEvaluationResult {
 
 #[non_exhaustive]
 pub enum RendererPageReply {
+    #[cfg(feature = "molio")]
+    ViewportNavigation(bool),
     #[cfg(feature = "molio")]
     ViewportEditor(Option<super::RendererViewportEditor>),
     #[cfg(feature = "molio")]

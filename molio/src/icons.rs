@@ -14,6 +14,7 @@ pub enum Icon {
     Site,
     Menu,
     Page,
+    Download,
     Loading,
 }
 
@@ -67,6 +68,11 @@ pub fn glyph(icon: Icon, color: Rgba) -> impl IntoElement {
                         (4., 2.5),
                     ],
                     &[(9., 2.5), (9., 5.5), (12., 5.5)],
+                ]),
+                Icon::Download => lines(&[
+                    &[(8., 2.5), (8., 10.)],
+                    &[(4.75, 7.), (8., 10.25), (11.25, 7.)],
+                    &[(3., 11.5), (3., 13.5), (13., 13.5), (13., 11.5)],
                 ]),
                 Icon::Reload => {
                     path.move_to(p(12.75, 5.4));

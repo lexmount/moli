@@ -24,6 +24,7 @@ pub struct AddressSuggestion {
 
 pub struct Address {
     pub focus: FocusHandle,
+    placeholder: &'static str,
     value: String,
     anchor: usize,
     head: usize,
@@ -38,8 +39,13 @@ impl EventEmitter<AddressEvent> for Address {}
 
 impl Address {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        Self::with_placeholder("Search or enter an address", cx)
+    }
+
+    pub fn with_placeholder(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
         Self {
             focus: cx.focus_handle(),
+            placeholder,
             value: String::new(),
             anchor: 0,
             head: 0,
@@ -49,6 +55,10 @@ impl Address {
             selected_suggestion: None,
             geometry: None,
         }
+    }
+
+    pub fn value(&self) -> &str {
+        &self.value
     }
 
     pub fn show(&mut self, url: String, cx: &mut Context<Self>) {
@@ -242,7 +252,7 @@ impl Render for Address {
         let focused = self.focus.is_focused(window);
         let focus = self.focus.clone();
         let text: SharedString = if self.value.is_empty() {
-            "Search or enter an address".into()
+            self.placeholder.into()
         } else {
             self.value.clone().into()
         };
