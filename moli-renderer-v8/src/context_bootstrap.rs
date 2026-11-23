@@ -204,9 +204,9 @@ pub(crate) use css_fontface_runtime::{
 pub(crate) use location_navigation::navigate_top_level_from_browser;
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
-    dispatch_top_level_navigation_event_with_source_element, is_native_location,
-    navigate_borrowed_location, navigate_child_meta_refresh,
-    navigate_location_object_with_child_navigate_event,
+    dispatch_top_level_navigation_event_with_source_element,
+    history_entry_seed_for_cross_document_location, is_native_location, navigate_borrowed_location,
+    navigate_child_meta_refresh, navigate_location_object_with_child_navigate_event,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
     sandbox_blocks_ancestor_or_top_navigation_from_source,
