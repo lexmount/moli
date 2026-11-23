@@ -6,6 +6,34 @@ use crate::runtime::{
 use moli_page_types::LayoutPolicy;
 
 #[tokio::test(flavor = "current_thread")]
+async fn native_pdf_extracts_only_bullets_for_transformed_password_values() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/password-print.html")?,
+        );
+        page.vm_mut().eval(
+            r#"
+document.head.innerHTML = '<style>@media print { input { text-transform: uppercase; } }</style>';
+document.body.innerHTML = '<input type=password value="Aß😀e\u0301Z">';
+'installed'
+"#,
+        )?;
+        let reply = page.print_to_pdf(RendererPrintToPdfRequest::default())?;
+        let RendererPrintToPdfReply::Printed(bytes) = reply else {
+            anyhow::bail!("password PDF failed: {reply:?}");
+        };
+        let pdf = lopdf::Document::load_mem(&bytes)?;
+        assert_eq!(pdf.extract_text(&[1])?.trim(), "••••••");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("password PDF fixture");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn native_pdf_only_admits_css_images_used_by_the_capture() {
     run_page_vm_async_test(async move {
         let image = "data:image/webp;base64,UklGRhwAAABXRUJQVlA4TA8AAAAvAUAAAAcQ/Y/+ByKi/wEA";

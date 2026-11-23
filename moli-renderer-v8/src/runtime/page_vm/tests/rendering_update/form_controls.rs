@@ -244,13 +244,14 @@ document.body.innerHTML = '<input id=field placeholder="Example">';
         )?;
         page.vm_mut().sync_live_document_style_sources();
 
-        for (label, value, masked, original_selection, masked_selection) in [
-            ("ASCII", "Wi10", "••••", None, None),
-            ("emoji sequences", "👩‍💻🇫🇷", "••", None, None),
+        for (label, value, masked, transform, original_selection, masked_selection) in [
+            ("ASCII", "Wi10", "••••", "none", None, None),
+            ("emoji sequences", "👩‍💻🇫🇷", "••", "none", None, None),
             (
                 "grapheme selection",
                 "A😀e\u{0301}Z",
                 "••••",
+                "none",
                 Some((1, 5)),
                 Some((1, 3)),
             ),
@@ -258,10 +259,35 @@ document.body.innerHTML = '<input id=field placeholder="Example">';
                 "grapheme caret",
                 "A😀e\u{0301}Z",
                 "••••",
+                "none",
                 Some((5, 5)),
                 Some((3, 3)),
             ),
-            ("placeholder", "", "", None, None),
+            (
+                "expanded uppercase selection",
+                "Aß😀e\u{0301}Z",
+                "••••••",
+                "uppercase",
+                Some((1, 2)),
+                Some((1, 3)),
+            ),
+            (
+                "caret inside a surrogate pair after uppercase expansion",
+                "Aß😀e\u{0301}Z",
+                "••••••",
+                "uppercase",
+                Some((3, 3)),
+                Some((4, 4)),
+            ),
+            (
+                "nonempty selection collapsed within a combining grapheme",
+                "e\u{0301}",
+                "•",
+                "none",
+                Some((1, 2)),
+                None,
+            ),
+            ("placeholder", "", "", "uppercase", None, None),
         ] {
             let mut reference = None;
             for (kind, value, selection) in [
@@ -275,7 +301,7 @@ document.body.innerHTML = '<input id=field placeholder="Example">';
                     None => "field.blur();".to_owned(),
                 };
                 page.vm_mut().eval(&format!(
-                    "field.type='{kind}';field.value={};{focus}'updated'",
+                    "field.type='{kind}';field.style.textTransform='{transform}';field.value={};{focus}'updated'",
                     serde_json::to_string(value)?,
                 ))?;
                 let snapshot = page

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::{fmt::Debug, hash::Hash, sync::Arc};
+use std::{borrow::Cow, fmt::Debug, hash::Hash, sync::Arc};
 
 use taffy::Size;
 use unicode_segmentation::UnicodeSegmentation;
@@ -9,7 +9,7 @@ use crate::{
     LayoutAnonymousReason, LayoutAnonymousStyleContext, LayoutBoxId, LayoutBoxKind, LayoutDisplay,
     LayoutElementCategory, LayoutElementSemantics, LayoutError, LayoutFormControlKind,
     LayoutInputControlKind, LayoutStyleResolver, LayoutTextSelection, LayoutWorld,
-    ResolvedLayoutStyle, replaced::ReplacedContext,
+    ResolvedLayoutStyle, TextTransform, TextTransformState, replaced::ReplacedContext,
 };
 
 pub(crate) fn prepare_form_controls<N, R>(
@@ -24,8 +24,12 @@ where
         .map(LayoutBoxId::from_index)
         .filter_map(|id| {
             let control = &world.boxes[id.index()];
-            form_control_texts(&control.element_semantics, control.text_selection)
-                .map(|(texts, placeholder, selection)| (id, texts, placeholder, selection))
+            form_control_texts(
+                &control.element_semantics,
+                control.style.text_transform(),
+                control.text_selection,
+            )
+            .map(|(texts, placeholder, selection)| (id, texts, placeholder, selection))
         })
         .filter(|(_, texts, _, selection)| !texts.is_empty() || selection.is_some())
         .collect::<Vec<_>>();
@@ -113,6 +117,7 @@ where
 
 fn form_control_texts(
     semantics: &Option<LayoutElementSemantics>,
+    text_transform: TextTransform,
     selection: Option<LayoutTextSelection>,
 ) -> Option<(Vec<Arc<str>>, bool, Option<LayoutTextSelection>)> {
     let semantics = semantics.as_ref()?;
@@ -131,8 +136,13 @@ fn form_control_texts(
     if kind == LayoutFormControlKind::Select {
         return Some((select_control_texts(&data), false, selection));
     }
-    let (text, placeholder, selection) =
-        form_control_text_with_selection(kind, &data.value, &data.placeholder, selection);
+    let (text, placeholder, selection) = form_control_text_with_selection(
+        kind,
+        &data.value,
+        &data.placeholder,
+        text_transform,
+        selection,
+    );
     Some((
         if text.is_empty() {
             Vec::new()
@@ -153,6 +163,7 @@ pub fn select_control_texts(data: &crate::LayoutFormControlData) -> Vec<Arc<str>
             LayoutFormControlKind::Select,
             &data.value,
             &data.placeholder,
+            TextTransform::None,
         );
         if text.is_empty() {
             Vec::new()
@@ -163,14 +174,15 @@ pub fn select_control_texts(data: &crate::LayoutFormControlData) -> Vec<Arc<str>
 }
 
 /// Visible text and placeholder selection shared by resource discovery and
-/// control rendering. This projection performs no layout or font loading.
+/// control rendering. Password values use `text_transform` before masking.
 pub fn form_control_text(
     kind: LayoutFormControlKind,
     value: &str,
     placeholder_text: &str,
+    text_transform: TextTransform,
 ) -> (String, bool) {
     let (text, placeholder, _) =
-        form_control_text_with_selection(kind, value, placeholder_text, None);
+        form_control_text_with_selection(kind, value, placeholder_text, text_transform, None);
     (text, placeholder)
 }
 
@@ -178,10 +190,11 @@ fn form_control_text_with_selection(
     kind: LayoutFormControlKind,
     value: &str,
     placeholder_text: &str,
+    text_transform: TextTransform,
     selection: Option<LayoutTextSelection>,
 ) -> (String, bool, Option<LayoutTextSelection>) {
     if kind == LayoutFormControlKind::Input(LayoutInputControlKind::Password) && !value.is_empty() {
-        let (text, selection) = mask_password(value, selection);
+        let (text, selection) = mask_password(value, text_transform, selection);
         return (text, false, selection);
     }
     let placeholder = value.is_empty()
@@ -269,14 +282,16 @@ fn form_control_text_with_selection(
 
 fn mask_password(
     value: &str,
+    text_transform: TextTransform,
     selection: Option<LayoutTextSelection>,
 ) -> (String, Option<LayoutTextSelection>) {
+    let (value, transformed_selection) = transform_password(value, text_transform, selection);
     let mut text = String::with_capacity(value.len());
     let mut source_offset = 0;
     let mut masked_selection = LayoutTextSelection::new(0, 0);
     for grapheme in value.graphemes(true) {
         text.push('\u{2022}');
-        if let Some(selection) = selection {
+        if let Some(selection) = transformed_selection {
             // A UTF-16 offset inside a grapheme maps to the end of its bullet.
             masked_selection.start += usize::from(source_offset < selection.start);
             masked_selection.end += usize::from(source_offset < selection.end);
@@ -287,6 +302,39 @@ fn mask_password(
         .filter(|original| original.is_caret() || !masked_selection.is_caret())
         .map(|_| masked_selection);
     (text, selection)
+}
+
+fn transform_password(
+    value: &str,
+    text_transform: TextTransform,
+    selection: Option<LayoutTextSelection>,
+) -> (Cow<'_, str>, Option<LayoutTextSelection>) {
+    if text_transform == TextTransform::None {
+        return (Cow::Borrowed(value), selection);
+    }
+
+    let mut transform = TextTransformState::default();
+    let mut transformed = String::with_capacity(value.len());
+    let mut source_offset = 0;
+    let mut transformed_selection = LayoutTextSelection::new(0, 0);
+    for character in value.chars() {
+        let mut transformed_units = 0;
+        for converted in transform.transform(character, text_transform) {
+            transformed.push(converted);
+            transformed_units += converted.len_utf16();
+        }
+        if let Some(selection) = selection {
+            transformed_selection.start +=
+                usize::from(source_offset < selection.start) * transformed_units;
+            transformed_selection.end +=
+                usize::from(source_offset < selection.end) * transformed_units;
+            source_offset += character.len_utf16();
+        }
+    }
+    (
+        Cow::Owned(transformed),
+        selection.map(|_| transformed_selection),
+    )
 }
 
 pub(crate) fn select_row_height(font_size: f32, line_height: f32) -> f32 {
