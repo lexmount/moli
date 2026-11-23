@@ -337,6 +337,7 @@ impl PageVm {
             include_backgrounds: true,
             include_viewport_controls: true,
             base_background_color: paint_background_color(request.base_background_color),
+            clip_filter_outset: 0.0,
             max_width: request.max_width,
             max_height: request.max_height,
         };
@@ -382,7 +383,7 @@ impl PageVm {
         format: RendererScreenshotFormat,
         quality: u8,
         optimize_for_speed: bool,
-        paint_capture: PaintCaptureRequest,
+        mut paint_capture: PaintCaptureRequest,
         reason: moli_layout::LayoutFlushReason,
         publication: LayoutPublicationRequest,
         environment_override: Option<StyloStyleEnvironment>,
@@ -391,6 +392,16 @@ impl PageVm {
         let total_started = profile_enabled.then(Instant::now);
         if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(RendererImageCaptureOutcome::LayoutDisabled);
+        }
+        use moli_page_types::VisionDeficiency;
+        let deficiency = if reason == moli_layout::LayoutFlushReason::Print {
+            VisionDeficiency::None
+        } else {
+            self.document_settings.emulated_media.vision_deficiency
+        };
+        if deficiency == VisionDeficiency::BlurredVision {
+            paint_capture.clip_filter_outset =
+                vision::BLURRED_VISION_SIGMA_CSS_PX * moli_image::GAUSSIAN_BLUR_OUTSET;
         }
         let surface = self.document_settings.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
@@ -441,13 +452,26 @@ impl PageVm {
         }
 
         let raster_started = profile_enabled.then(Instant::now);
-        let mut raster = moli_paint::raster_snapshot(&snapshot)?;
-        if reason != moli_layout::LayoutFlushReason::Print {
-            vision::apply(
-                &mut raster,
-                self.document_settings.emulated_media.vision_deficiency,
+        let raster_scale = snapshot
+            .surface
+            .viewport_to_raster_scale(snapshot.viewport_to_surface)
+            as f32;
+        if deficiency == VisionDeficiency::BlurredVision {
+            let layout = moli_paint::raster_buffer_layout(
+                snapshot.surface.css_width,
+                snapshot.surface.css_height,
                 snapshot.surface.device_scale,
             )?;
+            moli_image::validate_gaussian_blur(
+                layout.width,
+                layout.height,
+                vision::BLURRED_VISION_SIGMA_CSS_PX * raster_scale,
+            )?;
+        }
+        let mut raster = moli_paint::raster_snapshot(&snapshot)?;
+        vision::apply(&mut raster, deficiency, raster_scale)?;
+        if let Some(crop) = snapshot.raster_crop {
+            crop_capture(&mut raster, crop)?;
         }
         let raster_us = raster_started
             .map(|started| started.elapsed().as_micros())
@@ -573,10 +597,39 @@ impl RendererCaptureScreenshotRequest {
             },
             include_viewport_controls,
             base_background_color: paint_background_color(self.base_background_color),
+            clip_filter_outset: 0.0,
             max_width: self.max_width,
             max_height: self.max_height,
         })
     }
+}
+
+fn crop_capture(
+    raster: &mut moli_image::RgbaImage,
+    crop: moli_layout::PaintCaptureCrop,
+) -> anyhow::Result<()> {
+    let layout = moli_paint::raster_buffer_layout(
+        crop.surface.css_width,
+        crop.surface.css_height,
+        crop.surface.device_scale,
+    )?;
+    anyhow::ensure!(
+        layout.width <= raster.width.saturating_sub(crop.x)
+            && layout.height <= raster.height.saturating_sub(crop.y),
+        "requested output is outside its padded capture",
+    );
+    let source_stride = raster.width as usize * 4;
+    let output_stride = layout.width as usize * 4;
+    for row in 0..layout.height as usize {
+        let start = (row + crop.y as usize) * source_stride + crop.x as usize * 4;
+        raster
+            .rgba
+            .copy_within(start..start + output_stride, row * output_stride);
+    }
+    raster.rgba.truncate(layout.byte_len);
+    raster.width = layout.width;
+    raster.height = layout.height;
+    Ok(())
 }
 
 fn paint_background_color(rgba: [u8; 4]) -> moli_layout::PaintColor {
