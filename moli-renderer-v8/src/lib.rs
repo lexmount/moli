@@ -456,3 +456,6 @@ pub use runtime::{
     RendererDevToolsPageCommand, RendererDevToolsPageReply, RendererOverlayHighlight,
     RendererOverlayNode, RendererPageInspectorEndpoint, RendererRuntimeInspectorSessionRetirement,
 };
+
+#[cfg(feature = "devtools")]
+pub use runtime::RendererSyntheticWheelGesture;

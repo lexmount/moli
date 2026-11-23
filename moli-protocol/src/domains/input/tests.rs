@@ -9,6 +9,7 @@ mod element_click;
 mod keyboard_events;
 mod keyboard_location;
 mod mouse_snapshot;
+mod scroll_gestures;
 mod text_control_compat;
 mod text_input_events;
 mod touch_taps;
