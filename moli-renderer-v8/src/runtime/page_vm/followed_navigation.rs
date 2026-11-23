@@ -381,12 +381,6 @@ fn update_history_entry_after_redirect(
     entry.url = final_url.to_string();
     if let Some(activation) = &mut seed.activation {
         activation.entry = entry.clone();
-        if activation.from.as_ref().is_some_and(|from| {
-            from.url != "about:blank"
-                && !Url::parse(&from.url).is_ok_and(|url| moli_url::same_origin(&url, final_url))
-        }) {
-            activation.from = None;
-        }
     }
 }
 
@@ -1580,7 +1574,7 @@ mod tests {
     use url::Url;
 
     #[test]
-    fn redirected_history_preserves_entry_identity_and_hides_cross_origin_activation() {
+    fn redirected_history_preserves_entry_identity_and_source_snapshot() {
         use moli_page_types::{
             NavigationHistoryMutation, cross_document_navigation_seed,
             initial_navigation_history_seed,
@@ -1598,7 +1592,7 @@ mod tests {
         );
         let activation = seed.activation.as_ref().unwrap();
         let key = activation.entry.key.clone();
-        assert!(activation.from.is_some());
+        let source = activation.from.clone().unwrap();
 
         update_history_entry_after_redirect(&mut seed, &final_url);
 
@@ -1607,7 +1601,7 @@ mod tests {
         assert_eq!(current.key, key);
         let activation = seed.activation.unwrap();
         assert_eq!(&activation.entry, current);
-        assert!(activation.from.is_none());
+        assert_eq!(activation.from, Some(source));
     }
 
     #[test]

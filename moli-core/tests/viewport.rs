@@ -395,6 +395,84 @@ async fn viewport_history_honors_the_source_document_referrer_policy() -> Result
 }
 
 #[tokio::test]
+async fn viewport_navigation_activation_uses_the_final_redirect_origin() -> Result<()> {
+    let origin = moli_test_support::FixtureServer::spawn().await?;
+    let other_origin = moli_test_support::FixtureServer::spawn().await?;
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+
+    for (case, redirect_at, destination_at, replace, no_referrer) in [
+        ("return to origin", &other_origin, &origin, false, false),
+        ("replace at origin", &other_origin, &origin, true, false),
+        (
+            "return with no-referrer",
+            &other_origin,
+            &origin,
+            false,
+            true,
+        ),
+        ("leave origin", &origin, &other_origin, false, false),
+    ] {
+        let destination = destination_at.url("/static");
+        let mut redirect = url::Url::parse(&redirect_at.url("/redirect"))?;
+        redirect.query_pairs_mut().append_pair("to", &destination);
+        let mut source = url::Url::parse(&origin.url("/compat/child-dynamic-markup-document"))?;
+        let policy = if no_referrer {
+            r#"<meta name="referrer" content="no-referrer">"#
+        } else {
+            ""
+        };
+        source.query_pairs_mut().append_pair(
+            "markup",
+            &format!(r#"<!doctype html>{policy}<a href="{redirect}">Next</a>"#),
+        );
+
+        let mut page = browser.fetch(source.as_str()).await?;
+        let mut frames = page
+            .subscribe_viewport_frames(ViewportSurface::default(), 1)
+            .await?;
+        let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+        let previous = page
+            .evaluate_runtime_expression_async("navigation.currentEntry.key")
+            .await?;
+        let previous_key = previous["value"].as_str().context("source history key")?;
+
+        let navigate = if replace {
+            format!("location.replace({:?})", redirect.as_str())
+        } else {
+            "document.querySelector('a').click()".to_owned()
+        };
+        page.evaluate_runtime_expression_async(&navigate).await?;
+        let next = frame(&mut frames, |frame| frame.document != first.document).await?;
+        assert_eq!(next.navigation.url.as_str(), destination, "{case}");
+        assert_eq!(next.navigation.can_go_back, !replace, "{case}");
+
+        let activation = page
+            .evaluate_runtime_expression_by_value_async(
+                r#"[
+                    navigation.activation.navigationType,
+                    navigation.activation.entry.url,
+                    navigation.activation.from?.key ?? null,
+                    navigation.activation.from?.url ?? null
+                ]"#,
+            )
+            .await?;
+        let same_origin = next.navigation.url.origin() == source.origin();
+        assert_eq!(
+            activation["value"],
+            serde_json::json!([
+                if replace { "replace" } else { "push" },
+                destination,
+                same_origin.then_some(previous_key),
+                (same_origin && !no_referrer).then_some(source.as_str()),
+            ]),
+            "{case}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_reports_history_updates_on_a_static_document() -> Result<()> {
     let server = moli_test_support::FixtureServer::spawn().await?;
     let browser =
