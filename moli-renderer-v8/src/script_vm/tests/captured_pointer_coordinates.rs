@@ -410,6 +410,43 @@ async fn capture_projects_through_a_frame_box_without_a_child_layout_tree() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn capture_transfers_in_a_live_child_document_without_published_geometry() {
+    let mut vm = captured_child_vm(true, false).await;
+    dispatch(&mut vm, "mousedown", 140.0, 100.0, 1);
+    dispatch(&mut vm, "mousemove", 141.0, 101.0, 1);
+    vm.eval(
+        r#"
+        globalThis.replacement=captureDocument.createElement('div');
+        replacement.id='replacement';
+        captureDocument.body.append(replacement);
+        globalThis.captureTransfer=null;
+        captured.addEventListener('pointermove',event=>{
+            replacement.setPointerCapture(event.pointerId);
+            captureTransfer=replacement.hasPointerCapture(event.pointerId);
+        }, {once:true});
+        replacement.addEventListener('gotpointercapture',event=>
+            transitions.push([event.type,event.target.id]));
+        frame.style.display='none';
+        'hidden'
+    "#,
+    )
+    .unwrap();
+    vm.publish_layout_for_test().unwrap();
+    assert_eq!(
+        vm.eval("String(inner.contentDocument === captureDocument && replacement.isConnected)")
+            .unwrap(),
+        "true"
+    );
+    dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
+    assert_eq!(vm.eval("String(captureTransfer)").unwrap(), "true");
+    dispatch(&mut vm, "mousemove", 21.0, 21.0, 1);
+    assert_eq!(
+        vm.eval("JSON.stringify(transitions)").unwrap(),
+        r#"[["gotpointercapture","captured"],["lostpointercapture","captured"],["gotpointercapture","replacement"]]"#
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn frame_navigation_retires_the_capture_route_and_old_projection() {
     let mut vm = captured_child_vm(false, false).await;
     dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);

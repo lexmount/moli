@@ -299,20 +299,13 @@ impl PageScriptHost {
     pub(crate) fn input_owner_for_document(
         &self,
         document: DomHandle,
-        sampled: Option<&super::PublishedFrameGeometry>,
     ) -> Option<WindowDocumentTaskTarget> {
         if document == self.document_handle() {
             return self
                 .current_window_document_task_target_for_dispatch_scope(OwnerDispatchScope::Top);
         }
-        if self.layout_policy().uses_real_layout() {
-            let state = self.document_layout_state.borrow();
-            return state
-                .frame_geometry()
-                .map(std::rc::Rc::as_ref)
-                .or(sampled)?
-                .owner_for_document(self, document);
-        }
+        // A live child Document can receive captured input even when its frame
+        // has no box in the published layout.
         let scope = self.owner_dispatch_scope_for_node(document)?;
         let owner = self.current_window_document_task_target_for_dispatch_scope(scope)?;
         (self.input_document_for_owner(owner) == Some(document)).then_some(owner)

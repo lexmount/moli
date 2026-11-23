@@ -126,15 +126,11 @@ struct InputDocument {
 }
 
 impl InputDocument {
-    fn for_target(
-        runtime: &PageScriptHost,
-        target: DomHandle,
-        sampled: Option<&PublishedFrameGeometry>,
-    ) -> Option<Self> {
+    fn for_target(runtime: &PageScriptHost, target: DomHandle) -> Option<Self> {
         let handle = runtime.dom_host().owner_document_handle(target)?;
         Some(Self {
             handle,
-            owner: runtime.input_owner_for_document(handle, sampled),
+            owner: runtime.input_owner_for_document(handle),
         })
     }
 
@@ -1141,7 +1137,7 @@ impl ScriptVm {
         if event_name == "mousedown" && prepared.previous_buttons == 0 {
             self.mouse_routed_frame = hit_document
                 .filter(|document| *document != runtime.document_handle())
-                .and_then(|document| runtime.input_owner_for_document(document, None));
+                .and_then(|document| runtime.input_owner_for_document(document));
         } else if event_name == "mousemove" && prepared.buttons == 0 {
             self.mouse_routed_frame = None;
         }
@@ -1437,8 +1433,7 @@ impl ScriptVm {
                 pointer: &pointer,
                 modifiers,
             };
-            let Some(mut input_document) =
-                InputDocument::for_target(runtime(), initial_target, sampled.as_deref())
+            let Some(mut input_document) = InputDocument::for_target(runtime(), initial_target)
             else {
                 return Ok(input_dispatch_outcome(false));
             };
@@ -1510,9 +1505,8 @@ impl ScriptVm {
                         })
                         .unwrap_or(pointer_dispatch_handle);
                     pointer_data.coordinates = coordinates_for(next_target);
-                    let Some(next_document) =
-                        InputDocument::for_target(runtime(), next_target, sampled.as_deref())
-                            .filter(|document| document.contains(runtime(), next_target))
+                    let Some(next_document) = InputDocument::for_target(runtime(), next_target)
+                        .filter(|document| document.contains(runtime(), next_target))
                     else {
                         return Ok(input_dispatch_outcome(false));
                     };
@@ -1732,9 +1726,8 @@ impl ScriptVm {
                         pressure: 0.0,
                         ..pointer.clone()
                     };
-                    let cancel_owner =
-                        InputDocument::for_target(runtime(), cancel_target, sampled.as_deref())
-                            .and_then(|document| document.owner);
+                    let cancel_owner = InputDocument::for_target(runtime(), cancel_target)
+                        .and_then(|document| document.owner);
                     let cancel = PreparedPointerEvent {
                         coordinates: coordinates_for(cancel_target),
                         button: -1,
@@ -2240,8 +2233,7 @@ impl ScriptVm {
                         .map_or(*target, |hit| hit.handle)
                 };
                 let chosen_target = capture.unwrap_or(route);
-                let Some(input_document) =
-                    InputDocument::for_target(runtime(), chosen_target, sampled.as_deref())
+                let Some(input_document) = InputDocument::for_target(runtime(), chosen_target)
                 else {
                     continue;
                 };
