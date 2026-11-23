@@ -1466,10 +1466,13 @@ pub(crate) fn execute_immediate_devtools_page_command_with_protocol_events(
 ) {
     let result = match command {
         AutomationCommand::StopLoading(command) => {
-            page_command_owner(conn, &command.context).map(|owner| {
-                termination::stop_loading(conn, &owner);
-                AutomationResult::Empty
-            })
+            return match page_command_owner(conn, &command.context) {
+                Ok(owner) => (
+                    Ok(AutomationResult::Empty),
+                    termination::stop_loading(conn, &owner),
+                ),
+                Err(error) => (Err(error), Vec::new()),
+            };
         }
         AutomationCommand::GetNavigationHistory(command) => {
             navigation::execute_devtools_get_navigation_history_command(conn, command)

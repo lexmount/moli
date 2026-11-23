@@ -895,6 +895,85 @@ async fn replaced_navigation_cancels_queued_commit_admission_and_settles_once() 
 }
 
 #[tokio::test]
+async fn stop_loading_settles_the_announced_request_while_commit_is_queued() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let CommitFixture {
+                mut ctx,
+                token,
+                navigation,
+                prepared,
+                mut completions,
+            } = commit_fixture(true).await;
+            assert!(navigation.request_announced);
+            let request_id = navigation.request_id.clone().unwrap();
+            ctx.process_async(json!({"id":89,"method":"Network.enable","sessionId":"SID-1"}))
+                .await;
+            ctx.take_all();
+            ctx.with_fixture(|conn| {
+                conn.start_background_prepared_navigation_commit(token, navigation, prepared);
+            });
+            // Admit stop on the same owner turn, before the queued commit can run.
+            let stop = crate::conn::ParsedCdpCommand::from_serializable(
+                json!({"id":90,"method":"Page.stopLoading","sessionId":"SID-1"}),
+            )
+            .unwrap();
+            let CdpCommandTaskStep::Complete(stop) = ctx
+                .handle()
+                .with_state(|state| {
+                    state.start_parsed_command_dispatch_with_context(&stop, &mut Default::default())
+                })
+                .unwrap()
+            else {
+                panic!("stop acknowledges before the queued commit");
+            };
+            let (events, scheduler_events, predecessor) = stop.into_protocol_event_parts();
+            assert!(predecessor.is_empty());
+            ctx.route_direct_command_output_for_test(events, scheduler_events)
+                .await;
+            assert_eq!(ctx.take_response_by_id(90)["result"], json!({}));
+
+            let completion =
+                tokio::time::timeout(std::time::Duration::from_secs(5), completions.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert!(matches!(
+                &completion,
+                BackgroundNavigationCompletion::PreparedDocument(result)
+                    if result.transaction.is_none() && result.navigation.is_err()
+            ));
+            let outcome =
+                ctx.with_fixture(|conn| conn.admit_background_navigation_completion(completion));
+            let messages = ctx
+                .route_fixture_background_turns(&mut completions, outcome)
+                .await;
+            let replies: Vec<_> = messages
+                .iter()
+                .filter(|message| message["id"] == 1)
+                .collect();
+            assert_eq!(replies.len(), 1, "{messages:#?}");
+            assert_eq!(replies[0]["result"]["errorText"], "net::ERR_ABORTED");
+            let terminals: Vec<_> = messages
+                .iter()
+                .filter(|message| {
+                    message["params"]["requestId"] == request_id
+                        && matches!(
+                            message["method"].as_str(),
+                            Some("Network.loadingFailed" | "Network.loadingFinished")
+                        )
+                })
+                .collect();
+            assert_eq!(terminals.len(), 1, "{messages:#?}");
+            assert_eq!(terminals[0]["method"], "Network.loadingFailed");
+            assert_eq!(terminals[0]["params"]["errorText"], "net::ERR_ABORTED");
+            assert_eq!(terminals[0]["params"]["canceled"], true);
+            assert!(completions.try_recv().is_err());
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn cancelled_adoption_cannot_clean_up_a_replacement_page() {
     tokio::task::LocalSet::new()
         .run_until(async {
