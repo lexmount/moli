@@ -2,7 +2,6 @@ use moli_core::page::{
     Page, RendererMainDocumentCommit, RendererPageCreationArtifacts,
     RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
 };
-use moli_fetch::StreamingRawResponse;
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -183,13 +182,7 @@ impl RendererMainDocumentCommitSeed {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum CompletedDownloadBody {
-    Buffered(Vec<u8>),
-    Blob(moli_file_api::BlobData),
-    Streaming(Box<StreamingRawResponse>),
-    Intercepted(moli_core::network::ResourceInterceptionBody),
-}
+pub(crate) use moli_core::download::DownloadBody as CompletedDownloadBody;
 
 #[derive(Debug)]
 pub(crate) struct CompletedDownloadBodyArtifact {

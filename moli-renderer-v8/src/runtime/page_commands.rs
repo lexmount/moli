@@ -113,7 +113,7 @@ impl PageVm {
             RendererPageCommand::TraverseViewportHistory(delta) => self
                 .vm_mut()
                 .queue_viewport_history_traversal_by_delta(delta)
-                .map(RendererPageReply::Bool),
+                .map(RendererPageReply::ViewportNavigation),
             RendererPageCommand::RunPageSurfaceOverrideScript { source } => {
                 self.run_page_surface_override_script(&source)?;
                 Ok(RendererPageReply::Unit)
@@ -362,7 +362,7 @@ impl PageVm {
             RendererPageCommand::NavigateViewport(target) => {
                 let navigated = self.vm_mut().navigate_top_level_from_browser(target)?;
                 self.wake_viewport_frames();
-                Ok(RendererPageReply::Bool(navigated))
+                Ok(RendererPageReply::ViewportNavigation(navigated))
             }
             #[cfg(feature = "molio")]
             RendererPageCommand::ReadViewportEditor => Ok(RendererPageReply::ViewportEditor(self.read_viewport_editor())),

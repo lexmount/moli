@@ -71,8 +71,7 @@ impl MoliSurface {
 
     pub fn select_tab(
         &mut self,
-        commands: mpsc::UnboundedSender<TabCommand>,
-        output: Arc<ViewportOutput>,
+        connection: Option<&crate::host::TabConnection>,
         zoom: f64,
         document: Option<RendererDocumentLifecycleIdentity>,
         window: &mut Window,
@@ -80,8 +79,8 @@ impl MoliSurface {
     ) {
         self.finish_composition();
         self.send(TabCommand::Activity(DocumentActivity::new(false, false)));
-        self.commands = Some(commands);
-        self.output = Some(output);
+        self.commands = connection.map(|tab| tab.commands.clone());
+        self.output = connection.map(|tab| tab.viewport.clone());
         self.activity = None;
         self.viewport = None;
         self.document = document;

@@ -5,6 +5,7 @@ use gpui::{
 
 use crate::{
     address::{Address, AddressEvent},
+    download_page::{self, DownloadsPage},
     host::{BrowserHost, TabCommand, TabConnection, TabState},
     icons::{Icon, glyph},
     palette::Palette,
@@ -18,6 +19,7 @@ actions!(
         CloseTab,
         ReopenTab,
         FocusAddress,
+        ShowDownloads,
         Reload,
         GoBack,
         GoForward,
@@ -34,7 +36,7 @@ type TabId = u64;
 
 struct Tab {
     id: TabId,
-    connection: TabConnection,
+    connection: Option<TabConnection>,
     state: TabState,
     zoom: f64,
     page_focus: bool,
@@ -42,6 +44,9 @@ struct Tab {
 
 impl Tab {
     fn title(&self) -> String {
+        if self.connection.is_none() {
+            return "Downloads".to_owned();
+        }
         match self.state.navigation.as_ref() {
             Some(nav) if !nav.title.is_empty() => nav.title.clone(),
             Some(nav) if nav.url.as_str() != "about:blank" => {
@@ -52,6 +57,9 @@ impl Tab {
     }
 
     fn url(&self) -> &str {
+        if self.connection.is_none() {
+            return download_page::URL;
+        }
         self.state
             .navigation
             .as_ref()
@@ -91,6 +99,7 @@ pub struct BrowserWindow {
     host: BrowserHost,
     surface: Entity<MoliSurface>,
     address: Entity<Address>,
+    downloads: Entity<DownloadsPage>,
     tabs: Vec<Tab>,
     active: TabId,
     next_id: TabId,
@@ -112,6 +121,7 @@ impl BrowserWindow {
         let address = cx.new(Address::new);
         let address_updates = cx.observe(&address, |_, _, cx| cx.notify());
         let surface = cx.new(|cx| MoliSurface::new(window, cx));
+        let downloads = cx.new(|cx| DownloadsPage::new(host.downloads.clone(), cx));
         let address_events =
             cx.subscribe_in(
                 &address,
@@ -128,6 +138,7 @@ impl BrowserWindow {
             host,
             surface,
             address,
+            downloads,
             tabs: Vec::new(),
             active: 0,
             next_id: 1,
@@ -147,12 +158,16 @@ impl BrowserWindow {
     }
 
     fn send(&self, command: TabCommand) {
-        if let Some(tab) = self.current() {
-            let _ = tab.connection.commands.send(command);
+        if let Some(connection) = self.current().and_then(|tab| tab.connection.as_ref()) {
+            let _ = connection.commands.send(command);
         }
     }
 
     fn add_tab(&mut self, url: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        if url.as_deref().is_some_and(download_page::is_downloads_url) {
+            self.show_downloads(window, cx);
+            return;
+        }
         let connection = match self.host.open_tab() {
             Ok(connection) => connection,
             Err(error) => {
@@ -203,7 +218,7 @@ impl BrowserWindow {
         .detach();
         self.tabs.push(Tab {
             id,
-            connection,
+            connection: Some(connection),
             state: TabState::default(),
             zoom: 1.,
             page_focus: url.is_some(),
@@ -212,6 +227,27 @@ impl BrowserWindow {
         if let Some(url) = url {
             self.open_address(&url, window, cx);
         }
+    }
+
+    fn show_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = if let Some(tab) = self.tabs.iter().find(|tab| tab.connection.is_none()) {
+            tab.id
+        } else {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.tabs.push(Tab {
+                id,
+                connection: None,
+                state: TabState::default(),
+                zoom: 1.,
+                page_focus: true,
+            });
+            id
+        };
+        self.select_tab(id, window, cx);
+        self.popup = None;
+        self.focus_page(window, cx);
+        cx.notify();
     }
 
     fn select_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
@@ -227,16 +263,15 @@ impl BrowserWindow {
         };
         let tab = &self.tabs[index];
         self.tab_scroll.scroll_to_item(index);
-        let commands = tab.connection.commands.clone();
-        let output = tab.connection.viewport.clone();
         let zoom = tab.zoom;
         let page_focus = tab.page_focus;
         let document = tab.state.document;
         self.active = id;
         self.popup = None;
         self.surface.update(cx, |surface, cx| {
-            surface.select_tab(commands, output, zoom, document, window, cx)
+            surface.select_tab(tab.connection.as_ref(), zoom, document, window, cx)
         });
+        window.set_window_title(&format!("{} · molio", tab.title()));
         self.update_address(true, window, cx);
         if page_focus {
             self.focus_page(window, cx);
@@ -343,8 +378,16 @@ impl BrowserWindow {
     }
 
     fn open_address(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if download_page::is_downloads_url(text) {
+            self.show_downloads(window, cx);
+            return;
+        }
         if let Some(url) = address_target(text) {
             let url = url.to_string();
+            if self.current().is_some_and(|tab| tab.connection.is_none()) {
+                self.add_tab(Some(url), window, cx);
+                return;
+            }
             self.displayed_address.clone_from(&url);
             self.address
                 .update(cx, |address, cx| address.show(url.clone(), cx));
@@ -363,6 +406,10 @@ impl BrowserWindow {
     }
 
     fn focus_page(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.current().is_some_and(|tab| tab.connection.is_none()) {
+            self.downloads.read(cx).focus.clone().focus(window, cx);
+            return;
+        }
         self.surface
             .update(cx, |surface, cx| surface.focus_page(window, cx));
     }
@@ -450,14 +497,17 @@ impl BrowserWindow {
                 .on_drop(
                     cx.listener(move |view, tab: &DraggedTab, _, cx| view.move_tab(tab.id, id, cx)),
                 )
-                .child(match (busy, tab.state.favicon.as_ref()) {
-                    (true, _) => glyph(Icon::Loading, colors.accent).into_any_element(),
-                    (false, Some(icon)) => gpui::img(icon.clone())
-                        .size(px(16.))
-                        .flex_shrink_0()
-                        .into_any_element(),
-                    (false, None) => glyph(Icon::Page, colors.muted).into_any_element(),
-                })
+                .child(
+                    match (busy, tab.connection.is_none(), tab.state.favicon.as_ref()) {
+                        (true, _, _) => glyph(Icon::Loading, colors.accent).into_any_element(),
+                        (false, true, _) => glyph(Icon::Download, colors.muted).into_any_element(),
+                        (false, false, Some(icon)) => gpui::img(icon.clone())
+                            .size(px(16.))
+                            .flex_shrink_0()
+                            .into_any_element(),
+                        (false, false, None) => glyph(Icon::Page, colors.muted).into_any_element(),
+                    },
+                )
                 .child(
                     div()
                         .flex_1()
@@ -597,6 +647,11 @@ impl BrowserWindow {
                     .child(self.address.clone()),
             )
             .child(
+                icon("downloads", Icon::Download, "Downloads", true, colors)
+                    .ml_1()
+                    .on_click(cx.listener(|view, _, window, cx| view.show_downloads(window, cx))),
+            )
+            .child(
                 icon("menu", Icon::Menu, "molio menu", true, colors)
                     .ml_1()
                     .on_click(cx.listener(|view, _, _, cx| view.toggle_popup(Popup::Menu, cx))),
@@ -657,6 +712,11 @@ impl BrowserWindow {
                 .child(
                     menu_row("reopen", "Reopen closed tab", colors)
                         .on_click(cx.listener(|view, _, window, cx| view.reopen(window, cx))),
+                )
+                .child(
+                    menu_row("open-downloads", "Downloads", colors).on_click(
+                        cx.listener(|view, _, window, cx| view.show_downloads(window, cx)),
+                    ),
                 )
                 .child(
                     div()
@@ -772,13 +832,12 @@ impl Render for BrowserWindow {
         let blank = self
             .current()
             .is_some_and(|tab| tab.url() == "about:blank" && !tab.state.loading);
-        let surface = div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .overflow_hidden()
-            .child(self.surface.clone());
-        let surface = if let Some(error) = error {
+        let showing_downloads = self.current().is_some_and(|tab| tab.connection.is_none());
+        let surface = div().relative().flex_1().min_h_0().overflow_hidden();
+        let surface = if showing_downloads {
+            surface.child(self.downloads.clone())
+        } else if let Some(error) = error {
+            let surface = surface.child(self.surface.clone());
             surface.child(
                 div()
                     .absolute()
@@ -811,6 +870,7 @@ impl Render for BrowserWindow {
                     ),
             )
         } else if blank {
+            let surface = surface.child(self.surface.clone());
             surface.child(
                 div()
                     .absolute()
@@ -841,7 +901,7 @@ impl Render for BrowserWindow {
                     ),
             )
         } else {
-            surface
+            surface.child(self.surface.clone())
         };
         div()
             .id("browser-window")
@@ -858,6 +918,9 @@ impl Render for BrowserWindow {
                 }),
             )
             .on_action(cx.listener(|view, _: &ReopenTab, window, cx| view.reopen(window, cx)))
+            .on_action(
+                cx.listener(|view, _: &ShowDownloads, window, cx| view.show_downloads(window, cx)),
+            )
             .on_action(
                 cx.listener(|view, _: &FocusAddress, window, cx| view.focus_address(window, cx)),
             )
@@ -959,6 +1022,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(&format!("{modifier}-t"), NewTab, None),
         KeyBinding::new(&format!("{modifier}-w"), CloseTab, None),
         KeyBinding::new(&format!("{modifier}-shift-t"), ReopenTab, None),
+        KeyBinding::new(&format!("{modifier}-j"), ShowDownloads, None),
         KeyBinding::new(&format!("{modifier}-l"), FocusAddress, None),
         KeyBinding::new(&format!("{modifier}-r"), Reload, None),
         KeyBinding::new("alt-left", GoBack, None),
@@ -971,9 +1035,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(&format!("{modifier}-q"), Quit, None),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.set_menus(vec![
-        Menu::new("molio").items([MenuItem::action("Quit molio", Quit)]),
-    ]);
+    cx.set_menus(vec![Menu::new("molio").items([
+        MenuItem::action("Downloads", ShowDownloads),
+        MenuItem::action("Quit molio", Quit),
+    ])]);
 }
 
 fn address_target(input: &str) -> Option<url::Url> {

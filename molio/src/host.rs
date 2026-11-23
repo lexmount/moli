@@ -1,15 +1,17 @@
-use std::{fs, future::pending, path::PathBuf, sync::Arc, thread, time::Duration};
+use std::{fs, future::pending, path::PathBuf, rc::Rc, sync::Arc, thread, time::Duration};
 
 use anyhow::{Context as _, Result};
 use moli_core::{
-    LayoutPolicy, OptionalResourceFetchMask, RendererDocumentLifecycleIdentity,
-    RendererViewportEdit, RendererViewportEditor, RendererViewportNavigation,
-    RendererViewportWheelInput,
+    LayoutPolicy, OptionalResourceFetchMask, RendererDocumentLifecycleIdentity, RendererOutputItem,
+    RendererOutputTransportMessage, RendererOwnerAction, RendererViewportEdit,
+    RendererViewportEditor, RendererViewportNavigation, RendererViewportWheelInput,
     page::{
         BufferedViewportFrames, CompletedPageCommand, Page, PageInputExt, RendererDraggedFile,
-        RendererPointerEventProperties, ViewportBuffers, ViewportOutput, ViewportUpdate,
+        RendererInputDispatchOutcome, RendererPointerEventProperties, ViewportBuffers,
+        ViewportOutput, ViewportUpdate,
     },
     protocol_types::{DocumentActivity, ViewportSurface},
+    renderer_output_transport_channel,
     runtime::{Browser, BrowserConfig, RenderedDomWaitUntil},
 };
 use tokio::{
@@ -17,7 +19,12 @@ use tokio::{
     task::{JoinHandle, LocalSet},
 };
 
-pub struct BrowserHost(mpsc::UnboundedSender<OpenTab>);
+use crate::downloads::{DownloadClient, Downloads};
+
+pub struct BrowserHost {
+    tabs: mpsc::UnboundedSender<OpenTab>,
+    pub downloads: DownloadClient,
+}
 
 pub struct TabConnection {
     pub commands: mpsc::UnboundedSender<TabCommand>,
@@ -102,7 +109,16 @@ struct OpenTab {
 
 impl BrowserHost {
     pub fn start(profile: Option<PathBuf>) -> Result<Self> {
+        let directory = dirs::download_dir()
+            .or_else(|| dirs::home_dir().map(|home| home.join("Downloads")))
+            .unwrap_or_else(|| std::env::temp_dir().join("molio-downloads"));
+        Self::start_with_download_directory(profile, directory)
+    }
+
+    fn start_with_download_directory(profile: Option<PathBuf>, directory: PathBuf) -> Result<Self> {
         let (sender, mut requests) = mpsc::unbounded_channel::<OpenTab>();
+        let (client, mut download_commands, download_entries) =
+            DownloadClient::channel(directory.clone());
         thread::Builder::new()
             .name("molio-host".into())
             .spawn(move || {
@@ -123,30 +139,56 @@ impl BrowserHost {
                         .with_optional_resource_fetch_mask(
                             OptionalResourceFetchMask::IMAGE | OptionalResourceFetchMask::FONT,
                         );
-                    config.set_profile_dir(profile);
-                    let browser = Browser::new(config);
-                    while let Some(tab) = requests.recv().await {
-                        match &browser {
-                            Ok(browser) => {
-                                tokio::task::spawn_local(run_tab(browser.clone(), tab));
-                            }
-                            Err(error) => {
+                    config.set_profile_dir(profile.clone());
+                    let browser = match Browser::new(config) {
+                        Ok(browser) => browser,
+                        Err(error) => {
+                            while let Some(tab) = requests.recv().await {
                                 tab.state
                                     .send_modify(|state| state.error = Some(error.to_string()));
+                            }
+                            return;
+                        }
+                    };
+                    let (output, mut renderer_output) = renderer_output_transport_channel();
+                    browser.set_renderer_output_transport_sender(output);
+                    let downloads = Downloads::new(
+                        browser.resource_request_client(), download_entries, directory, profile.as_deref(),
+                    );
+                    loop {
+                        tokio::select! {
+                            tab = requests.recv() => {
+                                let Some(tab) = tab else { break };
+                                tokio::task::spawn_local(run_tab(browser.clone(), Rc::clone(&downloads), tab));
+                            }
+                            action = download_commands.recv(), if !download_commands.is_closed() => {
+                                if let Some(action) = action { downloads.command(action); }
+                            }
+                            message = renderer_output.recv(), if !renderer_output.is_closed() => {
+                                if let Some(RendererOutputTransportMessage::Publication(output)) = message {
+                                    for record in output.into_records() {
+                                        if let RendererOutputItem::OwnerAction(RendererOwnerAction::Download(activation)) = record.into_parts().1 {
+                                            downloads.start(activation);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 });
             })
             .context("start browser host thread")?;
-        Ok(Self(sender))
+        Ok(Self {
+            tabs: sender,
+            downloads: client,
+        })
     }
 
     pub fn open_tab(&self) -> Result<TabConnection> {
         let (commands, request_rx) = mpsc::unbounded_channel();
         let (state_tx, state) = watch::channel(TabState::default());
         let viewport = Arc::new(ViewportOutput::default());
-        self.0
+        self.tabs
             .send(OpenTab {
                 commands: request_rx,
                 state: state_tx,
@@ -179,7 +221,7 @@ async fn navigation_finished(task: &mut Option<PendingNavigation>) -> Result<Com
     }
 }
 
-async fn run_tab(browser: Browser, mut tab: OpenTab) {
+async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
     let initial = browser.fetch_allow_http_error_with_wait_until(
         "about:blank",
         RenderedDomWaitUntil::DomContentLoaded,
@@ -338,7 +380,11 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
                     }
                     TabCommand::Pointer(input) if activity.visible => {
                         let refresh = activity.focused && input.event != "mousemove";
-                        let result = dispatch_pointer(&mut page, input).await;
+                        let result = dispatch_pointer(&mut page, input).await.map(|outcome| {
+                            if let Some(activation) = outcome.pending_download {
+                                downloads.start(activation);
+                            }
+                        });
                         if refresh && result.is_ok() { refresh_editor(&mut page, &tab.state).await } else { result }
                     }
                     TabCommand::Wheel(input) if activity.visible => {
@@ -351,7 +397,11 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
                         let result = page.dispatch_key_event_with_outcome_async(
                             input.event, &input.key, &input.code, if enter { "\r" } else { "" },
                             input.modifiers, input.repeat, enter,
-                        ).await.map(drop);
+                        ).await.map(|outcome| {
+                            if let Some(activation) = outcome.pending_download {
+                                downloads.start(activation);
+                            }
+                        });
                         if result.is_ok() && input.event == "keydown" { refresh_editor(&mut page, &tab.state).await } else { result }
                     }
                     TabCommand::InsertText(text) if activity.focused => {
@@ -475,7 +525,10 @@ async fn refresh_capture(
     Ok(())
 }
 
-async fn dispatch_pointer(page: &mut Page, input: PointerInput) -> Result<()> {
+async fn dispatch_pointer(
+    page: &mut Page,
+    input: PointerInput,
+) -> Result<RendererInputDispatchOutcome> {
     let pending = page.start_dispatch_mouse_event_at_point_with_pointer_outcome(
         input.position.0,
         input.position.1,
@@ -489,13 +542,128 @@ async fn dispatch_pointer(page: &mut Page, input: PointerInput) -> Result<()> {
         input.modifiers,
         false,
     )?;
-    page.finish_dispatch_mouse_event_at_point_with_outcome(pending.wait().await?)?;
-    Ok(())
+    page.finish_dispatch_mouse_event_at_point_with_outcome(pending.wait().await?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::downloads::{Download, DownloadCommand, DownloadState};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn download_matching(
+        entries: &mut watch::Receiver<Vec<Download>>,
+        matches: impl Fn(&Download) -> bool,
+    ) -> Result<Download> {
+        let entries = tokio::time::timeout(
+            Duration::from_secs(10),
+            entries.wait_for(|entries| entries.iter().any(&matches)),
+        )
+        .await??;
+        entries
+            .iter()
+            .find(|entry| matches(entry))
+            .cloned()
+            .context("download entry")
+    }
+
+    #[tokio::test]
+    async fn attachment_download_survives_tab_close_and_blob_does_not_overwrite_it() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let tab = host.open_tab()?;
+        let mut entries = host.downloads.entries.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let target = format!("http://{}/attachment", listener.local_addr()?);
+        let (finish, hold) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await?;
+            let mut request = [0; 4096];
+            let size = client.read(&mut request).await?;
+            assert!(request[..size].starts_with(b"GET /attachment "));
+            client.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=report.txt\r\nContent-Length: 7\r\nConnection: close\r\n\r\nnet").await?;
+            hold.await?;
+            client.write_all(b"work").await?;
+            Ok::<_, anyhow::Error>(())
+        });
+        tab.commands
+            .send(TabCommand::Navigate(Some(target)))
+            .map_err(|_| anyhow::anyhow!("navigate to attachment"))?;
+        let entry = download_matching(&mut entries, |entry| {
+            entry.name == "report.txt" && entry.total == Some(7) && entry.received == 3
+        })
+        .await?;
+        assert!(entry.is_active());
+        drop(tab);
+        finish
+            .send(())
+            .map_err(|_| anyhow::anyhow!("release response body"))?;
+        server.await??;
+        let entry = download_matching(&mut entries, |current| {
+            current.id == entry.id && !current.is_active()
+        })
+        .await?;
+        assert!(matches!(entry.state, DownloadState::Complete(_)));
+        assert_eq!(fs::read(directory.path().join("report.txt"))?, b"network");
+
+        let tab = host.open_tab()?;
+        let script = "data:text/html,<body><script>const link=document.createElement('a');link.download='report.txt';link.href=URL.createObjectURL(new Blob(['blob']));document.body.append(link);link.click();URL.revokeObjectURL(link.href)</script>";
+        tab.commands
+            .send(TabCommand::Navigate(Some(script.to_owned())))
+            .map_err(|_| anyhow::anyhow!("navigate to Blob fixture"))?;
+        let blob = download_matching(&mut entries, |current| {
+            current.id != entry.id && !current.is_active()
+        })
+        .await?;
+        assert!(matches!(blob.state, DownloadState::Complete(_)));
+        assert_eq!(blob.name, "report (1).txt");
+        assert_eq!(fs::read(directory.path().join("report.txt"))?, b"network");
+        assert_eq!(fs::read(directory.path().join("report (1).txt"))?, b"blob");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn canceling_a_download_removes_the_partial_file() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let tab = host.open_tab()?;
+        let mut entries = host.downloads.entries.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let target = format!("http://{}/slow", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await?;
+            let mut request = [0; 4096];
+            let _ = client.read(&mut request).await?;
+            client.write_all(b"HTTP/1.1 200 OK\r\nContent-Disposition: attachment; filename=slow.dat\r\nContent-Length: 8192\r\nConnection: close\r\n\r\npartial").await?;
+            client.read(&mut request).await
+        });
+        tab.commands
+            .send(TabCommand::Navigate(Some(target)))
+            .map_err(|_| anyhow::anyhow!("navigate to attachment"))?;
+        let entry = download_matching(&mut entries, |entry| {
+            entry.name == "slow.dat" && entry.is_active()
+        })
+        .await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fs::read_dir(directory.path())?.next().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<_, std::io::Error>(())
+        })
+        .await??;
+        host.downloads.send(DownloadCommand::Cancel(entry.id));
+        let entry = download_matching(&mut entries, |current| {
+            current.id == entry.id && !current.is_active()
+        })
+        .await?;
+        assert!(matches!(entry.state, DownloadState::Canceled));
+        assert!(fs::read_dir(directory.path())?.next().is_none());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), server).await???,
+            0
+        );
+        Ok(())
+    }
 
     async fn show_tab(
         tab: &mut TabConnection,
