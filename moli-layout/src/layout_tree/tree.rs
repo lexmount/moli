@@ -1,4 +1,4 @@
-//! The immutable retained tree and its memory-retention boundary.
+//! The retained layout tree and its memory-retention boundary.
 
 use std::{fmt::Debug, hash::Hash, ops::Deref};
 
@@ -37,7 +37,8 @@ pub(crate) struct CssSizing {
     pub horizontal: bool,
 }
 
-/// One node in the immutable layout tree retained after a full pass.
+/// One node retained after a full layout pass. Scrolling can refresh its
+/// viewport coordinates and scroll extent without rebuilding the box.
 ///
 /// `geometry_source` associates ordinary CSSOM geometry with its source. A
 /// split inline continuation can therefore share its originating source while
@@ -102,6 +103,17 @@ pub const MAX_RETAINED_LAYOUT_FRAGMENTS: usize = 4_000_000;
 /// Maximum estimated allocation capacity retained by one frozen layout tree.
 pub const MAX_RETAINED_LAYOUT_TREE_BYTES: usize = 256 * 1024 * 1024;
 
+/// The outcome of reprojecting a published layout after scrolling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScrollProjectionRefresh {
+    /// No matching snapshot with complete scroll inputs. Nothing was changed.
+    Unavailable,
+    /// The snapshot already reflects the current scroll offsets.
+    Unchanged,
+    /// The snapshot's scroll geometry was updated.
+    Changed,
+}
+
 /// DOM-independent layout tree produced by one complete pass.
 ///
 /// The box tree is stored densely through parent IDs. Text/inline fragments,
@@ -109,6 +121,8 @@ pub const MAX_RETAINED_LAYOUT_TREE_BYTES: usize = 256 * 1024 * 1024;
 /// they preserve results that cannot be reconstructed after the working tree,
 /// Taffy caches, Parley state, and computed styles are dropped. Source and
 /// hit-test indexes are derived from the box provenance and fragments.
+/// A scroll refresh updates derived geometry in place while retaining the
+/// box structure, local sizes, and fragments.
 pub struct FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -291,7 +305,7 @@ where
     }
 
     /// Whether the entire snapshot has the placement inputs for reprojecting scroll.
-    pub fn has_scroll_projection(&self) -> bool {
+    fn has_scroll_projection(&self) -> bool {
         self.scroll_projection.is_some()
             && self
                 .embedded_frames
@@ -301,17 +315,19 @@ where
 
     /// Refreshes viewport geometry, scrollbars, and sticky positions in place.
     /// The offsets are in the same CSS pixels consumed by LayoutSource.
+    /// Checks scroll input availability for every frame before updating any.
     pub fn refresh_scroll_projection(
         &mut self,
         offset: impl Fn(N) -> LayoutPoint,
-    ) -> Result<bool, LayoutError> {
+    ) -> Result<ScrollProjectionRefresh, LayoutError> {
         if !self.has_scroll_projection() {
-            return Err(LayoutError::source_contract(
-                "scroll projection",
-                "placement inputs were not retained for the entire frame tree",
-            ));
+            return Ok(ScrollProjectionRefresh::Unavailable);
         }
-        self.refresh_scroll_projection_recursive(&offset)
+        if self.refresh_scroll_projection_recursive(&offset)? {
+            Ok(ScrollProjectionRefresh::Changed)
+        } else {
+            Ok(ScrollProjectionRefresh::Unchanged)
+        }
     }
 
     fn refresh_scroll_projection_recursive(

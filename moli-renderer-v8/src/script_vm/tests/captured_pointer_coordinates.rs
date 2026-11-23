@@ -61,7 +61,8 @@ fn dispatch(vm: &mut StandaloneScriptVmHarness, kind: &str, x: f64, y: f64, butt
 async fn realtime_scroll_reprojects_nested_frame_pointer_coordinates() {
     let mut vm = captured_child_vm(true, false).await;
     vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
-    vm.eval("document.body.style.height='2000px'").unwrap();
+    vm.eval("document.body.style.height='2000px';frame.contentDocument.body.style.height='2000px'")
+        .unwrap();
     // Establish :hover before taking the baseline so the next mousemove
     // keeps the same style inputs while exercising the reprojected frame.
     dispatch(&mut vm, "mousemove", 140.0, 100.0, 0);
@@ -78,6 +79,30 @@ async fn realtime_scroll_reprojects_nested_frame_pointer_coordinates() {
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
     dispatch(&mut vm, "mousemove", 140.0, 60.0, 0);
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"[["pointermove","captured",30,30]]"#
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+
+    // Scroll only the outer iframe's document. The inner iframe moves in
+    // its parent viewport while the top-level viewport stays at rest.
+    assert_eq!(
+        vm.eval("events.length=0;scrollTo(0,0);frame.getBoundingClientRect().top")
+            .unwrap(),
+        "60"
+    );
+    assert_eq!(
+        vm.eval(
+            "frame.contentWindow.scrollTo(0,15);\
+             JSON.stringify([scrollY,frame.getBoundingClientRect().top,\
+             frame.contentWindow.scrollY,inner.getBoundingClientRect().top])",
+        )
+        .unwrap(),
+        "[0,60,15,-5]"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    dispatch(&mut vm, "mousemove", 140.0, 85.0, 0);
     assert_eq!(
         vm.eval("JSON.stringify(events)").unwrap(),
         r#"[["pointermove","captured",30,30]]"#

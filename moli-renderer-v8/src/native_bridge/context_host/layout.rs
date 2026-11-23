@@ -6,6 +6,7 @@ use moli_layout::LayoutTransform2D;
 use moli_layout::{
     FrozenLayoutTree, GeometryProvider, LayoutAnswers, LayoutError, LayoutPassRequest,
     LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutViewport,
+    ScrollProjectionRefresh,
 };
 
 use super::PageScriptHost;
@@ -33,9 +34,10 @@ pub(crate) enum LayoutInputChange {
 }
 
 struct FrameLayoutPublication {
-    // An absent entry leaves the prior viewport alone. A visited frame with
-    // no box has an explicit None so publication can apply the layout policy.
-    content_boxes: HashMap<DomHandle, Option<LayoutRect>>,
+    // Full layout publication tracks the content boxes for viewport updates.
+    // An absent entry leaves the prior viewport alone. A visited frame
+    // without a box records None so publication can apply the layout policy.
+    content_boxes: Option<HashMap<DomHandle, Option<LayoutRect>>>,
     #[cfg(feature = "devtools")]
     geometry: PublishedFrameGeometry,
 }
@@ -66,8 +68,9 @@ impl FrameLayoutPublication {
             .collect();
         for &frame in frames {
             let owner_box = owner_boxes.get(&frame);
-            self.content_boxes
-                .insert(frame, owner_box.map(|owner_box| owner_box.content_box));
+            if let Some(content_boxes) = &mut self.content_boxes {
+                content_boxes.insert(frame, owner_box.map(|owner_box| owner_box.content_box));
+            }
             let Some(child_document) = host.child_browsing_context_document_handle(frame) else {
                 continue;
             };
@@ -548,11 +551,15 @@ impl PageScriptHost {
         let metrics = pass.metrics;
         let pass_viewport = pass.viewport;
         let live_frames = self.child_browsing_context_handles_in_document_order();
-        let frames = self.collect_frame_layout_publication(document, &pass.tree, &live_frames);
+        let frames =
+            self.collect_frame_layout_publication(document, &pass.tree, &live_frames, true);
+        let content_boxes = frames
+            .content_boxes
+            .expect("full layout publication collects frame content boxes");
         let frame_viewports = live_frames
             .into_iter()
             .filter_map(|frame| {
-                let content = frames.content_boxes.get(&frame);
+                let content = content_boxes.get(&frame);
                 if content.is_none() && !self.layout_policy.is_realtime() {
                     return None;
                 }
@@ -624,6 +631,7 @@ impl PageScriptHost {
         document: DomHandle,
         tree: &FrozenLayoutTree<DomHandle>,
         live_frames: &[DomHandle],
+        collect_content_boxes: bool,
     ) -> FrameLayoutPublication {
         let mut frames_by_document: HashMap<_, HashSet<_>> = HashMap::new();
         for &frame in live_frames {
@@ -632,7 +640,7 @@ impl PageScriptHost {
             }
         }
         let mut frames = FrameLayoutPublication {
-            content_boxes: HashMap::new(),
+            content_boxes: collect_content_boxes.then(HashMap::new),
             #[cfg(feature = "devtools")]
             geometry: PublishedFrameGeometry::new(
                 self.current_window_document_task_target_for_dispatch_scope(
@@ -651,7 +659,9 @@ impl PageScriptHost {
         frames
     }
 
-    pub(super) fn refresh_published_scroll_projection(&self) -> Result<bool, LayoutError> {
+    pub(super) fn refresh_published_scroll_projection(
+        &self,
+    ) -> Result<ScrollProjectionRefresh, LayoutError> {
         let document = self.document_handle();
         self.document_layout_state
             .borrow_mut()
@@ -661,7 +671,7 @@ impl PageScriptHost {
                 #[cfg(feature = "devtools")]
                 |tree| {
                     let frames = self.child_browsing_context_handles_in_document_order();
-                    self.collect_frame_layout_publication(document, tree, &frames)
+                    self.collect_frame_layout_publication(document, tree, &frames, false)
                         .geometry
                 },
             )

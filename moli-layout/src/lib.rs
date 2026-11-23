@@ -65,6 +65,7 @@ pub use layout_tree::{
     LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize,
     LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport,
     MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
+    ScrollProjectionRefresh,
 };
 pub use list::{ListCounter, list_marker_text};
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
