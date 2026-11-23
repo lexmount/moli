@@ -289,21 +289,14 @@ impl PageScriptHost {
             .expect("Realtime policy installs its document state");
         let inputs = self.screen_layout_inputs(state)?;
         let document = self.document_handle();
-        if inputs.permits_reuse() && state.published.borrow().as_ref() == Some(&inputs) {
-            let reused = if inputs.documents[0].root.is_none() {
-                true
-            } else if state.scroll_projection_dirty.get() {
-                self.refresh_published_scroll_projection()? != ScrollProjectionRefresh::Unavailable
-            } else {
-                self.document_layout_state
-                    .borrow()
-                    .latest_layout(document)
-                    .is_some()
-            };
-            if reused {
-                state.scroll_projection_dirty.set(false);
-                return Ok(());
-            }
+        if self.can_reuse_screen_layout(state, &inputs)
+            && (inputs.documents[0].root.is_none()
+                || !state.scroll_projection_dirty.get()
+                || self.refresh_published_scroll_projection()?
+                    != ScrollProjectionRefresh::Unavailable)
+        {
+            state.scroll_projection_dirty.set(false);
+            return Ok(());
         }
 
         // Native invalidation/geometry only: no input dispatch, callbacks,
@@ -340,6 +333,35 @@ impl PageScriptHost {
         self.realtime_layout_state
             .as_ref()
             .is_some_and(|state| state.published.borrow().is_some())
+    }
+
+    pub(crate) fn realtime_screen_layout_is_current(&self) -> bool {
+        let Some(state) = &self.realtime_layout_state else {
+            return false;
+        };
+        if !state.published.borrow().as_ref().is_some_and(|published| {
+            published.dom == self.dom_host().dom_version()
+                && Some(published.non_dom) == state.non_dom_revision.get()
+        }) {
+            return false;
+        }
+        self.screen_layout_inputs(state)
+            .is_ok_and(|inputs| self.can_reuse_screen_layout(state, &inputs))
+    }
+
+    fn can_reuse_screen_layout(
+        &self,
+        state: &RealtimeLayoutState,
+        inputs: &ScreenLayoutInputs,
+    ) -> bool {
+        inputs.permits_reuse()
+            && state.published.borrow().as_ref() == Some(inputs)
+            && (inputs.documents[0].root.is_none()
+                || self
+                    .document_layout_state
+                    .borrow()
+                    .latest_layout(self.document_handle())
+                    .is_some())
     }
 
     fn prepare_current_screen_styles(&self, inputs: &ScreenLayoutInputs) {

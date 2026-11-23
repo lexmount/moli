@@ -672,7 +672,7 @@ pub(crate) fn computed_style_properties_for_inspector_handle(
     }
     // The complete computed declaration includes used dimensions. Establish
     // geometry before constructing its viewport-specific style context.
-    public_layout::prepare_public_style_property(host, handle, StyleMode::Computed, "width")?;
+    public_layout::prepare_public_style_property(host, handle, StyleMode::Computed, "width", None)?;
     let Some(DocumentSnapshotStyleComputation::Available { context }) =
         style_computation_context_for_document_snapshot(host, handle)
     else {

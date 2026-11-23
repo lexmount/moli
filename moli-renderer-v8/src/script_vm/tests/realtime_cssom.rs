@@ -54,6 +54,38 @@ fn realtime_size_container_queries_follow_nested_content_boxes() {
 }
 
 #[test]
+fn realtime_cssom_size_container_query_refreshes_retained_color_and_display() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html><style>
+        #target { color: red; display: block }
+        #unrelated { width: 10cqw; color: blue }
+        @container (width >= 300px) { #target { color: green; display: flex } }
+        </style><div id=box style='container-type:inline-size;width:200px'>
+        <div id=target></div><div id=unrelated></div></div>"#,
+    );
+    assert_eq!(
+        vm.eval("const held = getComputedStyle(target); box.offsetWidth")
+            .unwrap(),
+        "200"
+    );
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval("box.style.width = '400px'; getComputedStyle(unrelated).color")
+            .unwrap(),
+        "rgb(0, 0, 255)"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    assert_eq!(vm.eval("held.color").unwrap(), "rgb(0, 128, 0)");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    assert_eq!(
+        vm.eval("box.style.width = '200px'; held.getPropertyValue('display')")
+            .unwrap(),
+        "block"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+}
+
+#[test]
 fn on_demand_cssom_size_container_query_keeps_live_inline_sizes() {
     let mut vm = new_parsed_test_vm(
         "https://ondemand-cssom.test/",
