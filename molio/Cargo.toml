@@ -10,13 +10,10 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0"
-gpui = { package = "gpui-ce", git = "https://github.com/gpui-ce/gpui-ce", rev = "1fe3d947698287f3ba50ef074a3eadd1ad46b84c" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/gpui-ce/gpui-ce", rev = "1fe3d947698287f3ba50ef074a3eadd1ad46b84c", features = ["wayland", "x11"] }
-image = { version = "0.25", default-features = false }
+gpui = { package = "gpui-ce", git = "https://github.com/lexmount/gpui-ce", rev = "1d433ddc675f9946ca91e0c705e4bc9b0360a78c" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/lexmount/gpui-ce", rev = "1d433ddc675f9946ca91e0c705e4bc9b0360a78c", features = ["wayland", "x11"] }
 moli-core = { path = "../moli-core" }
-moli-paint = { path = "../moli-paint" }
 moli-web-mime = { path = "../moli-web-mime" }
-smallvec = "1.15"
 tokio = { version = "1.53.1", features = ["macros", "net", "rt", "sync", "time"] }
 unicode-segmentation = "1.12"
 url = "2.5.7"

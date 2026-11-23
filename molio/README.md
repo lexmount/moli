@@ -8,7 +8,7 @@ cargo run --locked -p molio -- https://example.org
 
 Use `--profile-dir DIRECTORY` to persist your molio profile. The address field opens URLs and submits search terms to DuckDuckGo. Address suggestions use visits from the current session.
 
-The GPUI-CE window displays software frames from Moli's Realtime renderer. The UI and platform crates are pinned to the same Git revision. Tabs have independent navigation history, zoom, and focus state. The page surface accepts keyboard, mouse, composition input, text clipboard shortcuts, and dropped files.
+The GPUI-CE window displays software frames from Moli's Realtime renderer. The raster worker writes into GPUI-allocated BGRA buffers, and the window uploads each completed frame by borrowing its pixels. The UI and platform crates are pinned to the same Git revision. Tabs have independent navigation history, zoom, and focus state. The page surface accepts keyboard, mouse, composition input, text clipboard shortcuts, and dropped files.
 
 macOS uses GPUI-CE's Metal backend. Debian and Ubuntu workspace builds need `pkg-config`, `libfontconfig1-dev`, `libwayland-dev`, `libxcb1-dev`, `libxkbcommon-dev`, and `libxkbcommon-x11-dev` in addition to the workspace's regular build dependencies.
 

@@ -3017,7 +3017,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3092,7 +3092,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_apple"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "anyhow",
  "block",
@@ -3118,7 +3118,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_collections"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "gpui_ce_util",
  "indexmap",
@@ -3128,7 +3128,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_derive_refineable"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3138,7 +3138,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_linux"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3187,7 +3187,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macos"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3239,7 +3239,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macros"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3250,7 +3250,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_media"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "anyhow",
  "bindgen 0.72.1",
@@ -3264,7 +3264,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_parley"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "anyhow",
  "fontique 0.12.0",
@@ -3278,7 +3278,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_platform"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "console_error_panic_hook",
  "gpui-ce",
@@ -3292,7 +3292,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_refineable"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "gpui_ce_derive_refineable",
 ]
@@ -3300,7 +3300,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_render"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "anyhow",
  "gpui-ce",
@@ -3317,7 +3317,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_scheduler"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "async-task",
  "backtrace",
@@ -3332,7 +3332,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_shared_string"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "schemars",
  "serde",
@@ -3342,7 +3342,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_sum_tree"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "heapless",
  "log",
@@ -3353,7 +3353,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_util"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "anyhow",
  "log",
@@ -3363,7 +3363,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_web"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3388,7 +3388,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "anyhow",
  "core-foundation",
@@ -3420,7 +3420,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_windows"
 version = "0.4.0"
-source = "git+https://github.com/gpui-ce/gpui-ce?rev=1fe3d947698287f3ba50ef074a3eadd1ad46b84c#1fe3d947698287f3ba50ef074a3eadd1ad46b84c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -6135,11 +6135,8 @@ dependencies = [
  "anyhow",
  "gpui-ce",
  "gpui_ce_platform",
- "image",
  "moli-core",
- "moli-paint",
  "moli-web-mime",
- "smallvec",
  "tokio",
  "unicode-segmentation",
  "url",

@@ -163,7 +163,7 @@ impl BrowserWindow {
         let id = self.next_id;
         self.next_id += 1;
         let mut state = connection.state.clone();
-        let mut frames = connection.frames.clone();
+        let mut frames = connection.viewport.subscribe();
         cx.spawn_in(window, async move |view, cx| {
             loop {
                 let update = state.borrow_and_update().clone();
@@ -187,10 +187,10 @@ impl BrowserWindow {
             while frames.changed().await.is_ok() {
                 let _ = frames.borrow_and_update();
                 if cx
-                    .update(|window, cx| {
+                    .update(|_, cx| {
                         view.update(cx, |browser, cx| {
                             if browser.active == id {
-                                browser.present_frame(window, cx);
+                                browser.surface.update(cx, |_, cx| cx.notify());
                             }
                         })
                     })
@@ -228,13 +228,14 @@ impl BrowserWindow {
         let tab = &self.tabs[index];
         self.tab_scroll.scroll_to_item(index);
         let commands = tab.connection.commands.clone();
+        let output = tab.connection.viewport.clone();
         let zoom = tab.zoom;
         let page_focus = tab.page_focus;
         let document = tab.state.document;
         self.active = id;
         self.popup = None;
         self.surface.update(cx, |surface, cx| {
-            surface.select_tab(commands, zoom, document, window, cx)
+            surface.select_tab(commands, output, zoom, document, window, cx)
         });
         self.update_address(true, window, cx);
         if page_focus {
@@ -325,18 +326,8 @@ impl BrowserWindow {
                 |tab| format!("{} · molio", tab.title()),
             );
             window.set_window_title(&title);
-            self.present_frame(window, cx);
         }
         cx.notify();
-    }
-
-    fn present_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.current() else { return };
-        let frame = tab.connection.frames.borrow().clone();
-        if let Some(frame) = frame.filter(|frame| Some(frame.document) == tab.state.document) {
-            self.surface
-                .update(cx, |surface, cx| surface.show_frame(&frame, window, cx));
-        }
     }
 
     fn update_address(&mut self, force: bool, window: &Window, cx: &mut Context<Self>) {

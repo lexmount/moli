@@ -1,14 +1,12 @@
 use std::{fs, future::pending, path::PathBuf, sync::Arc, thread, time::Duration};
 
 use anyhow::{Context as _, Result};
-use gpui::RenderImage;
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererDocumentLifecycleIdentity,
-    RendererViewportEdit, RendererViewportEditor, RendererViewportFrame,
-    RendererViewportNavigation,
+    RendererViewportEdit, RendererViewportEditor, RendererViewportNavigation,
     page::{
-        CompletedPageCommand, Page, PageInputExt, RendererDraggedFile,
-        RendererPointerEventProperties, ViewportFrames,
+        BufferedViewportFrames, CompletedPageCommand, Page, PageInputExt, RendererDraggedFile,
+        RendererPointerEventProperties, ViewportBuffers, ViewportOutput, ViewportUpdate,
     },
     protocol_types::{DocumentActivity, ViewportSurface},
     runtime::{Browser, BrowserConfig, RenderedDomWaitUntil},
@@ -23,7 +21,7 @@ pub struct BrowserHost(mpsc::UnboundedSender<OpenTab>);
 pub struct TabConnection {
     pub commands: mpsc::UnboundedSender<TabCommand>,
     pub state: watch::Receiver<TabState>,
-    pub frames: watch::Receiver<Option<DisplayFrame>>,
+    pub viewport: Arc<ViewportOutput>,
 }
 
 #[derive(Clone, Default)]
@@ -35,14 +33,6 @@ pub struct TabState {
     pub error: Option<String>,
     pub editor: Option<RendererViewportEditor>,
     pub editor_ack: Option<u64>,
-}
-
-#[derive(Clone)]
-pub struct DisplayFrame {
-    pub document: RendererDocumentLifecycleIdentity,
-    pub viewport_revision: u64,
-    pub sequence: u64,
-    pub image: Option<Arc<RenderImage>>,
 }
 
 pub enum TabCommand {
@@ -104,7 +94,7 @@ pub struct KeyInput {
 struct OpenTab {
     commands: mpsc::UnboundedReceiver<TabCommand>,
     state: watch::Sender<TabState>,
-    frames: watch::Sender<Option<DisplayFrame>>,
+    viewport: Arc<ViewportOutput>,
 }
 
 impl BrowserHost {
@@ -152,38 +142,28 @@ impl BrowserHost {
     pub fn open_tab(&self) -> Result<TabConnection> {
         let (commands, request_rx) = mpsc::unbounded_channel();
         let (state_tx, state) = watch::channel(TabState::default());
-        let (frames_tx, frames) = watch::channel(None);
+        let viewport = Arc::new(ViewportOutput::default());
         self.0
             .send(OpenTab {
                 commands: request_rx,
                 state: state_tx,
-                frames: frames_tx,
+                viewport: viewport.clone(),
             })
             .map_err(|_| anyhow::anyhow!("browser host is unavailable"))?;
         Ok(TabConnection {
             commands,
             state,
-            frames,
+            viewport,
         })
     }
 }
 
-enum FrameEvent {
-    Paint,
-    ResourceChanged,
-    Closed,
-}
-
-async fn next_frame(stream: &mut Option<ViewportFrames>) -> FrameEvent {
-    let Some(stream) = stream else {
-        return pending().await;
-    };
-    tokio::select! {
-        result = stream.updates.changed() => match result {
-            Ok(()) => FrameEvent::Paint,
-            Err(_) => FrameEvent::Closed,
-        },
-        () = stream.resource_wake.notified() => FrameEvent::ResourceChanged,
+async fn next_viewport_update(
+    stream: &mut Option<BufferedViewportFrames>,
+) -> Option<ViewportUpdate> {
+    match stream {
+        Some(stream) => stream.changed().await.ok(),
+        None => pending().await,
     }
 }
 
@@ -216,8 +196,6 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
     let mut navigation = None;
     let mut queued = None;
     let mut activity = DocumentActivity::new(false, false);
-    let (paint_frames, paint_rx) = watch::channel(None);
-    let rasterizer = tokio::task::spawn_local(rasterize_frames(paint_rx, tab.frames));
     let _ = page.set_document_activity_async(activity).await;
 
     loop {
@@ -234,13 +212,13 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
                     }
                 });
             }
-            event = next_frame(&mut capture) => match event {
-                FrameEvent::Paint => {
-                    let frame = capture.as_mut().and_then(|stream| stream.updates.borrow_and_update().clone());
+            event = next_viewport_update(&mut capture) => match event {
+                Some(ViewportUpdate::StateChanged) => {
+                    let frame = capture.as_mut().and_then(BufferedViewportFrames::latest_state);
                     tab.state.send_if_modified(|state| {
-                        let document = frame.as_ref().map(|frame| frame.document);
-                        let navigation = frame.as_ref().map(|frame| frame.navigation.clone());
-                        let editor = if activity.focused { frame.as_ref().and_then(|frame| frame.editor.clone()) } else { None };
+                        let (document, navigation, editor) = frame.map_or((None, None, None), |frame| {
+                            (Some(frame.document), Some(frame.navigation), frame.editor.filter(|_| activity.focused))
+                        });
                         if state.document == document && state.navigation == navigation && state.editor == editor {
                             return false;
                         }
@@ -249,10 +227,9 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
                         state.editor = editor;
                         true
                     });
-                    paint_frames.send_replace(frame);
                 }
-                FrameEvent::ResourceChanged => { let _ = page.wake_viewport_frames().await; }
-                FrameEvent::Closed => { capture = None; }
+                Some(ViewportUpdate::ResourceChanged) => { let _ = page.wake_viewport_frames().await; }
+                None => { capture = None; }
             },
             command = async {
                 match queued.take() {
@@ -304,7 +281,7 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
                     TabCommand::Viewport(viewport, revision) => {
                         surface = Some((viewport, revision));
                         if activity.visible {
-                            refresh_capture(&mut page, &mut capture, surface).await
+                            refresh_capture(&mut page, &mut capture, surface, &tab.viewport).await
                         } else {
                             Ok(())
                         }
@@ -314,7 +291,6 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
                         activity = next;
                         if !next.visible {
                             capture = None;
-                            paint_frames.send_replace(None);
                         }
                         if !next.focused {
                             tab.state.send_if_modified(|state| state.editor.take().is_some());
@@ -322,7 +298,7 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
                         if let Err(error) = page.set_document_activity_async(next).await {
                             Err(error)
                         } else if visibility_changed && next.visible {
-                            refresh_capture(&mut page, &mut capture, surface).await
+                            refresh_capture(&mut page, &mut capture, surface, &tab.viewport).await
                         } else if next.focused {
                             refresh_editor(&mut page, &tab.state).await
                         } else {
@@ -389,7 +365,6 @@ async fn run_tab(browser: Browser, mut tab: OpenTab) {
     if let Some(task) = navigation {
         task.abort();
     }
-    rasterizer.abort();
 }
 
 async fn drop_files(
@@ -442,11 +417,23 @@ async fn refresh_editor(page: &mut Page, state: &watch::Sender<TabState>) -> Res
 
 async fn refresh_capture(
     page: &mut Page,
-    capture: &mut Option<ViewportFrames>,
+    capture: &mut Option<BufferedViewportFrames>,
     surface: Option<(ViewportSurface, u64)>,
+    output: &Arc<ViewportOutput>,
 ) -> Result<()> {
     if let Some((surface, revision)) = surface {
-        *capture = Some(page.subscribe_viewport_frames(surface, revision).await?);
+        let layout = ViewportBuffers::layout_for(surface)?;
+        let size = gpui::size(layout.width.into(), layout.height.into());
+        let storage = [
+            gpui::BgraImage::reserve_pixels(size)?,
+            gpui::BgraImage::reserve_pixels(size)?,
+            gpui::BgraImage::reserve_pixels(size)?,
+        ];
+        let buffers = ViewportBuffers::new(layout, storage)?;
+        *capture = Some(
+            page.subscribe_viewport_buffer(surface, revision, buffers, output.clone())
+                .await?,
+        );
     }
     Ok(())
 }
@@ -469,51 +456,6 @@ async fn dispatch_pointer(page: &mut Page, input: PointerInput) -> Result<()> {
     Ok(())
 }
 
-async fn rasterize_frames(
-    mut paint: watch::Receiver<Option<RendererViewportFrame>>,
-    displayed: watch::Sender<Option<DisplayFrame>>,
-) {
-    while paint.changed().await.is_ok() {
-        let Some(frame) = paint.borrow_and_update().clone() else {
-            displayed.send_replace(None);
-            continue;
-        };
-        let snapshot = frame.snapshot.clone();
-        let raster = tokio::task::spawn_blocking(move || -> Result<Option<Arc<RenderImage>>> {
-            let Some(snapshot) = snapshot else {
-                return Ok(None);
-            };
-            let mut pixels = moli_paint::raster_snapshot(&snapshot)?;
-            for pixel in pixels.rgba.as_chunks_mut::<4>().0 {
-                pixel.swap(0, 2);
-            }
-            let buffer = image::RgbaImage::from_raw(pixels.width, pixels.height, pixels.rgba)
-                .context("invalid viewport buffer dimensions")?;
-            Ok(Some(Arc::new(RenderImage::new(smallvec::smallvec![
-                image::Frame::new(buffer)
-            ]))))
-        })
-        .await;
-        match raster {
-            Ok(Ok(image))
-                if paint.borrow().as_ref().is_some_and(|current| {
-                    frame.document == current.document
-                        && frame.viewport_revision == current.viewport_revision
-                }) =>
-            {
-                displayed.send_replace(Some(DisplayFrame {
-                    document: frame.document,
-                    viewport_revision: frame.viewport_revision,
-                    sequence: frame.sequence,
-                    image,
-                }));
-            }
-            Ok(Err(error)) => eprintln!("Could not rasterize browser viewport: {error:#}"),
-            _ => {}
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,6 +466,7 @@ mod tests {
         revision: u64,
         color: [u8; 4],
     ) -> Result<RendererDocumentLifecycleIdentity> {
+        let mut frames = tab.viewport.subscribe();
         tab.commands
             .send(TabCommand::Activity(DocumentActivity::new(true, true)))
             .map_err(|_| anyhow::anyhow!("show tab"))?;
@@ -550,22 +493,24 @@ mod tests {
         .await??;
         let document = state.document.context("tab has a committed document")?;
         drop(state);
-        let frame = tokio::time::timeout(
-            Duration::from_secs(5),
-            tab.frames.wait_for(|frame| {
-                frame.as_ref().is_some_and(|frame| {
-                    frame.document == document && frame.viewport_revision == revision
-                })
-            }),
-        )
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(Some(())) = tab.viewport.read(|frame| {
+                    if frame.document != document || frame.viewport_revision != revision {
+                        return None;
+                    }
+                    let pixels = frame.pixels?;
+                    assert_eq!((frame.layout.width, frame.layout.height), (80, 60));
+                    assert_eq!(pixels.len(), 80 * 60 * 4);
+                    assert_eq!(pixels[..4], color);
+                    Some(())
+                }) {
+                    break Ok::<_, watch::error::RecvError>(());
+                }
+                frames.changed().await?;
+            }
+        })
         .await??;
-        let pixels = frame
-            .as_ref()
-            .and_then(|frame| frame.image.as_ref())
-            .and_then(|image| image.as_bytes(0))
-            .context("software frame pixels")?;
-        assert_eq!(pixels.len(), 80 * 60 * 4);
-        assert_eq!(pixels[..4], color);
         Ok(document)
     }
 
@@ -584,11 +529,17 @@ mod tests {
             )))
             .map_err(|_| anyhow::anyhow!("load blue tab"))?;
         let red_document = show_tab(&mut red, "Red", 1, [0, 0, 255, 255]).await?;
+        let mut red_frames = red.viewport.subscribe();
         red.commands
             .send(TabCommand::Activity(DocumentActivity::new(false, false)))
             .map_err(|_| anyhow::anyhow!("hide red tab"))?;
-        tokio::time::timeout(Duration::from_secs(5), red.frames.wait_for(Option::is_none))
-            .await??;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while red.viewport.read(|_| ()).is_some() {
+                red_frames.changed().await?;
+            }
+            Ok::<_, watch::error::RecvError>(())
+        })
+        .await??;
         let blue_document = show_tab(&mut blue, "Blue", 2, [255, 0, 0, 255]).await?;
         assert_ne!(red_document, blue_document);
         drop(blue);

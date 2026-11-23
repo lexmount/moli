@@ -1,31 +1,32 @@
 use std::{ops::Range, sync::Arc};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler, ExternalPaths,
-    FocusHandle, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ObjectFit, PaintQuad, Pixels, Point, RenderImage,
-    ScrollWheelEvent, Subscription, UTF16Selection, Window, canvas, div, img, point, prelude::*,
-    px, rgb, size,
+    App, BgraImage, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler,
+    ExternalPaths, FocusHandle, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent,
+    Subscription, UTF16Selection, Window, canvas, div, point, prelude::*, px, rgb, size,
 };
 use moli_core::{
     RendererDocumentLifecycleIdentity, RendererViewportEditAction, RendererViewportEditor,
+    page::{ViewportFrameRef, ViewportOutput},
     protocol_types::{DocumentActivity, ViewportSurface},
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::host::{DisplayFrame, KeyInput, PointerInput, TabCommand};
+use crate::host::{KeyInput, PointerInput, TabCommand};
 use crate::text_input::MoliTextInputBridge;
 
 pub struct MoliSurface {
     pub focus: FocusHandle,
     commands: Option<mpsc::UnboundedSender<TabCommand>>,
+    output: Option<Arc<ViewportOutput>>,
     activity: Option<DocumentActivity>,
     bounds: Option<Bounds<Pixels>>,
     viewport: Option<ViewportSurface>,
     revision: u64,
     zoom: f64,
     buttons: i32,
-    image: Option<Arc<RenderImage>>,
+    image: Option<BgraImage>,
     document: Option<RendererDocumentLifecycleIdentity>,
     presented: Option<(RendererDocumentLifecycleIdentity, u64)>,
     text_input: MoliTextInputBridge,
@@ -51,6 +52,7 @@ impl MoliSurface {
         Self {
             focus,
             commands: None,
+            output: None,
             activity: None,
             bounds: None,
             viewport: None,
@@ -68,6 +70,7 @@ impl MoliSurface {
     pub fn select_tab(
         &mut self,
         commands: mpsc::UnboundedSender<TabCommand>,
+        output: Arc<ViewportOutput>,
         zoom: f64,
         document: Option<RendererDocumentLifecycleIdentity>,
         window: &mut Window,
@@ -76,6 +79,7 @@ impl MoliSurface {
         self.finish_composition();
         self.send(TabCommand::Activity(DocumentActivity::new(false, false)));
         self.commands = Some(commands);
+        self.output = Some(output);
         self.activity = None;
         self.viewport = None;
         self.document = document;
@@ -93,30 +97,73 @@ impl MoliSurface {
 
     pub fn clear_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.presented = None;
-        if let Some(image) = self.image.take() {
-            let _ = window.drop_image(image);
-            cx.notify();
-        }
+        self.drop_image(window);
+        cx.notify();
     }
 
-    pub fn show_frame(
-        &mut self,
-        frame: &DisplayFrame,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.viewport.is_none()
-            || self.revision != frame.viewport_revision
-            || self.presented.is_some_and(|(document, sequence)| {
-                document == frame.document && sequence >= frame.sequence
-            })
-        {
+    fn drop_image(&mut self, window: &mut Window) {
+        let Some(image) = self.image.take() else {
             return;
+        };
+        window.drop_bgra_image(&image);
+    }
+
+    fn is_current_frame(&self, frame: &ViewportFrameRef<'_>) -> bool {
+        self.viewport.is_some()
+            && self.document == Some(frame.document)
+            && self.revision == frame.viewport_revision
+    }
+
+    fn is_new_frame(&self, frame: &ViewportFrameRef<'_>) -> bool {
+        self.presented.is_none_or(|(document, sequence)| {
+            document != frame.document || sequence < frame.sequence
+        })
+    }
+
+    fn paint_image(&mut self, bounds: Bounds<Pixels>, window: &mut Window) -> anyhow::Result<()> {
+        if self
+            .output
+            .clone()
+            .and_then(|output| output.read(|frame| self.paint_ready_image(frame, bounds, window)))
+            .transpose()?
+            .unwrap_or(false)
+        {
+            return Ok(());
         }
-        self.clear_frame(window, cx);
-        self.image = frame.image.clone();
+        if let Some(image) = self.image.as_ref() {
+            window.paint_bgra_image(bounds, image, None)?;
+        }
+        Ok(())
+    }
+
+    fn paint_ready_image(
+        &mut self,
+        frame: ViewportFrameRef<'_>,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+    ) -> anyhow::Result<bool> {
+        if !self.is_current_frame(&frame) {
+            return Ok(false);
+        }
+        if !self.is_new_frame(&frame) {
+            if let Some(image) = self.image.as_ref() {
+                return window.paint_bgra_image(bounds, image, frame.pixels);
+            }
+            return Ok(false);
+        }
+        let Some(pixels) = frame.pixels else {
+            self.drop_image(window);
+            self.presented = Some((frame.document, frame.sequence));
+            return Ok(false);
+        };
+        let image = BgraImage::new(size(frame.layout.width.into(), frame.layout.height.into()))?;
+        if !window.paint_bgra_image(bounds, &image, Some(pixels))? {
+            return Ok(false);
+        }
+        self.drop_image(window);
+        self.image = Some(image);
         self.presented = Some((frame.document, frame.sequence));
-        cx.notify();
+        Ok(true)
     }
 
     pub fn focus_page(&self, window: &mut Window, cx: &mut App) {
@@ -392,7 +439,7 @@ impl MoliSurface {
 }
 
 impl Render for MoliSurface {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let surface = cx.entity();
         let focus = self.focus.clone();
         let mut content = div()
@@ -413,9 +460,6 @@ impl Render for MoliSurface {
                 .on_mouse_up(button, cx.listener(Self::mouse_up))
                 .on_mouse_up_out(button, cx.listener(Self::mouse_up));
         }
-        if let Some(image) = self.image.clone() {
-            content = content.child(img(image).size_full().object_fit(ObjectFit::Fill));
-        }
         content.child(
             canvas(
                 |_, _, _| (),
@@ -426,6 +470,9 @@ impl Render for MoliSurface {
                         cx,
                     );
                     surface.update(cx, |surface, cx| {
+                        if let Err(error) = surface.paint_image(bounds, window) {
+                            eprintln!("Could not paint browser viewport: {error:#}");
+                        }
                         surface.measure(bounds, window, cx);
                         if let Some(editor) = surface.text_input.editor() {
                             for (_, rect) in &editor.mark_rects {
