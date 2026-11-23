@@ -2609,29 +2609,28 @@ async fn best_effort_page_readiness_consumes_only_the_remaining_fetch_deadline()
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn page_fetch_wait_until_apis_do_not_restart_best_effort_timeout() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
+    let url = server.url("/wait-until-shared-deadline");
 
-    for (wait_until, path) in [
-        (
-            RenderedDomWaitUntil::NetworkIdle,
-            "/wait-until-slow-interval-fetch",
-        ),
-        (
-            RenderedDomWaitUntil::DomStable,
-            "/wait-until-slow-interval-dom-mutation",
-        ),
+    for wait_until in [
+        RenderedDomWaitUntil::NetworkIdle,
+        RenderedDomWaitUntil::DomStable,
     ] {
-        let started = std::time::Instant::now();
-        let page = browser
-            .fetch_with_wait_until(&server.url(path), wait_until, Duration::from_secs(1))
+        // The main response spends four seconds of the ten-second budget.
+        // The eight-second subresource stays pending on the shared budget
+        // and has time to complete if readiness starts a fresh budget.
+        let mut page = browser
+            .fetch_with_wait_until(&url, wait_until, Duration::from_secs(10))
             .await?;
 
         assert!(
-            started.elapsed() < Duration::from_millis(1_300),
-            "the Page-returning {wait_until:?} API appears to have started a fresh timeout"
+            page.serialize_html_async()
+                .await?
+                .contains("data-activity=\"pending\""),
+            "the Page-returning {wait_until:?} API waited for activity beyond the shared deadline"
         );
         page.close_async().await?;
     }
