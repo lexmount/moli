@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use moli_action_window::{InputModifiers, Point, ScrollAction};
 use moli_layout::{LayoutFlushReason, PaintCaptureRequest, PaintSnapshot, PaintViewport};
 use moli_page_types::ViewportSurface;
 use tokio::sync::{Notify, watch};
@@ -78,6 +79,59 @@ pub struct RendererViewportSubscription {
     pub resource_wake: Arc<Notify>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RendererViewportWheelPhase {
+    Started,
+    Moved,
+    Ended,
+    Cancelled,
+}
+
+/// A wheel event expressed in CSS pixels for a particular viewport revision.
+#[derive(Clone, Copy, Debug)]
+pub struct RendererViewportWheelInput {
+    pub document: RendererDocumentLifecycleIdentity,
+    pub viewport_revision: u64,
+    pub position: (f64, f64),
+    pub buttons: i32,
+    pub delta: (f64, f64),
+    pub modifiers: u8,
+    pub phase: RendererViewportWheelPhase,
+    pub precise: bool,
+}
+
+impl RendererViewportWheelInput {
+    pub(crate) fn coalesce(&mut self, next: &Self) -> bool {
+        if self.phase != RendererViewportWheelPhase::Moved
+            || next.phase != RendererViewportWheelPhase::Moved
+            || self.document != next.document
+            || self.viewport_revision != next.viewport_revision
+            || self.buttons != next.buttons
+            || self.precise != next.precise
+        {
+            return false;
+        }
+
+        let mut scroll = self.scroll_action();
+        if !scroll.coalesce(&next.scroll_action()) {
+            return false;
+        }
+        self.delta = (scroll.delta_x, scroll.delta_y);
+        true
+    }
+
+    fn scroll_action(&self) -> ScrollAction {
+        ScrollAction {
+            modifiers: InputModifiers::from_bits(self.modifiers),
+            ..ScrollAction::pixels(
+                Point::new(self.position.0, self.position.1),
+                self.delta.0,
+                self.delta.1,
+            )
+        }
+    }
+}
+
 pub(super) struct ViewportFrameState {
     subscription: RendererViewportSubscription,
     painted: Option<RendererVisualStateToken>,
@@ -96,6 +150,38 @@ impl ViewportFrameState {
 }
 
 impl PageVm {
+    pub(super) fn dispatch_viewport_wheel(
+        &mut self,
+        input: RendererViewportWheelInput,
+    ) -> anyhow::Result<()> {
+        if input.document != self.document_lifecycle.identity()
+            || !self.document_settings.document_activity.visible
+            || self
+                .viewport_frames
+                .as_ref()
+                .is_none_or(|state| state.subscription.viewport_revision != input.viewport_revision)
+        {
+            return Ok(());
+        }
+        let result = self.dispatch_mouse_event_at_point_with_pointer(
+            input.position.0,
+            input.position.1,
+            "wheel",
+            -1,
+            Some(input.buttons),
+            0,
+            input.delta.0,
+            input.delta.1,
+            super::RendererPointerEventProperties::default(),
+            input.modifiers,
+            false,
+        );
+        if let Err(error) = &result {
+            tracing::warn!(%error, "viewport wheel dispatch failed");
+        }
+        result.map(drop)
+    }
+
     pub(super) fn read_viewport_selection(
         &mut self,
         document: RendererDocumentLifecycleIdentity,

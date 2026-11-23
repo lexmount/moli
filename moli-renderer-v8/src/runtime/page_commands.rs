@@ -355,6 +355,10 @@ impl PageVm {
                 Ok(RendererPageReply::Unit)
             }
             #[cfg(feature = "molio")]
+            RendererPageCommand::DispatchViewportWheel(input) => self
+                .dispatch_viewport_wheel(input)
+                .map(|()| RendererPageReply::Unit),
+            #[cfg(feature = "molio")]
             RendererPageCommand::NavigateViewport(target) => {
                 let navigated = self.vm_mut().navigate_top_level_from_browser(target)?;
                 self.wake_viewport_frames();
@@ -422,7 +426,9 @@ fn renderer_page_command_action_barrier(
             Some(moli_action_window::ActionBarrier::Screenshot)
         }
         #[cfg(feature = "molio")]
-        RendererPageCommand::WakeViewportFrames => None,
+        RendererPageCommand::WakeViewportFrames | RendererPageCommand::DispatchViewportWheel(_) => {
+            None
+        }
         _ => Some(moli_action_window::ActionBarrier::Explicit),
     }
 }

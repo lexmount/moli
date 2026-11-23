@@ -642,10 +642,11 @@ globalThis.__lmActionWindowWheelLog = [];
 globalThis.__lmActionWindowIoLog = [];
 addEventListener("wheel", event => {
   __lmActionWindowWheelLog.push("event:" + event.deltaY);
+  if (event.deltaY === 25) event.preventDefault();
   Promise.resolve().then(() => {
     __lmActionWindowWheelLog.push("microtask:" + event.deltaY);
   });
-}, { capture: true });
+}, { capture: true, passive: false });
 </script>"#,
     )
     .await;
@@ -701,7 +702,7 @@ addEventListener("scroll", () => fetch("/action-window-scroll-applied"), { once:
     );
 
     let opened_at = std::time::Instant::now();
-    for delta_y in [100.0, -100.0, 100.0] {
+    for delta_y in [100.0, -100.0, 10.0, 15.0, -5.0, 100.0] {
         let outcome = dispatch_wheel_for_action_window_test(&page, delta_y).await;
         assert!(outcome.handled, "wheel admission should be acknowledged");
     }
@@ -736,7 +737,7 @@ addEventListener("scroll", () => fetch("/action-window-scroll-applied"), { once:
     assert_eq!(
         renderer_json_value(state),
         Some(serde_json::json!(
-            r#"{"scrollY":100,"wheelLog":["event:100","event:-100","event:100","microtask:100","microtask:-100","microtask:100"],"ioLog":[false]}"#
+            r#"{"scrollY":100,"wheelLog":["event:100","event:-100","event:25","event:-5","event:100","microtask:100","microtask:-100","microtask:25","microtask:-5","microtask:100"],"ioLog":[false]}"#
         ))
     );
 
@@ -774,7 +775,7 @@ document.addEventListener("wheel", event => {
 
     capture_screenshot_for_renderer_page(&page).await;
 
-    for delta_y in [10.0, 20.0, 30.0] {
+    for delta_y in [10.0, 20.0, -30.0] {
         assert!(
             dispatch_wheel_for_action_window_test(&page, delta_y)
                 .await
@@ -795,7 +796,7 @@ document.addEventListener("wheel", event => {
         .expect("the explicit read barrier should apply the pending wheel batch");
     assert_eq!(
         renderer_json_value(state),
-        Some(serde_json::json!(r#"{"retired":[10],"replacement":[]}"#)),
+        Some(serde_json::json!(r#"{"retired":[30],"replacement":[]}"#)),
         "actions admitted for the retired lifecycle must not continue in its document.open replacement"
     );
 

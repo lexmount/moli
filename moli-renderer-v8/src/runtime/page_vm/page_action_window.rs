@@ -17,22 +17,17 @@ use crate::{
 
 use super::PageVm;
 
-#[derive(Debug)]
-struct QueuedWheelEvent {
-    x: f64,
-    y: f64,
+#[derive(Debug, PartialEq)]
+struct WheelEventProperties {
     button: i32,
     buttons: Option<i32>,
     click_count: i32,
-    delta_x: f64,
-    delta_y: f64,
     pointer: RendererPointerEventProperties,
-    modifiers: u8,
 }
 
 pub(super) struct RendererPageActionWindow {
     window: ActionWindow<RendererDocumentLifecycleIdentity>,
-    wheel_events: HashMap<ActionSequence, QueuedWheelEvent>,
+    wheel_events: HashMap<ActionSequence, WheelEventProperties>,
 }
 
 /// Input admission and layout refresh are separate decisions. Realtime uses
@@ -112,16 +107,11 @@ impl PageVm {
         let sequence = admission.sequence();
         self.page_action_window.wheel_events.insert(
             sequence,
-            QueuedWheelEvent {
-                x,
-                y,
+            WheelEventProperties {
                 button,
                 buttons,
                 click_count,
-                delta_x,
-                delta_y,
                 pointer,
-                modifiers,
             },
         );
         Ok(RendererInputDispatchOutcome {
@@ -180,10 +170,12 @@ impl PageVm {
         let batch_id = batch.id().get();
         let cause = batch.cause();
         let batch_document = self.document_lifecycle.identity();
-        let mut events = Vec::with_capacity(batch.retained_action_count());
+        let mut events: Vec<(ScrollAction, WheelEventProperties)> =
+            Vec::with_capacity(batch.retained_action_count());
         for action in batch.into_actions() {
             match action {
                 PlannedAction::Scroll { scope, run } => {
+                    let run_start = events.len();
                     for step in run.steps() {
                         let event = self
                             .page_action_window
@@ -195,9 +187,17 @@ impl PageVm {
                                     step.sequence().get()
                                 )
                             })?;
-                        if scope == batch_document {
-                            events.push((scope, event));
+                        if scope != batch_document {
+                            continue;
                         }
+                        if let Some((previous_scroll, previous_event)) =
+                            events[run_start..].last_mut()
+                            && *previous_event == event
+                            && previous_scroll.coalesce(step.value())
+                        {
+                            continue;
+                        }
+                        events.push((step.value().clone(), event));
                     }
                 }
                 PlannedAction::Click { .. } | PlannedAction::Ordered { .. } => {
@@ -215,22 +215,22 @@ impl PageVm {
         self.vm_mut().begin_batched_mouse_event_dispatch();
         let mut first_error = None;
         let mut skipped_events = 0_usize;
-        for (document, event) in events {
-            if self.document_lifecycle.identity() != document {
+        for (scroll, event) in events {
+            if self.document_lifecycle.identity() != batch_document {
                 skipped_events += 1;
                 continue;
             }
             let result = self.vm_mut().dispatch_mouse_input(
-                event.x,
-                event.y,
+                scroll.position.x,
+                scroll.position.y,
                 "wheel",
                 event.button,
                 event.buttons,
                 event.click_count,
-                event.delta_x,
-                event.delta_y,
+                scroll.delta_x,
+                scroll.delta_y,
                 event.pointer,
-                event.modifiers,
+                scroll.modifiers.bits(),
                 false,
                 MouseDispatchCompletion::DeferToBatch,
             );

@@ -566,6 +566,12 @@ impl RendererPageHandle {
         })
     }
 
+    #[cfg(feature = "molio")]
+    pub fn enqueue_viewport_wheel(&self, input: super::RendererViewportWheelInput) -> Result<()> {
+        self.render_runtime
+            .enqueue_viewport_wheel(self.token(), input)
+    }
+
     pub fn page_id(&self) -> u64 {
         self.token().page_id.as_u64()
     }

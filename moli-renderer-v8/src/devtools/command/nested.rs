@@ -88,6 +88,7 @@ impl RendererPageCommand {
 
             #[cfg(feature = "molio")]
             Self::SubscribeViewportFrames(..)
+            | Self::DispatchViewportWheel(..)
             | Self::NavigateViewport(..)
             | Self::TraverseViewportHistory(..)
             | Self::ReadViewportEditor

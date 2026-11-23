@@ -64,8 +64,8 @@ pub enum ScrollDeltaMode {
 
 /// One scroll step.
 ///
-/// Steps are retained in order inside a scroll run. Deltas are not summed,
-/// because doing so can change clamping and scroll-snap behavior.
+/// A scroll run retains its steps in order. Its consumer can coalesce
+/// compatible steps before dispatch.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollAction {
     pub position: Point,
@@ -86,6 +86,32 @@ impl ScrollAction {
             modifiers: InputModifiers::NONE,
         }
     }
+
+    /// Accumulate an adjacent compatible step for a single input dispatch.
+    /// The caller checks any document, gesture, and pointer state boundaries.
+    pub fn coalesce(&mut self, next: &Self) -> bool {
+        if self.position != next.position
+            || self.delta_mode != next.delta_mode
+            || self.modifiers != next.modifiers
+            || !same_scroll_direction(self.delta_x, next.delta_x)
+            || !same_scroll_direction(self.delta_y, next.delta_y)
+        {
+            return false;
+        }
+
+        let delta_x = self.delta_x + next.delta_x;
+        let delta_y = self.delta_y + next.delta_y;
+        if !delta_x.is_finite() || !delta_y.is_finite() {
+            return false;
+        }
+        self.delta_x = delta_x;
+        self.delta_y = delta_y;
+        true
+    }
+}
+
+fn same_scroll_direction(previous: f64, next: f64) -> bool {
+    previous == 0.0 || next == 0.0 || previous.is_sign_positive() == next.is_sign_positive()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

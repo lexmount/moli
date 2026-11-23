@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use crate::{
     ActionBarrier, ActionBatchCause, ActionCompaction, ActionWindow, AdmissionState, ClickAction,
-    InputModifiers, MouseButton, PlannedAction, Point, ScrollAction, WindowAction,
+    InputModifiers, MouseButton, PlannedAction, Point, ScrollAction, ScrollDeltaMode, WindowAction,
 };
 
 const SCOPE_A: u8 = 1;
@@ -36,6 +36,38 @@ fn scroll_deltas(action: &PlannedAction<u8, &'static str>) -> Vec<f64> {
         .iter()
         .map(|step| step.value().delta_y)
         .collect()
+}
+
+#[test]
+fn scroll_coalescing_preserves_input_boundaries() {
+    let position = Point::new(10.0, 20.0);
+    let mut scroll = ScrollAction::pixels(position, 2.0, 10.0);
+    let next = ScrollAction::pixels(position, 0.0, 15.0);
+    assert!(scroll.coalesce(&next));
+    let merged = ScrollAction::pixels(position, 2.0, 25.0);
+    assert_eq!(scroll, merged);
+
+    for incompatible in [
+        ScrollAction::pixels(position, -1.0, 15.0),
+        ScrollAction::pixels(position, 0.0, -5.0),
+        ScrollAction::pixels(Point::new(11.0, 20.0), 0.0, 15.0),
+        ScrollAction {
+            delta_mode: ScrollDeltaMode::Line,
+            ..next.clone()
+        },
+        ScrollAction {
+            modifiers: InputModifiers::SHIFT,
+            ..next
+        },
+    ] {
+        assert!(!scroll.coalesce(&incompatible));
+        assert_eq!(scroll, merged);
+    }
+
+    let large = ScrollAction::pixels(position, 0.0, f64::MAX);
+    let mut scroll = large.clone();
+    assert!(!scroll.coalesce(&large));
+    assert_eq!(scroll, large);
 }
 
 #[test]
