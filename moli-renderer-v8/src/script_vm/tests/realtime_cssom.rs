@@ -26,6 +26,33 @@ fn realtime_cssom_retained_declaration_reads_current_used_sizes() {
 }
 
 #[test]
+fn realtime_size_container_queries_follow_nested_content_boxes() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html><style>
+        #frame { width: 400px }
+        #outer { container: shell / inline-size; box-sizing: border-box;
+                 width: 100%; padding: 20px; border: 5px solid; transform: scale(.5) }
+        #inner { container: card / inline-size; width: 150px }
+        #target { width: 20px }
+        @container shell (width >= 300px) { #inner { width: 320px } }
+        @container card (width >= 300px) { #target { width: 110px } }
+        </style><div id=frame><div id=outer><div id=inner><div id=target></div></div></div></div>"#,
+    );
+    assert_eq!(
+        vm.eval(
+            r#"const sizes = () => [inner.offsetWidth, target.offsetWidth];
+            const initial = sizes();
+            frame.style.width = '340px';
+            const narrower = sizes();
+            frame.style.width = '400px';
+            JSON.stringify([initial, narrower, sizes()])"#,
+        )
+        .unwrap(),
+        "[[320,110],[150,20],[320,110]]"
+    );
+}
+
+#[test]
 fn realtime_cssom_shared_adopted_sheet_refreshes_all_shadow_clients_in_same_turn() {
     for first_read in ["color", "width", "offsetWidth"] {
         let mut vm =

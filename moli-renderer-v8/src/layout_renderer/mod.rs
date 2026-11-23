@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
-    LayoutViewport, finish_prepared_layout_pass, prepare_layout_pass,
+    LayoutViewport, finish_measured_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
 };
 
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
@@ -66,30 +66,21 @@ fn build_native_layout_pass_recursive(
     let source_ready = profile_started.map(|_| std::time::Instant::now());
     let mut styles_ready = None;
     let result = (|| {
-        let (prepared, resources) = style_resolver::with_layout_styles(
-            runtime,
-            document,
-            request.viewport,
-            environment_override,
-            |styles| -> Result<_, moli_layout::LayoutError> {
-                styles_ready = profile_started.map(|_| std::time::Instant::now());
-                let resources = if services.has_stylesheet_web_fonts() {
-                    Some(
-                        runtime
-                            .stylesheet_resource_snapshot_for_document(document)
-                            .ok_or_else(|| {
-                                moli_layout::LayoutError::source_contract(
-                                    "layout fonts",
-                                    "missing current stylesheet resource manifest",
-                                )
-                            })?,
-                    )
-                } else {
-                    None
-                };
-                Ok((prepare_layout_pass(&source, styles, request)?, resources))
-            },
-        )?;
+        let mut prepare = || {
+            style_resolver::with_layout_styles(
+                runtime,
+                document,
+                request.viewport,
+                environment_override,
+                |styles| {
+                    if profile_started.is_some() && styles_ready.is_none() {
+                        styles_ready = Some(std::time::Instant::now());
+                    }
+                    prepare_layout_pass(&source, styles, request)
+                },
+            )
+        };
+        let prepared = prepare()?;
         let mut frames = NativeEmbeddedFrameRenderer {
             runtime,
             reason: request.reason,
@@ -102,9 +93,28 @@ fn build_native_layout_pass_recursive(
             embedded_document_services,
         };
         let finish = |services: &mut DocumentLayoutServices| {
-            finish_prepared_layout_pass(prepared, &source, services, &mut frames)
+            let mut measured = measure_prepared_layout_pass(prepared, services)?;
+            // Nested containers can change when their outer queries start
+            // matching. Settle size feedback before laying out child documents
+            // and projecting paint. Bound work on oscillating layouts.
+            for _ in 0..8 {
+                if !runtime.update_layout_container_sizes(document, &measured) {
+                    break;
+                }
+                drop(measured);
+                measured = measure_prepared_layout_pass(prepare()?, services)?;
+            }
+            finish_measured_layout_pass(measured, &source, &mut frames)
         };
-        if let Some(resources) = resources {
+        if services.has_stylesheet_web_fonts() {
+            let resources = runtime
+                .stylesheet_resource_snapshot_for_document(document)
+                .ok_or_else(|| {
+                    moli_layout::LayoutError::source_contract(
+                        "layout fonts",
+                        "missing current stylesheet resource manifest",
+                    )
+                })?;
             services.with_stylesheet_font_declarations(
                 resources.web_fonts().iter().filter_map(|resource| {
                     let font = resource.web_font()?;

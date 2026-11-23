@@ -269,6 +269,58 @@ where
     form_control_elapsed: Duration,
 }
 
+/// Pass-local numeric layout, before embedded frames and paint are projected.
+pub struct MeasuredLayoutPass<N>
+where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
+    prepared: PreparedLayoutPass<N>,
+    inline_preparation_elapsed: Duration,
+    numeric_layout_elapsed: Duration,
+    numeric_metrics: NumericLayoutMetrics,
+}
+
+impl<N> MeasuredLayoutPass<N>
+where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
+    /// Untransformed content-box dimensions on the queryable physical axes.
+    pub fn query_container_sizes(&self) -> impl Iterator<Item = (N, [Option<f32>; 2])> + '_ {
+        use style::values::specified::box_::ContainerType;
+
+        let world = &self.prepared.world;
+        world
+            .boxes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, layout_box)| {
+                let source = layout_box.source()?;
+                let computed = layout_box.style.stylo_computed_values()?;
+                let container_type = computed.clone_container_type();
+                if !container_type.is_size_container_type()
+                    || layout_box.inline_flattened
+                    || layout_box.style.display().is_table()
+                {
+                    return None;
+                }
+                let geometry = crate::overflow::project_box(
+                    world,
+                    self.prepared.request.viewport,
+                    crate::LayoutBoxId::from_index(index),
+                );
+                let both_axes = container_type.contains(ContainerType::SIZE);
+                let horizontal = computed.writing_mode.is_horizontal();
+                Some((
+                    source,
+                    [
+                        (both_axes || horizontal).then_some(geometry.content_box.width),
+                        (both_axes || !horizontal).then_some(geometry.content_box.height),
+                    ],
+                ))
+            })
+    }
+}
+
 pub fn prepare_layout_pass<S, R>(
     source: &S,
     styles: &mut R,
@@ -316,21 +368,27 @@ where
     S: LayoutSource,
     F: EmbeddedFrameRenderer<S::NodeId>,
 {
-    let PreparedLayoutPass {
-        mut world,
-        request,
-        started,
-        box_tree_elapsed,
-        list_marker_elapsed,
-        form_control_elapsed,
-    } = prepared;
+    finish_measured_layout_pass(
+        measure_prepared_layout_pass(prepared, services)?,
+        source,
+        frames,
+    )
+}
+
+pub fn measure_prepared_layout_pass<N>(
+    mut prepared: PreparedLayoutPass<N>,
+    services: &mut DocumentLayoutServices,
+) -> Result<MeasuredLayoutPass<N>, LayoutError>
+where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
+    let world = &mut prepared.world;
     let phase_started = Instant::now();
-    prepare_inline_contexts(&mut world, services);
+    prepare_inline_contexts(world, services);
     let inline_preparation_elapsed = phase_started.elapsed();
     world.validate_invariants()?;
     let phase_started = Instant::now();
-    let numeric_metrics = compute_world_layout_with_scrollbars(&mut world, request.viewport);
-    let object_geometry = prepare_svg_content(&mut world, source);
+    let numeric_metrics = compute_world_layout_with_scrollbars(world, prepared.request.viewport);
     let numeric_layout_elapsed = phase_started.elapsed();
     if moli_trace::cpu_profile_enabled() {
         tracing::info!(
@@ -347,6 +405,40 @@ where
                 * std::mem::size_of::<taffy::Cache>(),
         );
     }
+    Ok(MeasuredLayoutPass {
+        prepared,
+        inline_preparation_elapsed,
+        numeric_layout_elapsed,
+        numeric_metrics,
+    })
+}
+
+pub fn finish_measured_layout_pass<S, F>(
+    measured: MeasuredLayoutPass<S::NodeId>,
+    source: &S,
+    frames: &mut F,
+) -> Result<LayoutPassResult<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    F: EmbeddedFrameRenderer<S::NodeId>,
+{
+    let MeasuredLayoutPass {
+        prepared:
+            PreparedLayoutPass {
+                mut world,
+                request,
+                started,
+                box_tree_elapsed,
+                list_marker_elapsed,
+                form_control_elapsed,
+            },
+        inline_preparation_elapsed,
+        numeric_layout_elapsed,
+        numeric_metrics,
+    } = measured;
+    let phase_started = Instant::now();
+    let object_geometry = prepare_svg_content(&mut world, source);
+    let numeric_layout_elapsed = numeric_layout_elapsed + phase_started.elapsed();
     let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();
     for (index, layout_box) in world.boxes.iter().enumerate() {

@@ -717,6 +717,8 @@ impl MoliStyleEngine {
         self.clear_owner_document_indexes_for_document(document);
         self.dom_adapter.clear_element_data_for_document(document);
         self.dom_adapter
+            .update_query_container_sizes(document, HashMap::new());
+        self.dom_adapter
             .clear_inline_style_attributes_for_document(document);
         self.dom_adapter
             .clear_shadow_cascade_data_for_document(document);
@@ -732,10 +734,41 @@ impl MoliStyleEngine {
         self.clear_owner_document_indexes_for_document(document);
         self.dom_adapter.clear_element_data_for_document(document);
         self.dom_adapter
+            .update_query_container_sizes(document, HashMap::new());
+        self.dom_adapter
             .clear_inline_style_attributes_for_document(document);
         self.dom_adapter
             .clear_shadow_cascade_data_for_document(document);
         self.document_worlds.retire_document(document)
+    }
+
+    pub(crate) fn update_layout_container_sizes(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+        sizes: impl Iterator<Item = (DomHandle, [Option<f32>; 2])>,
+    ) -> bool {
+        let sizes = sizes
+            .map(|(handle, [width, height])| {
+                (
+                    handle,
+                    euclid::default::Size2D::new(
+                        width.map(app_units::Au::from_f32_px),
+                        height.map(app_units::Au::from_f32_px),
+                    ),
+                )
+            })
+            .collect();
+        let changed = self
+            .dom_adapter
+            .update_query_container_sizes(document, sizes);
+        if changed.is_empty() {
+            return false;
+        }
+        let world = self.world_for_document(document);
+        self.invalidation_cleanup_for_world(&world)
+            .invalidate_subtrees(host, changed);
+        true
     }
 
     #[cfg(test)]
