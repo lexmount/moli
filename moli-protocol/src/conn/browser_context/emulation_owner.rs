@@ -5,7 +5,7 @@ use super::*;
 use crate::conn::{
     DevToolsEmulationSessionState, EffectiveTargetEmulationState,
     EffectiveTargetEmulationStateDelta, EmulatedDeviceMetrics, EmulatedGeolocationOverrideState,
-    EmulatedMediaOverrides, EmulatedNetworkConditions,
+    EmulatedMediaOverrides, EmulatedNetworkConditions, PageTargetHost,
 };
 
 pub(crate) struct TargetEmulationStateUpdate<'a> {
@@ -39,7 +39,6 @@ impl TargetEmulationStateUpdate<'_> {
         &mut self,
         mut emulated_media: EmulatedMediaOverrides,
     ) -> EmulatedMediaOverrides {
-        emulated_media.vision_deficiency = self.raw.emulated_media.vision_deficiency;
         self.raw.emulated_media = emulated_media.clone();
         emulated_media.vision_deficiency = self.effective.emulated_media.vision_deficiency;
         self.effective.emulated_media = emulated_media.clone();
@@ -50,7 +49,7 @@ impl TargetEmulationStateUpdate<'_> {
         &mut self,
         vision_deficiency: moli_page_types::VisionDeficiency,
     ) -> EmulatedMediaOverrides {
-        self.raw.emulated_media.vision_deficiency = vision_deficiency;
+        self.raw.vision_deficiency = Some(vision_deficiency);
         self.effective.emulated_media.vision_deficiency = vision_deficiency;
         self.effective.emulated_media.clone()
     }
@@ -95,6 +94,22 @@ impl TargetEmulationStateUpdate<'_> {
     }
 }
 
+impl PageTargetHost {
+    pub(crate) fn emulation_state_update(
+        &mut self,
+        session_key: &moli_page_types::DevToolsSessionKey,
+    ) -> TargetEmulationStateUpdate<'_> {
+        let raw = &mut self
+            .devtools_sessions
+            .ensure_session(session_key)
+            .emulation_session_state;
+        TargetEmulationStateUpdate {
+            raw,
+            effective: &mut self.effective_emulation_state,
+        }
+    }
+}
+
 impl TargetSessionOwnerMut<'_> {
     fn update_emulation_state(
         self,
@@ -104,12 +119,7 @@ impl TargetSessionOwnerMut<'_> {
             f(None);
             return false;
         };
-        let raw = &mut state
-            .devtools_sessions
-            .ensure_session(&self.session_key)
-            .emulation_session_state;
-        let effective = &mut state.effective_emulation_state;
-        f(Some(TargetEmulationStateUpdate { raw, effective }));
+        f(Some(state.emulation_state_update(&self.session_key)));
         true
     }
 

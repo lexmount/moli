@@ -778,6 +778,7 @@ pub(crate) struct DevToolsEmulationSessionState {
     pub(crate) network_conditions: Option<super::EmulatedNetworkConditions>,
     pub(crate) geolocation_override: Option<super::EmulatedGeolocationOverrideState>,
     pub(crate) emulated_media: super::EmulatedMediaOverrides,
+    pub(crate) vision_deficiency: Option<moli_page_types::VisionDeficiency>,
     pub(crate) emulated_device_metrics: Option<super::EmulatedDeviceMetrics>,
     pub(crate) max_touch_points: u32,
     pub(crate) emit_touch_events_for_mouse: bool,

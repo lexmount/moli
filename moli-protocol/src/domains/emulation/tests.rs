@@ -3100,6 +3100,20 @@ async fn locale_and_timezone_overrides_apply_to_locale_date_formatting() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn context_emulated_media_applies_to_loaded_background_page_without_activation() {
+    async fn background_screenshot(ctx: &mut TestContext) -> String {
+        ctx.process_and_wait_for_response_async(json!({
+            "id": 191,
+            "method": "Page.captureScreenshot",
+            "sessionId": "SID-background"
+        }))
+        .await;
+        let response = ctx.take_response_by_id(191);
+        response["result"]["data"]
+            .as_str()
+            .unwrap_or_else(|| panic!("background screenshot failed: {response}"))
+            .to_owned()
+    }
+
     let mut ctx = TestContext::new();
     let background = PageTargetHost::new(
         "TID-background".to_owned(),
@@ -3114,11 +3128,22 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_activa
     bc.insert_page_target_host(background);
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(
-        "data:text/html,<body>background</body>",
+        "data:text/html,<style>html{background:red}</style><body>background</body>",
         Some("SID-background"),
     )
     .await;
     ctx.sent.clear();
+    let original = background_screenshot(&mut ctx).await;
+    expect_session_command_result(
+        &mut ctx,
+        187,
+        "SID-background",
+        "Emulation.setEmulatedVisionDeficiency",
+        json!({"type": "protanopia"}),
+    )
+    .await;
+    let simulated = background_screenshot(&mut ctx).await;
+    assert_ne!(simulated, original);
 
     ctx.process_async(json!({
         "id": 188,
@@ -3164,7 +3189,22 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_activa
         serde_json::from_str(payload).expect("runtime evaluate payload should be json");
     assert_eq!(payload["dark"], json!(true));
     assert_eq!(payload["light"], json!(false));
+    assert_eq!(background_screenshot(&mut ctx).await, simulated);
     ctx.with_fixture(|conn| {
+        let background = conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .page_target("TID-background")
+            .unwrap();
+        assert_eq!(
+            background
+                .effective_emulation_state
+                .emulated_media
+                .color_scheme
+                .as_deref(),
+            Some("dark"),
+        );
         assert_eq!(
             conn.browser_context
                 .as_ref()
