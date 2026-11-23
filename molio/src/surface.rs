@@ -9,13 +9,14 @@ use gpui::{
 };
 use moli_core::{
     RendererDocumentLifecycleIdentity, RendererViewportCursorKind, RendererViewportEditAction,
-    RendererViewportEditor, RendererViewportWheelInput, RendererViewportWheelPhase,
+    RendererViewportEditor, RendererViewportPointerInput, RendererViewportWheelInput,
+    RendererViewportWheelPhase,
     page::{ViewportFrameRef, ViewportOutput},
     protocol_types::{DocumentActivity, ViewportSurface},
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::host::{KeyInput, PointerInput, TabCommand};
+use crate::host::{KeyInput, TabCommand};
 use crate::text_input::MoliTextInputBridge;
 
 pub struct MoliSurface {
@@ -86,7 +87,6 @@ impl MoliSurface {
         self.activity = None;
         self.viewport = None;
         self.document = document;
-        self.buttons = 0;
         self.zoom = zoom;
         self.clear_frame(window, cx);
         self.sync_activity(window);
@@ -100,6 +100,7 @@ impl MoliSurface {
 
     pub fn clear_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.presented = None;
+        self.buttons = 0;
         self.drop_image(window);
         cx.notify();
     }
@@ -157,6 +158,7 @@ impl MoliSurface {
         let Some(pixels) = frame.pixels else {
             self.drop_image(window);
             self.presented = Some((frame.document, frame.sequence));
+            self.buttons = 0;
             return Ok(false);
         };
         let image = BgraImage::new(size(frame.layout.width.into(), frame.layout.height.into()))?;
@@ -283,9 +285,23 @@ impl MoliSurface {
         }
     }
 
+    fn viewport_input_position(
+        &self,
+        point: Point<Pixels>,
+    ) -> Option<(RendererDocumentLifecycleIdentity, (f64, f64))> {
+        let (document, _) = self.presented?;
+        if self.document != Some(document) || self.image.is_none() {
+            return None;
+        }
+        Some((document, self.css_point(point)?))
+    }
+
     fn css_point(&self, point: Point<Pixels>) -> Option<(f64, f64)> {
         let bounds = self.bounds?;
         let surface = self.viewport?;
+        if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
+            return None;
+        }
         Some((
             f64::from((point.x - bounds.origin.x) / bounds.size.width)
                 * f64::from(surface.inner_width),
@@ -319,16 +335,17 @@ impl MoliSurface {
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_page(window, cx);
         self.sync_activity(window);
-        let (button, mask) = mouse_button(event.button);
-        self.buttons |= mask;
-        if let Some(position) = self.css_point(event.position) {
-            self.send(TabCommand::Pointer(PointerInput {
+        if let Some((document, position)) = self.viewport_input_position(event.position) {
+            let (button, mask) = mouse_button(event.button);
+            self.buttons |= mask;
+            self.send(TabCommand::Pointer(RendererViewportPointerInput {
+                document,
+                viewport_revision: self.revision,
                 event: "mousedown",
                 position,
                 button,
                 buttons: self.buttons,
                 click_count: event.click_count as i32,
-                delta: (0., 0.),
                 modifiers: modifiers(event.modifiers),
             }));
         }
@@ -340,14 +357,15 @@ impl MoliSurface {
             return;
         }
         self.buttons &= !mask;
-        if let Some(position) = self.css_point(event.position) {
-            self.send(TabCommand::Pointer(PointerInput {
+        if let Some((document, position)) = self.viewport_input_position(event.position) {
+            self.send(TabCommand::Pointer(RendererViewportPointerInput {
+                document,
+                viewport_revision: self.revision,
                 event: "mouseup",
                 position,
                 button,
                 buttons: self.buttons,
                 click_count: event.click_count as i32,
-                delta: (0., 0.),
                 modifiers: modifiers(event.modifiers),
             }));
         }
@@ -355,21 +373,22 @@ impl MoliSurface {
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, _: &mut Context<Self>) {
         self.pointer_over = true;
-        if let Some(position) = self.css_point(event.position) {
-            self.send(TabCommand::Pointer(PointerInput {
+        if let Some((document, position)) = self.viewport_input_position(event.position) {
+            self.send(TabCommand::Pointer(RendererViewportPointerInput {
+                document,
+                viewport_revision: self.revision,
                 event: "mousemove",
                 position,
                 button: -1,
                 buttons: self.buttons,
                 click_count: 0,
-                delta: (0., 0.),
                 modifiers: modifiers(event.modifiers),
             }));
         }
     }
 
     fn wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if let (Some(position), Some(document)) = (self.css_point(event.position), self.document) {
+        if let Some((document, position)) = self.viewport_input_position(event.position) {
             let delta = event.delta.pixel_delta(px(40.));
             self.send(TabCommand::Wheel(RendererViewportWheelInput {
                 document,
@@ -450,9 +469,7 @@ impl MoliSurface {
     }
 
     fn drop_files(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(document) = self.document
-            && let Some(position) = self.css_point(window.mouse_position())
-        {
+        if let Some((document, position)) = self.viewport_input_position(window.mouse_position()) {
             self.send(TabCommand::DropFiles {
                 document,
                 position,

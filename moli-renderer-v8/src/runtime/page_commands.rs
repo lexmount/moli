@@ -355,6 +355,12 @@ impl PageVm {
                 Ok(RendererPageReply::Unit)
             }
             #[cfg(feature = "molio")]
+            RendererPageCommand::DispatchViewportPointer(input) => self
+                .dispatch_viewport_pointer(input)
+                .map(|outcome| outcome.map_or(RendererPageReply::Unit, |outcome| {
+                    RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(outcome))
+                })),
+            #[cfg(feature = "molio")]
             RendererPageCommand::DispatchViewportWheel(input) => self
                 .dispatch_viewport_wheel(input)
                 .map(|()| RendererPageReply::Unit),

@@ -1,8 +1,9 @@
 use anyhow::Result;
 use moli_page_types::ViewportSurface;
 use moli_renderer_v8::{
-    RendererPageNavigationState, RendererViewportCursor, RendererViewportFrame,
-    RendererViewportSubscription, RendererViewportWheelInput,
+    RendererDevToolsPageReply, RendererPageNavigationState, RendererViewportCursor,
+    RendererViewportFrame, RendererViewportPointerInput, RendererViewportSubscription,
+    RendererViewportWheelInput,
 };
 use std::sync::Arc;
 use tokio::sync::{Notify, watch};
@@ -19,6 +20,27 @@ pub struct ViewportFrames {
 }
 
 impl Page {
+    /// Dispatches pointer input for the displayed viewport when its geometry is available.
+    pub async fn dispatch_viewport_pointer(
+        &mut self,
+        input: RendererViewportPointerInput,
+    ) -> Result<Option<super::RendererInputDispatchOutcome>> {
+        match self
+            .dispatch_page_command_async(RendererPageCommand::DispatchViewportPointer(input))
+            .await?
+        {
+            RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(
+                outcome,
+            )) => Ok(Some(outcome)),
+            RendererPageReply::Unit => Ok(None),
+            reply => Self::unexpected_page_reply(
+                "dispatch viewport pointer",
+                "an input outcome or unit",
+                reply,
+            ),
+        }
+    }
+
     /// Queues desktop wheel input on the renderer owner without waiting for DOM dispatch.
     pub fn enqueue_viewport_wheel(&self, input: RendererViewportWheelInput) -> Result<()> {
         self.handle.enqueue_viewport_wheel(input)

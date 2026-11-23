@@ -6,12 +6,12 @@ use anyhow::{Context as _, Result};
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererDocumentLifecycleIdentity, RendererOutputItem,
     RendererOutputTransportMessage, RendererOwnerAction, RendererViewportEdit,
-    RendererViewportEditor, RendererViewportNavigation, RendererViewportWheelInput,
+    RendererViewportEditor, RendererViewportNavigation, RendererViewportPointerInput,
+    RendererViewportWheelInput,
     page::{
         BufferedViewportFrames, CompletedPageCommand, Page, PageInputExt, RendererAuxiliaryWindow,
-        RendererDraggedFile, RendererInputDispatchOutcome, RendererPageWindowIdentity,
-        RendererPointerEventProperties, RendererPopupActivationParts, ViewportBuffers,
-        ViewportOutput, ViewportUpdate,
+        RendererDraggedFile, RendererPageWindowIdentity, RendererPopupActivationParts,
+        ViewportBuffers, ViewportOutput, ViewportUpdate,
     },
     protocol_types::{DocumentActivity, ViewportSurface},
     runtime::{Browser, BrowserConfig},
@@ -63,7 +63,7 @@ pub enum TabCommand {
         pointer_position: Option<(f64, f64)>,
     },
     Activity(DocumentActivity),
-    Pointer(PointerInput),
+    Pointer(RendererViewportPointerInput),
     PointerPosition {
         viewport_revision: u64,
         position: Option<(f64, f64)>,
@@ -91,6 +91,8 @@ impl TabCommand {
             (Self::Pointer(previous), Self::Pointer(next)) => {
                 previous.event == "mousemove"
                     && next.event == "mousemove"
+                    && previous.document == next.document
+                    && previous.viewport_revision == next.viewport_revision
                     && previous.buttons == 0
                     && next.buttons == 0
                     && previous.modifiers == next.modifiers
@@ -98,16 +100,6 @@ impl TabCommand {
             _ => false,
         }
     }
-}
-
-pub struct PointerInput {
-    pub event: &'static str,
-    pub position: (f64, f64),
-    pub button: i32,
-    pub buttons: i32,
-    pub click_count: i32,
-    pub delta: (f64, f64),
-    pub modifiers: u8,
 }
 
 pub struct KeyInput {
@@ -497,12 +489,16 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                     }
                     TabCommand::Pointer(input) if activity.visible => {
                         let refresh = activity.focused && input.event != "mousemove";
-                        let result = dispatch_pointer(&mut page, input).await.map(|outcome| {
-                            if let Some(activation) = outcome.pending_download {
-                                downloads.start(activation);
+                        match page.dispatch_viewport_pointer(input).await {
+                            Ok(Some(outcome)) => {
+                                if let Some(activation) = outcome.pending_download {
+                                    downloads.start(activation);
+                                }
+                                if refresh { refresh_editor(&mut page, &tab.state).await } else { Ok(()) }
                             }
-                        });
-                        if refresh && result.is_ok() { refresh_editor(&mut page, &tab.state).await } else { result }
+                            Ok(None) => Ok(()),
+                            Err(error) => Err(error),
+                        }
                     }
                     TabCommand::PointerPosition { viewport_revision, position } if activity.visible => {
                         page.set_viewport_pointer_position(viewport_revision, position).await
@@ -664,26 +660,6 @@ async fn refresh_capture(
         );
     }
     Ok(())
-}
-
-async fn dispatch_pointer(
-    page: &mut Page,
-    input: PointerInput,
-) -> Result<RendererInputDispatchOutcome> {
-    let pending = page.start_dispatch_mouse_event_at_point_with_pointer_outcome(
-        input.position.0,
-        input.position.1,
-        input.event,
-        input.button,
-        Some(input.buttons),
-        input.click_count,
-        input.delta.0,
-        input.delta.1,
-        RendererPointerEventProperties::default(),
-        input.modifiers,
-        false,
-    )?;
-    page.finish_dispatch_mouse_event_at_point_with_outcome(pending.wait().await?)
 }
 
 #[cfg(test)]
@@ -1038,15 +1014,25 @@ mod tests {
     }
 
     fn click(tab: &TabConnection, modifiers: u8) -> Result<()> {
+        let (document, viewport_revision) = tab
+            .viewport
+            .read(|frame| {
+                frame
+                    .pixels
+                    .map(|_| (frame.document, frame.viewport_revision))
+            })
+            .flatten()
+            .context("no displayed viewport for the popup link")?;
         for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
             tab.commands
-                .send(TabCommand::Pointer(PointerInput {
+                .send(TabCommand::Pointer(RendererViewportPointerInput {
+                    document,
+                    viewport_revision,
                     event,
                     position: (12., 10.),
                     button: 0,
                     buttons,
                     click_count: 1,
-                    delta: (0., 0.),
                     modifiers,
                 }))
                 .map_err(|_| anyhow::anyhow!("click popup link"))?;

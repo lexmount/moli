@@ -54,7 +54,7 @@ pub use moli_renderer_v8::{
     RendererPageNavigationState, RendererViewportCursor, RendererViewportCursorKind,
     RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
     RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
-    RendererViewportWheelInput, RendererViewportWheelPhase,
+    RendererViewportPointerInput, RendererViewportWheelInput, RendererViewportWheelPhase,
 };
 
 /// ACE page tasks executed on the renderer owner thread.
