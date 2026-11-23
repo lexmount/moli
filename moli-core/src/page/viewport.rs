@@ -1,7 +1,8 @@
 use anyhow::Result;
 use moli_page_types::ViewportSurface;
 use moli_renderer_v8::{
-    RendererViewportFrame, RendererViewportSubscription, RendererViewportWheelInput,
+    RendererPageNavigationState, RendererViewportFrame, RendererViewportSubscription,
+    RendererViewportWheelInput,
 };
 use std::sync::Arc;
 use tokio::sync::{Notify, watch};
@@ -96,8 +97,16 @@ impl Page {
         let RendererPageReply::ViewportNavigation(traversed) = reply else {
             anyhow::bail!("unexpected viewport history traversal reply");
         };
-        self.wake_viewport_frames().await?;
         Ok(traversed)
+    }
+
+    /// Watch committed navigation state across Document replacements and visibility changes.
+    ///
+    /// The subscription closes with the Page and does not require a paint surface.
+    pub async fn subscribe_navigation_state(
+        &self,
+    ) -> Result<watch::Receiver<Option<RendererPageNavigationState>>> {
+        self.handle.subscribe_navigation_state().await
     }
 
     pub async fn subscribe_viewport_frames(

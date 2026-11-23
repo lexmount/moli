@@ -359,11 +359,10 @@ impl PageVm {
                 .dispatch_viewport_wheel(input)
                 .map(|()| RendererPageReply::Unit),
             #[cfg(feature = "molio")]
-            RendererPageCommand::NavigateViewport(target) => {
-                let navigated = self.vm_mut().navigate_top_level_from_browser(target)?;
-                self.wake_viewport_frames();
-                Ok(RendererPageReply::ViewportNavigation(navigated))
-            }
+            RendererPageCommand::NavigateViewport(target) => self
+                .vm_mut()
+                .navigate_top_level_from_browser(target)
+                .map(RendererPageReply::ViewportNavigation),
             #[cfg(feature = "molio")]
             RendererPageCommand::ReadViewportEditor => Ok(RendererPageReply::ViewportEditor(self.read_viewport_editor())),
             #[cfg(feature = "molio")]

@@ -45,6 +45,8 @@ use crate::script_vm::{
 };
 use crate::{RendererNavigationReplyPolicy, RendererTopLevelNavigationDispatch};
 use tokio::sync::oneshot;
+#[cfg(feature = "molio")]
+use tokio::sync::watch;
 
 mod auxiliary_pages;
 mod bound;
@@ -560,6 +562,8 @@ impl RendererPageScriptEnvironmentPin {
 struct RendererOwnerLocalPageSlot {
     owner_slot: RendererPageSlotHandle,
     turn_scheduler: PageTurnScheduler<LivePageEntry>,
+    #[cfg(feature = "molio")]
+    navigation_updates: Option<watch::Sender<Option<RendererPageNavigationState>>>,
     owner_maintenance: RendererPageOwnerMaintenanceResidence,
     task_sources: RendererPageOwnedTaskSources,
     lifecycle_gate: Option<LifecycleGate>,
@@ -579,6 +583,8 @@ impl RendererOwnerLocalPageSlot {
         Self {
             owner_slot,
             turn_scheduler: PageTurnScheduler::new(entry),
+            #[cfg(feature = "molio")]
+            navigation_updates: None,
             owner_maintenance: RendererPageOwnerMaintenanceResidence::new(std::time::Instant::now()),
             task_sources,
             lifecycle_gate: lifecycle_gate.map(LifecycleGate::new),
@@ -593,6 +599,35 @@ impl RendererOwnerLocalPageSlot {
 
     fn resident_entry_mut(&mut self) -> Option<&mut LivePageEntry> {
         self.turn_scheduler.resident_mut()
+    }
+
+    #[cfg(feature = "molio")]
+    fn publish_navigation_state(&self) {
+        let Some(updates) = self
+            .navigation_updates
+            .as_ref()
+            .filter(|updates| !updates.is_closed())
+        else {
+            return;
+        };
+        let Some(entry) = self
+            .resident_entry()
+            .filter(|entry| !entry.has_uncommitted_page_vm())
+        else {
+            return;
+        };
+        let page_vm = entry.page_vm();
+        let next = RendererPageNavigationState {
+            document: page_vm.document_lifecycle.identity(),
+            navigation: page_vm.vm().viewport_navigation(),
+        };
+        updates.send_if_modified(|state| {
+            if state.as_ref() == Some(&next) {
+                return false;
+            }
+            *state = Some(next);
+            true
+        });
     }
 
     fn indexed_owner_maintenance_deadline(&self) -> Option<std::time::Instant> {
@@ -2965,6 +3000,30 @@ impl RendererOwnerLocalStore {
 }
 
 impl RendererOwnerLocalStore {
+    #[cfg(feature = "molio")]
+    pub(super) fn subscribe_page_navigation(
+        &mut self,
+        token: RendererPageToken,
+    ) -> Result<watch::Receiver<Option<RendererPageNavigationState>>> {
+        let page_slot = self
+            .page_hosts
+            .get_mut(&token.local_host_id)
+            .and_then(|host| host.pages.get_mut(&token.page_id))
+            .filter(|slot| !slot.turn_scheduler.is_retiring())
+            .ok_or_else(|| {
+                anyhow!(
+                    "renderer owner no longer tracks active page {}",
+                    token.page_id.as_u64()
+                )
+            })?;
+        let updates = page_slot
+            .navigation_updates
+            .get_or_insert_with(|| watch::Sender::new(None))
+            .subscribe();
+        page_slot.publish_navigation_state();
+        Ok(updates)
+    }
+
     pub(super) fn restore_entry_after_command(
         &mut self,
         token: RendererPageToken,
@@ -3048,7 +3107,14 @@ impl RendererOwnerLocalStore {
                     "restored PageVm must retain the stable Page producer routes"
                 );
                 match page_slot.turn_scheduler.restore(entry) {
-                    RendererPageEntryRestore::Restored => restored = true,
+                    RendererPageEntryRestore::Restored => {
+                        restored = true;
+                        // The owner turn has finished updating the Document and
+                        // history. Publish their combined view even when there
+                        // is no active paint subscription.
+                        #[cfg(feature = "molio")]
+                        page_slot.publish_navigation_state();
+                    }
                     RendererPageEntryRestore::Retire(mut entry) => {
                         entry.close_for_context_teardown();
                         entry.slot.remove_from_owner();

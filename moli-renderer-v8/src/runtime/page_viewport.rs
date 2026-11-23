@@ -73,6 +73,13 @@ pub struct RendererViewportNavigation {
     pub can_go_forward: bool,
 }
 
+/// Latest navigation metadata for the Page's committed Document.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RendererPageNavigationState {
+    pub document: RendererDocumentLifecycleIdentity,
+    pub navigation: RendererViewportNavigation,
+}
+
 pub struct RendererViewportSubscription {
     pub surface: ViewportSurface,
     pub viewport_revision: u64,
@@ -136,7 +143,6 @@ impl RendererViewportWheelInput {
 pub(super) struct ViewportFrameState {
     subscription: RendererViewportSubscription,
     painted: Option<RendererVisualStateToken>,
-    navigation: Option<RendererViewportNavigation>,
     sequence: u64,
     editing: crate::context_bootstrap::viewport_edit::ViewportEditing,
 }
@@ -144,7 +150,6 @@ pub(super) struct ViewportFrameState {
 impl ViewportFrameState {
     pub(super) fn discard_document(&mut self) {
         self.painted = None;
-        self.navigation = None;
         self.editing = Default::default();
         self.subscription.updates.send_replace(None);
     }
@@ -282,7 +287,6 @@ impl PageVm {
         self.restore_viewport_frames(Box::new(ViewportFrameState {
             subscription,
             painted: None,
-            navigation: None,
             sequence: 0,
             editing,
         }));
@@ -325,9 +329,7 @@ impl PageVm {
         );
         let document = self.document_lifecycle.identity();
         let before = self.vm().visual_state_token(document, viewport, [255; 4]);
-        let navigation = self.vm().viewport_navigation();
-        if state.painted.as_ref() == Some(&before) && state.navigation.as_ref() == Some(&navigation)
-        {
+        if state.painted.as_ref() == Some(&before) {
             return;
         }
 
@@ -349,12 +351,12 @@ impl PageVm {
             return;
         }
         let after = self.vm().visual_state_token(document, viewport, [255; 4]);
+        let navigation = self.vm().viewport_navigation();
         let editor = self.read_viewport_editor();
         let state = self
             .viewport_frames
             .as_mut()
             .expect("viewport subscription");
-        state.navigation = Some(navigation.clone());
         state.painted = Some(super::page_screenshot::visual_state_for_rendered_frame(
             before, after,
         ));

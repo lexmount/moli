@@ -21,6 +21,35 @@ pub(super) async fn run_opportunity(
     Ok(())
 }
 
+#[cfg(feature = "molio")]
+#[test]
+fn realtime_history_push_state_leaves_frame_scheduler_idle() {
+    run_page_vm_large_stack_async_test("realtime-history-state", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/static").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+
+        page.vm_mut()
+            .eval("history.pushState(null, '', '/pushed')")
+            .unwrap();
+        let navigation = page.vm().viewport_navigation();
+        assert_eq!(navigation.url.path(), "/pushed");
+        assert!(navigation.can_go_back);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
 #[test]
 fn realtime_lazy_image_csp_timeout_settles_frame_and_recovers() {
     run_page_vm_large_stack_async_test("realtime-lazy-image-csp-budget", || async move {

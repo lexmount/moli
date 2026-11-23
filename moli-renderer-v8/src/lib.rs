@@ -354,13 +354,14 @@ pub use runtime::{
 pub use runtime::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
 };
-pub use runtime::{RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder};
 #[cfg(feature = "molio")]
 pub use runtime::{
-    RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
-    RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
-    RendererViewportSubscription, RendererViewportWheelInput, RendererViewportWheelPhase,
+    RendererPageNavigationState, RendererViewportEdit, RendererViewportEditAction,
+    RendererViewportEditReply, RendererViewportEditor, RendererViewportFrame,
+    RendererViewportNavigation, RendererViewportSubscription, RendererViewportWheelInput,
+    RendererViewportWheelPhase,
 };
+pub use runtime::{RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder};
 pub use service_worker_runtime::{
     SharedServiceWorkerResourceStore, new_shared_json_service_worker_resource_store,
     new_shared_service_worker_resource_store,

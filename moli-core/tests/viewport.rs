@@ -596,11 +596,12 @@ async fn viewport_navigation_activation_uses_the_final_redirect_origin() -> Resu
 }
 
 #[tokio::test]
-async fn viewport_reports_history_updates_on_a_static_document() -> Result<()> {
+async fn navigation_state_updates_without_painting_a_static_document() -> Result<()> {
     let server = moli_test_support::FixtureServer::spawn().await?;
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
     let mut page = browser.fetch(&server.url("/static")).await?;
+    let mut navigation = page.subscribe_navigation_state().await?;
     let mut frames = page
         .subscribe_viewport_frames(ViewportSurface::default(), 1)
         .await?;
@@ -609,21 +610,44 @@ async fn viewport_reports_history_updates_on_a_static_document() -> Result<()> {
 
     page.evaluate_runtime_expression_async("history.pushState(null, '', '/pushed')")
         .await?;
-    let pushed = frame(&mut frames, |frame| {
-        frame.navigation.url.path() == "/pushed"
-    })
-    .await?;
+    let pushed = tokio::time::timeout(
+        Duration::from_secs(5),
+        navigation.wait_for(|state| {
+            state
+                .as_ref()
+                .is_some_and(|state| state.navigation.url.path() == "/pushed")
+        }),
+    )
+    .await??
+    .clone()
+    .context("pushed navigation state")?;
     assert_eq!(pushed.document, first.document);
     assert!(pushed.navigation.can_go_back);
     assert!(!pushed.navigation.can_go_forward);
+    assert!(!frames.updates.has_changed()?);
 
     assert!(page.traverse_viewport_history(-1).await?);
-    let back = frame(&mut frames, |frame| {
-        frame.navigation.url == first.navigation.url
-    })
-    .await?;
+    let back = tokio::time::timeout(
+        Duration::from_secs(5),
+        navigation.wait_for(|state| {
+            state
+                .as_ref()
+                .is_some_and(|state| state.navigation.can_go_forward)
+        }),
+    )
+    .await??
+    .clone()
+    .context("traversed navigation state")?;
     assert_eq!(back.document, first.document);
-    assert!(back.navigation.can_go_forward);
+    assert_eq!(back.navigation.url, first.navigation.url);
+    assert!(!back.navigation.can_go_back);
+    assert!(!frames.updates.has_changed()?);
+
+    page.evaluate_runtime_expression_async("document.body.style.backgroundColor = 'red'")
+        .await?;
+    let repainted = frame(&mut frames, |frame| frame.sequence > first.sequence).await?;
+    assert_eq!(repainted.document, first.document);
+    assert_ne!(repainted.snapshot, first.snapshot);
     Ok(())
 }
 

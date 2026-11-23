@@ -446,9 +446,10 @@ pub use self::page_surface::{
 };
 #[cfg(feature = "molio")]
 pub use self::page_viewport::{
-    RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
-    RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
-    RendererViewportSubscription, RendererViewportWheelInput, RendererViewportWheelPhase,
+    RendererPageNavigationState, RendererViewportEdit, RendererViewportEditAction,
+    RendererViewportEditReply, RendererViewportEditor, RendererViewportFrame,
+    RendererViewportNavigation, RendererViewportSubscription, RendererViewportWheelInput,
+    RendererViewportWheelPhase,
 };
 pub(crate) use self::page_vm::PageVm;
 use self::page_vm::PageVmDropTracker;
