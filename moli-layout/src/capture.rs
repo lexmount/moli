@@ -49,6 +49,8 @@ pub struct PaintCaptureRequest {
     /// browsing contexts use transparent black so their owner element remains
     /// visible unless the child document supplies its own canvas background.
     pub base_background_color: PaintColor,
+    /// Additional source neighborhood for post-processing a page clip, in CSS pixels.
+    pub clip_filter_outset: f32,
     /// Maximum encoded image width in device pixels.
     pub max_width: Option<u32>,
     /// Maximum encoded image height in device pixels.
@@ -63,6 +65,7 @@ impl PaintCaptureRequest {
             include_backgrounds: true,
             include_viewport_controls: true,
             base_background_color: PaintColor::WHITE,
+            clip_filter_outset: 0.0,
             max_width: None,
             max_height: None,
         }
@@ -75,6 +78,7 @@ impl PaintCaptureRequest {
             include_backgrounds: true,
             include_viewport_controls: true,
             base_background_color: PaintColor::WHITE,
+            clip_filter_outset: 0.0,
             max_width,
             max_height,
         }
@@ -87,6 +91,7 @@ impl PaintCaptureRequest {
             include_backgrounds: true,
             include_viewport_controls: false,
             base_background_color: PaintColor::WHITE,
+            clip_filter_outset: 0.0,
             max_width: None,
             max_height: None,
         }
@@ -107,6 +112,7 @@ impl PaintCaptureRequest {
             include_backgrounds: true,
             include_viewport_controls: false,
             base_background_color: PaintColor::WHITE,
+            clip_filter_outset: 0.0,
             max_width: None,
             max_height: None,
         }
@@ -141,6 +147,20 @@ impl PaintCaptureSurface {
             viewport.device_pixel_ratio,
         )
     }
+
+    /// Device-pixel scale of the capture's viewport-to-surface projection.
+    pub fn viewport_to_raster_scale(self, transform: LayoutTransform2D) -> f64 {
+        let [a, b, c, d, _, _] = transform.coefficients;
+        f64::from(self.device_scale) * a.hypot(b).max(c.hypot(d))
+    }
+}
+
+/// Original output within a padded raster surface, with an integer pixel origin.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaintCaptureCrop {
+    pub surface: PaintCaptureSurface,
+    pub x: u32,
+    pub y: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -150,6 +170,7 @@ pub(crate) struct ResolvedPaintCapture {
     /// Transform applied after local-to-viewport transforms.
     pub(crate) viewport_to_surface: LayoutTransform2D,
     pub(crate) surface: PaintCaptureSurface,
+    pub(crate) raster_crop: Option<PaintCaptureCrop>,
     /// Clip painted content to the transformed live viewport. The propagated
     /// canvas color still clears the whole surface, matching the compositor.
     pub(crate) clip_to_viewport: bool,
@@ -253,15 +274,81 @@ impl PaintCaptureRequest {
         }
 
         surface.device_scale = device_scale;
-        Ok(ResolvedPaintCapture {
+        let mut capture = ResolvedPaintCapture {
             viewport_rect,
             viewport_to_surface,
             surface,
+            raster_crop: None,
             clip_to_viewport,
             include_backgrounds: self.include_backgrounds,
             paint_root_scrollbars: self.include_viewport_controls,
             base_background_color: self.base_background_color,
-        })
+        };
+        if self.clip_filter_outset > 0.0
+            && matches!(self.region, PaintCaptureRegion::PageClip { .. })
+        {
+            let source_bounds = if self.include_viewport_controls {
+                viewport_bounds
+            } else {
+                LayoutRect::new(
+                    -viewport_scroll.x,
+                    -viewport_scroll.y,
+                    content_size.width,
+                    content_size.height,
+                )
+            };
+            capture.outset_page_clip(source_bounds, self.clip_filter_outset)?;
+        }
+        Ok(capture)
+    }
+}
+
+impl ResolvedPaintCapture {
+    fn outset_page_clip(&mut self, bounds: LayoutRect, outset: f32) -> Result<(), LayoutError> {
+        let scale = f64::from(self.surface.device_scale);
+        let max_padding = (f64::from(outset) * scale).ceil();
+        if !max_padding.is_finite() || max_padding > f64::from(u32::MAX) {
+            return Err(invalid_capture("capture filter neighborhood is too large"));
+        }
+        let rect = self.viewport_rect;
+        let padding = |available: f32| {
+            (f64::from(available) * scale)
+                .floor()
+                .clamp(0.0, max_padding)
+        };
+        let left = padding(rect.x - bounds.x);
+        let top = padding(rect.y - bounds.y);
+        let right = padding(bounds.x + bounds.width - rect.x - rect.width);
+        let bottom = padding(bounds.y + bounds.height - rect.y - rect.height);
+        if left + top + right + bottom == 0.0 {
+            return Ok(());
+        }
+
+        self.raster_crop = Some(PaintCaptureCrop {
+            surface: self.surface,
+            x: left as u32,
+            y: top as u32,
+        });
+        // Offset by whole pixels so the padded raster samples the same subpixel
+        // positions as the original capture. Keep the output's original scale.
+        self.viewport_to_surface.coefficients[4] += left / scale;
+        self.viewport_to_surface.coefficients[5] += top / scale;
+        self.surface.css_width =
+            (((f64::from(rect.width) * scale).ceil() + left + right) / scale) as f32;
+        self.surface.css_height =
+            (((f64::from(rect.height) * scale).ceil() + top + bottom) / scale) as f32;
+        validate_extent(
+            "padded capture surface",
+            self.surface.css_width,
+            self.surface.css_height,
+        )?;
+        self.viewport_rect = LayoutRect::new(
+            rect.x - (left / scale) as f32,
+            rect.y - (top / scale) as f32,
+            self.surface.css_width,
+            self.surface.css_height,
+        );
+        Ok(())
     }
 }
 
@@ -393,6 +480,7 @@ mod tests {
             include_backgrounds: true,
             include_viewport_controls: false,
             base_background_color: PaintColor::WHITE,
+            clip_filter_outset: 0.0,
             max_width: Some(500),
             max_height: Some(200),
         }

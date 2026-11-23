@@ -178,6 +178,7 @@ where
     let mut snapshot = PaintSnapshot::new(projection.viewport, canvas_color);
     snapshot.retain_text_semantics = retain_text_semantics;
     snapshot.surface = capture.surface;
+    snapshot.raster_crop = capture.raster_crop;
     snapshot.viewport_to_surface = capture.viewport_to_surface;
     snapshot.content_size = projection.document_content_size();
     snapshot.diagnostics = projection.diagnostics.clone();

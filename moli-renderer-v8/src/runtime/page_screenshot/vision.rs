@@ -1,14 +1,18 @@
 use moli_image::RgbaImage;
 use moli_page_types::VisionDeficiency;
 
+pub(super) const BLURRED_VISION_SIGMA_CSS_PX: f32 = 2.0;
+
 pub(super) fn apply(
     raster: &mut RgbaImage,
     deficiency: VisionDeficiency,
-    device_scale: f32,
+    raster_scale: f32,
 ) -> Result<(), moli_image::RgbaImageError> {
     let (matrix, offset) = match deficiency {
         VisionDeficiency::None => return Ok(()),
-        VisionDeficiency::BlurredVision => return blur_linear_rgba(raster, 2.0 * device_scale),
+        VisionDeficiency::BlurredVision => {
+            return blur_linear_rgba(raster, BLURRED_VISION_SIGMA_CSS_PX * raster_scale);
+        }
         VisionDeficiency::ReducedContrast => {
             ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], 0.5)
         }

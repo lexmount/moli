@@ -955,6 +955,8 @@ pub struct PaintSnapshot {
     pub viewport: PaintViewport,
     /// Short-lived raster surface selected for this capture.
     pub surface: PaintCaptureSurface,
+    /// Requested output when this snapshot includes a filter neighborhood.
+    pub raster_crop: Option<crate::PaintCaptureCrop>,
     /// Maps projection viewport coordinates into capture-surface CSS pixels.
     pub viewport_to_surface: PaintTransform2D,
     /// Color composited over the whole output before any fragments.
@@ -985,6 +987,7 @@ impl PaintSnapshot {
             retain_text_semantics: false,
             viewport,
             surface: PaintCaptureSurface::for_viewport(viewport),
+            raster_crop: None,
             viewport_to_surface: PaintTransform2D::IDENTITY,
             canvas_color,
             content_size: PaintSize::new(viewport.css_width as f32, viewport.css_height as f32),

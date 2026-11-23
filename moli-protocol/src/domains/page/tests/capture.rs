@@ -1205,6 +1205,57 @@ async fn devtools_node_screenshot_chain_uses_real_box_and_layout_metrics() {
     assert_eq!(decode_png_pixel(&png, 6, 4), [0, 255, 0, 255]);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn blurred_vision_uses_the_full_raster_scale_and_clip_neighborhood() {
+    let mut ctx = TestContext::new();
+    let session = "SID-VISION-CLIP";
+    let fixture = screenshot_data_url(
+        r#"<!doctype html>
+        <style>
+          html, body { margin: 0; background: black; overflow: hidden }
+          div { position: absolute; width: 100px; height: 200px; background: white }
+        </style><div></div>"#,
+    );
+    install_active_screenshot_page(&mut ctx, "BID-VISION", "TID-VISION", session, &fixture).await;
+    set_screenshot_viewport(&mut ctx, session, 200, 200, 2.0, 150).await;
+    ctx.process_async(json!({
+        "id": 151, "sessionId": session,
+        "method": "Emulation.setEmulatedVisionDeficiency",
+        "params": {"type": "blurredVision"}
+    }))
+    .await;
+    ctx.expect_result(151, json!({}), Some(session));
+
+    let mut captures = Vec::new();
+    for (id, params) in [
+        (152, json!({})),
+        (
+            153,
+            json!({"clip": {"x": 0, "y": 0, "width": 200, "height": 200, "scale": 1}}),
+        ),
+        (
+            154,
+            json!({"clip": {"x": 100, "y": 0, "width": 100, "height": 200, "scale": 1}}),
+        ),
+    ] {
+        ctx.process_and_wait_for_response_async(json!({
+            "id": id, "sessionId": session, "method": "Page.captureScreenshot", "params": params
+        }))
+        .await;
+        captures.push(screenshot_png_bytes(&take_response_by_id(&mut ctx, id)));
+    }
+    let [viewport, equivalent_clip, half_clip] = captures.as_slice() else {
+        unreachable!();
+    };
+    assert_png_dimensions(viewport, 400, 400);
+    assert_png_dimensions(half_clip, 200, 400);
+    assert_eq!(viewport, equivalent_clip);
+    let boundary = decode_png_pixel(viewport, 200, 200);
+    assert!(boundary[0] > 0 && boundary[0] < 255, "{boundary:?}");
+    assert_eq!(decode_png_pixel(half_clip, 0, 200), boundary);
+    assert_eq!(decode_png_pixel(half_clip, 199, 200), [0, 0, 0, 255]);
+}
+
 async fn install_active_screenshot_page(
     ctx: &mut TestContext,
     browser_context_id: &str,
