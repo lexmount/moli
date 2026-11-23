@@ -189,7 +189,7 @@ impl EffectiveTargetEmulationState {
         // Blink clears media on every Emulation handler disable. Keep the
         // target-wide side effect while retaining each handler's raw copy.
         self.emulated_media = EmulatedMediaOverrides::default();
-        if raw.emulated_media.vision_deficiency == moli_page_types::VisionDeficiency::None {
+        if raw.vision_deficiency.is_none() {
             self.emulated_media.vision_deficiency = previous.emulated_media.vision_deficiency;
         }
         self.default_background_color = None;
@@ -231,6 +231,28 @@ impl EffectiveTargetEmulationState {
 #[cfg(test)]
 mod tests {
     use super::{EffectiveTargetEmulationState, EmulatedDeviceMetrics};
+
+    #[test]
+    fn vision_reset_distinguishes_explicit_none_from_an_untouched_handler() {
+        use moli_page_types::VisionDeficiency;
+
+        let mut effective = EffectiveTargetEmulationState::default();
+        effective.emulated_media.vision_deficiency = VisionDeficiency::Protanopia;
+        let mut raw = crate::conn::DevToolsEmulationSessionState::default();
+
+        assert!(!effective.disable_session_handler(&raw).emulated_media);
+        assert_eq!(
+            effective.emulated_media.vision_deficiency,
+            VisionDeficiency::Protanopia,
+        );
+
+        raw.vision_deficiency = Some(VisionDeficiency::None);
+        assert!(effective.disable_session_handler(&raw).emulated_media);
+        assert_eq!(
+            effective.emulated_media.vision_deficiency,
+            VisionDeficiency::None,
+        );
+    }
 
     #[test]
     fn device_pixel_ratio_normalizes_non_positive_and_non_finite_values() {
