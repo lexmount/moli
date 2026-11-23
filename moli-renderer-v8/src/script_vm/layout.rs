@@ -320,7 +320,8 @@ impl ScriptVm {
         }
         // Font resources are reconciled by the document resource lifecycle.
         // Layout consumes registered data and performs no font loading work.
-        let requests_paint = request.requests_paint();
+        let paused = self.is_debugger_paused();
+        let discovers_css_images = request.requests_paint() && !paused;
         let (document, publishes_layout, result) = {
             let context_host = self._context_host.borrow();
             let document = context_host.document_handle();
@@ -344,7 +345,7 @@ impl ScriptVm {
                     let Some(mut pass) = pass else {
                         return Ok(None);
                     };
-                    let css_images = match (requests_paint, request.includes_backgrounds()) {
+                    let css_images = match (discovers_css_images, request.includes_backgrounds()) {
                         (false, _) => Vec::new(),
                         (true, true) => pass.css_image_references().to_vec(),
                         (true, false) => pass
@@ -367,6 +368,11 @@ impl ScriptVm {
             Ok(None) => (Ok(None), Vec::new()),
             Err(error) => (Err(error), Vec::new()),
         };
+        // Nested Page-agent reads can paint while the owner is suspended in
+        // V8. Resource admission and observer delivery belong to regular turns.
+        if paused {
+            return result;
+        }
         self.start_css_images_discovered_by_layout(css_images);
         if publishes_layout
             && matches!(&result, Ok(Some(_)))

@@ -134,7 +134,7 @@ fn start(conn: &mut CdpConnection, cmd: &Cmd<'_>, action: OverlayAction) -> Nati
         RendererNativeOperation::new(
             RendererPageCommand::DevTools(RendererDevToolsPageCommand::SetOverlayHighlight {
                 inspector_session_id,
-                highlight,
+                highlight: Ok(highlight),
             }),
             native::unit_response,
         ),

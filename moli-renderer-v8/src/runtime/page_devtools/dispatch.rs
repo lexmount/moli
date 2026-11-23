@@ -361,7 +361,10 @@ impl PageVm {
                 )),
             ),
             RendererDevToolsPageCommand::SetOverlayHighlight { inspector_session_id, highlight } => {
-                self.set_overlay_highlight(inspector_session_id.as_deref(), highlight)?;
+                self.set_overlay_highlight(
+                    inspector_session_id.as_deref(),
+                    highlight.map_err(anyhow::Error::msg)?,
+                )?;
                 Ok(RendererPageReply::Unit)
             }
             RendererDevToolsPageCommand::DocumentHitTest {

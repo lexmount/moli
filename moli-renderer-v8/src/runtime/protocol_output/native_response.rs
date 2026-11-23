@@ -4,7 +4,10 @@
 //! metadata here. Internal queries continue to return their typed values to
 //! their continuation; they never acquire this frontend publication capability.
 
-use crate::runtime::RendererDevToolsPageCommand;
+use crate::runtime::{
+    RendererDevToolsPageCommand, RendererDomNodeReference, RendererOverlayHighlight,
+    RendererOverlayNode,
+};
 use std::convert::Infallible;
 
 use moli_page_types::{DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId};
@@ -240,16 +243,12 @@ impl RendererNativeOperation {
         + Send
         + 'static,
     ) -> Self {
-        let nested_dispatch = match &command {
-            RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope))
-                if envelope.runtime_binding_removal_name().is_some() =>
-            {
-                RendererDevToolsMainNestedDispatch::NativeInspectorSession
-            }
-            _ if command.nested_dispatch() == RendererDevToolsMainNestedDispatch::PageAgent => {
-                RendererDevToolsMainNestedDispatch::PageAgent
-            }
-            _ => RendererDevToolsMainNestedDispatch::OwnerOnly,
+        let nested_dispatch = if NestedNativeInspectorRequest::for_command(&command).is_some() {
+            RendererDevToolsMainNestedDispatch::NativeInspectorSession
+        } else if command.nested_dispatch() == RendererDevToolsMainNestedDispatch::PageAgent {
+            RendererDevToolsMainNestedDispatch::PageAgent
+        } else {
+            RendererDevToolsMainNestedDispatch::OwnerOnly
         };
         Self {
             nested_dispatch,
@@ -313,16 +312,32 @@ enum NativeReadyReply {
     },
 }
 
+pub(crate) enum NestedNativeInspectorRequest<'a> {
+    RemoveRuntimeBinding(&'a str),
+    ResolveOverlayNode(&'a str),
+}
+
+impl<'a> NestedNativeInspectorRequest<'a> {
+    fn for_command(command: &'a RendererPageCommand) -> Option<Self> {
+        match command {
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)) => {
+                envelope
+                    .runtime_binding_removal_name()
+                    .map(Self::RemoveRuntimeBinding)
+            }
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::SetOverlayHighlight {
+                highlight: Ok(Some(highlight)),
+                ..
+            }) => highlight.runtime_object_id().map(Self::ResolveOverlayNode),
+            _ => None,
+        }
+    }
+}
+
 impl RendererCdpCall {
-    pub(crate) fn runtime_binding_removal_name(&self) -> &str {
-        let RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)) =
-            self.operation.command.as_ref()
-        else {
-            unreachable!("nested native Inspector dispatch requires an Inspector payload")
-        };
-        envelope
-            .runtime_binding_removal_name()
-            .expect("only removeBinding supports nested native Inspector dispatch")
+    pub(crate) fn nested_inspector_request(&self) -> NestedNativeInspectorRequest<'_> {
+        NestedNativeInspectorRequest::for_command(&self.operation.command)
+            .expect("nested native Inspector dispatch requires a session request")
     }
 
     pub(crate) fn into_runtime_binding_removal_commit(
@@ -339,9 +354,35 @@ impl RendererCdpCall {
                 envelope.into_runtime_binding_removal_commit(output),
             ),
         ));
+        self.into_nested_page_commit()
+    }
+
+    pub(crate) fn into_overlay_node_commit(
+        mut self,
+        result: Result<u32, String>,
+    ) -> RendererPageCommand {
+        let RendererPageCommand::DevTools(RendererDevToolsPageCommand::SetOverlayHighlight {
+            highlight,
+            ..
+        }) = self.operation.command.as_mut()
+        else {
+            unreachable!("overlay resolution requires an overlay command")
+        };
+        match result {
+            Ok(id) => {
+                let Ok(Some(RendererOverlayHighlight::Node { target, .. })) = highlight else {
+                    unreachable!("overlay resolution requires a node highlight")
+                };
+                *target = RendererOverlayNode::Node(RendererDomNodeReference::BackendNodeId(id));
+            }
+            Err(error) => *highlight = Err(error),
+        }
+        self.into_nested_page_commit()
+    }
+
+    fn into_nested_page_commit(mut self) -> RendererPageCommand {
         self.operation.nested_dispatch = RendererDevToolsMainNestedDispatch::PageAgent;
-        // Keep the original response lease and terminal projection. Neither
-        // the V8 response capture nor the adapter can publish another reply.
+        // The native terminal retains its original response lease.
         RendererPageCommand::DevTools(RendererDevToolsPageCommand::Native(self))
     }
 

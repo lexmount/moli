@@ -29,6 +29,18 @@ pub enum RendererOverlayHighlight {
     },
 }
 
+impl RendererOverlayHighlight {
+    pub(crate) fn runtime_object_id(&self) -> Option<&str> {
+        match self {
+            Self::Node {
+                target: RendererOverlayNode::RuntimeObject(object_id),
+                ..
+            } => Some(object_id),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(in crate::runtime) struct OverlayState {
     highlight: Option<(DevToolsSessionKey, RendererOverlayHighlight)>,
