@@ -580,13 +580,12 @@ impl PageScriptHost {
                 self.record_child_document_load_network(&network_attribution, network);
                 if let Some(response) = download {
                     self.record_pending_download_activation(
-                        crate::runtime::RendererPendingDownloadActivation {
-                            initiator_url: None,
-                            frame_id: Some(network_attribution.frame_id().to_owned()),
-                            url: response.final_url.clone(),
-                            suggested_filename: None,
-                            response: Some(Box::new(response)),
-                        },
+                        crate::runtime::RendererPendingDownloadActivation::new(
+                            response.final_url.clone(),
+                            Some(network_attribution.frame_id().to_owned()),
+                            None,
+                            Some(response),
+                        ),
                     );
                 }
                 self.clear_child_browsing_context_pending_navigation(handle);

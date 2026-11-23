@@ -1455,20 +1455,19 @@ mod tests {
                 let delivery = conn
                     .prepare_pending_download_activation_delivery(
                         &owner,
-                        RendererPendingDownloadActivation {
-                            initiator_url: None,
-                            frame_id: None,
-                            url: "blob:https://download.test/retained".to_owned(),
-                            suggested_filename: Some("anchor.bin".to_owned()),
-                            response: Some(Box::new(RendererPendingDownloadResponse {
+                        RendererPendingDownloadActivation::new(
+                            "blob:https://download.test/retained".to_owned(),
+                            None,
+                            Some("anchor.bin".to_owned()),
+                            Some(RendererPendingDownloadResponse {
                                 final_url: "blob:https://download.test/retained".to_owned(),
                                 status: 200,
                                 headers,
                                 body: moli_core::page::RendererDownloadBody::Blob(
                                     bytes.clone().into(),
                                 ),
-                            })),
-                        },
+                            }),
+                        ),
                         false,
                     )
                     .unwrap();
@@ -1506,13 +1505,12 @@ mod tests {
             let delivery = conn
                 .prepare_pending_download_activation_delivery(
                     &owner,
-                    RendererPendingDownloadActivation {
-                        initiator_url: None,
-                        frame_id: Some("child-frame".to_owned()),
-                        url: "blob:https://download.test/revoked".to_owned(),
-                        suggested_filename: Some("gone.bin".to_owned()),
-                        response: None,
-                    },
+                    RendererPendingDownloadActivation::new(
+                        "blob:https://download.test/revoked".to_owned(),
+                        Some("child-frame".to_owned()),
+                        Some("gone.bin".to_owned()),
+                        None,
+                    ),
                     false,
                 )
                 .unwrap();
@@ -1592,20 +1590,19 @@ mod tests {
                 let delivery = conn
                     .prepare_pending_download_activation_delivery(
                         &owner,
-                        RendererPendingDownloadActivation {
-                            initiator_url: None,
-                            frame_id: None,
-                            url: "blob:https://download.test/retained".to_owned(),
-                            suggested_filename: Some("large.bin".to_owned()),
-                            response: Some(Box::new(RendererPendingDownloadResponse {
+                        RendererPendingDownloadActivation::new(
+                            "blob:https://download.test/retained".to_owned(),
+                            None,
+                            Some("large.bin".to_owned()),
+                            Some(RendererPendingDownloadResponse {
                                 final_url: "blob:https://download.test/retained".to_owned(),
                                 status: 200,
                                 headers: Vec::new(),
                                 body: moli_core::page::RendererDownloadBody::Blob(
                                     moli_file_api::BlobData::from_source(source.clone(), size),
                                 ),
-                            })),
-                        },
+                            }),
+                        ),
                         false,
                     )
                     .unwrap();
@@ -2041,20 +2038,17 @@ mod tests {
                     .set_global("allow".to_owned(), download_path, false);
                 let result = conn.prepare_pending_download_activation_delivery(
                     &owner,
-                    RendererPendingDownloadActivation {
-                        initiator_url: None,
-                        frame_id: None,
-                        url: "relative-download-url".to_owned(),
-                        suggested_filename: None,
-                        response: prefetched.then(|| {
-                            Box::new(RendererPendingDownloadResponse {
-                                final_url: "relative-response-url".to_owned(),
-                                status: 200,
-                                headers: Vec::new(),
-                                body: Vec::new().into(),
-                            })
+                    RendererPendingDownloadActivation::new(
+                        "relative-download-url".to_owned(),
+                        None,
+                        None,
+                        prefetched.then(|| RendererPendingDownloadResponse {
+                            final_url: "relative-response-url".to_owned(),
+                            status: 200,
+                            headers: Vec::new(),
+                            body: Vec::new().into(),
                         }),
-                    },
+                    ),
                     false,
                 );
                 if has_download_path {

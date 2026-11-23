@@ -1184,13 +1184,12 @@ async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
     prepared.extend_payload(
         InputPreparedOutputSlot::from_outputs(
             InputPreparedOutputs::from_download_activations_for_test(vec![
-                RendererPendingDownloadActivation {
-                    initiator_url: None,
-                    frame_id: None,
-                    url: "https://example.test/report.txt".to_owned(),
-                    suggested_filename: Some("report.txt".to_owned()),
-                    response: None,
-                },
+                RendererPendingDownloadActivation::new(
+                    "https://example.test/report.txt".to_owned(),
+                    None,
+                    Some("report.txt".to_owned()),
+                    None,
+                ),
             ]),
         )
         .into(),

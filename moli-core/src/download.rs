@@ -52,6 +52,7 @@ impl DownloadBody {
         }
     }
 
+    #[cfg(feature = "molio")]
     pub fn known_size(&self) -> Option<u64> {
         match self {
             Self::Buffered(bytes) => Some(bytes.len() as u64),

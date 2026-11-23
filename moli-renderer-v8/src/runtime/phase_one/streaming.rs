@@ -182,18 +182,17 @@ impl ConcurrentParseTimeRuntime {
             let mut body_source = RawDocumentBodySource::External(raw_body);
             let response_body = collect_streaming_raw_body(&mut body_source).await?;
             return Ok(StreamingNavigationPageCreationResult::Download(
-                RendererPendingDownloadActivation {
-                    initiator_url: None,
-                    frame_id: None,
-                    url: final_url.as_str().to_owned(),
-                    suggested_filename: None,
-                    response: Some(Box::new(RendererPendingDownloadResponse {
+                RendererPendingDownloadActivation::new(
+                    final_url.as_str().to_owned(),
+                    None,
+                    None,
+                    Some(RendererPendingDownloadResponse {
                         final_url: final_url.as_str().to_owned(),
                         status: response_status,
                         headers: response_headers,
-                        body: (response_body).into(),
-                    })),
-                },
+                        body: response_body.into(),
+                    }),
+                ),
             ));
         }
 
