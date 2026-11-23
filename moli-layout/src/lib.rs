@@ -63,8 +63,9 @@ pub use layout_tree::{
     LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics,
     LayoutResizeObserverSize, LayoutResolvedGridTrackList, LayoutResolvedGridTracks,
     LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize,
-    LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport,
-    MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
+    LayoutTextGeometryRange, LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutUsedSize,
+    LayoutViewport, MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS,
+    MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
 pub use list::{ListCounter, list_marker_text};
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
@@ -101,7 +102,7 @@ pub use source::{
     LayoutFormControlData, LayoutFormControlKind, LayoutHyperlink, LayoutImageResource,
     LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo,
     LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutSvgContent,
-    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    LayoutSvgObject, LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
     ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, html_display_contents_is_none,
 };
 pub use style::{

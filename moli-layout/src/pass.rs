@@ -441,13 +441,17 @@ fn prepare_svg_content<S: LayoutSource>(
         );
         if let Some(content) = source.svg_content(node, &layout_box.style, viewport) {
             layout_box.replaced_image = content.image;
-            objects.extend(content.objects.into_iter().map(|(source, quad)| {
-                crate::LayoutObjectGeometry {
-                    source,
-                    owner: crate::LayoutOutputBoxId::from_index(index),
-                    quad,
-                }
-            }));
+            objects.extend(
+                content
+                    .objects
+                    .into_iter()
+                    .map(|object| crate::LayoutObjectGeometry {
+                        source: object.source,
+                        owner: crate::LayoutOutputBoxId::from_index(index),
+                        quad: object.quad,
+                        text_range: object.text_range,
+                    }),
+            );
         }
     }
     objects
