@@ -222,8 +222,21 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
         node_id: DomHandle,
         attrs: Vec<crate::dom::native::Attribute>,
     ) {
+        let merges_load_handler = crate::native_bridge::element::parser_merges_body_load_handler(
+            self.runtime.dom_host(),
+            node_id,
+            &attrs,
+        );
         self.runtime
             .add_attrs_if_missing_for_parser_in_live_dom_host(node_id, attrs);
+        if merges_load_handler {
+            crate::native_bridge::element::invalidate_event_handler_content_attribute(
+                self.scope,
+                self.host_ptr,
+                node_id,
+                "onload",
+            );
+        }
     }
 
     fn create_text_node(&mut self, document_handle: DomHandle, text: String) -> DomHandle {

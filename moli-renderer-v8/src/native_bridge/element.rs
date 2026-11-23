@@ -293,6 +293,7 @@ pub(crate) use event_handlers::{
     invalidate_event_handler_content_attribute, is_body_window_event_handler_attribute,
     is_global_event_handler_attribute, node_event_handler_getter_function,
     node_event_handler_setter_function, node_event_handler_value_from_wrapper,
+    parser_merges_body_load_handler,
 };
 use event_handlers::{
     body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,

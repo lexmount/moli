@@ -349,3 +349,34 @@ fn child_window_onerror_return_values_use_native_cancellation() {
         r#"{"rows":[[true,5,"failure"],[true,1,"error"],[true,1,"error"]],"errorAllowed":false,"errorPrevented":true,"ordinaryAllowed":false,"ordinaryPrevented":true,"noncancelableAllowed":true,"noncancelablePrevented":false,"topUntouched":true}"#
     );
 }
+
+#[test]
+fn parser_merged_body_onload_replaces_the_handler_once() {
+    let mut vm = new_storage_test_vm("https://merged-body-handler.test/");
+    let source = r#"
+<!doctype html><p>Implicit body before the attributes arrive</p>
+<script>
+  window.mergedLoadEvents = [];
+  window.onload = () => mergedLoadEvents.push('old');
+</script>
+<body onload="mergedLoadEvents.push('attribute')">
+<script>
+  window.dispatchEvent(new Event('load'));
+  window.onload = () => mergedLoadEvents.push('assigned');
+</script>
+<body onload="mergedLoadEvents.push('ignored')">
+<script>
+  window.dispatchEvent(new Event('load'));
+  window.mergedLoadSnapshot = JSON.stringify(mergedLoadEvents);
+</script>
+"#;
+    vm.eval(&format!(
+        "document.open(); document.write({}); document.close();",
+        serde_json::to_string(source).unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(
+        vm.eval("mergedLoadSnapshot").unwrap(),
+        r#"["attribute","assigned"]"#,
+    );
+}
