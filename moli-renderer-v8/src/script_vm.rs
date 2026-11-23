@@ -703,6 +703,7 @@ mod dom_debugger;
 #[cfg(feature = "devtools")]
 mod dom_inspector;
 mod file_reading;
+mod html_fragment_modules;
 mod related_page;
 mod response_links;
 #[cfg(feature = "devtools")]

@@ -448,7 +448,30 @@ impl ScriptVm {
             ModuleScriptCompletionOwner::Parser,
             "runtime-owned ready graph continuations should be owned by DynamicScriptOwner"
         );
+        let pending = continuation
+            .parser_pending_script_id()
+            .expect("main parser graph must retain its PendingScript");
+        let route = self
+            ._context_host
+            .borrow_mut()
+            .take_html_fragment_module_load(
+                pending.owner().task_owner(),
+                continuation.script.node_id,
+            );
         let work = continuation.into_main_document_graph_ready_work();
+        if let Some(route) = route {
+            self.document_runtime
+                .parser_module_document_scripts_mut()
+                .discard_module_script(pending);
+            return self.publish_html_fragment_module_terminal(
+                route,
+                crate::native_bridge::HtmlFragmentModuleTerminal::Main(Box::new(
+                    crate::document_script_scheduler::ParserModuleGraphTerminalWork::Ready(
+                        Box::new(work),
+                    ),
+                )),
+            );
+        }
         self.document_runtime
             .parser_module_document_scripts_mut()
             .notify_module_script_graph_ready_work(work)
@@ -462,15 +485,32 @@ impl ScriptVm {
             ModuleScriptCompletionOwner::Parser,
             "runtime-owned graph failures should be owned by DynamicScriptOwner"
         );
+        let pending = failure
+            .continuation
+            .parser_pending_script_id()
+            .expect("main parser graph failure must retain its PendingScript");
+        let route = self
+            ._context_host
+            .borrow_mut()
+            .take_html_fragment_module_load(
+                pending.owner().task_owner(),
+                failure.continuation.script.node_id,
+            );
+        let work = DocumentOwnedScriptReadyAction::new(pending.owner(), failure);
+        if let Some(route) = route {
+            self.document_runtime
+                .parser_module_document_scripts_mut()
+                .discard_module_script(pending);
+            return self.publish_html_fragment_module_terminal(
+                route,
+                crate::native_bridge::HtmlFragmentModuleTerminal::Main(Box::new(
+                    crate::document_script_scheduler::ParserModuleGraphTerminalWork::Failed(work),
+                )),
+            );
+        }
         self.document_runtime
             .parser_module_document_scripts_mut()
-            .notify_module_script_graph_failed_action(DocumentOwnedScriptReadyAction::new(
-                failure
-                    .continuation
-                    .parser_document_owner()
-                    .expect("parser graph failure requires its original document owner"),
-                failure,
-            ))
+            .notify_module_script_graph_failed_action(work)
     }
     pub(super) fn queue_main_parser_module_evaluation_work(
         &mut self,
@@ -830,7 +870,7 @@ impl ScriptVm {
         }
         Ok(true)
     }
-    pub(super) fn accept_registered_parser_pending_module_script_graph_for_document_owner(
+    pub(in crate::script_vm) fn accept_registered_parser_pending_module_script_graph_for_document_owner(
         &mut self,
         pending_script_id: ParserPendingScriptId<MainParserDocumentOwner>,
         script: &PreparedScript,

@@ -787,7 +787,7 @@ impl ScriptVm {
         }
         self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }
-                .apply_parser_dom_mutation_to_live_dom_host(scope, host_ptr, mutation);
+                .apply_parser_dom_mutation_to_live_dom_host(scope, host_ptr, mutation, false);
             Ok(())
         })
     }

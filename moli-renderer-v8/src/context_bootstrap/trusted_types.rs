@@ -15,7 +15,9 @@ mod parser_options;
 mod policy_callbacks;
 mod realm_state;
 pub(super) use parser_options::UnsafeHtmlDocumentArgs;
-pub(crate) use parser_options::UnsafeHtmlFragmentArgs;
+pub(crate) use parser_options::{
+    CompliantParserOptions, UnsafeHtmlFragmentArgs, UnsafeHtmlStreamArgs,
+};
 pub(super) use parser_options::{
     build_template as build_parser_options_constructor_template, finalize_policy_window_bindings,
 };

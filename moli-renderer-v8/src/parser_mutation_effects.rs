@@ -62,10 +62,11 @@ pub(crate) fn apply_parser_mutation_effects(
         for &root in tree.disconnected_roots() {
             custom_elements::enqueue_disconnected_callbacks_for_subtree(scope, host_ptr, root);
         }
-        custom_elements::enqueue_connected_and_form_callbacks_for_already_upgraded_subtrees(
+        custom_elements::enqueue_connected_and_form_callbacks_for_subtrees(
             scope,
             host_ptr,
             tree.connected_roots(),
+            false,
         );
         if form_owner_changed {
             custom_elements::enqueue_form_association_callbacks_for_all(scope, host_ptr);

@@ -4,7 +4,8 @@ use super::parser_handoff_definition::{
 };
 use super::parser_handoff_direct::construct_parser_created_custom_element_direct;
 use super::{
-    FailedExistingConstructionPrototype, custom_element_wrapper_for_existing_upgrade,
+    CustomElementRegistryAssociation, FailedExistingConstructionPrototype,
+    custom_element_wrapper_for_existing_upgrade, enqueue_upgrade_reaction_if_defined,
     set_dom_custom_element_is_name, set_dom_custom_element_state,
     upgrade_existing_custom_element_with_constructor,
 };
@@ -23,6 +24,95 @@ pub(crate) fn create_and_construct_parser_custom_element_direct_for_document(
     intended_parent: Option<DomHandle>,
     create_candidate: impl FnOnce(DomHandle, String, String, Option<String>) -> DomHandle,
 ) -> Option<DomHandle> {
+    let (handle, definition_match) = create_parser_custom_element_candidate(
+        host_ptr,
+        document_handle,
+        local_name,
+        namespace,
+        prefix,
+        token_attributes,
+        intended_parent,
+        create_candidate,
+    )?;
+    if definition_match.definition_name != definition_match.local_name {
+        // Parser-created customized built-ins upgrade the parser element itself.
+        // Constructor mutations are therefore valid existing-element mutations,
+        // not direct-construction validation failures.
+        let constructed = construct_parser_created_customized_builtin_existing_element(
+            scope,
+            host_ptr,
+            handle,
+            token_attributes,
+            definition_match,
+        );
+        return constructed.or(Some(handle));
+    }
+    let constructed = construct_parser_created_custom_element_direct(
+        scope,
+        host_ptr,
+        handle,
+        token_attributes,
+        definition_match,
+    );
+    constructed.or(Some(handle))
+}
+
+pub(crate) fn create_and_enqueue_fragment_parser_custom_element(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    request: &moli_parser::ParserElementCreationRequest<'_>,
+    create_candidate: impl FnOnce(DomHandle, String, String, Option<String>) -> DomHandle,
+) -> Option<DomHandle> {
+    let null_registry = request.namespace == crate::native_bridge::document::XHTML_NS
+        && request.attributes.iter().any(|attribute| {
+            attribute.namespace().is_empty() && attribute.local_name() == "customelementregistry"
+        });
+    let handle = if null_registry {
+        let handle = create_candidate(
+            request.document_handle,
+            request.local_name.to_owned(),
+            request.namespace.to_owned(),
+            request.prefix.map(str::to_owned),
+        );
+        unsafe { &mut *host_ptr }.set_custom_element_registry_association(
+            handle,
+            CustomElementRegistryAssociation::Null,
+        );
+        handle
+    } else {
+        let (handle, _) = create_parser_custom_element_candidate(
+            host_ptr,
+            request.document_handle,
+            request.local_name,
+            request.namespace,
+            request.prefix,
+            request.attributes,
+            request.intended_parent,
+            create_candidate,
+        )?;
+        handle
+    };
+
+    // A fragment creates custom elements with an upgrade reaction. Insertion
+    // can invoke it immediately for a connected element. A template consumed
+    // by declarative shadow attachment or content patching stays detached.
+    append_parser_custom_element_token_attributes(scope, host_ptr, handle, request.attributes);
+    if !null_registry {
+        enqueue_upgrade_reaction_if_defined(scope, host_ptr, handle);
+    }
+    Some(handle)
+}
+
+fn create_parser_custom_element_candidate(
+    host_ptr: *mut PageScriptHost,
+    document_handle: DomHandle,
+    local_name: &str,
+    namespace: &str,
+    prefix: Option<&str>,
+    token_attributes: &moli_dom::native::ParserAttributes,
+    intended_parent: Option<DomHandle>,
+    create_candidate: impl FnOnce(DomHandle, String, String, Option<String>) -> DomHandle,
+) -> Option<(DomHandle, ParserCustomElementDefinitionMatch)> {
     let definition_match = lookup_parser_custom_element_definition_for_token(
         host_ptr,
         document_handle,
@@ -48,27 +138,7 @@ pub(crate) fn create_and_construct_parser_custom_element_direct_for_document(
         set_dom_custom_element_is_name(host_ptr, handle, &definition_match.definition_name);
         set_dom_custom_element_state(host_ptr, handle, CustomElementState::Undefined);
     }
-    if definition_match.definition_name != definition_match.local_name {
-        // Parser-created customized built-ins upgrade the parser element itself.
-        // Constructor mutations are therefore valid existing-element mutations,
-        // not direct-construction validation failures.
-        let constructed = construct_parser_created_customized_builtin_existing_element(
-            scope,
-            host_ptr,
-            handle,
-            token_attributes,
-            definition_match,
-        );
-        return constructed.or(Some(handle));
-    }
-    let constructed = construct_parser_created_custom_element_direct(
-        scope,
-        host_ptr,
-        handle,
-        token_attributes,
-        definition_match,
-    );
-    constructed.or(Some(handle))
+    Some((handle, definition_match))
 }
 
 fn construct_parser_created_customized_builtin_existing_element(

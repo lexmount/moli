@@ -382,6 +382,61 @@ impl PageScriptHost {
         }
     }
 
+    pub(crate) fn register_html_fragment_module_load(
+        &mut self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        node: DomHandle,
+        target: crate::page_task_queue::HtmlFragmentModuleTaskTarget,
+    ) {
+        let previous = self
+            .html_fragment_module_loads
+            .insert((owner, node), target);
+        debug_assert!(previous.is_none(), "streamed module root was started twice");
+    }
+
+    pub(crate) fn take_html_fragment_module_load(
+        &mut self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        node: DomHandle,
+    ) -> Option<crate::page_task_queue::HtmlFragmentModuleTaskTarget> {
+        self.html_fragment_module_loads.remove(&(owner, node))
+    }
+
+    pub(crate) fn retire_html_fragment_module_loads(
+        &mut self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) {
+        let streams: std::collections::HashSet<_> = self
+            .html_fragment_module_loads
+            .extract_if(|(task_owner, _), _| *task_owner == owner)
+            .map(|(_, target)| (target.document, target.stream))
+            .collect();
+        if let Some(sender) = self.html_fragment_script_task_sender() {
+            for (document, stream) in streams {
+                let _ = sender.send_html_fragment_script(
+                    document,
+                    stream,
+                    crate::page_task_queue::HtmlFragmentScriptTaskKind::Retire,
+                );
+            }
+        }
+    }
+
+    pub(crate) fn current_html_fragment_script_context<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        target: WindowDocumentTaskTarget,
+        document: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Context>> {
+        if self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
+            != Some(target)
+        {
+            return None;
+        }
+        let resolved = self.resolve_authorized_window_document_task_context(scope, target)?;
+        (resolved.document_handle == document).then_some(resolved.context)
+    }
+
     pub(super) fn resolve_authorized_window_document_task_context<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

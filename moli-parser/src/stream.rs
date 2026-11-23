@@ -455,7 +455,32 @@ impl HtmlTreeSinkStream {
 
     pub fn prepare_script(&self, request: ParserScriptPreparationRequest) -> ParserScriptHandoff {
         let target = self.parser.sink().borrow_target();
-        prepare_parser_script(&*target, request.node_id, Some(request.position)).into_handoff(
+        let mut preparation =
+            prepare_parser_script(&*target, request.node_id, Some(request.position));
+        // A fragment script retains the parser's original document as its intended document.
+        if target.fragment_script_changed_document(request.node_id) {
+            let mode = match &preparation {
+                ParserScriptPreparation::BlockingClassic(script)
+                | ParserScriptPreparation::AsyncPostParse(script)
+                | ParserScriptPreparation::NonAsyncPostParse(script) => Some(script.mode),
+                ParserScriptPreparation::ImportMap(_) => Some(ScriptMode::Normal),
+                ParserScriptPreparation::PreparationFailure(failure)
+                    if failure.element_state_transition()
+                        == ParserScriptElementStateTransition::MarkAlreadyStarted =>
+                {
+                    Some(failure.mode())
+                }
+                _ => None,
+            };
+            if let Some(mode) = mode {
+                preparation = ignored_parser_script(
+                    request.position,
+                    mode,
+                    ParserScriptElementStateTransition::MarkAlreadyStarted,
+                );
+            }
+        }
+        preparation.into_handoff(
             request.node_id,
             request.start_line,
             request.start_column,

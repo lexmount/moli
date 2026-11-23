@@ -20,13 +20,17 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         mutation: ParserDomMutation,
+        upgrade_connected_subtrees: bool,
     ) {
         self.apply_parser_dom_mutation_to_live_dom_host_with_options(
             scope,
             host_ptr,
             mutation,
             RuntimeMutationOptions::parser_tree_sink(),
-            TreeMutationSourceProfile::parser_tree_sink(),
+            TreeMutationSourceProfile {
+                upgrade_connected_subtrees,
+                ..TreeMutationSourceProfile::parser_tree_sink()
+            },
         );
     }
 
@@ -245,7 +249,12 @@ impl DocumentRuntime {
             );
         }
         self.sync_tree_insertion_context_followups(scope, host_ptr, insertion_plan);
-        self.enqueue_parser_tree_insertion_reactions_after_change(scope, host_ptr, insertion_plan);
+        self.enqueue_parser_tree_insertion_reactions_after_change(
+            scope,
+            host_ptr,
+            insertion_plan,
+            profile.upgrade_connected_subtrees,
+        );
         if profile.nonce_policy.hides_inserted_content_attributes()
             && insertion_plan.subtree_plan.may_have_nonce
             && self.dom_host.is_connected(insertion_plan.parent)
@@ -264,6 +273,7 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
+        upgrade_connected_subtrees: bool,
     ) {
         let lifecycle_quiescent =
             unsafe { &*host_ptr }.custom_elements_subtree_lifecycle_quiescent();
@@ -325,10 +335,11 @@ impl DocumentRuntime {
             host_ptr,
             &form_owner_roots,
         );
-        custom_elements::enqueue_connected_and_form_callbacks_for_already_upgraded_subtrees(
+        custom_elements::enqueue_connected_and_form_callbacks_for_subtrees(
             scope,
             host_ptr,
             &connected_roots,
+            upgrade_connected_subtrees,
         );
         self.enqueue_tree_removed_lifecycle_reactions(
             scope,

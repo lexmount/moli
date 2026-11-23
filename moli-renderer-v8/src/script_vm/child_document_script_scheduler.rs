@@ -66,6 +66,20 @@ impl<'vm> ChildDocumentScriptSchedulerOwner<'vm> {
         }
     }
 
+    fn take_html_fragment_module_route(
+        &mut self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        pending: crate::document_script_scheduler::ParserPendingScriptId<
+            crate::frame_owner_model::FrameDocumentOwner,
+        >,
+    ) -> Option<crate::page_task_queue::HtmlFragmentModuleTaskTarget> {
+        let mut host = self.vm._context_host.borrow_mut();
+        let route = host.take_html_fragment_module_load(owner, pending.script_node_id())?;
+        host.child_document_script_schedulers_mut()
+            .discard_module_script(pending);
+        Some(route)
+    }
+
     fn notify_terminal_graph_ready_work(
         &mut self,
         work: DocumentModuleGraphReadyWork,
@@ -112,6 +126,17 @@ impl<'vm> ChildDocumentScriptSchedulerOwner<'vm> {
                 graph_entry_count,
                 dependency_count,
                 "dropping stale child module-script graph-ready work before scheduler notification"
+            );
+            return FrameDocumentModuleScriptTerminalFollowup::none();
+        }
+        if let Some(route) = self.take_html_fragment_module_route(owner, work.pending_script_id()) {
+            self.vm.publish_html_fragment_module_terminal(
+                route,
+                crate::native_bridge::HtmlFragmentModuleTerminal::Child(Box::new(
+                    crate::document_script_scheduler::DocumentModuleScriptReadyWork::GraphReady(
+                        work,
+                    ),
+                )),
             );
             return FrameDocumentModuleScriptTerminalFollowup::none();
         }
@@ -171,6 +196,17 @@ impl<'vm> ChildDocumentScriptSchedulerOwner<'vm> {
                 tree_id = ?tree_id.map(|tree_id| tree_id.0),
                 message = %work.error().message(),
                 "dropping stale child module-script graph-failed work before scheduler notification"
+            );
+            return FrameDocumentModuleScriptTerminalFollowup::none();
+        }
+        if let Some(route) = self.take_html_fragment_module_route(owner, work.pending_script_id()) {
+            self.vm.publish_html_fragment_module_terminal(
+                route,
+                crate::native_bridge::HtmlFragmentModuleTerminal::Child(Box::new(
+                    crate::document_script_scheduler::DocumentModuleScriptReadyWork::GraphFailed(
+                        work,
+                    ),
+                )),
             );
             return FrameDocumentModuleScriptTerminalFollowup::none();
         }

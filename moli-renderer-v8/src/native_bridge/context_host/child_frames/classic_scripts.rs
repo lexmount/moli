@@ -270,6 +270,22 @@ impl PageScriptHost {
         Some((child_handle, script_handle))
     }
 
+    pub(crate) fn push_streamed_child_current_script(
+        &mut self,
+        child: DomHandle,
+        script: DomHandle,
+    ) -> Option<(DomHandle, Option<DomHandle>)> {
+        let script = self
+            .dom_host()
+            .containing_shadow_root(script)
+            .is_none()
+            .then_some(script);
+        self.child_browsing_contexts
+            .get_mut(&child)?
+            .push_child_current_script(script);
+        Some((child, script))
+    }
+
     pub(crate) fn pop_child_current_script(&mut self, token: (DomHandle, Option<DomHandle>)) {
         let (child_handle, script_handle) = token;
         if let Some(entry) = self.child_browsing_contexts.get_mut(&child_handle) {

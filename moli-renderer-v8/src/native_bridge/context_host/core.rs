@@ -448,6 +448,7 @@ impl PageScriptHost {
             frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore::default(),
             frame_document_stylesheets: FrameDocumentStylesheetStore::default(),
             child_document_script_schedulers: FrameDocumentScriptSchedulerStore::default(),
+            html_fragment_module_loads: Default::default(),
             child_document_parsers: ChildDocumentParserStore::default(),
             child_window_proxy_records: ChildWindowProxyRecords::default(),
             top_window_opener: None,
@@ -1045,6 +1046,12 @@ impl PageScriptHost {
             )
             .dom_manipulation()
             .popup_close()
+    }
+
+    pub(crate) fn html_fragment_script_task_sender(
+        &self,
+    ) -> Option<&crate::page_task_queue::RendererPageDomManipulationSender> {
+        Some(self.page_task_capabilities.get()?.dom_manipulation())
     }
 
     pub(crate) fn page_file_entry_file_callback_sender(

@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::HashMap, ptr::NonNull, rc::Rc};
+use std::{collections::HashMap, ptr::NonNull, rc::Rc};
 
 use crate::{HtmlSanitizer, ParserCustomElementRegistryAssociation};
 
@@ -23,7 +23,8 @@ use moli_stylesheet_blocking::{
 
 use super::{HtmlTreeSinkState, stream::HtmlTreeSinkStream};
 use crate::html::{
-    HtmlFragmentContext, ParseHandle, ParserCustomElementConstructionHandoff, ParserElementFlags,
+    FragmentStreamState, HtmlFragmentContext, ParseHandle, ParserCustomElementConstructionHandoff,
+    ParserElementFlags,
 };
 
 #[cfg(test)]
@@ -695,6 +696,7 @@ pub trait ParserDomMutationConsumer {
 struct ParserDomMutationSink {
     data: NonNull<()>,
     apply: unsafe fn(NonNull<()>, ParserDomMutation),
+    parser_template_contents_owner_document: unsafe fn(NonNull<()>, NativeNodeId) -> NativeNodeId,
     create_element_for_document_without_attributes:
         unsafe fn(NonNull<()>, NativeNodeId, String, String, Option<String>) -> NativeNodeId,
     create_parser_element_for_document_without_attributes: unsafe fn(
@@ -735,6 +737,13 @@ impl ParserDomMutationSink {
             // SAFETY: ParserDomMutationSink::from_consumer_unchecked requires the
             // pointed-to consumer to remain live and exclusive for the pump step.
             unsafe { data.cast::<T>().as_mut() }.apply_parser_dom_mutation(mutation);
+        }
+        unsafe fn parser_template_contents_owner_document_impl<T: ParserDomMutationConsumer>(
+            data: NonNull<()>,
+            document: NativeNodeId,
+        ) -> NativeNodeId {
+            // SAFETY: the parser step keeps the consumer live and exclusive.
+            unsafe { data.cast::<T>().as_mut() }.parser_template_contents_owner_document(document)
         }
         unsafe fn create_element_for_document_without_attributes_impl<
             T: ParserDomMutationConsumer,
@@ -936,6 +945,9 @@ impl ParserDomMutationSink {
         Self {
             data: NonNull::from(consumer).cast(),
             apply: apply_impl::<T>,
+            parser_template_contents_owner_document: parser_template_contents_owner_document_impl::<
+                T,
+            >,
             create_element_for_document_without_attributes:
                 create_element_for_document_without_attributes_impl::<T>,
             create_parser_element_for_document_without_attributes:
@@ -964,6 +976,11 @@ impl ParserDomMutationSink {
         // SAFETY: construction ties the raw pointer and callback to the same
         // consumer remains live for the current runtime-DOM sink step.
         unsafe { (self.apply)(self.data, mutation) };
+    }
+
+    fn parser_template_contents_owner_document(self, document: NativeNodeId) -> NativeNodeId {
+        // SAFETY: the consumer remains live for the current runtime-DOM step.
+        unsafe { (self.parser_template_contents_owner_document)(self.data, document) }
     }
 
     fn create_element_for_document_without_attributes(
@@ -1724,6 +1741,16 @@ impl ParserDomMutationConsumer for TestMutationEffectCollector<'_> {
 }
 
 #[cfg(test)]
+impl ParserElementCreationConsumer for TestMutationEffectCollector<'_> {
+    fn create_parser_element(
+        &mut self,
+        _: ParserElementCreationRequest<'_>,
+    ) -> Option<NativeNodeId> {
+        None
+    }
+}
+
+#[cfg(test)]
 impl ParserMutationEffectConsumer for TestMutationEffectCollector<'_> {
     fn consume_parser_mutation_effects(&mut self, effects: DomMutationEffects) {
         self.effects.merge(effects);
@@ -2211,7 +2238,8 @@ pub(super) struct ParserStreamHtmlTreeSinkTarget {
 pub(super) struct FragmentInsertion {
     pub(super) root: NativeNodeId,
     pub(super) target: ParserInsertionPoint,
-    pub(super) invalid_reference: Rc<Cell<bool>>,
+    pub(super) state: Rc<FragmentStreamState>,
+    pub(super) runs_scripts: bool,
 }
 
 struct ParserSanitizer {
@@ -2824,7 +2852,9 @@ impl ParserStreamHtmlTreeSinkTarget {
         else {
             return false;
         };
-        let blocks_scripts = input.blocks_scripts();
+        // Stylesheets inserted by a fragment belong to its target document.
+        // The fragment parser has its own script queue and never waits on them.
+        let blocks_scripts = self.fragment_insertion.is_none() && input.blocks_scripts();
         if self.state.captured_stylesheet_nodes.insert(node_id) {
             if blocks_scripts {
                 self.state
@@ -3339,10 +3369,27 @@ impl ParserStreamHtmlTreeSinkTarget {
         self.fragment_insertion = Some(insertion);
     }
 
+    pub(super) fn fragment_script_changed_document(&self, node_id: NativeNodeId) -> bool {
+        self.fragment_insertion
+            .as_ref()
+            .is_some_and(|fragment| fragment.runs_scripts)
+            && self.read_owner_document(node_id) != Some(self.parser_owner_document_node_id())
+    }
+
+    pub(super) fn is_streaming_fragment(&self) -> bool {
+        self.fragment_insertion.is_some()
+    }
+
     pub(super) fn fragment_reference_is_invalid(&self) -> bool {
         self.fragment_insertion
             .as_ref()
-            .is_some_and(|insertion| insertion.invalid_reference.get())
+            .is_some_and(|insertion| insertion.state.invalid_reference.get())
+    }
+
+    pub(super) fn fragment_abort_requested(&self) -> bool {
+        self.fragment_insertion
+            .as_ref()
+            .is_some_and(|insertion| insertion.state.abort_requested.get())
     }
 
     fn adjusted_insertion_location(&self, point: ParserInsertionPoint) -> ParserInsertionPoint {
@@ -3359,7 +3406,7 @@ impl ParserStreamHtmlTreeSinkTarget {
     }
 
     fn can_insert_at(&self, point: ParserInsertionPoint) -> bool {
-        if self.fragment_reference_is_invalid() {
+        if self.fragment_reference_is_invalid() || self.fragment_abort_requested() {
             return false;
         }
         if point
@@ -3369,7 +3416,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             if let Some(insertion) = &self.fragment_insertion
                 && point == insertion.target
             {
-                insertion.invalid_reference.set(true);
+                insertion.state.invalid_reference.set(true);
             }
             return false;
         }
@@ -3546,6 +3593,19 @@ impl ParserStreamHtmlTreeSinkTarget {
                 .or_else(|| intended_parent.and_then(|handle| self.read_owner_document(handle)))
                 .unwrap_or_else(|| self.parser_owner_document_node_id()),
         };
+        let abort_requested = self.fragment_abort_requested();
+        let document_handle = if abort_requested {
+            if let Some(owner) = &self.runtime_dom_sinks {
+                owner
+                    .dom_mutation_sink()
+                    .parser_template_contents_owner_document(document_handle)
+            } else {
+                self.dom_host_mut()
+                    .parser_template_contents_owner_document(document_handle)
+            }
+        } else {
+            document_handle
+        };
         let element_name = Rc::new(name.clone());
         let local_name = name.local.to_string();
         let namespace = name.ns.to_string();
@@ -3584,7 +3644,8 @@ impl ParserStreamHtmlTreeSinkTarget {
             self.open_template_element_depth = self.open_template_element_depth.saturating_add(1);
         }
 
-        if action == SanitizerAction::Keep
+        if !abort_requested
+            && action == SanitizerAction::Keep
             && !insertion_is_template_contents
             && let Some(sink) = self
                 .runtime_dom_sinks
@@ -3629,6 +3690,9 @@ impl ParserStreamHtmlTreeSinkTarget {
             prefix,
         );
         self.add_attrs_if_missing_for_parser(node_id, attributes);
+        if abort_requested {
+            return ParseHandle::new_element(node_id, element_name, parser_flags);
+        }
         if let Some(sanitizer) = &mut self.sanitizer {
             sanitizer.note_action(node_id, action);
         }
@@ -3664,6 +3728,13 @@ impl ParserStreamHtmlTreeSinkTarget {
                 .push(ParserCustomElementRegistryAssociation::Null(node_id));
         }
         if is_script {
+            if self
+                .fragment_insertion
+                .as_ref()
+                .is_some_and(|fragment| !fragment.runs_scripts)
+            {
+                self.mark_script_already_started_for_dom_host(node_id);
+            }
             if script_nonceable == Some(false) {
                 self.state.non_nonceable_parser_scripts.insert(node_id);
             }
@@ -3932,7 +4003,9 @@ impl ParserStreamHtmlTreeSinkTarget {
         scope_is_open: bool,
         name: &str,
     ) -> Option<Vec<NativeNodeId>> {
-        if self.sanitizer_action(template) != SanitizerAction::Keep {
+        if self.fragment_abort_requested()
+            || self.sanitizer_action(template) != SanitizerAction::Keep
+        {
             return None;
         }
         scope = self
@@ -4099,6 +4172,22 @@ impl ParserStreamHtmlTreeSinkTarget {
 
     pub(super) fn mark_script_already_started(&mut self, node_id: NativeNodeId) {
         self.mark_script_already_started_for_dom_host(node_id);
+    }
+
+    pub(super) fn mark_open_fragment_scripts_already_started(&mut self) {
+        if !self
+            .fragment_insertion
+            .as_ref()
+            .is_some_and(|fragment| fragment.runs_scripts)
+        {
+            return;
+        }
+        for index in 0..self.open_parser_elements.len() {
+            let node_id = self.open_parser_elements[index].node_id;
+            if self.state.script_start_positions.contains_key(&node_id) {
+                self.mark_script_already_started_for_dom_host(node_id);
+            }
+        }
     }
 
     pub(super) fn note_node_closed(&mut self, node_id: NativeNodeId, is_script_element: bool) {
@@ -5065,6 +5154,200 @@ fn parser_stream_live_fragment_root_writes_fragment() {
             .is_empty(),
         "live fragment root parse must not append roots under the document"
     );
+}
+
+#[cfg(test)]
+fn live_fragment_stream_for_test<'a>(
+    host: &mut DomHost,
+    effects: &'a mut DomMutationEffects,
+    run_scripts: bool,
+) -> (
+    crate::HtmlFragmentStream,
+    NativeNodeId,
+    TestMutationEffectCollector<'a>,
+) {
+    let parser = crate::HtmlParser::SCRIPTING_ENABLED;
+    let url = Url::parse("https://example.test/").unwrap();
+    let document = host.document_handle();
+    let root = host.create_element("html");
+    let target = host.create_element("body");
+    assert!(host.append_child(document, root));
+    assert!(host.append_child(root, target));
+    let fragment = host.create_document_fragment();
+    let mut owner = TestMutationEffectCollector {
+        host,
+        effects,
+        panic_on_mutation: false,
+        finish_texts: None,
+    };
+    let stream = parser.start_fragment_stream(
+        url,
+        fragment,
+        document,
+        HtmlFragmentContext::new(Some(target), "http://www.w3.org/1999/xhtml", "body"),
+        target,
+        None,
+        run_scripts,
+        &mut owner,
+    );
+    (stream, target, owner)
+}
+
+#[test]
+fn executable_fragment_stream_yields_in_order_at_script_boundaries() {
+    use crate::{ParserPumpStep, ParserScriptHandoff, ParserYield, ScriptSource};
+
+    let mut host = DomHost::from_dom(NativeDom::new_html(
+        Url::parse("https://example.test/").unwrap(),
+    ));
+    let mut effects = DomMutationEffects::default();
+    let (stream, target, mut owner) = live_fragment_stream_for_test(&mut host, &mut effects, true);
+    stream
+        .enqueue(
+            "<style>@import url('/sheet.css');</style><script>const value".into(),
+            &mut owner,
+        )
+        .unwrap();
+    assert!(matches!(
+        stream.pump_next(&mut owner).unwrap(),
+        ParserPumpStep::InputDrained
+    ));
+
+    stream
+        .enqueue(
+            " = 42;</script><p>tail</p><svg><script>svgCode()</script></svg>".into(),
+            &mut owner,
+        )
+        .unwrap();
+    for (expected_source, expected_children) in [("const value = 42;", 2), ("svgCode()", 4)] {
+        let step = stream.pump_next(&mut owner).unwrap();
+        let ParserPumpStep::Yield(ParserYield::ScriptPreparation(request)) = step else {
+            panic!("expected script preparation, got {step:?}");
+        };
+        let prepared = stream.prepare_script(*request, &mut owner);
+        let ParserScriptHandoff::BlockingClassic { script, .. } = prepared else {
+            panic!("expected a blocking inline classic, got {prepared:?}");
+        };
+        assert!(matches!(script.source, ScriptSource::Inline(source) if source == expected_source));
+        assert_eq!(host.child_handles(target).count(), expected_children);
+        if expected_children == 2 {
+            stream
+                .enqueue("<i>write while paused</i>".into(), &mut owner)
+                .unwrap();
+            stream
+                .enqueue("<i>write during script execution</i>".into(), &mut owner)
+                .unwrap();
+        }
+    }
+
+    while stream.has_pending_input() {
+        assert!(matches!(
+            stream.pump_next(&mut owner).unwrap(),
+            ParserPumpStep::InputDrained
+        ));
+    }
+    stream.close(&mut owner).unwrap();
+    let children = host.child_handles(target).collect::<Vec<_>>();
+    assert_eq!(children.len(), 6);
+    assert_eq!(host.text_content(children[2]).as_deref(), Some("tail"));
+    assert_eq!(
+        host.text_content(children[4]).as_deref(),
+        Some("write while paused")
+    );
+    assert_eq!(
+        host.text_content(children[5]).as_deref(),
+        Some("write during script execution")
+    );
+}
+
+#[test]
+fn executable_fragment_stream_prevents_scripts_from_running_in_an_adopting_document() {
+    use crate::{
+        ParserPumpStep, ParserScriptElementStateTransition, ParserScriptHandoff, ParserYield,
+    };
+
+    let mut host = DomHost::from_dom(NativeDom::new_html(
+        Url::parse("https://example.test/").unwrap(),
+    ));
+    let mut effects = DomMutationEffects::default();
+    let (stream, target, mut owner) = live_fragment_stream_for_test(&mut host, &mut effects, true);
+    stream
+        .enqueue("<script>adoptedCode()".into(), &mut owner)
+        .unwrap();
+    assert!(matches!(
+        stream.pump_next(&mut owner).unwrap(),
+        ParserPumpStep::InputDrained
+    ));
+
+    let script = host.child_handles(target).next().unwrap();
+    let new_document = host.create_detached_html_document();
+    assert_eq!(host.adopt_node(new_document, script), Some(script));
+    assert!(host.append_child(new_document, script));
+    host.mark_subtree_connected_preserving_owner_document(new_document);
+    assert!(host.is_connected(script));
+
+    stream.enqueue("</script>".into(), &mut owner).unwrap();
+    let step = stream.pump_next(&mut owner).unwrap();
+    let ParserPumpStep::Yield(ParserYield::ScriptPreparation(request)) = step else {
+        panic!("expected script preparation, got {step:?}");
+    };
+    let prepared = stream.prepare_script(*request, &mut owner);
+    let ParserScriptHandoff::NoExecution {
+        node_id, outcome, ..
+    } = prepared
+    else {
+        panic!("expected an inert adopted script, got {prepared:?}");
+    };
+    assert_eq!(node_id, script);
+    assert_eq!(
+        outcome.element_state_transition(),
+        ParserScriptElementStateTransition::MarkAlreadyStarted
+    );
+    stream.close(&mut owner).unwrap();
+}
+
+#[test]
+fn fragment_stream_keeps_inert_and_unclosed_scripts_already_started() {
+    for (run_scripts, abort, markup) in [
+        (
+            false,
+            false,
+            "<script>htmlCode()</script><svg><script>svgCode()</script></svg>",
+        ),
+        (true, false, "<script>unclosed()"),
+        (true, true, "<svg><script>unclosed()"),
+    ] {
+        let url = Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        let mut effects = DomMutationEffects::default();
+        let (stream, target, mut owner) =
+            live_fragment_stream_for_test(&mut host, &mut effects, run_scripts);
+        if run_scripts {
+            stream.enqueue(markup.into(), &mut owner).unwrap();
+            assert!(matches!(
+                stream.pump_next(&mut owner).unwrap(),
+                crate::ParserPumpStep::InputDrained
+            ));
+        } else {
+            stream.write(markup, &mut owner).unwrap();
+        }
+        if abort {
+            stream.abort(&mut owner);
+        } else {
+            stream.close(&mut owner).unwrap();
+        }
+        let scripts = host.elements_by_tag_name(target, "script", false);
+        assert_eq!(scripts.len(), if run_scripts { 1 } else { 2 });
+        for script in scripts {
+            assert!(
+                host.node(script)
+                    .unwrap()
+                    .as_element()
+                    .unwrap()
+                    .script_already_started()
+            );
+        }
+    }
 }
 
 #[test]

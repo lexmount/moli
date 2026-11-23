@@ -237,9 +237,43 @@ pub(in crate::context_bootstrap) struct UnsafeHtmlDocumentArgs<'s> {
     options: ParserOptionsArgument<'s>,
 }
 
-enum CompliantParserOptions<'s> {
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "HTML streaming")]
+pub(crate) struct UnsafeHtmlStreamArgs<'s> {
+    #[webidl(with = fragment_options_argument)]
+    options: ParserOptionsArgument<'s>,
+}
+
+pub(crate) struct CompliantParserOptions<'s>(ParserOptionsSource<'s>);
+
+enum ParserOptionsSource<'s> {
     Author(SetHtmlUnsafeOptions<'s>),
     Trusted(PreparedParserOptions),
+}
+
+impl<'s> CompliantParserOptions<'s> {
+    pub(crate) fn into_parser_options(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<(Option<HtmlSanitizer>, bool)> {
+        let options = match self.0 {
+            ParserOptionsSource::Author(options) => options.into_prepared(scope)?,
+            ParserOptionsSource::Trusted(options) => options,
+        };
+        Some((options.sanitizer, options.run_scripts))
+    }
+}
+
+impl<'s> UnsafeHtmlStreamArgs<'s> {
+    pub(crate) fn prepare(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        global: v8::Local<'s, v8::Object>,
+        requirements: TrustedTypesForScriptRequirements,
+        sink: &'static str,
+    ) -> Option<CompliantParserOptions<'s>> {
+        prepare_parser_options(scope, self.options, global, requirements, sink, true)
+    }
 }
 
 pub(crate) struct PreparedUnsafeHtml<'s> {
@@ -252,11 +286,8 @@ impl<'s> PreparedUnsafeHtml<'s> {
         self,
         scope: &mut v8::PinScope<'s, '_>,
     ) -> Option<(String, Option<HtmlSanitizer>, bool)> {
-        let options = match self.options {
-            CompliantParserOptions::Author(options) => options.into_prepared(scope)?,
-            CompliantParserOptions::Trusted(options) => options,
-        };
-        Some((self.html, options.sanitizer, options.run_scripts))
+        let (sanitizer, run_scripts) = self.options.into_parser_options(scope)?;
+        Some((self.html, sanitizer, run_scripts))
     }
 }
 
@@ -309,10 +340,35 @@ fn prepare_html<'s>(
     sink: &'static str,
     api_name: &'static str,
 ) -> Option<PreparedUnsafeHtml<'s>> {
+    let options = prepare_parser_options(scope, options, global, requirements, sink, false)?;
+    if let ParserOptionsSource::Trusted(options) = options.0 {
+        return prepared_with_trusted_options(scope, html, options);
+    }
+    let html = trusted_type_string_or_throw(
+        scope,
+        html.0,
+        TrustedTypeKind::Html,
+        requirements,
+        sink,
+        api_name,
+        Some(global),
+    )?;
+    Some(PreparedUnsafeHtml { html, options })
+}
+
+fn prepare_parser_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    options: ParserOptionsArgument<'s>,
+    global: v8::Local<'s, v8::Object>,
+    requirements: TrustedTypesForScriptRequirements,
+    sink: &'static str,
+    throw_if_missing: bool,
+) -> Option<CompliantParserOptions<'s>> {
     let options = match options {
         ParserOptionsArgument::Trusted(owner) => {
-            let options = trusted_options(scope, owner)?;
-            return prepared_with_trusted_options(scope, html, options);
+            return trusted_options(scope, owner)
+                .map(ParserOptionsSource::Trusted)
+                .map(CompliantParserOptions);
         }
         ParserOptionsArgument::Dictionary(options) => options,
     };
@@ -335,15 +391,19 @@ fn prepare_html<'s>(
                     convert_policy_result,
                 ) {
                     TrustedTypePolicyCallbackOutcome::Returned(Some(result)) => {
-                        let options = result.into_prepared(scope)?;
-                        return prepared_with_trusted_options(scope, html, options);
+                        return result
+                            .into_prepared(scope)
+                            .map(ParserOptionsSource::Trusted)
+                            .map(CompliantParserOptions);
                     }
                     TrustedTypePolicyCallbackOutcome::Returned(None) => true,
                     TrustedTypePolicyCallbackOutcome::Abrupt => return None,
-                    TrustedTypePolicyCallbackOutcome::Missing => options.needs_vetting(),
+                    TrustedTypePolicyCallbackOutcome::Missing => {
+                        throw_if_missing || options.needs_vetting()
+                    }
                 }
             }
-            None => options.needs_vetting(),
+            None => throw_if_missing || options.needs_vetting(),
         };
         if report_violation {
             if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
@@ -359,19 +419,7 @@ fn prepare_html<'s>(
         }
     }
 
-    let html = trusted_type_string_or_throw(
-        scope,
-        html.0,
-        TrustedTypeKind::Html,
-        requirements,
-        sink,
-        api_name,
-        Some(global),
-    )?;
-    Some(PreparedUnsafeHtml {
-        html,
-        options: CompliantParserOptions::Author(options),
-    })
+    Some(CompliantParserOptions(ParserOptionsSource::Author(options)))
 }
 
 fn prepared_with_trusted_options<'s>(
@@ -386,7 +434,7 @@ fn prepared_with_trusted_options<'s>(
     })?;
     Some(PreparedUnsafeHtml {
         html,
-        options: CompliantParserOptions::Trusted(options),
+        options: CompliantParserOptions(ParserOptionsSource::Trusted(options)),
     })
 }
 

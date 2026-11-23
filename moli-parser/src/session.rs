@@ -263,6 +263,13 @@ impl TokenSink for EmbedderPausingTreeBuilder {
         // custom-element pause visible only after one of those tokens. Retain
         // the sink-owned pause until a tag token can yield it safely.
         let can_pause = matches!(&token, Token::TagToken(_));
+        if self.sink().fragment_abort_requested() {
+            return if can_pause {
+                TokenSinkResult::Script(TokenizerPause::OwnerInterrupted)
+            } else {
+                TokenSinkResult::Continue
+            };
+        }
         let commits_text = !matches!(
             &token,
             Token::CharacterTokens(_) | Token::NullCharacterToken | Token::ParseError(_)
@@ -442,6 +449,9 @@ impl HtmlParserSession {
         let input = self.input.borrow().current();
         let result = feed_with_definitive_encoding(&self.tokenizer, &input);
         self.tokenizer.sink.flush_text_at_input_boundary();
+        if self.sink().fragment_abort_requested() {
+            return HtmlParserSessionResult::OwnerInterrupted;
+        }
         if matches!(result, HtmlParserSessionResult::InputDrained)
             && self.input.borrow().is_current(&input)
         {
@@ -506,6 +516,10 @@ impl HtmlParserSession {
         }
         debug_assert!(input_buffer.is_empty());
         tokenizer.sink.begin_tree_builder_finish();
+        tokenizer
+            .sink
+            .sink()
+            .mark_open_fragment_scripts_already_started();
         tokenizer.end();
         let sink = tokenizer.sink.sink();
         sink.finish_construction();
@@ -522,6 +536,7 @@ impl HtmlParserSession {
     /// End the tree builder without running the tokenizer's EOF algorithm.
     /// Already inserted elements still finish parsing their children.
     pub(super) fn abort_fragment(&self) {
+        self.sink().mark_open_fragment_scripts_already_started();
         self.tokenizer.sink.end();
         self.sink().finish_construction();
     }
@@ -580,13 +595,10 @@ pub(super) fn new_fragment_html_tree_sink_session(
     scripting_enabled: bool,
 ) -> HtmlTreeSinkSession {
     let sink = DocumentSink::new(target);
+    let mut options = html_parse_opts_with_scripting(scripting_enabled);
+    options.tree_builder.fragment_runs_scripts = context.runs_scripts;
     let context_handle = context.into_parse_handle();
-    let parser = HtmlParserSession::new_fragment(
-        sink,
-        html_parse_opts_with_scripting(scripting_enabled),
-        context_handle,
-        scripting_enabled,
-    );
+    let parser = HtmlParserSession::new_fragment(sink, options, context_handle, scripting_enabled);
     let script_input = ParserInputQueue::default();
 
     HtmlTreeSinkSession {

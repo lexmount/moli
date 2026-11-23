@@ -1,4 +1,5 @@
 use crate::page_task_queue::{
+    HtmlFragmentModuleTaskTarget, HtmlFragmentScriptTask, HtmlFragmentScriptTaskKind,
     PageDomManipulationTurnAction, PageDomManipulationTurnOutcome, RendererPageDomManipulationTask,
 };
 
@@ -39,6 +40,17 @@ impl PageVm {
                 .map(|outcome| {
                     outcome.map_action(PageDomManipulationTurnAction::FileEntryFileCallback)
                 }),
+            RendererPageDomManipulationTask::HtmlFragmentScript(task) => {
+                let dispatched =
+                    if task.owner.root_document() == self.document_lifecycle.identity().document {
+                        self.apply_selected_html_fragment_script_turn(task).await?
+                    } else {
+                        false
+                    };
+                Ok(PageDomManipulationTurnOutcome::new(
+                    PageDomManipulationTurnAction::HtmlFragmentScript { dispatched },
+                ))
+            }
             RendererPageDomManipulationTask::ServiceWorkerQuery(task) => self
                 .apply_selected_page_service_worker_query_turn(task)
                 .map(|outcome| {
@@ -90,5 +102,79 @@ impl PageVm {
                     outcome.map_action(PageDomManipulationTurnAction::ViewTransitionUpdate)
                 }),
         }
+    }
+
+    async fn apply_selected_html_fragment_script_turn(
+        &mut self,
+        task: HtmlFragmentScriptTask,
+    ) -> anyhow::Result<bool> {
+        match task.kind {
+            HtmlFragmentScriptTaskKind::StartModule { job } => self
+                .vm_mut()
+                .start_html_fragment_module(HtmlFragmentModuleTaskTarget {
+                    document: task.owner.target(),
+                    stream: task.stream,
+                    job,
+                }),
+            HtmlFragmentScriptTaskKind::RunModule { job } => {
+                self.run_selected_html_fragment_module(HtmlFragmentModuleTaskTarget {
+                    document: task.owner.target(),
+                    stream: task.stream,
+                    job,
+                })
+                .await
+            }
+            _ => self.vm_mut().apply_html_fragment_script_task(task),
+        }
+    }
+
+    async fn run_selected_html_fragment_module(
+        &mut self,
+        route: HtmlFragmentModuleTaskTarget,
+    ) -> anyhow::Result<bool> {
+        use crate::native_bridge::{HtmlFragmentModuleTerminal, WindowDocumentOwner};
+        let Some(terminal) = self.vm_mut().take_html_fragment_module_terminal(route)? else {
+            return Ok(false);
+        };
+        let mut failure = None;
+        let effect = match terminal {
+            HtmlFragmentModuleTerminal::Main(work) => {
+                let WindowDocumentOwner::Frame(owner) = route.document.owner() else {
+                    unreachable!("main fragment graph retains a frame owner");
+                };
+                let Some(loader) = self
+                    .vm()
+                    .document_runtime
+                    .current_document_resource_loader()
+                else {
+                    self.vm_mut()
+                        .finish_html_fragment_module_turn(route, None)?;
+                    return Ok(false);
+                };
+                super::parser_owned_document_script::MainParserOwnedDocumentScriptOwner::new(
+                    self,
+                    loader.request_client(),
+                )
+                .run_html_fragment_module_terminal(owner, *work)
+                .await
+                .map(|effect| {
+                    !matches!(
+                        effect,
+                        super::parser_task_completion::MainParserContinuationTaskEffect::NotApplied
+                    )
+                })
+            }
+            HtmlFragmentModuleTerminal::Child(work) => Ok(self
+                .vm_mut()
+                .run_child_html_fragment_module_terminal(*work)
+                .await),
+            HtmlFragmentModuleTerminal::Unavailable(node) => {
+                failure = Some(node);
+                Ok(true)
+            }
+        };
+        self.vm_mut()
+            .finish_html_fragment_module_turn(route, failure)?;
+        effect
     }
 }

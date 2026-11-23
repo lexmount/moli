@@ -114,6 +114,7 @@ impl PageScriptHost {
         owner: FrameDocumentTaskOwner,
     ) {
         let document_owner = owner.document_owner();
+        self.retire_html_fragment_module_loads(owner);
         let _ = self
             .frame_owner_store
             .release_all_document_script_load_delays(owner);
@@ -130,6 +131,14 @@ impl PageScriptHost {
         self.cancel_child_classic_document_script_work(handle);
     }
 
+    pub(crate) fn queue_child_html_fragment_module(
+        &mut self,
+        handle: DomHandle,
+        script: PreparedScript,
+    ) -> bool {
+        self.queue_child_module_script(handle, script.node_id, Default::default(), script, true)
+    }
+
     /// Parser and runtime insertions share the module graph pipeline. Only
     /// ModuleDefer reserves parser order and delays DOMContentLoaded.
     pub(in crate::native_bridge::context_host) fn queue_child_module_script_for_current_document(
@@ -139,7 +148,26 @@ impl PageScriptHost {
         blocking_stylesheet_signatures: std::collections::HashSet<
             crate::stylesheet_blocking::DocumentBlockingStylesheetSignature,
         >,
+        script: PreparedScript,
+    ) -> bool {
+        self.queue_child_module_script(
+            handle,
+            script_handle,
+            blocking_stylesheet_signatures,
+            script,
+            false,
+        )
+    }
+
+    fn queue_child_module_script(
+        &mut self,
+        handle: DomHandle,
+        script_handle: DomHandle,
+        blocking_stylesheet_signatures: std::collections::HashSet<
+            crate::stylesheet_blocking::DocumentBlockingStylesheetSignature,
+        >,
         mut script: PreparedScript,
+        fragment_owned: bool,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -159,7 +187,7 @@ impl PageScriptHost {
                 .frame_owner_store
                 .resolve_current_child_document_module_integrity(handle, owner, &script.url);
         }
-        let parser_ordered = script.mode == ScriptMode::ModuleDefer;
+        let parser_ordered = !fragment_owned && script.mode == ScriptMode::ModuleDefer;
         let pending_script_id = ParserPendingScriptId::from_key(
             owner.document_owner(),
             crate::document_script_scheduler::ParserPendingScriptKey::from_script(&script),
@@ -177,7 +205,9 @@ impl PageScriptHost {
             );
             return true;
         }
-        let load_delay_token = if parser_ordered {
+        let load_delay_token = if fragment_owned {
+            Some(crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay::AlreadyUnblocked)
+        } else if parser_ordered {
             self.frame_owner_store
                 .acquire_current_child_parser_deferred_script_load_delay(handle, owner)
                 .map(Into::into)
@@ -188,7 +218,12 @@ impl PageScriptHost {
         let Some(load_delay_token) = load_delay_token else {
             return false;
         };
-        let (registered_pending_script_id, accepted, queued_ready_work) = if parser_ordered {
+        let (registered_pending_script_id, accepted, queued_ready_work) = if fragment_owned {
+            let registered = self
+                .child_document_script_schedulers
+                .register_module_script(owner.document_owner(), &script);
+            (registered, true, false)
+        } else if parser_ordered {
             match self
                 .child_document_script_schedulers
                 .accept_parser_ordered_module_script(

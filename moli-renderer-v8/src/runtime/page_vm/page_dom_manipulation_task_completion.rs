@@ -40,6 +40,13 @@ impl PageVm {
             PageDomManipulationTurnAction::FileEntryFileCallback(action) => {
                 action.into_page_task_completion()
             }
+            PageDomManipulationTurnAction::HtmlFragmentScript { dispatched } => {
+                if dispatched {
+                    super::PageTaskCompletion::CallbackCompletion
+                } else {
+                    super::PageTaskCompletion::NoCompletion
+                }
+            }
             PageDomManipulationTurnAction::ServiceWorkerQuery(action) => {
                 action.into_page_task_completion()
             }

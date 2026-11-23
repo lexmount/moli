@@ -1009,6 +1009,10 @@ pub(crate) struct PageScriptHost {
     frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore,
     frame_document_stylesheets: FrameDocumentStylesheetStore,
     child_document_script_schedulers: FrameDocumentScriptSchedulerStore,
+    html_fragment_module_loads: std::collections::HashMap<
+        (crate::frame_owner_model::FrameDocumentTaskOwner, DomHandle),
+        crate::page_task_queue::HtmlFragmentModuleTaskTarget,
+    >,
     child_document_parsers: ChildDocumentParserStore,
     child_window_proxy_records: ChildWindowProxyRecords,
     top_window_opener: Option<(PendingWindowMessageEndpoint, v8::Global<v8::Object>)>,

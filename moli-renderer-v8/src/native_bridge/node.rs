@@ -43,8 +43,8 @@ pub(super) use self::errors::*;
 pub(crate) use self::foreign::node_or_foreign_arg_handle_allow_detached;
 pub(super) use self::foreign::*;
 use self::metadata::*;
-pub(crate) use self::mutation::validate_pre_insert_handles;
 pub(super) use self::mutation::*;
+pub(crate) use self::mutation::{validate_document_sequence, validate_pre_insert_handles};
 pub(super) use self::tree::*;
 
 #[derive(WebApiFunctionTemplate)]

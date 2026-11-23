@@ -83,25 +83,20 @@ pub(super) fn convert_nodes_into_node(
     Some(fragment)
 }
 
-pub(super) fn validate_document_sequence(
-    runtime: &PageScriptHost,
+pub(crate) fn validate_document_sequence(
+    dom: &moli_dom::native::DomHost,
     parent: DomHandle,
     reference_child: Option<DomHandle>,
     inserted: &[DomHandle],
     skipped: &[DomHandle],
 ) -> bool {
-    if !node_is_document(runtime, parent) {
+    if !dom.node(parent).is_some_and(Node::is_document) {
         return true;
     }
 
     let mut sequence = Vec::new();
-    let children = runtime
-        .dom_host()
-        .node(parent)
-        .map(|node| node.child_ids(runtime.dom_host().dom()).collect::<Vec<_>>())
-        .unwrap_or_default();
     let mut inserted_emitted = false;
-    for child in children {
+    for child in dom.child_handles(parent) {
         if Some(child) == reference_child {
             sequence.extend_from_slice(inserted);
             inserted_emitted = true;
@@ -118,7 +113,7 @@ pub(super) fn validate_document_sequence(
     let mut saw_element = false;
     let mut saw_doctype = false;
     for handle in sequence {
-        let Some(node) = runtime.dom_host().node(handle) else {
+        let Some(node) = dom.node(handle) else {
             return false;
         };
         match node.node_type() {

@@ -28,6 +28,11 @@ pub(crate) use current_input::{
 };
 pub(crate) mod document;
 pub(crate) mod element;
+pub(crate) use element::{
+    HtmlFragmentModuleTerminal, accept_html_fragment_module_terminal,
+    apply_html_fragment_script_task, finish_html_fragment_module_turn,
+    take_html_fragment_module_start, take_html_fragment_module_terminal,
+};
 pub(crate) mod fullscreen;
 mod helpers;
 mod history_queue;
@@ -109,7 +114,7 @@ pub(crate) use node::{
     node_owner_document_relevant_context, node_relevant_context,
     node_runtime_and_handle_from_object, node_runtime_and_handle_from_object_or_detached,
     node_target_relevant_context, object_is_node_wrapper_or_detached, receiver_has_detached_state,
-    validate_pre_insert_handles,
+    validate_document_sequence, validate_pre_insert_handles,
 };
 pub(crate) use node::{install_character_data_template_bindings, install_node_template_bindings};
 

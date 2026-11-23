@@ -6,12 +6,15 @@ use std::sync::{
 use moli_owner_queue::{OwnerReadyTaskRoute, OwnerReadyTaskSource};
 
 use crate::{
+    native_bridge::WindowDocumentTaskTarget,
+    planning::PreparedScriptSourceLoadOutcome,
     resource_ready::{ReadyPageTask, RendererPageTaskReadyMetadata},
     runtime::PageOwnerTurnOutcome,
 };
 
 use super::{
     RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskReadySignal,
+    RendererPageWindowDocumentTaskOwner,
     broadcast_channel_delivery::{
         RendererPageBroadcastChannelDeliveryOwner, RendererPageBroadcastChannelDeliverySender,
         RendererPageBroadcastChannelDeliveryTask,
@@ -102,6 +105,36 @@ impl RendererPageDomManipulationCancellation {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum HtmlFragmentScriptTaskKind {
+    SourceReady {
+        job: u64,
+        outcome: Result<Box<PreparedScriptSourceLoadOutcome>, String>,
+    },
+    StartModule {
+        job: u64,
+    },
+    RunModule {
+        job: u64,
+    },
+    RunDeferred,
+    Retire,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HtmlFragmentModuleTaskTarget {
+    pub(crate) document: WindowDocumentTaskTarget,
+    pub(crate) stream: u64,
+    pub(crate) job: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct HtmlFragmentScriptTask {
+    pub(crate) owner: RendererPageWindowDocumentTaskOwner,
+    pub(crate) stream: u64,
+    pub(crate) kind: HtmlFragmentScriptTaskKind,
+}
+
 /// Exact owner of the head of the HTML DOM-manipulation task source.
 ///
 /// Variants remain typed for source-local authorization, while the outer enum
@@ -114,6 +147,7 @@ pub(crate) enum RendererPageDomManipulationOwner {
     HashChange(RendererPageHashChangeDeliveryOwner),
     ElementToggle(RendererPageElementToggleEventOwner),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackOwner),
+    HtmlFragmentScript(RendererPageWindowDocumentTaskOwner),
     ServiceWorkerQuery(RendererPageServiceWorkerQueryOwner),
     ScriptPreparationError(RendererPageScriptPreparationErrorOwner),
     ObjectResourceSelection(RendererPageObjectResourceSelectionOwner),
@@ -139,6 +173,7 @@ pub(crate) enum RendererPageDomManipulationTask {
     HashChange(RendererPageHashChangeDeliveryTask),
     ElementToggle(RendererPageElementToggleEventTask),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackTask),
+    HtmlFragmentScript(HtmlFragmentScriptTask),
     ServiceWorkerQuery(RendererPageServiceWorkerQueryTask),
     ScriptPreparationError(RendererPageScriptPreparationErrorTask),
     ObjectResourceSelection(RendererPageObjectResourceSelectionTask),
@@ -171,6 +206,9 @@ impl RendererPageDomManipulationTask {
             }
             Self::FileEntryFileCallback(task) => {
                 RendererPageDomManipulationOwner::FileEntryFileCallback(task.owner())
+            }
+            Self::HtmlFragmentScript(task) => {
+                RendererPageDomManipulationOwner::HtmlFragmentScript(task.owner)
             }
             Self::ServiceWorkerQuery(task) => {
                 RendererPageDomManipulationOwner::ServiceWorkerQuery(task.owner())
@@ -240,6 +278,7 @@ pub(crate) enum PageDomManipulationTurnAction {
     HashChange(super::PageHashChangeDeliveryTurnAction),
     ElementToggle(super::PageElementToggleEventTurnAction),
     FileEntryFileCallback(super::PageFileEntryFileCallbackTurnAction),
+    HtmlFragmentScript { dispatched: bool },
     ServiceWorkerQuery(super::PageServiceWorkerQueryTurnAction),
     ScriptPreparationError(super::PageScriptPreparationErrorTurnAction),
     ObjectResourceSelection(super::PageObjectResourceSelectionTurnAction),
@@ -301,6 +340,22 @@ impl RendererPageDomManipulationSender {
     pub(crate) fn file_entry_file_callback(&self) -> RendererPageFileEntryFileCallbackSender {
         RendererPageFileEntryFileCallbackSender::new(self.route.clone(), self.root_document)
     }
+    pub(crate) fn send_html_fragment_script(
+        &self,
+        target: WindowDocumentTaskTarget,
+        stream: u64,
+        kind: HtmlFragmentScriptTaskKind,
+    ) -> Result<(), RendererPageDomManipulationRouteClosed> {
+        self.route
+            .send(RendererPageDomManipulationTask::HtmlFragmentScript(
+                HtmlFragmentScriptTask {
+                    owner: RendererPageWindowDocumentTaskOwner::new(self.root_document, target),
+                    stream,
+                    kind,
+                },
+            ))
+    }
+
     pub(crate) fn service_worker_query(&self) -> RendererPageServiceWorkerQuerySender {
         RendererPageServiceWorkerQuerySender::new(self.route.clone(), self.root_document)
     }

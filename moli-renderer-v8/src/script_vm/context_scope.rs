@@ -106,6 +106,17 @@ impl ScriptVm {
         self.with_context_scope_by_ptr(context_ptr, op)
     }
 
+    pub(crate) fn apply_html_fragment_script_task(
+        &mut self,
+        task: crate::page_task_queue::HtmlFragmentScriptTask,
+    ) -> Result<bool> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            Ok(crate::native_bridge::apply_html_fragment_script_task(
+                scope, host_ptr, task,
+            ))
+        })
+    }
+
     /// Update an already-materialized JavaScript surface without creating one.
     pub(super) fn with_current_main_world_scope<T>(
         &mut self,

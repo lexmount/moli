@@ -275,7 +275,13 @@ fn validate_pre_insert_node_type_and_document(
     }
 
     let inserted = pre_insert_validation_handles(runtime, child);
-    if !validate_document_sequence(runtime, parent, reference_child, &inserted, skipped) {
+    if !validate_document_sequence(
+        runtime.dom_host(),
+        parent,
+        reference_child,
+        &inserted,
+        skipped,
+    ) {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return false;
     }
@@ -414,7 +420,13 @@ fn node_move_before_after_argument_validation(
     if reference_child == Some(child) {
         return;
     }
-    if !validate_document_sequence(runtime, parent, reference_child, &[child], &[child]) {
+    if !validate_document_sequence(
+        runtime.dom_host(),
+        parent,
+        reference_child,
+        &[child],
+        &[child],
+    ) {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }

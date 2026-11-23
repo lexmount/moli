@@ -152,6 +152,33 @@ impl<'page, 'loader> MainParserOwnedDocumentScriptOwner<'page, 'loader> {
         runner.run_ready_work(work).await
     }
 
+    pub(super) async fn run_html_fragment_module_terminal(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+        terminal: crate::module_script_continuation::MainParserModuleGraphTerminalWork,
+    ) -> Result<MainParserContinuationTaskEffect> {
+        let ready = match terminal {
+            ParserModuleGraphTerminalWork::Ready(work) => {
+                DocumentModuleScriptReadyWork::GraphReady(*work)
+            }
+            ParserModuleGraphTerminalWork::Failed(failure) => {
+                DocumentModuleScriptReadyWork::GraphFailed(failure)
+            }
+        };
+        match self
+            .run_parser_module_ready_with_shared_runner(
+                ready,
+                ParserModuleTerminalDisposition::ReturnToSelectedParserTask,
+            )
+            .await?
+        {
+            MainParserModuleExecution::Settled { task_effect, .. } => Ok(task_effect),
+            MainParserModuleExecution::TerminalForSelectedTask { terminal, .. } => Ok(self
+                .page_vm
+                .dispatch_parser_module_terminal(owner, terminal)),
+        }
+    }
+
     pub(super) async fn run_parser_deferred_module_terminal(
         &mut self,
         owner: FrameDocumentTaskOwner,

@@ -1,7 +1,8 @@
 use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use super::construction_failure::ConstructionFailure;
 use super::construction_invocation::{
-    CustomElementConstructorInvocation, invoke_custom_element_constructor,
+    CustomElementConstructorInvocation, call_custom_element_constructor,
+    checkpoint_after_custom_element_constructor,
 };
 use super::construction_result::{
     FailedExistingConstructionPrototype, synchronize_custom_element_prototype_for_handle,
@@ -30,9 +31,8 @@ pub(super) fn upgrade_existing_custom_element_with_constructor<'s>(
     unsafe { &mut *host_ptr }
         .custom_elements_mut_for_node_handle(handle)
         .begin_construction(scope, construction_owner, constructor, wrapper, handle);
-    let _dynamic_markup = enter_upgrade_dynamic_markup_insertion(host_ptr, handle);
-    let invocation = invoke_custom_element_constructor(scope, host_ptr, constructor);
-    match invocation {
+    let dynamic_markup = enter_upgrade_dynamic_markup_insertion(host_ptr, handle);
+    let result = match call_custom_element_constructor(scope, host_ptr, constructor) {
         CustomElementConstructorInvocation::Created(created) => {
             let created = v8::Local::new(scope, &created);
             synchronize_custom_element_prototype_for_handle(scope, host_ptr, handle, wrapper);
@@ -47,9 +47,9 @@ pub(super) fn upgrade_existing_custom_element_with_constructor<'s>(
                     ),
                     failure_prototype,
                 );
-                return true;
+            } else {
+                complete_existing_custom_element_upgrade(scope, host_ptr, handle, definition_name);
             }
-            complete_existing_custom_element_upgrade(scope, host_ptr, handle, definition_name);
             true
         }
         CustomElementConstructorInvocation::Exception(exception) => {
@@ -64,16 +64,16 @@ pub(super) fn upgrade_existing_custom_element_with_constructor<'s>(
                 definition_name,
             ) {
                 complete_existing_custom_element_upgrade(scope, host_ptr, handle, definition_name);
-                return true;
+            } else {
+                fail_existing_custom_element_construction(
+                    scope,
+                    host_ptr,
+                    handle,
+                    constructor,
+                    ConstructionFailure::Exception(exception),
+                    failure_prototype,
+                );
             }
-            fail_existing_custom_element_construction(
-                scope,
-                host_ptr,
-                handle,
-                constructor,
-                ConstructionFailure::Exception(exception),
-                failure_prototype,
-            );
             true
         }
         CustomElementConstructorInvocation::Empty => {
@@ -85,7 +85,13 @@ pub(super) fn upgrade_existing_custom_element_with_constructor<'s>(
                 .clear_reactions(handle);
             false
         }
-    }
+    };
+    drop(dynamic_markup);
+    // The same element can be waiting in the backup queue. Publish the
+    // upgrade before a checkpoint can deliver its attribute and connection
+    // reactions through that queue.
+    checkpoint_after_custom_element_constructor(scope);
+    result
 }
 
 fn validate_existing_custom_element_upgrade_result<'s>(

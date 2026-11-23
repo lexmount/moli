@@ -242,7 +242,7 @@ where
                             tag.attrs,
                             tag.had_duplicate_attributes,
                         );
-                        if self.is_fragment() {
+                        if self.is_fragment() && !self.opts.fragment_runs_scripts {
                             self.sink.mark_script_already_started(&elem);
                         }
                         self.insert_appropriately(AppendNode(elem.clone()), None);

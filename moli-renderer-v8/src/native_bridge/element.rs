@@ -38,6 +38,11 @@ mod events;
 mod focus;
 mod forms;
 mod html_streaming;
+pub(crate) use html_streaming::{
+    HtmlFragmentModuleTerminal, accept_html_fragment_module_terminal,
+    apply_html_fragment_script_task, finish_html_fragment_module_turn,
+    take_html_fragment_module_start, take_html_fragment_module_terminal,
+};
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -480,8 +485,10 @@ pub(in crate::native_bridge) use forms::{
     resize_select_options, select_add_insertion_point, select_options_resize_target,
 };
 pub(super) use html_streaming::{
-    stream_after_html, stream_append_html, stream_before_html, stream_html, stream_prepend_html,
-    stream_replace_with_html,
+    stream_after_html, stream_after_html_unsafe, stream_append_html, stream_append_html_unsafe,
+    stream_before_html, stream_before_html_unsafe, stream_html, stream_html_unsafe,
+    stream_prepend_html, stream_prepend_html_unsafe, stream_replace_with_html,
+    stream_replace_with_html_unsafe,
 };
 use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};
 

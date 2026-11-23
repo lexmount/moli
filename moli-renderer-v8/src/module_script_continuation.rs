@@ -72,6 +72,12 @@ pub(crate) type MainDocumentScriptSchedulerStore = DocumentScriptSchedulerStore<
 pub(crate) type MainParserDeferredClassicSourceLoadCompletion =
     ParserDeferredClassicSourceLoadCompletion<MainParserDocumentOwner>;
 
+pub(crate) type MainParserModuleGraphTerminalWork =
+    crate::document_script_scheduler::ParserModuleGraphTerminalWork<
+        MainDocumentModuleGraphReadyTarget,
+        MainParserOwnedModuleScriptFailure,
+    >;
+
 pub(crate) type MainParserOwnedDocumentScriptWork = DocumentScriptReadyWork<
     MainDocumentModuleGraphReadyTarget,
     MainParserOwnedModuleScriptEvaluation,

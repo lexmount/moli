@@ -1,8 +1,9 @@
 use crate::native_bridge::element::{
     node_after_html_callback, node_after_html_unsafe_callback, node_before_html_callback,
     node_before_html_unsafe_callback, node_replace_with_html_callback,
-    node_replace_with_html_unsafe_callback, stream_after_html, stream_before_html,
-    stream_replace_with_html,
+    node_replace_with_html_unsafe_callback, stream_after_html, stream_after_html_unsafe,
+    stream_before_html, stream_before_html_unsafe, stream_replace_with_html,
+    stream_replace_with_html_unsafe,
 };
 use crate::web_api_interfaces;
 use crate::{
@@ -37,10 +38,16 @@ struct CharacterDataPrototypeDeclaration {
     replace_data: (),
     #[webapi(method = "streamBeforeHTML", length = 0, callback = stream_before_html)]
     stream_before_html: (),
+    #[webapi(method = "streamBeforeHTMLUnsafe", length = 0, callback = stream_before_html_unsafe)]
+    stream_before_html_unsafe: (),
     #[webapi(method = "streamAfterHTML", length = 0, callback = stream_after_html)]
     stream_after_html: (),
+    #[webapi(method = "streamAfterHTMLUnsafe", length = 0, callback = stream_after_html_unsafe)]
+    stream_after_html_unsafe: (),
     #[webapi(method = "streamReplaceWithHTML", length = 0, callback = stream_replace_with_html)]
     stream_replace_with_html: (),
+    #[webapi(method = "streamReplaceWithHTMLUnsafe", length = 0, callback = stream_replace_with_html_unsafe)]
+    stream_replace_with_html_unsafe: (),
     #[webapi(method = "beforeHTML", length = 1, callback = node_before_html_callback)]
     before_html: (),
     #[webapi(

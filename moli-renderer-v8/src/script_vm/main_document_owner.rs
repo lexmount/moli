@@ -133,6 +133,9 @@ impl ScriptVm {
                 DocumentInspectorBindingTransition::Preserved,
                 "Inspector replacement must execute synchronously before runtime replacement"
             );
+            self._context_host
+                .borrow_mut()
+                .retire_html_fragment_module_loads(transition.retired_owner());
             let prepared =
                 self.prepare_document_context_transition(transition.context_transition());
             rebound_isolated_world_count += self.finish_document_context_transition(prepared).1;

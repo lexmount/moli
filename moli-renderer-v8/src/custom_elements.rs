@@ -84,7 +84,7 @@ pub(crate) use attribute_lifecycle::{
 pub(crate) use connected_lifecycle::{
     enqueue_connected_callback, enqueue_connected_move_callback, enqueue_disconnected_callback,
 };
-pub(crate) use connected_subtree_lifecycle::enqueue_connected_and_form_callbacks_for_already_upgraded_subtrees;
+pub(crate) use connected_subtree_lifecycle::enqueue_connected_and_form_callbacks_for_subtrees;
 mod disconnected_subtree_lifecycle;
 pub(crate) use disconnected_subtree_lifecycle::enqueue_disconnected_callbacks_for_subtree;
 pub(crate) use lifecycle::call_lifecycle_callback;
@@ -95,7 +95,10 @@ mod parser_handoff_direct;
 mod parser_handoff_direct_result;
 mod parser_handoff_dom;
 mod parser_handoff_failure;
-pub(crate) use parser_handoff::create_and_construct_parser_custom_element_direct_for_document;
+pub(crate) use parser_handoff::{
+    create_and_construct_parser_custom_element_direct_for_document,
+    create_and_enqueue_fragment_parser_custom_element,
+};
 pub(crate) use parser_handoff_dom::flush_parser_custom_element_handoff_replacements;
 mod parser_handoff_runtime;
 pub(crate) use parser_handoff_runtime::construct_parser_created_autonomous_element_from_handoff;

@@ -2,38 +2,58 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use moli_parser::HtmlFragmentStream;
 use moli_v8_util::v8_string_to_u16_string;
-use moli_webapi::streams::adapter::{new_writable_stream_object, set_resolved_promise};
+use moli_webapi::streams::adapter::{
+    new_writable_stream_object, rejected_promise_value, set_resolved_promise,
+};
 use moli_webapi_declare::WebApiObject;
 
 use crate::{
-    context_bootstrap::sanitizer::SetHtmlOptions,
+    context_bootstrap::{CompliantParserOptions, UnsafeHtmlStreamArgs, sanitizer::SetHtmlOptions},
     custom_elements,
-    document_runtime::{DomHandle, HtmlInsertionAction},
+    document_runtime::HtmlInsertionAction,
     native_bridge::{
         PageScriptHost, bridge::wrapped_handle_value,
         node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
     },
+    page_task_queue::{HtmlFragmentModuleTaskTarget, HtmlFragmentScriptTask},
+    planning::PreparedScript,
     util::{get_private_object, get_private_value},
     webidl,
 };
 
 use super::content::HtmlInsertionPosition;
 
+mod parser;
+mod scripts;
+
+use parser::{FragmentStreamOwner, FragmentStreamProgress};
+
 const STREAM_ID: &str = "moli.HtmlFragmentStream.id";
 const STREAM_TARGET: &str = "moli.HtmlFragmentStream.target";
 
-type StreamState = Rc<RefCell<Option<ActiveFragmentStream>>>;
+pub(crate) enum HtmlFragmentModuleTerminal {
+    Main(Box<crate::module_script_continuation::MainParserModuleGraphTerminalWork>),
+    Child(Box<crate::document_script_scheduler::FrameDocumentModuleScriptReadyWork>),
+    Unavailable(crate::document_runtime::DomHandle),
+}
+
+pub(crate) struct HtmlFragmentModuleStart {
+    pub(crate) script: PreparedScript,
+    pub(crate) still_in_preparation_document: bool,
+}
+
+type StreamState = Rc<FragmentStream>;
 type StreamStore = Rc<RefCell<FragmentStreams>>;
 
-struct ActiveFragmentStream {
-    parser: HtmlFragmentStream,
-    host: *mut PageScriptHost,
-    target: DomHandle,
-    leading_surrogate: Option<u16>,
+struct FragmentStream {
+    owner: FragmentStreamOwner,
+    id: u64,
+    progress: RefCell<FragmentStreamProgress>,
+    writable: v8::Weak<v8::Object>,
 }
 
 struct FragmentStreamEntry {
-    _sink: v8::Weak<v8::Object>,
+    sink: v8::Weak<v8::Object>,
     stream: StreamState,
 }
 
@@ -68,7 +88,8 @@ struct StreamHtmlArgs<'s> {
 fn new_fragment_writable_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
-    stream: ActiveFragmentStream,
+    owner: FragmentStreamOwner,
+    parser: HtmlFragmentStream,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let store = scope.get_slot::<StreamStore>().cloned().unwrap_or_else(|| {
         let store = StreamStore::default();
@@ -90,24 +111,41 @@ fn new_fragment_writable_stream<'s>(
     let null = v8::null(scope);
     sink.set_prototype(scope, null.into())
         .filter(|changed| *changed)?;
+    let writable = new_writable_stream_object(scope, Some(sink), 1.0, None);
     let weak_store = Rc::downgrade(&store);
-    let weak = v8::Weak::with_finalizer(
+    let sink = v8::Weak::with_finalizer(
         scope,
         sink,
         Box::new(move |_| {
             if let Some(store) = weak_store.upgrade() {
-                store.borrow_mut().entries.remove(&id);
+                remove_collected_stream(&mut store.borrow_mut(), id);
             }
         }),
     );
-    store.borrow_mut().entries.insert(
+    let stream = Rc::new(FragmentStream {
+        owner,
         id,
-        FragmentStreamEntry {
-            _sink: weak,
-            stream: Rc::new(RefCell::new(Some(stream))),
-        },
-    );
-    Some(new_writable_stream_object(scope, Some(sink), 1.0, None))
+        progress: RefCell::new(FragmentStreamProgress::new(parser)),
+        writable: v8::Weak::new(scope, writable),
+    });
+    store
+        .borrow_mut()
+        .entries
+        .insert(id, FragmentStreamEntry { sink, stream });
+    Some(writable)
+}
+
+fn remove_collected_stream(store: &mut FragmentStreams, id: u64) {
+    if store.entries.get(&id).is_some_and(|entry| {
+        entry.sink.is_empty()
+            && entry
+                .stream
+                .progress
+                .try_borrow()
+                .is_ok_and(|progress| !progress.has_tasks())
+    }) {
+        store.entries.remove(&id);
+    }
 }
 
 fn stream_state<'s>(
@@ -116,6 +154,10 @@ fn stream_state<'s>(
 ) -> Option<StreamState> {
     let value = get_private_value(scope, sink, STREAM_ID)?;
     let id = v8::Local::<v8::BigInt>::try_from(value).ok()?.u64_value().0;
+    stream_state_by_id(scope, id)
+}
+
+fn stream_state_by_id(scope: &mut v8::PinScope<'_, '_>, id: u64) -> Option<StreamState> {
     scope
         .get_slot::<StreamStore>()?
         .borrow()
@@ -124,34 +166,14 @@ fn stream_state<'s>(
         .map(|entry| entry.stream.clone())
 }
 
-fn stream_runtime<'s>(
+fn stream_target_is_current<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     sink: v8::Local<'s, v8::Object>,
-    stream: &ActiveFragmentStream,
-) -> Option<*mut PageScriptHost> {
-    let target = get_private_object(scope, sink, STREAM_TARGET)?;
-    let (runtime, handle) = node_runtime_and_handle_from_object_or_detached(scope, target).ok()?;
-    (runtime == stream.host && handle == stream.target).then_some(runtime)
-}
-
-fn throw_displaced_reference(scope: &mut v8::PinScope<'_, '_>) {
-    throw_dom_exception(
-        scope,
-        "HierarchyRequestError",
-        3,
-        "The reference child is no longer a child of the HTML stream's target.",
-    );
-}
-
-fn abort_fragment<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    sink: v8::Local<'s, v8::Object>,
-    stream: ActiveFragmentStream,
-) {
-    if let Some(runtime_ptr) = stream_runtime(scope, sink, &stream) {
-        let runtime = unsafe { &mut *runtime_ptr };
-        runtime.abort_html_fragment_stream(scope, runtime_ptr, stream.parser);
-    }
+    stream: &FragmentStream,
+) -> bool {
+    get_private_object(scope, sink, STREAM_TARGET)
+        .and_then(|target| node_runtime_and_handle_from_object_or_detached(scope, target).ok())
+        == Some((stream.owner.host, stream.owner.target))
 }
 
 fn write_callback<'s>(
@@ -159,7 +181,7 @@ fn write_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(state) = stream_state(scope, args.this()) else {
+    let Some(stream) = stream_state(scope, args.this()) else {
         return;
     };
     let input = {
@@ -169,45 +191,35 @@ fn write_callback<'s>(
             None => Err(tc.exception().map(|error| v8::Global::new(tc, error))),
         }
     };
-    let Some(mut stream) = state.borrow_mut().take() else {
-        return;
-    };
-    let mut chunk = match input {
+    let chunk = match input {
         Ok(chunk) => chunk,
         Err(exception) => {
-            abort_fragment(scope, args.this(), stream);
             if let Some(exception) = exception {
                 let exception = v8::Local::new(scope, &exception);
-                scope.throw_exception(exception);
+                stream.abort_parser(scope, Some(exception));
+                if let Some(promise) = rejected_promise_value(scope, exception) {
+                    rv.set(promise);
+                }
+            } else {
+                stream.abort_parser(scope, None);
             }
             return;
         }
     };
-    let Some(runtime_ptr) = stream_runtime(scope, args.this(), &stream) else {
-        throw_displaced_reference(scope);
-        return;
-    };
-    if let Some(leading) = stream.leading_surrogate.take() {
-        chunk.insert(0, leading);
-    }
-    // A DOMString chunk can end between the code units of one character.
-    if chunk
-        .last()
-        .is_some_and(|unit| (0xd800..=0xdbff).contains(unit))
-    {
-        stream.leading_surrogate = chunk.pop();
-    }
-    let chunk = String::from_utf16_lossy(&chunk);
-    let runtime = unsafe { &mut *runtime_ptr };
-    if runtime
-        .write_html_fragment_stream(scope, runtime_ptr, &stream.parser, &chunk)
-        .is_err()
-    {
-        runtime.abort_html_fragment_stream(scope, runtime_ptr, stream.parser);
-        throw_displaced_reference(scope);
+    if !stream_target_is_current(scope, args.this(), &stream) || !stream.reference_is_valid() {
+        let error = stream.invalid_reference(scope);
+        if let Some(promise) = rejected_promise_value(scope, error) {
+            rv.set(promise);
+        }
         return;
     }
-    state.replace(Some(stream));
+    stream.progress.borrow_mut().append_chunk(chunk);
+    if let Err(error) = stream.run_fragment_parser(scope) {
+        if let Some(promise) = rejected_promise_value(scope, error) {
+            rv.set(promise);
+        }
+        return;
+    }
     set_resolved_promise(scope, &mut rv, v8::undefined(scope).into());
 }
 
@@ -216,32 +228,22 @@ fn close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(stream) = stream_state(scope, args.this()).and_then(|state| state.borrow_mut().take())
-    else {
+    let Some(stream) = stream_state(scope, args.this()) else {
         return;
     };
-    let Some(runtime_ptr) = stream_runtime(scope, args.this(), &stream) else {
-        throw_displaced_reference(scope);
+    let Some(close) = v8::PromiseResolver::new(scope) else {
         return;
     };
-    let runtime = unsafe { &mut *runtime_ptr };
-    if stream.leading_surrogate.is_some()
-        && runtime
-            .write_html_fragment_stream(scope, runtime_ptr, &stream.parser, "\u{fffd}")
-            .is_err()
-    {
-        runtime.abort_html_fragment_stream(scope, runtime_ptr, stream.parser);
-        throw_displaced_reference(scope);
-        return;
+    let promise = close.get_promise(scope);
+    let global = v8::Global::new(scope, close);
+    stream.progress.borrow_mut().start_close(global);
+    if stream_target_is_current(scope, args.this(), &stream) {
+        // A close error is reported through the promise returned to the sink.
+        let _ = stream.run_fragment_parser(scope);
+    } else {
+        stream.invalid_reference(scope);
     }
-    if runtime
-        .close_html_fragment_stream(scope, runtime_ptr, stream.parser)
-        .is_err()
-    {
-        throw_displaced_reference(scope);
-        return;
-    }
-    set_resolved_promise(scope, &mut rv, v8::undefined(scope).into());
+    rv.set(promise.into());
 }
 
 fn abort_callback<'s>(
@@ -249,21 +251,175 @@ fn abort_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some(stream) =
-        stream_state(scope, args.this()).and_then(|state| state.borrow_mut().take())
-    {
-        abort_fragment(scope, args.this(), stream);
+    if let Some(stream) = stream_state(scope, args.this()) {
+        let reason = args.get(0);
+        stream.abort_parser(scope, Some(reason));
     }
     set_resolved_promise(scope, &mut rv, v8::undefined(scope).into());
+}
+
+pub(crate) fn apply_html_fragment_script_task(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    task: HtmlFragmentScriptTask,
+) -> bool {
+    let Some(stream) = stream_state_by_id(scope, task.stream) else {
+        return false;
+    };
+    let target = task.owner.target();
+    if stream.owner.host != host_ptr || stream.owner.script_target != Some(target) {
+        return false;
+    }
+    let host = unsafe { &mut *host_ptr };
+    let Some(context) =
+        host.current_html_fragment_script_context(scope, target, stream.owner.document)
+    else {
+        let dispatched = stream.retire_script_tasks(scope);
+        remove_finished_stream(scope, task.stream);
+        return dispatched;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let dispatch_scope = target.dispatch_scope();
+    let previous = dispatch_scope.enter(scope);
+    let dispatched = stream.apply_script_task(scope, task.kind);
+    dispatch_scope.restore(scope, previous);
+    remove_finished_stream(scope, task.stream);
+    dispatched
+}
+
+fn fragment_module_stream(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    target: HtmlFragmentModuleTaskTarget,
+) -> Option<StreamState> {
+    let stream = stream_state_by_id(scope, target.stream)?;
+    if stream.owner.host != host_ptr || stream.owner.script_target != Some(target.document) {
+        return None;
+    }
+    let host = unsafe { &*host_ptr };
+    if host.current_window_document_task_target_for_dispatch_scope(target.document.dispatch_scope())
+        != Some(target.document)
+    {
+        stream.retire_script_tasks(scope);
+        remove_finished_stream(scope, target.stream);
+        return None;
+    }
+    Some(stream)
+}
+
+pub(crate) fn take_html_fragment_module_start(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    target: HtmlFragmentModuleTaskTarget,
+) -> Option<HtmlFragmentModuleStart> {
+    let stream = fragment_module_stream(scope, host_ptr, target)?;
+    let script = stream.take_module_start(target.job)?;
+    let still_in_preparation_document =
+        stream.script_is_in_preparation_document(target.document, script.node_id);
+    Some(HtmlFragmentModuleStart {
+        script,
+        still_in_preparation_document,
+    })
+}
+
+pub(crate) fn accept_html_fragment_module_terminal(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    target: HtmlFragmentModuleTaskTarget,
+    terminal: HtmlFragmentModuleTerminal,
+) -> bool {
+    let Some(stream) = fragment_module_stream(scope, host_ptr, target) else {
+        return false;
+    };
+    let accepted = stream.accept_module_terminal(target.document, target.job, terminal);
+    remove_finished_stream(scope, target.stream);
+    accepted
+}
+
+pub(crate) fn take_html_fragment_module_terminal(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    target: HtmlFragmentModuleTaskTarget,
+) -> Option<HtmlFragmentModuleTerminal> {
+    let stream = fragment_module_stream(scope, host_ptr, target)?;
+    let work = stream.take_ready_module(target.document, target.job);
+    remove_finished_stream(scope, target.stream);
+    work
+}
+
+pub(crate) fn finish_html_fragment_module_turn(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    target: HtmlFragmentModuleTaskTarget,
+    failure: Option<crate::document_runtime::DomHandle>,
+) {
+    let Some(stream) = fragment_module_stream(scope, host_ptr, target) else {
+        return;
+    };
+    if let Some(node) = failure {
+        stream.with_script_context(scope, node, |scope, _| {
+            stream.dispatch_script_event(scope, node, "error");
+        });
+    }
+    stream.finish_module_turn();
+    remove_finished_stream(scope, target.stream);
+}
+
+fn remove_finished_stream(scope: &mut v8::PinScope<'_, '_>, id: u64) {
+    if let Some(store) = scope.get_slot::<StreamStore>() {
+        remove_collected_stream(&mut store.borrow_mut(), id);
+    }
+}
+
+enum StreamOptions<'s> {
+    Safe(SetHtmlOptions<'s>),
+    Unsafe(CompliantParserOptions<'s>),
+}
+
+fn unsafe_stream_sink(position: &HtmlInsertionPosition, shadow_root: bool) -> &'static str {
+    match (position, shadow_root) {
+        (HtmlInsertionPosition::Set, false) => "Element streamHTMLUnsafe",
+        (HtmlInsertionPosition::Set, true) => "ShadowRoot streamHTMLUnsafe",
+        (HtmlInsertionPosition::Append, false) => "Element streamAppendHTMLUnsafe",
+        (HtmlInsertionPosition::Append, true) => "ShadowRoot streamAppendHTMLUnsafe",
+        (HtmlInsertionPosition::Prepend, false) => "Element streamPrependHTMLUnsafe",
+        (HtmlInsertionPosition::Prepend, true) => "ShadowRoot streamPrependHTMLUnsafe",
+        (HtmlInsertionPosition::Before, _) => "Node streamBeforeHTMLUnsafe",
+        (HtmlInsertionPosition::After, _) => "Node streamAfterHTMLUnsafe",
+        (HtmlInsertionPosition::Replace, _) => "Node streamReplaceWithHTMLUnsafe",
+    }
 }
 
 fn create_html_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     position: HtmlInsertionPosition,
+    unsafe_markup: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let parsed = webidl::parse_args::<StreamHtmlArgs>(scope, &args)?;
     let receiver = args.this();
+    let options = if unsafe_markup {
+        let parsed = webidl::parse_args::<UnsafeHtmlStreamArgs>(scope, &args)?;
+        let (host_ptr, handle) =
+            node_runtime_and_handle_from_object_or_detached(scope, receiver).ok()?;
+        // Adoption updates the policy's node document while preserving the
+        // original wrapper and the realm in which the method was installed.
+        let context =
+            crate::native_bridge::node_owner_document_relevant_context(scope, host_ptr, handle)?;
+        let global = context.global(scope);
+        let host = unsafe { &*host_ptr };
+        let sink = unsafe_stream_sink(&position, host.dom_host().is_shadow_root(handle));
+        let requirements = host
+            .owner_dispatch_scope_for_node(handle)
+            .and_then(|owner| host.trusted_types_for_script_requirements_for_owner(owner))
+            .unwrap_or_else(|| {
+                host.trusted_types_for_script_requirements_for_global(scope, global)
+            });
+        StreamOptions::Unsafe(parsed.prepare(scope, global, requirements, sink)?)
+    } else {
+        let parsed = webidl::parse_args::<StreamHtmlArgs>(scope, &args)?;
+        StreamOptions::Safe(parsed.options)
+    };
+    // A default policy can move the node before the insertion target is selected.
     let (host_ptr, handle) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver).ok()?;
     let host = unsafe { &*host_ptr }.dom_host();
@@ -293,25 +449,26 @@ fn create_html_stream<'s>(
         HtmlInsertionAction::InsertBefore(reference) => reference,
         HtmlInsertionAction::Replace(node) => host.next_sibling(node),
     };
-    let sanitizer = parsed.options.prepare(scope)?;
+    let (sanitizer, run_scripts) = match options {
+        StreamOptions::Safe(options) => (Some(options.prepare(scope)?), false),
+        StreamOptions::Unsafe(options) => options.into_parser_options(scope)?,
+    };
     let realm = receiver.get_creation_context(scope)?;
     let scope = &mut v8::ContextScope::new(scope, realm);
     let target_object =
         v8::Local::<v8::Object>::try_from(wrapped_handle_value(scope, host_ptr, target.parent)?)
             .ok()?;
     let runtime = unsafe { &mut *host_ptr };
-    let parser =
-        runtime.start_html_fragment_stream(scope, host_ptr, &target, reference, sanitizer)?;
-    let stream = new_fragment_writable_stream(
+    let owner = FragmentStreamOwner::new(runtime, host_ptr, target.parent, reference)?;
+    let parser = runtime.start_html_fragment_stream(
         scope,
-        target_object,
-        ActiveFragmentStream {
-            parser,
-            host: host_ptr,
-            target: target.parent,
-            leading_surrogate: None,
-        },
+        host_ptr,
+        &target,
+        reference,
+        sanitizer,
+        run_scripts,
     )?;
+    let stream = new_fragment_writable_stream(scope, target_object, owner, parser)?;
     custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
         let runtime = unsafe { &mut *host_ptr };
         match target.action {
@@ -338,23 +495,34 @@ fn create_html_stream<'s>(
 }
 
 macro_rules! stream_html_callback {
-    ($name:ident, $position:ident) => {
+    ($name:ident, $position:ident, $unsafe_markup:literal) => {
         pub(in crate::native_bridge) fn $name<'s>(
             scope: &mut v8::PinScope<'s, '_>,
             args: v8::FunctionCallbackArguments<'s>,
             mut rv: v8::ReturnValue<'_, v8::Value>,
         ) {
-            if let Some(stream) = create_html_stream(scope, args, HtmlInsertionPosition::$position)
-            {
+            if let Some(stream) = create_html_stream(
+                scope,
+                args,
+                HtmlInsertionPosition::$position,
+                $unsafe_markup,
+            ) {
                 rv.set(stream.into());
             }
         }
     };
 }
 
-stream_html_callback!(stream_html, Set);
-stream_html_callback!(stream_append_html, Append);
-stream_html_callback!(stream_prepend_html, Prepend);
-stream_html_callback!(stream_before_html, Before);
-stream_html_callback!(stream_after_html, After);
-stream_html_callback!(stream_replace_with_html, Replace);
+stream_html_callback!(stream_html, Set, false);
+stream_html_callback!(stream_append_html, Append, false);
+stream_html_callback!(stream_prepend_html, Prepend, false);
+stream_html_callback!(stream_before_html, Before, false);
+stream_html_callback!(stream_after_html, After, false);
+stream_html_callback!(stream_replace_with_html, Replace, false);
+
+stream_html_callback!(stream_html_unsafe, Set, true);
+stream_html_callback!(stream_append_html_unsafe, Append, true);
+stream_html_callback!(stream_prepend_html_unsafe, Prepend, true);
+stream_html_callback!(stream_before_html_unsafe, Before, true);
+stream_html_callback!(stream_after_html_unsafe, After, true);
+stream_html_callback!(stream_replace_with_html_unsafe, Replace, true);

@@ -254,6 +254,7 @@ pub(crate) use self::device_sensor::{
     RendererPageDeviceSensorTaskId, RendererPageDeviceSensorTaskKind,
 };
 pub(crate) use self::dom_manipulation::{
+    HtmlFragmentModuleTaskTarget, HtmlFragmentScriptTask, HtmlFragmentScriptTaskKind,
     PageDomManipulationTurnAction, PageDomManipulationTurnOutcome,
     RendererPageDomManipulationCancellation, RendererPageDomManipulationOwner,
     RendererPageDomManipulationRoute, RendererPageDomManipulationSender,

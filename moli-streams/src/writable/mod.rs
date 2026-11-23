@@ -188,7 +188,9 @@ impl WritableSnapshot {
 
     #[must_use]
     pub const fn plan_writer_write_entry(self) -> WriterWriteEntryPlan {
-        if matches!(self.state, WritableState::Erroring | WritableState::Errored) {
+        if matches!(self.state, WritableState::Errored)
+            || (matches!(self.state, WritableState::Erroring) && !self.close_requested)
+        {
             WriterWriteEntryPlan::RejectStoredError
         } else {
             WriterWriteEntryPlan::Continue
@@ -197,25 +199,26 @@ impl WritableSnapshot {
 
     #[must_use]
     pub const fn plan_internal_write_entry(self) -> InternalWriteEntryPlan {
-        if matches!(self.state, WritableState::Erroring | WritableState::Errored) {
-            InternalWriteEntryPlan::RejectStoredError
-        } else {
-            InternalWriteEntryPlan::Continue
+        match self.plan_writer_write_entry() {
+            WriterWriteEntryPlan::RejectStoredError => InternalWriteEntryPlan::RejectStoredError,
+            WriterWriteEntryPlan::Continue => InternalWriteEntryPlan::Continue,
         }
     }
 
     /// Revalidates the writer and stream after the strategy size algorithm has
     /// run arbitrary JavaScript. The ordering matches
-    /// WritableStreamDefaultWriterWrite: ownership, terminal error, then
-    /// close/closed state.
+    /// WritableStreamDefaultWriterWrite: ownership, terminal error, close,
+    /// then a pending error.
     #[must_use]
     pub const fn plan_write_after_size(self, owner_is_current: bool) -> WriteAfterSizePlan {
         if !owner_is_current {
             WriteAfterSizePlan::RejectReleasedWriter
-        } else if matches!(self.state, WritableState::Erroring | WritableState::Errored) {
+        } else if matches!(self.state, WritableState::Errored) {
             WriteAfterSizePlan::RejectStoredError
         } else if self.close_requested || matches!(self.state, WritableState::Closed) {
             WriteAfterSizePlan::RejectClosingOrClosed
+        } else if matches!(self.state, WritableState::Erroring) {
+            WriteAfterSizePlan::RejectStoredError
         } else {
             WriteAfterSizePlan::Continue
         }
@@ -546,22 +549,32 @@ mod tests {
             WriteAfterSizePlan::RejectReleasedWriter
         );
 
-        let closing = WritableSnapshot::new(
-            WritableState::Writable,
-            WritableKind::Sink,
-            true,
-            true,
-            false,
-            0,
-            false,
-            false,
-            PendingAbortState::None,
-            StrategySnapshot::new(1.0, 0.0),
-        );
-        assert_eq!(
-            closing.plan_write_after_size(true),
-            WriteAfterSizePlan::RejectClosingOrClosed
-        );
+        for state in [WritableState::Writable, WritableState::Erroring] {
+            let closing = WritableSnapshot::new(
+                state,
+                WritableKind::Sink,
+                true,
+                true,
+                false,
+                0,
+                false,
+                false,
+                PendingAbortState::None,
+                StrategySnapshot::new(1.0, 0.0),
+            );
+            assert_eq!(
+                closing.plan_writer_write_entry(),
+                WriterWriteEntryPlan::Continue
+            );
+            assert_eq!(
+                closing.plan_internal_write_entry(),
+                InternalWriteEntryPlan::Continue
+            );
+            assert_eq!(
+                closing.plan_write_after_size(true),
+                WriteAfterSizePlan::RejectClosingOrClosed
+            );
+        }
         assert_eq!(
             snapshot(WritableState::Closed, WritableKind::Sink).plan_write_after_size(true),
             WriteAfterSizePlan::RejectClosingOrClosed

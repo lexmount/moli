@@ -1132,6 +1132,57 @@ impl PageScriptHost {
         )
     }
 
+    pub(crate) fn allows_streamed_external_script_by_csp(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        script: &crate::planning::PreparedScript,
+        url: &Url,
+        redirect: ContentSecurityPolicyRedirectStatus,
+    ) -> bool {
+        let Some(snapshot) = self.owner_document_policy_snapshot(owner) else {
+            return false;
+        };
+        let policy = &snapshot.policy_container;
+        let document_url = policy
+            .content_security_policy_self_url
+            .as_ref()
+            .unwrap_or(&snapshot.document_url);
+        let runtime = unsafe { &*self.document_runtime };
+        if runtime.bypass_content_security_policy() {
+            return true;
+        }
+        let nonce = script.fetch_metadata.nonce.as_deref();
+        let report = runtime
+            .script_element_request_csp_report_only_violation_for_document_with_redirect_status(
+                document_url,
+                &policy.response_content_security_report_only_policies,
+                &policy.content_security_reporting_endpoints,
+                url,
+                redirect,
+                nonce,
+            );
+        let enforced = runtime
+            .script_element_request_csp_violation_for_document_with_redirect_status(
+                snapshot.document_handle,
+                document_url,
+                &policy.response_content_security_policies,
+                &policy.content_security_reporting_endpoints,
+                url,
+                redirect,
+                nonce,
+            );
+        for violation in report.iter().chain(&enforced) {
+            self.queue_content_security_policy_violation_task(
+                scope,
+                owner,
+                Some(script.node_id),
+                violation,
+            );
+        }
+        enforced.is_none()
+    }
+
     pub(crate) fn allows_inline_script_element_by_csp<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
