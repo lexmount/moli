@@ -34,9 +34,9 @@ struct CachedInferredFrameStyleViewport {
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
 ///
 /// `ScriptVm` outlives `document.open()`, so the main-document owner
-/// transition replaces this value explicitly. Full layout passes borrow the
-/// services and discard every working tree/cache. Only the latest frozen
-/// layout tree and document-owned font/text sidecars survive a pass.
+/// transition replaces this value explicitly. This state owns the latest
+/// frozen layout tree and document font/text services. Active Realtime
+/// screencasts hold their paint inputs in the Realtime publication state.
 /// Embedded documents receive separate Parley services so a main-document
 /// `@font-face` registration cannot leak across the browsing-context boundary.
 /// The single snapshot slot records the exact root Document it was built for;

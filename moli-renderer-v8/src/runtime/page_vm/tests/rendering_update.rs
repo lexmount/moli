@@ -28,6 +28,7 @@ fn viewport_screencast_request(
         max_width: None,
         max_height: None,
         known_visual_state,
+        paint_session: Default::default(),
     }
 }
 

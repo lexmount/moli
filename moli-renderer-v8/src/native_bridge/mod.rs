@@ -6,6 +6,8 @@ mod child_window_surface;
 mod collections;
 mod context_host;
 mod current_input;
+#[cfg(feature = "devtools")]
+pub use context_host::RendererScreencastPaintSession;
 pub(crate) use context_host::{
     ChildDocumentFetch, LayoutPublicationRequest, PageScriptHost, PageScriptHostTaskCapabilities,
     PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,

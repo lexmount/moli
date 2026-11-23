@@ -129,8 +129,12 @@ mod realtime_environment;
 mod realtime_events;
 mod realtime_layout;
 mod realtime_rendering;
+#[cfg(feature = "devtools")]
+mod screencast_paint;
 pub(crate) use media_loads::PendingMediaLoadTerminalFollowup;
 pub(crate) use realtime_layout::LayoutPublicationRequest;
+#[cfg(feature = "devtools")]
+pub use screencast_paint::RendererScreencastPaintSession;
 mod text_track_loads;
 pub(crate) use text_track_loads::{
     PendingMediaCanPlayFollowup, PendingMediaTextTrackGateRegistration,
