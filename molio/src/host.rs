@@ -254,6 +254,20 @@ async fn navigation_finished(task: &mut Option<PendingNavigation>) -> Result<Com
     }
 }
 
+fn start_favicon_load(
+    browser: &Browser,
+    navigation: &RendererViewportNavigation,
+) -> Option<JoinHandle<Option<Arc<gpui::RenderImage>>>> {
+    if navigation.favicon_urls.is_empty() {
+        return None;
+    }
+    let browser = browser.clone();
+    let navigation = navigation.clone();
+    Some(tokio::task::spawn_local(async move {
+        crate::favicon::load(&browser, &navigation).await
+    }))
+}
+
 async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
     let initial = browser.fetch_allow_http_error_with_wait_until(
         "about:blank",
@@ -276,9 +290,45 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
     let mut queued = None;
     let mut activity = DocumentActivity::new(false, false);
     let _ = page.set_document_activity_async(activity).await;
+    let mut navigation_updates = match page.subscribe_navigation_state().await {
+        Ok(updates) => updates,
+        Err(error) => {
+            tab.state
+                .send_modify(|state| state.error = Some(format!("{error:#}")));
+            return;
+        }
+    };
+    navigation_updates.mark_changed();
 
     loop {
         tokio::select! {
+            Ok(()) = navigation_updates.changed() => {
+                let Some(next) = navigation_updates.borrow_and_update().clone() else { continue };
+                tab.state.send_modify(|state| {
+                    let document_changed = state.document != Some(next.document);
+                    if document_changed
+                        || state.navigation.as_ref().map(|nav| &nav.favicon_urls)
+                            != Some(&next.navigation.favicon_urls)
+                    {
+                        if let Some(task) = favicon_task.take() {
+                            task.abort();
+                        }
+                        state.favicon = None;
+                        if activity.visible {
+                            favicon_task = start_favicon_load(&browser, &next.navigation);
+                        }
+                    }
+                    if document_changed {
+                        state.editor = capture
+                            .as_mut()
+                            .and_then(BufferedViewportFrames::latest_state)
+                            .filter(|frame| frame.document == next.document && activity.focused)
+                            .and_then(|frame| frame.editor);
+                    }
+                    state.document = Some(next.document);
+                    state.navigation = Some(next.navigation);
+                });
+            }
             result = navigation_finished(&mut navigation) => {
                 navigation = None;
                 let result = result.and_then(|completion| page.finish_viewport_navigation(completion));
@@ -304,32 +354,12 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
             }
             event = next_viewport_update(&mut capture) => match event {
                 Some(ViewportUpdate::StateChanged) => {
-                    let frame = capture.as_mut().and_then(BufferedViewportFrames::latest_state);
+                    let Some(frame) = capture.as_mut().and_then(BufferedViewportFrames::latest_state) else { continue };
+                    let editor = frame.editor.filter(|_| activity.focused);
                     tab.state.send_if_modified(|state| {
-                        let (document, navigation, editor) = frame.map_or((None, None, None), |frame| {
-                            (Some(frame.document), Some(frame.navigation), frame.editor.filter(|_| activity.focused))
-                        });
-                        if state.document == document && state.navigation == navigation && state.editor == editor {
+                        if state.document != Some(frame.document) || state.editor == editor {
                             return false;
                         }
-                        if state.document != document
-                            || state.navigation.as_ref().map(|nav| &nav.favicon_urls)
-                                != navigation.as_ref().map(|nav| &nav.favicon_urls)
-                        {
-                            if let Some(task) = favicon_task.take() {
-                                task.abort();
-                            }
-                            state.favicon = None;
-                            if let Some(navigation) = navigation.as_ref().filter(|nav| !nav.favicon_urls.is_empty()) {
-                                let navigation = navigation.clone();
-                                let browser = browser.clone();
-                                favicon_task = Some(tokio::task::spawn_local(async move {
-                                    crate::favicon::load(&browser, &navigation).await
-                                }));
-                            }
-                        }
-                        state.document = document;
-                        state.navigation = navigation;
                         state.editor = editor;
                         true
                     });
@@ -404,6 +434,14 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                         if let Err(error) = page.set_document_activity_async(next).await {
                             Err(error)
                         } else if visibility_changed && next.visible {
+                            {
+                                let state = tab.state.borrow();
+                                if state.favicon.is_none() && favicon_task.is_none() {
+                                    favicon_task = state.navigation.as_ref().and_then(|navigation| {
+                                        start_favicon_load(&browser, navigation)
+                                    });
+                                }
+                            }
                             refresh_capture(&mut page, &mut capture, surface, &tab.viewport).await
                         } else if next.focused {
                             refresh_editor(&mut page, &tab.state).await
@@ -1012,7 +1050,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tabs_load_declared_and_default_favicons_for_the_current_document() -> Result<()> {
+    async fn tabs_update_navigation_and_favicons_without_a_viewport() -> Result<()> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -1061,19 +1099,6 @@ mod tests {
 
         let host = BrowserHost::start(None)?;
         let mut tab = host.open_tab()?;
-        tab.commands
-            .send(TabCommand::Activity(DocumentActivity::new(true, true)))
-            .map_err(|_| anyhow::anyhow!("show tab"))?;
-        tab.commands
-            .send(TabCommand::Viewport(
-                ViewportSurface {
-                    inner_width: 80,
-                    inner_height: 60,
-                    ..ViewportSurface::default()
-                },
-                1,
-            ))
-            .map_err(|_| anyhow::anyhow!("set viewport"))?;
 
         for (path, title, pixel) in [
             ("/page", "Declared", [224, 160, 18, 255]),
@@ -1084,6 +1109,23 @@ mod tests {
                     "http://{address}{path}"
                 ))))
                 .map_err(|_| anyhow::anyhow!("navigate to {path}"))?;
+            if path == "/page" {
+                let hidden = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    tab.state.wait_for(|state| {
+                        state
+                            .navigation
+                            .as_ref()
+                            .is_some_and(|nav| nav.title == title)
+                    }),
+                )
+                .await??;
+                assert!(hidden.favicon.is_none());
+                tab.commands.send(TabCommand::Activity(DocumentActivity {
+                    focused: false,
+                    visible: true,
+                }))?;
+            }
             let state = tokio::time::timeout(
                 Duration::from_secs(10),
                 tab.state.wait_for(|state| {
@@ -1096,11 +1138,35 @@ mod tests {
             )
             .await
             .with_context(|| format!("wait for {title} favicon"))??;
+            let navigation = state.navigation.as_ref().context("tab navigation state")?;
+            assert_eq!(navigation.url.path(), path);
+            if path == "/next" {
+                assert!(navigation.can_go_back);
+            }
+            assert!(!navigation.can_go_forward);
             assert_eq!(
                 &state.favicon.as_ref().unwrap().as_bytes(0).unwrap()[..4],
                 &pixel
             );
         }
+
+        tab.commands
+            .send(TabCommand::Activity(DocumentActivity::new(false, false)))?;
+        tab.commands
+            .send(TabCommand::History(-1))
+            .map_err(|_| anyhow::anyhow!("go back to the declared icon page"))?;
+        let back = tokio::time::timeout(
+            Duration::from_secs(5),
+            tab.state.wait_for(|state| {
+                state.navigation.as_ref().is_some_and(|navigation| {
+                    navigation.url.path() == "/page" && navigation.can_go_forward
+                })
+            }),
+        )
+        .await??;
+        assert!(back.favicon.is_none());
+        assert!(tab.viewport.read(|_| ()).is_none());
+        drop(back);
 
         tab.commands
             .send(TabCommand::Navigate(Some(

@@ -572,6 +572,22 @@ impl RendererPageHandle {
             .enqueue_viewport_wheel(self.token(), input)
     }
 
+    #[cfg(feature = "molio")]
+    pub async fn subscribe_navigation_state(
+        &self,
+    ) -> Result<tokio::sync::watch::Receiver<Option<super::RendererPageNavigationState>>> {
+        match self
+            .render_runtime
+            .dispatch(RendererOwnerCommand::SubscribePageNavigation {
+                token: self.token(),
+            })
+            .await?
+        {
+            RendererOwnerReply::PageNavigationSubscription(updates) => Ok(updates),
+            _ => anyhow::bail!("unexpected page navigation subscription reply"),
+        }
+    }
+
     pub fn page_id(&self) -> u64 {
         self.token().page_id.as_u64()
     }

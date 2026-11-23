@@ -115,9 +115,6 @@ impl PageScriptHost {
                 update,
             },
         );
-        // History commits also update the viewport's navigation controls.
-        #[cfg(feature = "molio")]
-        self.request_realtime_rendering_opportunity();
     }
 
     /// Replace the dynamically scoped Runtime command cause and return the

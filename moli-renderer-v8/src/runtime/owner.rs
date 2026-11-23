@@ -284,6 +284,10 @@ pub enum RendererOwnerCommand {
     RemovePage {
         token: RendererPageToken,
     },
+    #[cfg(feature = "molio")]
+    SubscribePageNavigation {
+        token: RendererPageToken,
+    },
     TestingCurrentPageState {
         token: RendererPageToken,
     },
@@ -328,6 +332,10 @@ pub enum RendererOwnerReply {
     RuntimeInspectorSessionErrorSettled(RendererOutputFence),
     RuntimeInspectorSessionDetachFinalized(bool),
     PageRemoved,
+    #[cfg(feature = "molio")]
+    PageNavigationSubscription(
+        tokio::sync::watch::Receiver<Option<super::RendererPageNavigationState>>,
+    ),
     TestingCurrentPageState(Arc<RendererPageState>),
     TestingRendererPageView(RendererPageView),
     TestingOwnerSlot(RendererPageSlotHandle),

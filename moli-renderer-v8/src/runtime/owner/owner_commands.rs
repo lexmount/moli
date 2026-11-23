@@ -843,6 +843,11 @@ impl RendererOwnerHandle {
                 .map(|()| RendererOwnerReply::PageRemoved)
                 .into()
             }
+            #[cfg(feature = "molio")]
+            RendererOwnerCommand::SubscribePageNavigation { token } => owner_local_store
+                .subscribe_page_navigation(token)
+                .map(RendererOwnerReply::PageNavigationSubscription)
+                .into(),
             RendererOwnerCommand::TestingCurrentPageState { token } => {
                 owner_local_store_session(owner_local_store)
                     .current_page_state_for_testing(token)
