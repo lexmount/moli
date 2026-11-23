@@ -1,4 +1,5 @@
 use super::*;
+pub(in crate::native_bridge) use crate::dom_presentation::normalize_textarea_api_value;
 use crate::native_bridge::document::detached_native_handle_for_runtime;
 use crate::util::utf16_len;
 
@@ -10,29 +11,13 @@ pub(crate) fn text_control_value(runtime: &PageScriptHost, handle: DomHandle) ->
         return element.input_value();
     }
     if element.is_html_textarea() {
-        if element.input_value_dirty() {
-            return normalize_textarea_api_value(&element.input_value());
-        }
-        let default_value = node_direct_text_content(runtime, handle).unwrap_or_default();
-        return normalize_textarea_api_value(&default_value);
+        return crate::dom_presentation::textarea_value_from_dom(
+            runtime.dom_host(),
+            handle,
+            element,
+        );
     }
     String::new()
-}
-
-pub(in crate::native_bridge) fn normalize_textarea_api_value(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\r' {
-            if chars.peek() == Some(&'\n') {
-                let _ = chars.next();
-            }
-            output.push('\n');
-        } else {
-            output.push(ch);
-        }
-    }
-    output
 }
 
 pub(super) fn clamp_text_control_offset(
