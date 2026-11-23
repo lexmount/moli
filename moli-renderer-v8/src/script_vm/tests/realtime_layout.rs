@@ -199,6 +199,83 @@ fn realtime_layout_native_state_and_scroll_commit_before_geometry_reads() {
 }
 
 #[test]
+fn realtime_plain_scroll_matches_a_fresh_layout_without_rebuilding() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html>
+        <style>
+            html,body {margin:0}
+            body {height:2000px}
+            #scroller {position:absolute;left:20px;top:120px;width:150px;height:100px;
+                       overflow:auto;transform:translateX(5px)}
+            #sticky {position:sticky;top:0;width:30px;height:20px}
+            #moving {width:30px;height:20px}
+            #pinned {position:fixed;top:10px;left:5px;width:10px;height:10px}
+        </style>
+        <div id=scroller>
+            <div style="height:55px"></div>
+            <div id=sticky></div>
+            <div id=moving></div>
+            <div style="height:600px"></div>
+        </div>
+        <div id=pinned></div>"#,
+    );
+    vm.eval("moving.getBoundingClientRect().top").unwrap();
+    let initial_builds = vm.layout_pass_observability_for_test().1;
+    let sample = r#"JSON.stringify([
+        moving.getBoundingClientRect().top,
+        sticky.getBoundingClientRect().top,
+        sticky.offsetTop,
+        pinned.getBoundingClientRect().top,
+        scroller.scrollTop,
+        scroller.scrollHeight
+    ])"#;
+    for (root, inner, moving_top, sticky_top) in
+        [(100, 70, 25, 20), (110, 75, 10, 10), (0, 0, 195, 175)]
+    {
+        let reprojection = vm
+            .eval(&format!(
+                "scrollTo(0,{root});scroller.scrollTop={inner};{sample}"
+            ))
+            .unwrap();
+        let values: Vec<i64> = serde_json::from_str(&reprojection).unwrap();
+        assert_eq!(values[0], moving_top);
+        assert_eq!(values[1], sticky_top);
+        assert_eq!(values[3], 10);
+        assert_eq!(values[4], inner);
+        assert_eq!(vm.layout_pass_observability_for_test().1, initial_builds);
+        if root != 0 {
+            assert_eq!(
+                vm.eval("document.elementFromPoint(30,sticky.getBoundingClientRect().top+2).id")
+                    .unwrap(),
+                "sticky"
+            );
+        }
+    }
+
+    let projected = vm
+        .eval(&format!("scrollTo(0,100);scroller.scrollTop=70;{sample}"))
+        .unwrap();
+    assert_eq!(vm.layout_pass_observability_for_test().1, initial_builds);
+    let rebuilt = vm
+        .eval(&format!("moving.dataset.layoutCheck='fresh';{sample}"))
+        .unwrap();
+    assert_eq!(projected, rebuilt);
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        initial_builds + 1
+    );
+    assert_eq!(
+        vm.eval("moving.style.width='60px';scroller.scrollTop=72;moving.offsetWidth")
+            .unwrap(),
+        "60"
+    );
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        initial_builds + 2
+    );
+}
+
+#[test]
 fn legacy_layout_modes_do_not_allocate_realtime_state_or_refresh_after_writes() {
     for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
         let mut vm = new_parsed_test_vm(

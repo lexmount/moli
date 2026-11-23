@@ -282,7 +282,7 @@ fn realtime_synchronous_hits_refresh_scroll_transform_and_clip_without_callbacks
                 return JSON.stringify([scrolled,oldPoint,transformed,clipped,repeated,lifecycle.slice()]);
             })()
         "#).unwrap(), "[true,false,true,false,false,[]]");
-        assert_eq!(page.vm().layout_pass_observability_for_test().1, before + 3);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, before + 2);
         assert_eq!(page.current_realtime_rendering_opportunity(), Some(pending));
         assert_eq!(
             page.vm_mut().eval("JSON.stringify(lifecycle)").unwrap(),
@@ -302,7 +302,7 @@ fn realtime_synchronous_hits_refresh_scroll_transform_and_clip_without_callbacks
             .is_none(),
             "IO notification waits for rendering-phase sampling"
         );
-        assert_eq!(page.vm().layout_pass_observability_for_test().1, before + 3);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, before + 2);
         let metrics = page.vm().layout_pass_observability_for_test().3.unwrap();
         assert_eq!(metrics.paint_event_count, 0);
         assert_eq!(metrics.paint_operation_count, 0);

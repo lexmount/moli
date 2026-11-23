@@ -330,7 +330,9 @@ impl ScriptVm {
             // Screen publication needs geometry from zero-sized frames too.
             // Transient captures use the coverage requested by their output path.
             let request = if publishes_layout && context_host.layout_policy().is_realtime() {
-                request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
+                request
+                    .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
+                    .with_scroll_projection(true)
             } else {
                 request
             };

@@ -1,7 +1,7 @@
 //! CSS relationship/inset preparation and a geometry-only sticky axis solver.
 //!
-//! The constraints are stack-local to this projection. They retain reference
-//! spaces, not global edges: an ancestor may itself move before we resolve them.
+//! Constraints retain reference spaces so they can be resolved with current
+//! scroll offsets even when an ancestor has moved since the last layout.
 //! This extraction preserves the existing inset and containing-block policy;
 //! extending that policy does not require changing coordinate composition.
 
@@ -49,6 +49,7 @@ fn solve_sticky_axis(constraint: StickyAxisConstraint, geometry: StickyAxisGeome
     target - geometry.normal_start
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct StickyConstraints {
     pub(super) scroll_container: LayoutBoxId,
     scrollport: LayoutRect,
@@ -58,6 +59,7 @@ pub(super) struct StickyConstraints {
     containing: Option<ContainingBlockConstraint>,
 }
 
+#[derive(Clone, Copy)]
 struct ContainingBlockConstraint {
     border_start: LayoutPoint,
     padding_start: LayoutPoint,

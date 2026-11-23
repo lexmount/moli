@@ -55,7 +55,7 @@ pub(super) fn set_node_scroll_position(
     if changed {
         // Freshness must be visible even while ActionBatch defers events and
         // observer work until its checkpoint.
-        unsafe { &*runtime_ptr }.note_realtime_layout_input_change();
+        unsafe { &*runtime_ptr }.note_realtime_scroll_change();
     }
     if changed && queue_observable_effects {
         // Admission only: ActionBatch still owns its checkpoints and the
@@ -135,7 +135,10 @@ pub(crate) fn apply_scroll_observable_effects(
         }
     }
     queue_revealed_lazy_media_loads(scope, runtime_ptr);
-    unsafe { &*runtime_ptr }.invalidate_layout_after_interaction_state_change();
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.layout_policy().is_realtime() {
+        runtime.invalidate_layout_after_interaction_state_change();
+    }
     crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
     if effects
         .iter()

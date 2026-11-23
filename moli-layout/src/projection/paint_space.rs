@@ -160,7 +160,7 @@ mod paint_space_tests {
         transform: ResolvedLayoutTransform,
     ) -> PaintSpace {
         let parent = parent.map(|paint| super::super::ProjectedCoordinateSpace {
-            layout: super::super::compose_layout_space(
+            layout: super::super::coordinates::compose_layout_space(
                 0,
                 ResolvedPlacement {
                     anchor: ProjectionAnchor::Document,

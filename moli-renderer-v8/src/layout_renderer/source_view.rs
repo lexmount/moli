@@ -55,6 +55,14 @@ impl<'a> NativeLayoutSourceView<'a> {
     }
 }
 
+pub(crate) fn native_scroll_offset(host: &DomHost, node: DomHandle) -> moli_layout::LayoutPoint {
+    host.node(node)
+        .and_then(Node::as_element)
+        .map_or(moli_layout::LayoutPoint::ZERO, |element| {
+            moli_layout::LayoutPoint::new(element.scroll_left() as f32, element.scroll_top() as f32)
+        })
+}
+
 impl LayoutSource for NativeLayoutSourceView<'_> {
     type NodeId = DomHandle;
     type ChildIter<'a>
@@ -205,15 +213,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     }
 
     fn scroll_offset(&self, node: Self::NodeId) -> moli_layout::LayoutPoint {
-        self.host().node(node).and_then(Node::as_element).map_or(
-            moli_layout::LayoutPoint::ZERO,
-            |element| {
-                moli_layout::LayoutPoint::new(
-                    element.scroll_left() as f32,
-                    element.scroll_top() as f32,
-                )
-            },
-        )
+        native_scroll_offset(self.host(), node)
     }
 
     fn replaced_metrics(&self, node: Self::NodeId) -> Option<ReplacedMetrics> {

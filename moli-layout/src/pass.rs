@@ -94,6 +94,7 @@ pub struct LayoutPassRequest {
     environment: crate::LayoutEnvironment,
     paint_capture: Option<PaintCaptureRequest>,
     frame_coverage: LayoutFrameCoverage,
+    retain_scroll_projection: bool,
 }
 
 impl LayoutPassRequest {
@@ -106,6 +107,7 @@ impl LayoutPassRequest {
             },
             paint_capture: None,
             frame_coverage: LayoutFrameCoverage::PositiveViewport,
+            retain_scroll_projection: false,
         }
     }
 
@@ -139,6 +141,16 @@ impl LayoutPassRequest {
 
     pub const fn frame_coverage(self) -> LayoutFrameCoverage {
         self.frame_coverage
+    }
+
+    /// Retains box placement inputs needed to update screen geometry after scrolling.
+    pub const fn with_scroll_projection(mut self, retain: bool) -> Self {
+        self.retain_scroll_projection = retain;
+        self
+    }
+
+    pub const fn retains_scroll_projection(self) -> bool {
+        self.retain_scroll_projection
     }
 
     /// Whether this demand also needs immutable software-paint input.
@@ -382,6 +394,7 @@ where
         request.reason,
         started,
         request.paint_capture,
+        request.retain_scroll_projection,
         object_geometry,
         embedded_frames,
         crate::projection::LayoutPassPhaseMetrics {

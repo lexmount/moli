@@ -102,7 +102,7 @@ pub const MAX_RETAINED_LAYOUT_FRAGMENTS: usize = 4_000_000;
 /// Maximum estimated allocation capacity retained by one frozen layout tree.
 pub const MAX_RETAINED_LAYOUT_TREE_BYTES: usize = 256 * 1024 * 1024;
 
-/// Immutable, DOM-independent layout tree produced by one complete pass.
+/// DOM-independent layout tree produced by one complete pass.
 ///
 /// The box tree is stored densely through parent IDs. Text/inline fragments,
 /// coordinate spaces, clips, and scroll extents are canonical layout data:
@@ -127,6 +127,7 @@ where
     viewport_coordinate_space: FrozenCoordinateSpace,
     pub clip_chain: Vec<LayoutClipNode>,
     embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
+    pub(crate) scroll_projection: Option<Box<crate::projection::ScrollProjection<N>>>,
 }
 
 impl<N> FrozenLayoutTree<N>
@@ -202,7 +203,12 @@ where
             .saturating_add(allocation::<FrozenEmbeddedFrame<N>>(
                 self.embedded_frames.capacity(),
             ))
-            .saturating_add(box_allocations);
+            .saturating_add(box_allocations)
+            .saturating_add(
+                self.scroll_projection
+                    .as_ref()
+                    .map_or(0, |projection| projection.estimated_bytes()),
+            );
         let embedded = self.embedded_frames.iter().fold(
             LayoutTreeRetentionMetrics::default(),
             |total, frame| {
@@ -283,6 +289,45 @@ where
     pub fn embedded_frames(&self) -> impl ExactSizeIterator<Item = &FrozenEmbeddedFrame<N>> {
         self.embedded_frames.iter()
     }
+
+    /// Whether the entire snapshot has the placement inputs for reprojecting scroll.
+    pub fn has_scroll_projection(&self) -> bool {
+        self.scroll_projection.is_some()
+            && self
+                .embedded_frames
+                .iter()
+                .all(|frame| frame.tree.has_scroll_projection())
+    }
+
+    /// Refreshes viewport geometry, scrollbars, and sticky positions in place.
+    /// The offsets are in the same CSS pixels consumed by LayoutSource.
+    pub fn refresh_scroll_projection(
+        &mut self,
+        offset: impl Fn(N) -> LayoutPoint,
+    ) -> Result<bool, LayoutError> {
+        if !self.has_scroll_projection() {
+            return Err(LayoutError::source_contract(
+                "scroll projection",
+                "placement inputs were not retained for the entire frame tree",
+            ));
+        }
+        self.refresh_scroll_projection_recursive(&offset)
+    }
+
+    fn refresh_scroll_projection_recursive(
+        &mut self,
+        offset: &impl Fn(N) -> LayoutPoint,
+    ) -> Result<bool, LayoutError> {
+        let projection = self
+            .scroll_projection
+            .as_ref()
+            .expect("validated scroll inputs");
+        let mut changed = projection.refresh(&mut self.boxes, &mut self.viewport_scroll, offset)?;
+        for child in &mut self.embedded_frames {
+            changed |= child.tree.refresh_scroll_projection_recursive(offset)?;
+        }
+        Ok(changed)
+    }
 }
 
 impl<N> FrozenLayoutTree<N>
@@ -316,6 +361,7 @@ where
             viewport_coordinate_space,
             clip_chain,
             embedded_frames,
+            scroll_projection: None,
         }
     }
 }
