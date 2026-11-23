@@ -144,9 +144,14 @@ fn html_serialize_options(
     }
 }
 
-pub(super) async fn render_markdown(page: &mut Page, strip: StripOptions) -> Result<String> {
+pub(super) async fn render_markdown(
+    page: &mut Page,
+    strip: StripOptions,
+    with_frames: bool,
+) -> Result<String> {
     page.render_markdown_async(RendererMarkdownOptions {
         strip: renderer_strip_options(strip),
+        with_frames,
     })
     .await
 }
