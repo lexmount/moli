@@ -72,6 +72,13 @@ const WAIT_UNTIL_INTERVAL_FETCH_HTML: &str = "<!doctype html><html><body data-st
 const WAIT_UNTIL_INTERVAL_DOM_MUTATION_HTML: &str = "<!doctype html><html><body data-state=\"init\"><main id=\"mutation-count\">0</main><script>window.addEventListener('load', () => { setInterval(() => { const count = Number(document.body.getAttribute('data-mutation-count') || '0') + 1; document.body.setAttribute('data-mutation-count', String(count)); document.getElementById('mutation-count').textContent = String(count); }, 50); });</script></body></html>";
 const WAIT_UNTIL_SLOW_STATIC_HTML: &str =
     "<!doctype html><html><body><main id=\"slow-main\">slow-main=ready</main></body></html>";
+const WAIT_UNTIL_SHARED_DEADLINE_HTML: &str = r#"<!doctype html><body data-activity="pending">
+<script>
+fetch('/wait-until-shared-deadline/activity')
+    .then(response => response.text())
+    .then(state => { document.body.dataset.activity = state; })
+    .catch(() => {});
+</script></body>"#;
 const WAIT_UNTIL_REDIRECT_STATUS_NAVIGATION_HTML: &str = r#"<!doctype html>
 <html><head><title>terminal 302 navigation</title></head><body>
 <main id="redirect-status-challenge">redirect-status=challenge</main>
@@ -354,6 +361,14 @@ pub(super) fn add_wait_routes(router: Router) -> Router {
         .route(
             "/wait-until-slow-interval-dom-mutation",
             get(wait_until_slow_interval_dom_mutation_page),
+        )
+        .route(
+            "/wait-until-shared-deadline",
+            get(wait_until_shared_deadline_page),
+        )
+        .route(
+            "/wait-until-shared-deadline/activity",
+            get(wait_until_shared_deadline_activity),
         )
         .route(
             "/wait-until-redirect-status-navigation",
@@ -782,6 +797,16 @@ async fn wait_until_delayed_interval_fetch_page() -> Html<&'static str> {
 async fn wait_until_slow_interval_dom_mutation_page() -> Html<&'static str> {
     sleep(Duration::from_millis(500)).await;
     Html(WAIT_UNTIL_INTERVAL_DOM_MUTATION_HTML)
+}
+
+async fn wait_until_shared_deadline_page() -> Html<&'static str> {
+    sleep(Duration::from_secs(4)).await;
+    Html(WAIT_UNTIL_SHARED_DEADLINE_HTML)
+}
+
+async fn wait_until_shared_deadline_activity() -> &'static str {
+    sleep(Duration::from_secs(8)).await;
+    "complete"
 }
 
 async fn wait_until_data_page() -> Response {
