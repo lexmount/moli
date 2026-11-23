@@ -61,11 +61,7 @@ pub(super) fn metrics_from_cdp(
     {
         return Err(invalid());
     }
-    // Mobile emulation also needs viewport-meta processing, autosizing and
-    // overlay scrollbars. Reject it instead of publishing only its geometry.
-    // Default/disabled options below retain the native desktop behavior.
     for (unsupported, setting) in [
-        (params.mobile, "mobile=true"),
         (params.display_feature.is_some(), "displayFeature"),
         (params.device_posture.is_some(), "devicePosture"),
         (
@@ -77,7 +73,7 @@ pub(super) fn metrics_from_cdp(
             "screenOrientationLockEmulation=true",
         ),
         (
-            matches!(params.viewport_meta, Some(ViewportMeta::Enable)),
+            !params.mobile && matches!(params.viewport_meta, Some(ViewportMeta::Enable)),
             "viewportMeta=enable",
         ),
     ] {
@@ -142,6 +138,8 @@ pub(super) fn metrics_from_cdp(
     };
     let (screen_width, screen_height) = if screen_width != 0 && screen_height != 0 {
         (screen_width, screen_height)
+    } else if params.mobile {
+        (width, height)
     } else {
         (base.screen_width, base.screen_height)
     };
@@ -154,9 +152,22 @@ pub(super) fn metrics_from_cdp(
             scale,
             native_device_pixel_ratio: base.device_pixel_ratio,
             viewport,
+            mobile_viewport: params.mobile.then_some(moli_page_types::MobileViewport {
+                width: f64::from(width),
+                height: f64::from(height),
+                scale: 1.0,
+            }),
         }),
-        outer_width: base.outer_width,
-        outer_height: base.outer_height,
+        outer_width: if params.mobile {
+            width
+        } else {
+            base.outer_width
+        },
+        outer_height: if params.mobile {
+            height
+        } else {
+            base.outer_height
+        },
         device_scale_factor,
         screen_width,
         screen_height,

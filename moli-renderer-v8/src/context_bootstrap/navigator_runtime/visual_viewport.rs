@@ -124,7 +124,7 @@ fn visual_viewport_attribute_getter_callback<'s>(
     };
     if matches!(
         slot,
-        VISUAL_VIEWPORT_WIDTH_SLOT | VISUAL_VIEWPORT_HEIGHT_SLOT
+        VISUAL_VIEWPORT_WIDTH_SLOT | VISUAL_VIEWPORT_HEIGHT_SLOT | VISUAL_VIEWPORT_SCALE_SLOT
     ) {
         // A borrowed getter belongs to its receiver's Window, even when the
         // function was obtained from another realm's VisualViewport prototype.
@@ -151,7 +151,28 @@ fn visual_viewport_attribute_getter_callback<'s>(
         if !super::super::window_accessors::prepare_window_viewport_read(scope, window) {
             return;
         }
-        let value = if slot == VISUAL_VIEWPORT_WIDTH_SLOT {
+        let mobile =
+            super::super::window_accessors::window_host_ptr(scope, window).and_then(|host_ptr| {
+                let host = unsafe { &*host_ptr };
+                if !matches!(
+                    super::super::window_accessors::window_current_dispatch_scope(
+                        scope, window, host
+                    ),
+                    Some(crate::native_bridge::OwnerDispatchScope::Top),
+                ) {
+                    return None;
+                }
+                host.viewport_surface()?.emulated_view?.mobile_viewport
+            });
+        let value = if let Some(mobile) = mobile {
+            match slot {
+                VISUAL_VIEWPORT_WIDTH_SLOT => mobile.width,
+                VISUAL_VIEWPORT_HEIGHT_SLOT => mobile.height,
+                _ => mobile.scale,
+            }
+        } else if slot == VISUAL_VIEWPORT_SCALE_SLOT {
+            1.0
+        } else if slot == VISUAL_VIEWPORT_WIDTH_SLOT {
             super::super::window_accessors::window_inner_surface_width(scope, window)
         } else {
             super::super::window_accessors::window_inner_surface_height(scope, window)

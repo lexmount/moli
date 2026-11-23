@@ -258,8 +258,8 @@ impl PageVm {
         if !self.vm().is_debugger_paused() {
             self.flush_page_action_window(barrier)?;
         }
-        let paint_capture = request
-            .paint_capture_request(self.document_settings.viewport_surface.unwrap_or_default())?;
+        let paint_capture =
+            request.paint_capture_request(self.vm().viewport_surface().unwrap_or_default())?;
         if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(RendererCaptureScreenshotReply::LayoutDisabled);
         }
@@ -337,7 +337,7 @@ impl PageVm {
         if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(CaptureScreencastFrame(LayoutDisabled));
         }
-        let surface = self.document_settings.viewport_surface.unwrap_or_default();
+        let surface = self.vm().viewport_surface().unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,
             surface.inner_height,
@@ -443,7 +443,7 @@ impl PageVm {
             paint_capture.clip_filter_outset =
                 vision::BLURRED_VISION_SIGMA_CSS_PX * moli_image::GAUSSIAN_BLUR_OUTSET;
         }
-        let surface = self.document_settings.viewport_surface.unwrap_or_default();
+        let surface = self.vm().viewport_surface().unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,
             surface.inner_height,
@@ -776,15 +776,17 @@ fn paint_viewport_region(
     let (scale, width, height) = match capture {
         ViewportCapture::Surface => {
             let ratio = surface.device_pixel_ratio / view.native_device_pixel_ratio;
-            (
-                ratio,
-                f64::from(surface.inner_width) * ratio,
-                f64::from(surface.inner_height) * ratio,
-            )
+            let (width, height) = if view.mobile_viewport.is_some() {
+                (view.width, view.height)
+            } else {
+                (surface.inner_width, surface.inner_height)
+            };
+            (ratio, f64::from(width) * ratio, f64::from(height) * ratio)
         }
         #[cfg(feature = "devtools")]
         ViewportCapture::Widget => (view.scale, f64::from(view.width), f64::from(view.height)),
     };
+    let scale = scale * view.mobile_viewport.map_or(1.0, |viewport| viewport.scale);
     let (transform, scroll_scale) = if let Some(viewport) = view.viewport {
         // Blink applies the preview scale first, then the page-coordinate
         // viewport offset and scale. Resolve scroll compensation during layout.

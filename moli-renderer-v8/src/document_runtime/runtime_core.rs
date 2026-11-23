@@ -14,6 +14,25 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn viewport_surface(&self) -> Option<crate::protocol_types::ViewportSurface> {
+        self.configured_viewport_surface().map(|surface| {
+            if surface
+                .emulated_view
+                .is_some_and(|view| view.mobile_viewport.is_some())
+            {
+                let content = self.dom_host.document_meta_content_for_document(
+                    self.dom_host.document_handle(),
+                    "viewport",
+                );
+                super::mobile_viewport::resolve(surface, content)
+            } else {
+                surface
+            }
+        })
+    }
+
+    pub(crate) fn configured_viewport_surface(
+        &self,
+    ) -> Option<crate::protocol_types::ViewportSurface> {
         self.dom_host.viewport_surface
     }
 
@@ -25,7 +44,9 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn style_viewport(&self) -> crate::style_engine::StyleViewport {
-        self.dom_host.style_viewport()
+        self.viewport_surface()
+            .map(crate::style_engine::StyleViewport::from_viewport_surface)
+            .unwrap_or_else(|| self.dom_host.style_viewport())
     }
 
     pub(crate) fn stylesheet_media_matches(&self, media: &str) -> bool {

@@ -897,7 +897,7 @@ impl PageScriptHost {
         &mut self,
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> bool {
-        let changed = self.viewport_surface() != viewport_surface;
+        let changed = self.configured_viewport_surface() != viewport_surface;
         let previous =
             (changed && self.layout_policy().is_realtime()).then(|| self.style_viewport());
         if changed {
@@ -925,6 +925,12 @@ impl PageScriptHost {
 
     pub(crate) fn viewport_surface(&self) -> Option<crate::protocol_types::ViewportSurface> {
         unsafe { &*self.document_runtime }.viewport_surface()
+    }
+
+    pub(crate) fn configured_viewport_surface(
+        &self,
+    ) -> Option<crate::protocol_types::ViewportSurface> {
+        unsafe { &*self.document_runtime }.configured_viewport_surface()
     }
 
     pub(crate) fn document_base_url_for_handle(&self, document: DomHandle) -> url::Url {
