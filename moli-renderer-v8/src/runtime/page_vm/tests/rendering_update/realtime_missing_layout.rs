@@ -23,6 +23,50 @@ fn install_child(page: &mut PageVm) {
 }
 
 #[test]
+#[cfg(feature = "devtools")]
+fn realtime_pointer_targets_an_empty_iframe_outer_box() {
+    run_page_vm_large_stack_async_test("realtime-pointer-empty-frame", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        install_child(&mut page);
+        page.vm_mut()
+            .eval(
+                "frame.style.cssText='position:absolute;left:40px;top:40px;width:120px;height:80px;border:0';
+                 window.moves=[];
+                 frame.addEventListener('mousemove',()=>moves.push('frame'));
+                 childTarget.addEventListener('mousemove',()=>moves.push('child'));
+                 window.childRoot=child.documentElement;",
+            )
+            .unwrap();
+        let mouse_move = |page: &mut PageVm| {
+            page.dispatch_mouse_event_at_point_with_pointer(
+                50.,
+                50.,
+                "mousemove",
+                -1,
+                Some(0),
+                0,
+                0.,
+                0.,
+                crate::RendererPointerEventProperties::default(),
+                0,
+                false,
+            )
+            .unwrap();
+        };
+        mouse_move(&mut page);
+        page.vm_mut().eval("childRoot.remove()").unwrap();
+        mouse_move(&mut page);
+        page.vm_mut().eval("child.append(childRoot)").unwrap();
+        mouse_move(&mut page);
+        assert_eq!(
+            page.vm_mut().eval("moves.join(',')").unwrap(),
+            "child,frame,child"
+        );
+    });
+}
+
+#[test]
 fn realtime_ro_missing_frame_layout_reports_zero_and_preserves_parent_frames() {
     run_page_vm_large_stack_async_test("realtime-ro-missing-layout", || async move {
         for hidden in [true, false] {
