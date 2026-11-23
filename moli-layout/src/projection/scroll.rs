@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash, mem::size_of};
 
 use crate::{
     FrozenLayoutBox, LayoutBoxGeometry, LayoutBoxId, LayoutError, LayoutPoint, LayoutScrollExtent,
-    LayoutScrollbarGeometry, LayoutWorld,
+    LayoutScrollbarGeometry, LayoutWorld, style::ResolvedLayoutTransform,
 };
 
 use super::{
@@ -56,6 +56,10 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
 
     pub(super) fn placement(&self, index: usize) -> (BoxPlacement, Option<StickyConstraints>) {
         (self.placements[index], self.sticky.get(&index).copied())
+    }
+
+    pub(super) fn resolved_transform(&self, index: usize) -> ResolvedLayoutTransform {
+        self.placements[index].transform
     }
 
     pub(crate) fn estimated_bytes(&self) -> usize {

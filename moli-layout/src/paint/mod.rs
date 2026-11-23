@@ -36,7 +36,7 @@ use crate::{
     LayoutWorld, PaintColor, PaintDiagnostic, PaintDiagnosticSeverity, PaintEdgeSizes,
     PaintFragment, PaintShape, PaintSnapshot,
     capture::ResolvedPaintCapture,
-    projection::{OutputProjection, PaintSpace},
+    projection::{PaintProjection, PaintSpace},
     stacking::PaintOrderEvent,
 };
 
@@ -63,7 +63,7 @@ pub(crate) struct PaintProjectionResult {
 
 /// Paint-property-tree cursor for clips within a stacking context.
 ///
-/// `OutputProjection` already interns every clip as a stable chain node. Keep
+/// Projection gives every clip a stable chain node. Keep
 /// the common prefix active across adjacent paint-order events instead of
 /// serializing the complete ancestor chain around every box fragment. The
 /// cursor is cleared at stacking-context boundaries so effect/mask layers keep
@@ -77,7 +77,7 @@ struct ActivePaintClipChain {
 impl ActivePaintClipChain {
     fn transition_to<N>(
         &mut self,
-        projection: &OutputProjection<'_, N>,
+        projection: &PaintProjection<'_, N>,
         clip: Option<LayoutClipChainId>,
         snapshot: &mut PaintSnapshot,
     ) where
@@ -107,7 +107,7 @@ impl ActivePaintClipChain {
 
     fn push_filter_output_clips<N>(
         &mut self,
-        projection: &OutputProjection<'_, N>,
+        projection: &PaintProjection<'_, N>,
         clip: Option<LayoutClipChainId>,
         snapshot: &mut PaintSnapshot,
     ) -> usize
@@ -162,7 +162,7 @@ enum UnavailableReplacedContentPaint {
 pub(crate) use links::LinkProjection;
 
 pub(crate) fn project_paint_snapshot<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     capture: ResolvedPaintCapture,
     content_size: crate::LayoutSize,
     links: Option<LinkProjection>,
@@ -183,10 +183,12 @@ where
     snapshot.raster_crop = capture.raster_crop;
     snapshot.viewport_to_surface = capture.viewport_to_surface;
     snapshot.content_size = content_size;
-    snapshot.diagnostics = projection.diagnostics.clone();
+    snapshot
+        .diagnostics
+        .extend_from_slice(projection.diagnostics);
     let cull_plan = PaintCullPlan::build(projection);
     let mut metrics = PaintProjectionMetrics {
-        event_count: projection.paint_events.len(),
+        event_count: projection.metadata.events.len(),
         ..PaintProjectionMetrics::default()
     };
     let mut current_cull = PaintCullRegion::for_capture(capture.viewport_rect);
@@ -224,8 +226,8 @@ where
     let mut active_clips = ActivePaintClipChain::default();
     let mut event_index = 0usize;
     let mut inline_text = HashMap::new();
-    while event_index < projection.paint_events.len() {
-        let event = projection.paint_events[event_index];
+    while event_index < projection.metadata.events.len() {
+        let event = projection.metadata.events[event_index];
         if let PaintOrderEvent::PushStackingContext(_) = event {
             // Context boundaries reset per-fragment clips even when the
             // complete balanced range is outside this capture.
@@ -258,7 +260,7 @@ where
             PaintOrderEvent::BoxOutsetShadow(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.background_clips[id.index()],
+                    projection.geometry(id.index()).clip_chain,
                     &mut snapshot,
                 );
                 project_outset_box_shadows(projection, id, &mut snapshot);
@@ -266,7 +268,7 @@ where
             PaintOrderEvent::PushStackingContext(id) => {
                 let layout_box = &projection.world.boxes[id.index()];
                 let style = &layout_box.style;
-                let geometry = &projection.boxes[id.index()];
+                let geometry = projection.geometry(id.index());
                 let viewport_transform = projection.coordinate_spaces
                     [geometry.coordinate_space.index()]
                 .paint
@@ -282,7 +284,7 @@ where
                 } else {
                     active_clips.push_filter_output_clips(
                         projection,
-                        projection.background_clips[id.index()],
+                        projection.geometry(id.index()).clip_chain,
                         &mut snapshot,
                     )
                 };
@@ -418,11 +420,11 @@ where
             PaintOrderEvent::BoxBackground(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.background_clips[id.index()],
+                    projection.geometry(id.index()).clip_chain,
                     &mut snapshot,
                 );
                 if let Some(links) = &links
-                    && let Some(fragment) = projection.direct_fragments[id.index()]
+                    && let Some(fragment) = projection.metadata.boxes[id.index()].direct_fragment
                 {
                     links.append(projection, fragment, &mut snapshot);
                 }
@@ -441,16 +443,13 @@ where
             PaintOrderEvent::BoxContents(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.content_clips[id.index()],
+                    projection.metadata.boxes[id.index()].content_clip,
                     &mut snapshot,
                 );
                 if let Some(links) = &links {
-                    for fragment in &projection.owner_paint_fragments[id.index()] {
-                        if matches!(
-                            projection.fragments[fragment.index()].kind,
-                            crate::LayoutFragmentKind::Text { .. }
-                        ) {
-                            links.append(projection, *fragment, &mut snapshot);
+                    for fragment in projection.inline_fragments(id) {
+                        if matches!(fragment.kind, crate::LayoutFragmentKind::Text { .. }) {
+                            links.append(projection, fragment.id, &mut snapshot);
                         }
                     }
                 }
@@ -459,16 +458,13 @@ where
             PaintOrderEvent::InlineContents(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.content_clips[id.index()],
+                    projection.metadata.boxes[id.index()].content_clip,
                     &mut snapshot,
                 );
                 if let Some(links) = &links {
-                    for fragment in &projection.owner_paint_fragments[id.index()] {
-                        if matches!(
-                            projection.fragments[fragment.index()].kind,
-                            crate::LayoutFragmentKind::InlineBox { .. }
-                        ) {
-                            links.append(projection, *fragment, &mut snapshot);
+                    for fragment in projection.inline_fragments(id) {
+                        if matches!(fragment.kind, crate::LayoutFragmentKind::InlineBox { .. }) {
+                            links.append(projection, fragment.id, &mut snapshot);
                         }
                     }
                 }
@@ -486,7 +482,7 @@ where
             PaintOrderEvent::BoxText(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.content_clips[id.index()],
+                    projection.metadata.boxes[id.index()].content_clip,
                     &mut snapshot,
                 );
                 project_box_text(projection, id, current_cull, &mut metrics, &mut snapshot);
@@ -494,7 +490,7 @@ where
             PaintOrderEvent::BoxCaret(id) | PaintOrderEvent::InlineSelection { owner: id, .. } => {
                 active_clips.transition_to(
                     projection,
-                    projection.content_clips[id.index()],
+                    projection.metadata.boxes[id.index()].content_clip,
                     &mut snapshot,
                 );
                 let space = &projection.coordinate_spaces[id.index() + 1];
@@ -515,13 +511,13 @@ where
             PaintOrderEvent::InlineBox { owner, fragment } => {
                 active_clips.transition_to(
                     projection,
-                    projection.content_clips[owner.index()],
+                    projection.metadata.boxes[owner.index()].content_clip,
                     &mut snapshot,
                 );
                 if let Some(links) = &links {
                     links.append(
                         projection,
-                        projection.owner_paint_fragments[owner.index()][fragment],
+                        projection.inline_fragments(owner)[fragment].id,
                         &mut snapshot,
                     );
                 }
@@ -544,7 +540,7 @@ where
                 }
                 active_clips.transition_to(
                     projection,
-                    projection.content_clips[owner.index()],
+                    projection.metadata.boxes[owner.index()].content_clip,
                     &mut snapshot,
                 );
                 let space = projection.coordinate_spaces[owner.index() + 1]
@@ -571,7 +567,7 @@ where
             PaintOrderEvent::TableCollapsedBorders(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.background_clips[id.index()],
+                    projection.geometry(id.index()).clip_chain,
                     &mut snapshot,
                 );
                 project_collapsed_table_borders(projection, id, &mut snapshot);
@@ -579,14 +575,14 @@ where
             PaintOrderEvent::BoxOutline(id) => {
                 if id != projection.world.root || capture.paint_root_scrollbars {
                     let scrollbar_clip = (id != projection.world.root)
-                        .then_some(projection.background_clips[id.index()])
+                        .then_some(projection.geometry(id.index()).clip_chain)
                         .flatten();
                     active_clips.transition_to(projection, scrollbar_clip, &mut snapshot);
                     project_scrollbars(projection, id, &mut snapshot);
                 }
                 active_clips.transition_to(
                     projection,
-                    projection.background_clips[id.index()],
+                    projection.geometry(id.index()).clip_chain,
                     &mut snapshot,
                 );
                 project_box_outline(projection, id, &mut snapshot);
@@ -601,7 +597,7 @@ where
                 }
                 if state.mask_layer {
                     let layout_box = &projection.world.boxes[id.index()];
-                    let geometry = &projection.boxes[id.index()];
+                    let geometry = projection.geometry(id.index());
                     let paint_space = projection.coordinate_spaces
                         [geometry.coordinate_space.index()]
                     .paint_space(capture.viewport_to_surface);
@@ -653,7 +649,7 @@ where
 }
 
 fn paint_clip_chain<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     clip: Option<LayoutClipChainId>,
     filter_output_clips: &[LayoutOutputBoxId],
 ) -> Vec<LayoutClipChainId>
@@ -680,7 +676,7 @@ where
 }
 
 fn push_clip_node<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutClipChainId,
     snapshot: &mut PaintSnapshot,
 ) where
@@ -724,7 +720,7 @@ fn push_clip_node<N>(
 }
 
 fn push_clip_chain<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     clip: Option<LayoutClipChainId>,
     filter_output_clips: &[LayoutOutputBoxId],
     snapshot: &mut PaintSnapshot,
@@ -821,7 +817,7 @@ fn style_has_canvas_background(style: &crate::ResolvedLayoutStyle) -> bool {
 }
 
 fn project_box_background<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     filter_output_clips: &[LayoutOutputBoxId],
     propagated_background: Option<LayoutBoxId>,
@@ -837,7 +833,7 @@ fn project_box_background<N>(
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return;
     }
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
     let areas = BoxAreas::for_box(projection, id);
@@ -938,7 +934,7 @@ fn project_box_background<N>(
 /// second layout tree: each box reuses its pass-owned Parley output and exact
 /// coordinate space, while ordinary foreground paint remains in paint order.
 fn project_background_text_clip_mask<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     root: LayoutBoxId,
     filter_output_clips: &[LayoutOutputBoxId],
     scope: TextClipMaskScope,
@@ -991,7 +987,7 @@ fn project_background_text_clip_mask<N>(
 }
 
 fn project_box_text_clip_mask<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     filter_output_clips: &[LayoutOutputBoxId],
     scope: TextClipMaskScope,
@@ -1005,7 +1001,7 @@ fn project_box_text_clip_mask<N>(
     if !layout_box.style.is_visible() {
         return;
     }
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let viewport_transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
         .local_transform();
@@ -1013,7 +1009,7 @@ fn project_box_text_clip_mask<N>(
     let transform = snapshot.viewport_to_surface.concatenate(viewport_transform);
     let clip_count = push_clip_chain(
         projection,
-        projection.content_clips[id.index()],
+        projection.metadata.boxes[id.index()].content_clip,
         filter_output_clips,
         snapshot,
     );
@@ -1022,7 +1018,7 @@ fn project_box_text_clip_mask<N>(
 }
 
 fn project_outset_box_shadows<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     snapshot: &mut PaintSnapshot,
 ) where
@@ -1032,7 +1028,7 @@ fn project_outset_box_shadows<N>(
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return;
     }
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
     let areas = BoxAreas::for_box(projection, id);
@@ -1063,7 +1059,7 @@ fn push_diagnostic_once(snapshot: &mut PaintSnapshot, code: &'static str, messag
 }
 
 fn project_box_outline<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     snapshot: &mut PaintSnapshot,
 ) where
@@ -1073,7 +1069,7 @@ fn project_box_outline<N>(
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return;
     }
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
     let radii = layout_box
@@ -1089,7 +1085,7 @@ fn project_box_outline<N>(
 }
 
 fn project_box_contents<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     embedded_frames: &mut HashMap<LayoutBoxId, PaintSnapshot>,
     snapshot: &mut PaintSnapshot,
@@ -1100,7 +1096,7 @@ fn project_box_contents<N>(
     if !layout_box.style.is_visible() {
         return;
     }
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
     let transform = paint_space.local_transform();
@@ -1120,7 +1116,7 @@ fn project_box_contents<N>(
 
 #[allow(clippy::too_many_arguments)]
 fn project_inline_contents<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     filter_output_clips: &[LayoutOutputBoxId],
     selected_fragment: Option<usize>,
@@ -1162,7 +1158,7 @@ fn project_inline_contents<N>(
 }
 
 fn project_box_text<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     cull: PaintCullRegion,
     metrics: &mut PaintProjectionMetrics,
@@ -1174,7 +1170,7 @@ fn project_box_text<N>(
     if !layout_box.style.is_visible() {
         return;
     }
-    let geometry = &projection.boxes[id.index()];
+    let geometry = projection.geometry(id.index());
     let viewport_transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
         .local_transform();

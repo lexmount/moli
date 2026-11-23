@@ -10,7 +10,7 @@ use style::properties::generated::longhands::{
 
 use crate::{
     LayoutBoxId, LayoutRect, PaintCornerRadii, PaintEdgeSizes, PaintShape,
-    projection::OutputProjection,
+    projection::PaintProjection,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,12 +66,12 @@ pub(super) struct BoxAreas {
 }
 
 impl BoxAreas {
-    pub(super) fn for_box<N>(projection: &OutputProjection<'_, N>, id: LayoutBoxId) -> Self
+    pub(super) fn for_box<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) -> Self
     where
         N: Copy + Debug + Eq + Hash,
     {
         let layout_box = &projection.world.boxes[id.index()];
-        let geometry = &projection.boxes[id.index()];
+        let geometry = projection.geometry(id.index());
         let layout = layout_box.final_layout;
         // CSS ignores border-radius on boxes participating in the collapsed
         // table border model. Their shared grid edges are painted by the table

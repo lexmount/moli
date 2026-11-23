@@ -4,7 +4,7 @@ use crate::{
     LayoutBoxId, LayoutPoint, LayoutRect, LayoutScrollbarAxis, LayoutScrollbarGeometry, PaintBrush,
     PaintColor, PaintCornerRadii, PaintCornerRadius, PaintFragment, PaintPath, PaintPathElement,
     PaintShape, PaintSnapshot,
-    projection::{OutputProjection, PaintSpace},
+    projection::{PaintProjection, PaintSpace},
 };
 
 const DEFAULT_TRACK: PaintColor = PaintColor::new(252.0 / 255.0, 252.0 / 255.0, 252.0 / 255.0, 1.0);
@@ -13,7 +13,7 @@ const FLUENT_BUTTON_LENGTH: f32 = 18.0;
 const FLUENT_ARROW_SIDE: f32 = 9.0;
 
 pub(super) fn project_scrollbars<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     snapshot: &mut PaintSnapshot,
 ) where
@@ -23,14 +23,14 @@ pub(super) fn project_scrollbars<N>(
     if !projection.world.boxes[index].style.is_visible() {
         return;
     }
-    let extent = &projection.scroll_extents[index];
+    let extent = projection.scroll_extent(index);
     let colors = extent.scrollbar_colors;
     let track = colors.map_or(DEFAULT_TRACK, |colors| colors.track);
     let thumb = colors.map_or(DEFAULT_THUMB, |colors| colors.thumb);
     let paint_space = if id == projection.world.root {
         PaintSpace::ROOT.with_outer_transform(snapshot.viewport_to_surface)
     } else {
-        let geometry = &projection.boxes[index];
+        let geometry = projection.geometry(index);
         projection.coordinate_spaces[geometry.coordinate_space.index()]
             .paint_space(snapshot.viewport_to_surface)
     };

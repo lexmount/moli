@@ -19,11 +19,11 @@ use crate::{
     LayoutBoxId, LayoutPoint, LayoutRect, LayoutReplacedKind, LayoutSize, PaintBorderColors,
     PaintBorderStyle, PaintBorderStyles, PaintColor, PaintCornerRadii, PaintDiagnostic,
     PaintDiagnosticSeverity, PaintEdgeSizes, PaintFragment, PaintImage, PaintImageSampling,
-    PaintSnapshot, PaintSvgImage, projection::OutputProjection,
+    PaintSnapshot, PaintSvgImage, projection::PaintProjection,
 };
 
 pub(super) fn project_replaced_image<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
@@ -165,7 +165,7 @@ fn replaced_content_clip_needed(areas: BoxAreas, destination: LayoutRect) -> boo
 }
 
 fn project_unavailable_image<N>(
-    projection: &OutputProjection<'_, N>,
+    projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
