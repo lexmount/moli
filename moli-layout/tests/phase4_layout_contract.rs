@@ -2823,6 +2823,63 @@ fn single_row_textarea_does_not_expand_its_flex_search_bar() {
 }
 
 #[test]
+fn checkbox_and_radio_paint_respects_computed_appearance() {
+    use style::{
+        properties::{ComputedValues, style_structs::Font},
+        servo_arc::Arc as ServoArc,
+        values::computed::{Appearance, Display},
+    };
+
+    let initial = ComputedValues::initial_values_with_font_override(Font::initial_values());
+    for control in [
+        LayoutInputControlKind::Checkbox,
+        LayoutInputControlKind::Radio,
+    ] {
+        let source = Source(vec![
+            Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+            Node::element(
+                "control",
+                "input",
+                LayoutElementCategory::FormControl(LayoutFormControlKind::Input(control)),
+                Some(LayoutReplacedKind::FormControl),
+                Vec::new(),
+            )
+            .with_metadata(LayoutElementMetadata {
+                form_control: Some(LayoutFormControlData {
+                    checked: true,
+                    ..LayoutFormControlData::default()
+                }),
+                ..LayoutElementMetadata::default()
+            }),
+        ]);
+        let mut styles = Styles::default();
+        styles.primary.insert(
+            0,
+            sized(LayoutDisplay::Block, 80.0, 80.0, PaintColor::TRANSPARENT),
+        );
+        for (appearance, paints_native_control) in
+            [(Appearance::Auto, true), (Appearance::None, false)]
+        {
+            let mut computed = (*initial).clone();
+            computed.mutate_box().set_display(Display::Block);
+            computed.mutate_box().set_appearance(appearance);
+            styles
+                .primary
+                .insert(1, ResolvedLayoutStyle::from_stylo(ServoArc::new(computed)));
+            let snapshot = render(&source, &mut styles, 80, 80);
+            assert_eq!(
+                snapshot.fragments.iter().any(|fragment| matches!(
+                    fragment,
+                    PaintFragment::Fill { .. } | PaintFragment::Stroke(_)
+                )),
+                paints_native_control,
+                "{control:?} with {appearance:?}",
+            );
+        }
+    }
+}
+
+#[test]
 fn form_controls_have_deterministic_intrinsic_geometry_content_and_basic_appearance() {
     let form_data = LayoutFormControlData {
         placeholder: "Search".into(),
