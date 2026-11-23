@@ -275,6 +275,15 @@ pub(crate) fn css_media_rule_matches_getter_callback<'s>(
         .filter(|view| view.rule_type == CssRuleType::Media)
         .map(|view| view.condition_text)
         .unwrap_or_default();
+    if let Some((host, document)) =
+        get_private_object(scope, args.this(), CSS_RULE_PARENT_STYLE_SHEET_SLOT)
+            .and_then(|sheet| stylesheet_document(scope, sheet))
+    {
+        rv.set_bool(unsafe { &*host }.media_query_matches_for_document(document, &media_text));
+        return;
+    }
+
+    // Unowned rule wrappers can still be queried using their Window's media.
     let context = args
         .this()
         .get_creation_context(scope)
@@ -296,6 +305,35 @@ pub(crate) fn css_media_rule_matches_getter_callback<'s>(
         )
     };
     rv.set_bool(matches);
+}
+
+fn stylesheet_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    mut sheet: v8::Local<'s, v8::Object>,
+) -> Option<(*mut crate::native_bridge::PageScriptHost, DomHandle)> {
+    // Imported sheets inherit the association of their root stylesheet.
+    while let Some(rule) = get_private_object(scope, sheet, CSS_STYLE_SHEET_OWNER_RULE_SLOT) {
+        sheet = get_private_object(scope, rule, CSS_RULE_PARENT_STYLE_SHEET_SLOT)?;
+    }
+    let (host_ptr, document) = if let Some(node) = css_style_sheet_owner_node(scope, sheet) {
+        let (host_ptr, node) =
+            crate::native_bridge::node_runtime_and_handle_from_object(scope, node).ok()?;
+        let dom = unsafe { &*host_ptr }.dom_host();
+        if !dom.is_connected_to_document(node) {
+            return None;
+        }
+        (host_ptr, dom.owner_document_handle(node)?)
+    } else {
+        // A constructed stylesheet uses its constructor document before
+        // adoption as well. It can only be adopted by that same document.
+        let document = css_style_sheet_constructor_document_handle(scope, sheet)?;
+        let host_ptr = sheet
+            .get_creation_context(scope)
+            .and_then(crate::util::context_host_ptr_from_context_slot)?;
+        (host_ptr, document)
+    };
+    unsafe { &*host_ptr }.owner_dispatch_scope_for_node(document)?;
+    Some((host_ptr, document))
 }
 
 pub(crate) fn media_list_media_text_getter_callback<'s>(

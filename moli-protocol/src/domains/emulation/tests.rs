@@ -162,6 +162,84 @@ async fn os_text_scale_keeps_styles_document_media_queries_and_font_faces_in_syn
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn css_media_rule_matches_uses_the_stylesheet_document_after_adoption() {
+    for policy in [
+        moli_core::LayoutPolicy::OnDemand,
+        moli_core::LayoutPolicy::Realtime,
+    ] {
+        let mut ctx = TestContext::new_with_layout_policy(policy);
+        load_session_page_for_pending_emulation_test(&mut ctx).await;
+        expect_session_command_result(
+            &mut ctx,
+            88503,
+            "SID-1",
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width": 800, "height": 600, "deviceScaleFactor": 1, "mobile": false}),
+        )
+        .await;
+        expect_session_command_result(
+            &mut ctx,
+            88504,
+            "SID-1",
+            "Emulation.setEmulatedOSTextScale",
+            json!({"scale": 1.5}),
+        )
+        .await;
+        let result = evaluate(
+            &mut ctx,
+            r#"
+            (async () => {
+                const optIn = '<meta name=text-scale content=scale>';
+                document.head.insertAdjacentHTML('afterbegin', optIn);
+                const frame = document.createElement('iframe');
+                frame.style.cssText = 'display:block; width:800px; height:120px; border:0';
+                const loaded = new Promise(resolve => frame.addEventListener('load', resolve, {once:true}));
+                frame.srcdoc = '<!doctype html><body>child</body>';
+                document.body.append(frame);
+                await loaded;
+
+                const child = frame.contentDocument;
+                const window = frame.contentWindow;
+                const query = '(min-width: 40em)';
+                const style = document.createElement('style');
+                style.textContent = 'body { color: black } @media ' + query + ' { body { color: red } }';
+                child.head.append(style);
+                const rule = style.sheet.cssRules[1];
+                const read = () => [rule.matches, window.matchMedia(query).matches,
+                                    window.getComputedStyle(child.body).color];
+                const before = read();
+
+                const constructed = new window.CSSStyleSheet();
+                constructed.replaceSync('@media ' + query + ' {}');
+                const constructedRule = constructed.cssRules[0];
+                const detached = constructedRule.matches;
+                child.adoptedStyleSheets = [constructed];
+                const adopted = constructedRule.matches;
+
+                child.head.insertAdjacentHTML('afterbegin', optIn);
+                return [innerWidth, window.innerWidth, matchMedia(query).matches,
+                        before, detached, adopted, read()];
+            })()
+            "#,
+        )
+        .await;
+        assert_eq!(
+            result,
+            json!([
+                800,
+                800,
+                false,
+                [true, true, "rgb(255, 0, 0)"],
+                true,
+                true,
+                [false, false, "rgb(0, 0, 0)"]
+            ]),
+            "{policy:?}",
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn detaching_an_untouched_emulation_session_resets_the_target_text_scale() {
     let mut ctx = TestContext::new();
     install_multi_session_page_state(&mut ctx);
