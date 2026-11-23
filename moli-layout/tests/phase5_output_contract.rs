@@ -4036,6 +4036,10 @@ fn transforms_and_semantic_paint_order_share_the_hit_test_projection() {
         LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
     );
     assert!(output.paint_snapshot().is_some());
+    let geometry_only = build(&source, &mut styles);
+    assert!(geometry_only.paint_snapshot().is_none());
+    assert_eq!(geometry_only.boxes, output.boxes);
+    assert_eq!(geometry_only.fragments, output.fragments);
     assert_rect(
         output
             .box_model_for_source(2)
