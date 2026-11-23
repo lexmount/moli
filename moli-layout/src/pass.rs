@@ -284,6 +284,38 @@ impl<N> MeasuredLayoutPass<N>
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
+    /// Rebuild after style feedback, keeping the cost of the discarded layout.
+    pub fn remeasure(
+        self,
+        services: &mut DocumentLayoutServices,
+        prepare: impl FnOnce() -> Result<PreparedLayoutPass<N>, LayoutError>,
+    ) -> Result<Self, LayoutError> {
+        let Self {
+            prepared,
+            inline_preparation_elapsed,
+            numeric_layout_elapsed,
+            numeric_metrics,
+        } = self;
+        let PreparedLayoutPass {
+            world,
+            started,
+            box_tree_elapsed,
+            list_marker_elapsed,
+            form_control_elapsed,
+            ..
+        } = prepared;
+        drop(world);
+        let mut next = measure_prepared_layout_pass(prepare()?, services)?;
+        next.prepared.started = started;
+        next.prepared.box_tree_elapsed += box_tree_elapsed;
+        next.prepared.list_marker_elapsed += list_marker_elapsed;
+        next.prepared.form_control_elapsed += form_control_elapsed;
+        next.inline_preparation_elapsed += inline_preparation_elapsed;
+        next.numeric_layout_elapsed += numeric_layout_elapsed;
+        next.numeric_metrics.accumulate(numeric_metrics);
+        Ok(next)
+    }
+
     /// Untransformed content-box dimensions on the queryable physical axes.
     pub fn query_container_sizes(&self) -> impl Iterator<Item = (N, [Option<f32>; 2])> + '_ {
         use style::values::specified::box_::ContainerType;
@@ -587,6 +619,19 @@ struct NumericLayoutMetrics {
     scrollbar_feedback_elapsed: Duration,
     feedback_invalidated_node_count: usize,
     feedback_overflow_recomputed_node_count: usize,
+}
+
+impl NumericLayoutMetrics {
+    fn accumulate(&mut self, previous: Self) {
+        self.pass_count += previous.pass_count;
+        self.first_pass_elapsed += previous.first_pass_elapsed;
+        self.followup_passes_elapsed += previous.followup_passes_elapsed;
+        self.overflow_detection_elapsed += previous.overflow_detection_elapsed;
+        self.scrollbar_feedback_elapsed += previous.scrollbar_feedback_elapsed;
+        self.feedback_invalidated_node_count += previous.feedback_invalidated_node_count;
+        self.feedback_overflow_recomputed_node_count +=
+            previous.feedback_overflow_recomputed_node_count;
+    }
 }
 
 fn compute_world_layout_with_scrollbars<N>(

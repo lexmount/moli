@@ -10,7 +10,10 @@ use super::realtime_environment::RealtimeEnvironmentState;
 use super::realtime_events::RealtimeRenderingEvents;
 use super::realtime_rendering::RealtimeFrameState;
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
-use crate::{document_runtime::DomHandle, style_engine::StyloStyleEnvironment};
+use crate::{
+    document_runtime::DomHandle, layout_renderer::ContainerSizeFeedback,
+    style_engine::StyloStyleEnvironment,
+};
 
 /// The consumer explicitly decides whether a pass may update screen geometry.
 /// Trigger reasons remain diagnostic and do not select publication behavior.
@@ -161,6 +164,7 @@ impl PageScriptHost {
         &self,
         publication: PreparedLayoutPublication,
         pass: LayoutPassResult<DomHandle>,
+        feedback: ContainerSizeFeedback<'_>,
     ) -> Result<(), LayoutError> {
         match publication.0 {
             LayoutPublication::LegacyLatest(document) => {
@@ -180,6 +184,7 @@ impl PageScriptHost {
                     ));
                 }
                 self.publish_layout_pass_for_document(document, pass);
+                feedback.commit();
                 self.did_publish_screen_layout(state, inputs);
             }
             LayoutPublication::Transient => {}
@@ -307,7 +312,9 @@ impl PageScriptHost {
         let request = LayoutPassRequest::new(inputs.viewport, reason)
             .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
             .with_scroll_projection(true);
-        let Some(pass) = self.build_layout_pass_for_document(document, request)? else {
+        let Some((pass, feedback)) =
+            self.build_layout_pass_for_document_in_environment(document, request, None)?
+        else {
             if self.screen_layout_inputs(state)? != inputs {
                 return Err(LayoutError::source_contract(
                     "screen layout",
@@ -325,6 +332,7 @@ impl PageScriptHost {
         self.finish_layout_publication(
             PreparedLayoutPublication(LayoutPublication::CurrentScreen { document, inputs }),
             pass,
+            feedback,
         )
     }
 

@@ -8,6 +8,7 @@ use moli_layout::{
     LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutViewport,
     ScrollProjectionRefresh,
 };
+use moli_selector::QueryContainerSizes;
 
 use super::PageScriptHost;
 #[cfg(feature = "devtools")]
@@ -18,6 +19,7 @@ use crate::{
         CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
     },
     document_runtime::DomHandle,
+    layout_renderer::ContainerSizeFeedback,
     native_bridge::element::iframe_handle_viewport,
     script_vm::web_fonts::DocumentWebFontCompletion,
     style_engine::{StyleViewport, StyloStyleEnvironment},
@@ -453,16 +455,13 @@ impl PageScriptHost {
             .clear_latest_layout();
     }
 
-    pub(crate) fn update_layout_container_sizes(
+    pub(crate) fn replace_layout_container_sizes(
         &self,
         document: DomHandle,
-        pass: &moli_layout::MeasuredLayoutPass<DomHandle>,
-    ) -> bool {
-        self.style_engine.update_layout_container_sizes(
-            self.dom_host(),
-            document,
-            pass.query_container_sizes(),
-        )
+        sizes: QueryContainerSizes,
+    ) -> Option<QueryContainerSizes> {
+        self.style_engine
+            .replace_layout_container_sizes(self.dom_host(), document, sizes)
     }
 
     pub(crate) fn build_layout_pass_for_document(
@@ -471,6 +470,7 @@ impl PageScriptHost {
         request: LayoutPassRequest,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
         self.build_layout_pass_for_document_in_environment(document, request, None)
+            .map(|pass| pass.map(|(layout, _)| layout))
     }
 
     pub(crate) fn build_layout_pass_for_document_in_environment(
@@ -478,7 +478,7 @@ impl PageScriptHost {
         document: DomHandle,
         request: LayoutPassRequest,
         environment_override: Option<StyloStyleEnvironment>,
-    ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
+    ) -> Result<Option<(LayoutPassResult<DomHandle>, ContainerSizeFeedback<'_>)>, LayoutError> {
         let Some(root) = self
             .dom_host()
             .dom()
@@ -487,7 +487,7 @@ impl PageScriptHost {
             return Ok(None);
         };
         let _active = ActiveLayoutPass::enter(&self.layout_pass_active)?;
-        let pass = {
+        let (pass, feedback) = {
             let mut state = self.document_layout_state.borrow_mut();
             state.retain_live_embedded_document_services(|candidate| {
                 self.child_browsing_context_host_for_document_handle(candidate)
@@ -549,7 +549,7 @@ impl PageScriptHost {
             );
         }
         pass.validate_retention_budget()?;
-        Ok(Some(pass))
+        Ok(Some((pass, feedback)))
     }
 
     pub(crate) fn publish_layout_pass_for_document(

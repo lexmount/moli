@@ -14,6 +14,9 @@ pub enum LayoutError {
     /// A layout demand attempted to enter while another synchronous pass was active.
     #[error("a synchronous layout pass cannot re-enter itself")]
     ReentrantLayoutPass,
+    /// Container-query feedback did not settle within its layout budget.
+    #[error("container query sizes did not converge after {iterations} feedback iterations")]
+    ContainerQuerySizesDidNotConverge { iterations: usize },
     /// A consumer requested paint data from a geometry-only output.
     #[error("this layout pass did not request a paint projection")]
     PaintProjectionNotRequested,

@@ -11,27 +11,54 @@ use moli_layout::{
     DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
     LayoutViewport, finish_measured_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
 };
+use moli_selector::QueryContainerSizes;
 
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
-pub(crate) fn build_native_layout_pass(
-    runtime: &PageScriptHost,
+/// Measured sizes are provisional until a Realtime screen pass publishes.
+/// Captures and failed passes restore the previous tables for CSSOM reads.
+pub(crate) struct ContainerSizeFeedback<'a> {
+    host: &'a PageScriptHost,
+    previous: HashMap<DomHandle, QueryContainerSizes>,
+}
+
+impl ContainerSizeFeedback<'_> {
+    pub(crate) fn commit(mut self) {
+        self.previous.clear();
+    }
+}
+
+impl Drop for ContainerSizeFeedback<'_> {
+    fn drop(&mut self) {
+        for (document, sizes) in self.previous.drain() {
+            let _ = self.host.replace_layout_container_sizes(document, sizes);
+        }
+    }
+}
+
+pub(crate) fn build_native_layout_pass<'a>(
+    runtime: &'a PageScriptHost,
     root: DomHandle,
     services: &mut DocumentLayoutServices,
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
-) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
-    let mut document_stack = Vec::new();
-    build_native_layout_pass_recursive(
+) -> Result<(LayoutPassResult<DomHandle>, ContainerSizeFeedback<'a>), moli_layout::LayoutError> {
+    let mut feedback = ContainerSizeFeedback {
+        host: runtime,
+        previous: HashMap::new(),
+    };
+    let pass = build_native_layout_pass_recursive(
         runtime,
         root,
         services,
         embedded_document_services,
         request,
         environment_override,
-        &mut document_stack,
-    )
+        &mut Vec::new(),
+        &mut feedback.previous,
+    )?;
+    Ok((pass, feedback))
 }
 
 fn build_native_layout_pass_recursive(
@@ -42,6 +69,7 @@ fn build_native_layout_pass_recursive(
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     document_stack: &mut Vec<DomHandle>,
+    original_container_sizes: &mut HashMap<DomHandle, QueryContainerSizes>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
     let document = runtime
@@ -91,18 +119,46 @@ fn build_native_layout_pass_recursive(
             retain_scroll_projection: request.retains_scroll_projection(),
             document_stack,
             embedded_document_services,
+            original_container_sizes,
         };
         let finish = |services: &mut DocumentLayoutServices| {
             let mut measured = measure_prepared_layout_pass(prepared, services)?;
-            // Nested containers can change when their outer queries start
-            // matching. Settle size feedback before laying out child documents
-            // and projecting paint. Bound work on oscillating layouts.
-            for _ in 0..8 {
-                if !runtime.update_layout_container_sizes(document, &measured) {
+            let mut iterations = 0;
+            let mut largest_container_count = 0;
+            loop {
+                let sizes: QueryContainerSizes = measured
+                    .query_container_sizes()
+                    .map(|(handle, [width, height])| {
+                        (
+                            handle,
+                            euclid::default::Size2D::new(
+                                width.map(app_units::Au::from_f32_px),
+                                height.map(app_units::Au::from_f32_px),
+                            ),
+                        )
+                    })
+                    .collect();
+                largest_container_count = largest_container_count.max(sizes.len());
+                let Some(previous) = runtime.replace_layout_container_sizes(document, sizes) else {
                     break;
+                };
+                largest_container_count = largest_container_count.max(previous.len());
+                frames
+                    .original_container_sizes
+                    .entry(document)
+                    .or_insert(previous);
+                // A chain can advance by one nested container per feedback
+                // pass. Allow work proportional to the number of containers,
+                // including newly revealed boxes, and fail without publishing
+                // if the measured sizes still change at the budget limit.
+                let budget = largest_container_count.saturating_mul(2).saturating_add(1);
+                if iterations >= budget {
+                    return Err(
+                        moli_layout::LayoutError::ContainerQuerySizesDidNotConverge { iterations },
+                    );
                 }
-                drop(measured);
-                measured = measure_prepared_layout_pass(prepare()?, services)?;
+                iterations += 1;
+                measured = measured.remeasure(services, &mut prepare)?;
             }
             finish_measured_layout_pass(measured, &source, &mut frames)
         };
@@ -162,6 +218,7 @@ struct NativeEmbeddedFrameRenderer<'a> {
     retain_scroll_projection: bool,
     document_stack: &'a mut Vec<DomHandle>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
+    original_container_sizes: &'a mut HashMap<DomHandle, QueryContainerSizes>,
 }
 
 impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
@@ -219,6 +276,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             request,
             self.environment_override,
             self.document_stack,
+            self.original_container_sizes,
         );
         self.embedded_document_services.insert(document, services);
         let output = result?;

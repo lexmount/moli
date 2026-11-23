@@ -7,13 +7,13 @@ use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use dom::ElementState as StyloElementState;
 #[cfg(test)]
 use indexmap::IndexSet;
-use moli_selector::StyloDomStyleAdapter;
 #[cfg(test)]
 use moli_selector::StyloRetainedStyleInvalidationQuery as RetainedStyleInvalidationQuery;
 #[cfg(test)]
 use moli_selector::StyloStyleSourceScope as StyleSourceScope;
 #[cfg(test)]
 use moli_selector::stylo_element_dependency_snapshot as style_element_dependency_snapshot;
+use moli_selector::{QueryContainerSizes, StyloDomStyleAdapter};
 #[cfg(test)]
 use moli_selector::{
     StyloStylesheetSourceScopeFallbackInput, stylo_stylesheet_source_scope_fallback_roots,
@@ -716,8 +716,9 @@ impl MoliStyleEngine {
     pub(crate) fn clear_for_document_replacement(&mut self, document: DomHandle) {
         self.clear_owner_document_indexes_for_document(document);
         self.dom_adapter.clear_element_data_for_document(document);
-        self.dom_adapter
-            .update_query_container_sizes(document, HashMap::new());
+        let _ = self
+            .dom_adapter
+            .replace_query_container_sizes(document, QueryContainerSizes::new());
         self.dom_adapter
             .clear_inline_style_attributes_for_document(document);
         self.dom_adapter
@@ -733,8 +734,9 @@ impl MoliStyleEngine {
     pub(crate) fn retire_document_style_world(&mut self, document: DomHandle) -> bool {
         self.clear_owner_document_indexes_for_document(document);
         self.dom_adapter.clear_element_data_for_document(document);
-        self.dom_adapter
-            .update_query_container_sizes(document, HashMap::new());
+        let _ = self
+            .dom_adapter
+            .replace_query_container_sizes(document, QueryContainerSizes::new());
         self.dom_adapter
             .clear_inline_style_attributes_for_document(document);
         self.dom_adapter
@@ -742,33 +744,19 @@ impl MoliStyleEngine {
         self.document_worlds.retire_document(document)
     }
 
-    pub(crate) fn update_layout_container_sizes(
+    pub(crate) fn replace_layout_container_sizes(
         &self,
         host: &DomHost,
         document: DomHandle,
-        sizes: impl Iterator<Item = (DomHandle, [Option<f32>; 2])>,
-    ) -> bool {
-        let sizes = sizes
-            .map(|(handle, [width, height])| {
-                (
-                    handle,
-                    euclid::default::Size2D::new(
-                        width.map(app_units::Au::from_f32_px),
-                        height.map(app_units::Au::from_f32_px),
-                    ),
-                )
-            })
-            .collect();
-        let changed = self
+        sizes: QueryContainerSizes,
+    ) -> Option<QueryContainerSizes> {
+        let (previous, changed) = self
             .dom_adapter
-            .update_query_container_sizes(document, sizes);
-        if changed.is_empty() {
-            return false;
-        }
+            .replace_query_container_sizes(document, sizes)?;
         let world = self.world_for_document(document);
         self.invalidation_cleanup_for_world(&world)
             .invalidate_subtrees(host, changed);
-        true
+        Some(previous)
     }
 
     #[cfg(test)]
