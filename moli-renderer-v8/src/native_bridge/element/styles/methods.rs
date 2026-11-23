@@ -20,8 +20,8 @@ use super::declaration::{
     style_property_priority, style_property_value, style_runtime_and_handle_from_object,
     supported_declared_property,
 };
-use super::public_layout::read_live_style_property;
-use super::{style_object_computation_context, style_object_forces_empty_computed};
+use super::public_layout::{live_style_read_context, read_live_style_property};
+use super::style_object_forces_empty_computed;
 
 pub(crate) fn style_set_property_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -252,7 +252,7 @@ pub(crate) fn computed_style_property_names_from_object<'s>(
         return Some(Vec::new());
     }
     let runtime = unsafe { &*runtime_ptr };
-    let context = style_object_computation_context(scope, style, runtime, handle, mode);
+    let context = live_style_read_context(scope, style, runtime, handle, mode, None)?;
     Some(style_property_names_with_context(
         runtime, handle, mode, context,
     ))
@@ -429,7 +429,10 @@ pub(crate) fn style_item_callback<'s>(
         return;
     }
     let runtime = unsafe { &*runtime_ptr };
-    let context = style_object_computation_context(scope, args.this(), runtime, handle, mode);
+    let Some(context) = live_style_read_context(scope, args.this(), runtime, handle, mode, None)
+    else {
+        return;
+    };
     let Some(name) =
         style_property_name_at_with_context(runtime, handle, mode, context, parsed.index as usize)
     else {

@@ -5,10 +5,8 @@ use super::declaration::{
     style_css_text_for_computed, style_entries, style_entries_css_text_with_pdb,
     style_runtime_and_handle_from_object,
 };
-use super::{
-    style_object_computation_context, style_object_forces_empty_computed,
-    style_object_property_count_with_context,
-};
+use super::public_layout::live_style_read_context;
+use super::{style_object_forces_empty_computed, style_object_property_count_with_context};
 use crate::{
     css_style::{CssStyleDeclarationCssTextArgs, serialize_css_style_entries},
     webidl,
@@ -36,7 +34,9 @@ fn set_style_length<'s>(
         return;
     }
     let runtime = unsafe { &*runtime_ptr };
-    let context = style_object_computation_context(scope, style, runtime, handle, mode);
+    let Some(context) = live_style_read_context(scope, style, runtime, handle, mode, None) else {
+        return;
+    };
     let length =
         style_object_property_count_with_context(scope, style, runtime, handle, mode, context)
             as i32;

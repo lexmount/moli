@@ -162,9 +162,10 @@ fn style_property_map_size_getter_callback<'s>(
         throw_style_property_map_illegal_invocation(scope, "get size");
         return;
     };
-    let size = computed_style_property_names(scope, style)
-        .len()
-        .min(u32::MAX as usize) as u32;
+    let Some(names) = computed_style_property_names(scope, style) else {
+        return;
+    };
+    let size = names.len().min(u32::MAX as usize) as u32;
     rv.set(v8::Integer::new_from_unsigned(scope, size).into());
 }
 
@@ -177,7 +178,10 @@ fn style_property_map_entries_callback<'s>(
         throw_style_property_map_illegal_invocation(scope, "entries");
         return;
     };
-    let entries = computed_style_property_names(scope, style)
+    let Some(names) = computed_style_property_names(scope, style) else {
+        return;
+    };
+    let entries = names
         .into_iter()
         .map(|property| {
             let property_value = v8_string(scope, &property)
@@ -201,7 +205,10 @@ fn style_property_map_keys_callback<'s>(
         throw_style_property_map_illegal_invocation(scope, "keys");
         return;
     };
-    let keys = computed_style_property_names(scope, style)
+    let Some(names) = computed_style_property_names(scope, style) else {
+        return;
+    };
+    let keys = names
         .into_iter()
         .filter_map(|property| v8_string(scope, &property))
         .map(v8::Local::<v8::Value>::from)
@@ -219,7 +226,10 @@ fn style_property_map_values_callback<'s>(
         throw_style_property_map_illegal_invocation(scope, "values");
         return;
     };
-    let values = computed_style_property_names(scope, style)
+    let Some(names) = computed_style_property_names(scope, style) else {
+        return;
+    };
+    let values = names
         .into_iter()
         .map(|property| style_values_array(scope, style, &property))
         .map(v8::Local::<v8::Value>::from)
@@ -245,7 +255,10 @@ fn style_property_map_for_each_callback<'s>(
         return;
     };
     let this_arg = args.get(1);
-    let snapshot = computed_style_property_names(scope, style)
+    let Some(names) = computed_style_property_names(scope, style) else {
+        return;
+    };
+    let snapshot = names
         .into_iter()
         .filter_map(|property| {
             let property_value = v8_string(scope, &property)?;
@@ -341,7 +354,7 @@ fn style_property_text<'s>(
     if !text.is_empty() {
         return Some(text);
     }
-    computed_style_property_names(scope, style)
+    computed_style_property_names(scope, style)?
         .iter()
         .any(|name| name == property)
         .then_some(text)
@@ -350,17 +363,17 @@ fn style_property_text<'s>(
 fn computed_style_property_names<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
-) -> Vec<String> {
+) -> Option<Vec<String>> {
     // Computed CSSStyleDeclaration and Typed OM enumerate one public property list.
-    let mut names = native_bridge::element::computed_style_property_names_from_object(scope, style)
-        .unwrap_or_default();
+    let mut names =
+        native_bridge::element::computed_style_property_names_from_object(scope, style)?;
     names.sort_by(|left, right| {
         typed_om_property_sort_category(left)
             .cmp(&typed_om_property_sort_category(right))
             .then_with(|| left.cmp(right))
     });
     names.dedup();
-    names
+    Some(names)
 }
 
 fn typed_om_property_sort_category(property: &str) -> u8 {

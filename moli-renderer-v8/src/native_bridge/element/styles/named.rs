@@ -8,8 +8,8 @@ use super::declaration::{
     style_property_index_exists_with_context, style_property_name_at_with_context,
     style_runtime_and_handle_from_object,
 };
-use super::public_layout::read_live_style_property;
-use super::{style_object_computation_context, style_object_forces_empty_computed};
+use super::public_layout::{live_style_read_context, read_live_style_property};
+use super::style_object_forces_empty_computed;
 use crate::{
     css_style::css_style_declaration_property_value,
     util::{throw_type_error, v8_string},
@@ -36,7 +36,11 @@ pub(super) fn style_named_getter<'s>(
         if forces_empty {
             return v8::Intercepted::kNo;
         }
-        let context = style_object_computation_context(scope, args.holder(), runtime, handle, mode);
+        let Some(context) =
+            live_style_read_context(scope, args.holder(), runtime, handle, mode, None)
+        else {
+            return v8::Intercepted::kYes;
+        };
         let Some(name) = style_property_name_at_with_context(runtime, handle, mode, context, index)
         else {
             return v8::Intercepted::kNo;
@@ -120,20 +124,22 @@ pub(super) fn style_named_query<'s>(
         return v8::Intercepted::kNo;
     };
     let raw_key = key.to_rust_string_lossy(scope);
-    let runtime = unsafe { &*runtime_ptr };
+    // Non-index attributes are defined on CSSStyleDeclaration.prototype.
+    let Some(index) = css_style_index_property(&raw_key) else {
+        return v8::Intercepted::kNo;
+    };
     if style_object_forces_empty_computed(scope, args.holder(), mode) {
         return v8::Intercepted::kNo;
     }
-    let context = style_object_computation_context(scope, args.holder(), runtime, handle, mode);
-    if css_style_index_property(&raw_key).is_some_and(|index| {
-        style_property_index_exists_with_context(runtime, handle, mode, context, index)
-    }) {
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(context) = live_style_read_context(scope, args.holder(), runtime, handle, mode, None)
+    else {
+        return v8::Intercepted::kYes;
+    };
+    if style_property_index_exists_with_context(runtime, handle, mode, context, index) {
         rv.set_int32(v8::PropertyAttribute::NONE.as_u32() as i32);
         return v8::Intercepted::kYes;
     }
-    // CSS property IDL attributes live on CSSStyleDeclaration.prototype; the
-    // named getter/setter below provides their dynamic values without making
-    // them instance own properties.
     v8::Intercepted::kNo
 }
 
@@ -312,7 +318,10 @@ pub(super) fn style_indexed_getter<'s>(
         return v8::Intercepted::kNo;
     }
     let runtime = unsafe { &*runtime_ptr };
-    let context = style_object_computation_context(scope, args.holder(), runtime, handle, mode);
+    let Some(context) = live_style_read_context(scope, args.holder(), runtime, handle, mode, None)
+    else {
+        return v8::Intercepted::kYes;
+    };
     let Some(name) =
         style_property_name_at_with_context(runtime, handle, mode, context, index as usize)
     else {
@@ -340,7 +349,10 @@ pub(super) fn style_indexed_query<'s>(
         return v8::Intercepted::kNo;
     }
     let runtime = unsafe { &*runtime_ptr };
-    let context = style_object_computation_context(scope, args.holder(), runtime, handle, mode);
+    let Some(context) = live_style_read_context(scope, args.holder(), runtime, handle, mode, None)
+    else {
+        return v8::Intercepted::kYes;
+    };
     if !style_property_index_exists_with_context(runtime, handle, mode, context, index as usize) {
         return v8::Intercepted::kNo;
     }
@@ -364,7 +376,10 @@ pub(super) fn style_indexed_enumerator<'s>(
         return;
     }
     let runtime = unsafe { &*runtime_ptr };
-    let context = style_object_computation_context(scope, args.holder(), runtime, handle, mode);
+    let Some(context) = live_style_read_context(scope, args.holder(), runtime, handle, mode, None)
+    else {
+        return;
+    };
     let keys = (0..style_property_count_with_context(runtime, handle, mode, context))
         .map(|index| v8::Integer::new_from_unsigned(scope, index as u32).into())
         .collect::<Vec<_>>();

@@ -86,6 +86,38 @@ fn realtime_cssom_size_container_query_refreshes_retained_color_and_display() {
 }
 
 #[test]
+fn realtime_cssom_container_query_refreshes_retained_property_names() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html><style>
+        @container (width >= 300px) { #target { --wide: yes } }
+        </style><div id=box style="container-type:inline-size;width:200px">
+        <div id=target></div></div>"#,
+    );
+    assert_eq!(
+        vm.eval(
+            r#"const held = getComputedStyle(target);
+            void box.offsetWidth;
+            const narrowCount = held.length;
+            box.style.width = '400px';
+            const lengthDifference = held.length - narrowCount;
+            box.style.width = '200px';
+            const missing = held.item(narrowCount);
+            box.style.width = '400px';
+            const item = held.item(narrowCount);
+            box.style.width = '200px';
+            const hasIndex = narrowCount in held;
+            box.style.width = '400px';
+            const indexed = held[narrowCount];
+            box.style.width = '200px';
+            const enumerated = Object.keys(held).includes(String(narrowCount));
+            JSON.stringify([lengthDifference, missing, item, hasIndex, indexed, enumerated])"#,
+        )
+        .unwrap(),
+        r#"[1,"","--wide",false,"--wide",false]"#
+    );
+}
+
+#[test]
 fn realtime_cssom_native_container_units_share_current_style_and_geometry() {
     let mut vm = realtime_vm(
         r#"<!doctype html><style>
