@@ -37,6 +37,7 @@ mod document_world;
 mod drain;
 mod eligibility;
 mod fallback;
+pub(crate) mod filter_diagnostics;
 mod invalidation;
 mod lazy_invalidation;
 pub(crate) mod media_list;

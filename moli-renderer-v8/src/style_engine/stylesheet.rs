@@ -516,7 +516,7 @@ fn parse_stylesheet(
         media,
         shared_lock.clone(),
         None,
-        None,
+        Some(&super::filter_diagnostics::FILTER_PARSE_DIAGNOSTICS),
         quirks_mode,
         AllowImportRules::No,
     )
