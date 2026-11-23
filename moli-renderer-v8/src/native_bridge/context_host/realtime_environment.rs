@@ -99,7 +99,7 @@ impl PageScriptHost {
             }
         };
         if changed {
-            self.queue_realtime_environment_notification(target);
+            self.queue_realtime_environment_notification(target, true, true);
             self.sample_realtime_media_queries(Some(target));
         }
     }
@@ -276,7 +276,12 @@ impl PageScriptHost {
         self.refresh_realtime_rendering_opportunity();
     }
 
-    pub(super) fn queue_realtime_environment_notification(&self, target: WindowDocumentTaskTarget) {
+    pub(super) fn queue_realtime_environment_notification(
+        &self,
+        target: WindowDocumentTaskTarget,
+        window_resize: bool,
+        visual_resize: bool,
+    ) {
         if self.realtime_layout_state.is_none() {
             return;
         }
@@ -288,8 +293,8 @@ impl PageScriptHost {
         }
         self.restore_realtime_environment_notification(RealtimeEnvironmentNotification {
             target,
-            window_resize: true,
-            visual_resize: true,
+            window_resize,
+            visual_resize,
         });
     }
 

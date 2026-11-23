@@ -594,3 +594,80 @@ async fn websocket_screencast_discovers_css_image_after_debugger_resume() {
     let _ = socket.close(None).await;
     abort_test_cdp_server(server).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_realtime_mobile_meta_resamples_existing_media_queries_and_resize() {
+    let (addr, server) = spawn_realtime_cast_server().await;
+    let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let target = open_screenshot_target(
+        &mut socket,
+        "data:text/html,%3C!doctype%20html%3E%3Cbody%3E",
+    )
+    .await;
+    let session = target.session_id.as_str();
+    let applied = send_cdp_command(
+        &mut socket,
+        10,
+        "Emulation.setDeviceMetricsOverride",
+        Some(session),
+        json!({"width":375,"height":667,"deviceScaleFactor":1,"mobile":true}),
+    )
+    .await;
+    assert_cdp_success(&applied, 10);
+    let initialize = send_cdp_command(
+        &mut socket, 11, "Runtime.evaluate", Some(session),
+        json!({"expression":r#"
+            new Promise(resolve => requestAnimationFrame(() => {
+                window.query = matchMedia('(max-width: 500px)');
+                window.notifications = [];
+                addEventListener('resize', () => notifications.push('window'));
+                visualViewport.addEventListener('resize', () => notifications.push('visual'));
+                query.addEventListener('change', event => notifications.push('matches:' + event.matches));
+                resolve([innerWidth, query.matches]);
+            }))
+        "#,"awaitPromise":true,"returnByValue":true}),
+    ).await;
+    assert_eq!(
+        response_by_id(&initialize, 11)["result"]["result"]["value"],
+        json!([981, false])
+    );
+
+    for (id, update, geometry, events) in [
+        (
+            12,
+            r#"document.head.insertAdjacentHTML('beforeend', '<meta name=viewport content="width=device-width, initial-scale=1">')"#,
+            json!([375, 375, true, true]),
+            json!(["window", "visual", "matches:true"]),
+        ),
+        (
+            14,
+            r#"document.querySelector('meta[name=viewport]').content='width=device-width, initial-scale=2'"#,
+            json!([375, 187.5, true, true]),
+            json!(["visual"]),
+        ),
+    ] {
+        let changed = send_cdp_command(
+            &mut socket, id, "Runtime.evaluate", Some(session),
+            json!({"expression":format!("notifications.length = 0; {update}; [innerWidth, visualViewport.width, query.matches, matchMedia(query.media).matches]"),"returnByValue":true}),
+        ).await;
+        assert_eq!(
+            response_by_id(&changed, id)["result"]["result"]["value"],
+            geometry
+        );
+        let observed = send_cdp_command(
+            &mut socket, id + 1, "Runtime.evaluate", Some(session),
+            json!({
+                "expression":"new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(notifications))))",
+                "awaitPromise":true, "returnByValue":true,
+            }),
+        ).await;
+        assert_eq!(
+            response_by_id(&observed, id + 1)["result"]["result"]["value"],
+            events
+        );
+    }
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}

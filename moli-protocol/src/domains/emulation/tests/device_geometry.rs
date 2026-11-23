@@ -153,6 +153,45 @@ async fn mobile_device_metrics_use_the_document_viewport_meta() {
     assert_eq!(evaluate(&mut ctx, geometry).await, desktop);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn mobile_viewport_separates_layout_size_from_the_page_scale() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+    for (width, height, content, expected) in [
+        (400, 600, "width=320", json!([320, 480, 320, 480, 1.25])),
+        (
+            375,
+            667,
+            "width=980, minimum-scale=1",
+            json!([375, 667, 375, 667, 1]),
+        ),
+        (
+            375,
+            667,
+            "width=980, initial-scale=2",
+            json!([981, 1744, 187.5, 333.5, 2]),
+        ),
+    ] {
+        set_metrics(
+            &mut ctx,
+            json!({"width":width,"height":height,"mobile":true}),
+        )
+        .await;
+        evaluate(
+            &mut ctx,
+            &format!(
+                "document.head.innerHTML = '<meta name=viewport content=\"{content}\">'; undefined"
+            ),
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, "[innerWidth, innerHeight, visualViewport.width, visualViewport.height, visualViewport.scale]").await,
+            expected,
+            "{content}",
+        );
+    }
+}
+
 fn unsupported_modes() -> [(&'static str, serde_json::Value); 6] {
     [
         (

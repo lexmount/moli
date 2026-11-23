@@ -20,6 +20,7 @@ pub(super) enum PendingRenderingUpdatePayload {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct PendingEnvironmentChange {
     pub(super) previous_viewport: crate::style_engine::StyleViewport,
+    pub(super) previous_visual_viewport: Option<moli_page_types::MobileViewport>,
     pub(super) previous_activity: moli_page_types::DocumentActivity,
     pub(super) previous_orientation: moli_page_types::ScreenOrientation,
 }
@@ -189,6 +190,13 @@ impl PageScriptHost {
             };
             let change = PendingEnvironmentChange {
                 previous_viewport,
+                previous_visual_viewport: matches!(dispatch_scope, OwnerDispatchScope::Top).then(
+                    || {
+                        self.viewport_surface()
+                            .unwrap_or_default()
+                            .visual_viewport_geometry()
+                    },
+                ),
                 previous_activity: self.document_activity(),
                 previous_orientation: self
                     .viewport_surface()
@@ -400,26 +408,36 @@ impl PageScriptHost {
 
             let resized = change.previous_viewport.width != current_viewport.width
                 || change.previous_viewport.height != current_viewport.height;
-            if include_layout_events && resized {
-                if let Ok(event) = crate::host::create_host_event(
+            let visual_resized = change.previous_visual_viewport.map_or(resized, |previous| {
+                previous
+                    != self
+                        .viewport_surface()
+                        .unwrap_or_default()
+                        .visual_viewport_geometry()
+            });
+            if include_layout_events
+                && resized
+                && let Ok(event) = crate::host::create_host_event(
                     context_scope,
                     "resize",
                     global.into(),
                     global.into(),
                     false,
                     false,
-                ) {
-                    dispatched |= self
-                        .dispatch_public_event_best_effort(
-                            context_scope,
-                            host_ptr,
-                            window_target,
-                            event,
-                            "window resize event",
-                        )
-                        .is_ok();
-                }
+                )
+            {
+                dispatched |= self
+                    .dispatch_public_event_best_effort(
+                        context_scope,
+                        host_ptr,
+                        window_target,
+                        event,
+                        "window resize event",
+                    )
+                    .is_ok();
+            }
 
+            if include_layout_events && visual_resized {
                 if !self.window_document_owner_is_current_for_dispatch_scope(
                     target.owner(),
                     target.dispatch_scope(),

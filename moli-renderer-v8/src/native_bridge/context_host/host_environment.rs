@@ -897,26 +897,56 @@ impl PageScriptHost {
         &mut self,
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> bool {
-        let changed = self.configured_viewport_surface() != viewport_surface;
-        let previous =
-            (changed && self.layout_policy().is_realtime()).then(|| self.style_viewport());
-        if changed {
-            self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
+        if self.configured_viewport_surface() == viewport_surface {
+            return false;
         }
+        let previous = self.viewport_surface();
+        self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         unsafe { &mut *self.document_runtime }.set_viewport_surface(viewport_surface);
-        if let Some(previous_viewport) = previous {
-            let viewport = self.style_viewport();
-            if (previous_viewport.width != viewport.width
-                || previous_viewport.height != viewport.height)
-                && let Some(target) = self.current_window_document_task_target_for_dispatch_scope(
-                    super::OwnerDispatchScope::Top,
-                )
-            {
-                self.queue_realtime_environment_notification(target);
-            }
-            self.sample_realtime_media_queries(None);
+        self.sample_root_viewport_change(previous);
+        true
+    }
+
+    pub(crate) fn refresh_mobile_viewport_after_mutation(
+        &mut self,
+        effects: &crate::dom::native::DomMutationEffects,
+    ) {
+        let Some(surface) =
+            (unsafe { &*self.document_runtime }).mobile_viewport_surface_after_mutation(effects)
+        else {
+            return;
+        };
+        let previous = self.viewport_surface();
+        if previous == Some(surface) {
+            return;
         }
-        changed
+        self.queue_environment_change();
+        self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
+        unsafe { &*self.document_runtime }.set_resolved_viewport_surface(Some(surface));
+        self.sample_root_viewport_change(previous);
+    }
+
+    fn sample_root_viewport_change(
+        &self,
+        previous: Option<crate::protocol_types::ViewportSurface>,
+    ) {
+        if !self.layout_policy().is_realtime() {
+            return;
+        }
+        let previous = previous.unwrap_or_default();
+        let current = self.viewport_surface().unwrap_or_default();
+        let window_resize = (previous.inner_width, previous.inner_height)
+            != (current.inner_width, current.inner_height);
+        let visual_resize =
+            previous.visual_viewport_geometry() != current.visual_viewport_geometry();
+        if (window_resize || visual_resize)
+            && let Some(target) = self.current_window_document_task_target_for_dispatch_scope(
+                super::OwnerDispatchScope::Top,
+            )
+        {
+            self.queue_realtime_environment_notification(target, window_resize, visual_resize);
+        }
+        self.sample_realtime_media_queries(None);
     }
 
     pub(crate) fn style_viewport(&self) -> StyleViewport {
