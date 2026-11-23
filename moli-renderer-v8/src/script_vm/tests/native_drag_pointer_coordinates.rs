@@ -64,7 +64,7 @@ fn coordinate_drag_vm(scale: Option<f64>, capture: bool) -> StandaloneScriptVmHa
 fn start_coordinate_drag(vm: &mut StandaloneScriptVmHarness, scale: f64) -> serde_json::Value {
     for (event, position) in [("mousedown", 20.0), ("mousemove", 40.0)] {
         let outcome = vm
-            .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+            .dispatch_mouse_input(
                 100.0 + position * scale,
                 120.0 + position * scale,
                 event,
@@ -76,6 +76,7 @@ fn start_coordinate_drag(vm: &mut StandaloneScriptVmHarness, scale: f64) -> serd
                 RendererPointerEventProperties::default(),
                 0,
                 true,
+                MouseDispatchCompletion::FinishTurn,
             )
             .expect("dispatch native drag in root coordinates");
         assert_eq!(
@@ -181,7 +182,7 @@ fn captured_iframe_drag_startup_maps_coordinates_after_the_pointer_leaves_the_fr
             ("mousemove", 20.0, 20.0),
         ] {
             let outcome = vm
-                .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+                .dispatch_mouse_input(
                     x,
                     y,
                     event,
@@ -193,6 +194,7 @@ fn captured_iframe_drag_startup_maps_coordinates_after_the_pointer_leaves_the_fr
                     RendererPointerEventProperties::default(),
                     0,
                     true,
+                    MouseDispatchCompletion::FinishTurn,
                 )
                 .expect("dispatch captured drag across iframe boundary");
             assert_eq!(outcome.intercepted_drag.is_some(), event == "mousemove");

@@ -598,6 +598,11 @@ const TOUCH_POINTER_ID: i32 = 2;
 // this radius cannot become a tap, even if it returns to its starting point.
 const TOUCH_TAP_SLOP: f64 = 16.0;
 
+pub(crate) enum MouseDispatchCompletion {
+    FinishTurn,
+    DeferToBatch,
+}
+
 #[derive(Clone, Copy)]
 struct PreparedMouseInputDispatch {
     button: i32,
@@ -947,7 +952,7 @@ impl ScriptVm {
         delta_y: f64,
         pointer: RendererPointerEventProperties,
     ) -> Result<RendererInputDispatchOutcome> {
-        self.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+        self.dispatch_mouse_input(
             x,
             y,
             event_name,
@@ -959,10 +964,11 @@ impl ScriptVm {
             pointer,
             0,
             false,
+            MouseDispatchCompletion::FinishTurn,
         )
     }
 
-    pub(crate) fn dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+    pub(crate) fn dispatch_mouse_input(
         &mut self,
         x: f64,
         y: f64,
@@ -975,6 +981,7 @@ impl ScriptVm {
         pointer: RendererPointerEventProperties,
         modifiers: u8,
         intercept_drags: bool,
+        completion: MouseDispatchCompletion,
     ) -> Result<RendererInputDispatchOutcome> {
         let surface_hit = self.mouse_input_surface_hit(x, y, event_name)?;
         let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
@@ -982,7 +989,7 @@ impl ScriptVm {
             Rc::clone(&self._context_host),
             CurrentInputEvent::mouse(event_name, prepared.button, modifiers),
         );
-        let result = self.dispatch_mouse_event_at_point_with_pointer_and_modifiers_body(
+        let result = self.dispatch_mouse_input_body(
             x,
             y,
             event_name,
@@ -999,7 +1006,11 @@ impl ScriptVm {
             self.mouse_routed_frame = None;
             self._context_host.borrow_mut().clear_mouse_press();
         }
-        self.finish_input_event_dispatch_turn(result)
+        // For standalone input the event scope covers the turn-end checkpoint.
+        match completion {
+            MouseDispatchCompletion::FinishTurn => self.finish_input_event_dispatch_turn(result),
+            MouseDispatchCompletion::DeferToBatch => result,
+        }
     }
 
     pub(crate) fn begin_batched_mouse_event_dispatch(&mut self) {
@@ -1037,46 +1048,6 @@ impl ScriptVm {
             )),
         };
         self.finish_input_event_dispatch_turn(result)
-    }
-
-    pub(crate) fn dispatch_mouse_event_at_point_with_pointer_and_modifiers_without_checkpoint(
-        &mut self,
-        x: f64,
-        y: f64,
-        event_name: &str,
-        button: i32,
-        buttons: Option<i32>,
-        click_count: i32,
-        delta_x: f64,
-        delta_y: f64,
-        pointer: RendererPointerEventProperties,
-        modifiers: u8,
-        intercept_drags: bool,
-    ) -> Result<RendererInputDispatchOutcome> {
-        let surface_hit = self.mouse_input_surface_hit(x, y, event_name)?;
-        let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
-        let _current_input_event = CurrentInputEventScope::enter(
-            Rc::clone(&self._context_host),
-            CurrentInputEvent::mouse(event_name, prepared.button, modifiers),
-        );
-        let result = self.dispatch_mouse_event_at_point_with_pointer_and_modifiers_body(
-            x,
-            y,
-            event_name,
-            prepared,
-            surface_hit,
-            click_count,
-            delta_x,
-            delta_y,
-            pointer,
-            modifiers,
-            intercept_drags,
-        );
-        if event_name == "mouseup" && prepared.buttons == 0 {
-            self.mouse_routed_frame = None;
-            self._context_host.borrow_mut().clear_mouse_press();
-        }
-        result
     }
 
     pub(crate) fn mouse_input_surface_hit(
@@ -1191,7 +1162,7 @@ impl ScriptVm {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn dispatch_mouse_event_at_point_with_pointer_and_modifiers_body(
+    fn dispatch_mouse_input_body(
         &mut self,
         x: f64,
         y: f64,

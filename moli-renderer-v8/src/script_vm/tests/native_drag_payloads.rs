@@ -18,7 +18,7 @@ fn intercepted_payload(vm: &mut StandaloneScriptVmHarness, point: [f64; 2]) -> R
     vm.publish_layout_for_test().unwrap();
     for (event, x) in [("mousedown", point[0]), ("mousemove", point[0] + 12.0)] {
         let outcome = vm
-            .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+            .dispatch_mouse_input(
                 x,
                 point[1],
                 event,
@@ -30,6 +30,7 @@ fn intercepted_payload(vm: &mut StandaloneScriptVmHarness, point: [f64; 2]) -> R
                 RendererPointerEventProperties::default(),
                 0,
                 true,
+                MouseDispatchCompletion::FinishTurn,
             )
             .unwrap();
         if event == "mousemove" {

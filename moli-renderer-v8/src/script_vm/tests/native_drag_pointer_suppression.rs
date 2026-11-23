@@ -20,7 +20,7 @@ fn pointer_drag_mouse(
     x: f64,
     y: f64,
 ) -> RendererInputDispatchOutcome {
-    vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+    vm.dispatch_mouse_input(
         x,
         y,
         name,
@@ -32,6 +32,7 @@ fn pointer_drag_mouse(
         RendererPointerEventProperties::default(),
         2,
         true,
+        MouseDispatchCompletion::FinishTurn,
     )
     .expect("native pointer drag input")
 }

@@ -767,7 +767,7 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
     let passes_before = vm.layout_pass_observability_for_test().1;
     vm.begin_batched_mouse_event_dispatch();
     for delta_y in [10.0, 20.0, 30.0] {
-        vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers_without_checkpoint(
+        vm.dispatch_mouse_input(
             130.0,
             110.0,
             "wheel",
@@ -779,6 +779,7 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
             crate::runtime::RendererPointerEventProperties::default(),
             0,
             false,
+            MouseDispatchCompletion::DeferToBatch,
         )
         .expect("batched child wheel step should dispatch");
     }

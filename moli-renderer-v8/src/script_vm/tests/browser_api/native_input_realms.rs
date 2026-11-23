@@ -25,7 +25,7 @@ fn native_mouse_boundary_and_wheel_events_use_target_document_intrinsics() {
                         vm.eval(&format!("__mouseRealm.prepare('{phase}'); 'ready'"))
                             .unwrap();
                         let wheel = event == "wheel";
-                        vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+                        vm.dispatch_mouse_input(
                             x,
                             80.0,
                             event,
@@ -42,6 +42,7 @@ fn native_mouse_boundary_and_wheel_events_use_target_document_intrinsics() {
                             },
                             modifiers,
                             false,
+                            MouseDispatchCompletion::FinishTurn,
                         )
                         .unwrap_or_else(|error| {
                             panic!("{context}, {poison}, {pointer_type}, modifiers {modifiers}, {phase}: {error}")
@@ -100,7 +101,7 @@ fn native_mouse_release_followups_use_target_document_intrinsics() {
             "#)).unwrap();
             vm.publish_layout_for_test().unwrap();
             for (event, held) in [("mousedown", buttons), ("mouseup", 0)] {
-                vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+                vm.dispatch_mouse_input(
                     80.0,
                     80.0,
                     event,
@@ -112,6 +113,7 @@ fn native_mouse_release_followups_use_target_document_intrinsics() {
                     crate::runtime::RendererPointerEventProperties::default(),
                     0,
                     false,
+                    MouseDispatchCompletion::FinishTurn,
                 )
                 .unwrap();
             }

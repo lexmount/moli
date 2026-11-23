@@ -33,6 +33,8 @@ mod touch_native_receivers;
 mod touch_snapshot;
 mod visual_viewport_receiver;
 mod writable_stream_native_receivers;
+#[cfg(feature = "devtools")]
+use super::MouseDispatchCompletion;
 use super::post_parse::dynamic_script_execute_is_runnable_before_dom_content_loaded;
 use super::{
     PostParseDriverStep, PostParseLifecycleAdvance, PostParseLifecycleCompletionAction,

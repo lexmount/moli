@@ -1,5 +1,6 @@
 use super::super::*;
 use super::child_frame_nodes::child_frame_document_contains_live_handle;
+use crate::script_vm::MouseDispatchCompletion;
 
 impl PageVm {
     pub(crate) fn dispatch_mouse_event_at_point_with_pointer(
@@ -16,21 +17,20 @@ impl PageVm {
         modifiers: u8,
         intercept_drags: bool,
     ) -> Result<RendererInputDispatchOutcome> {
-        let mut outcome = self
-            .vm_mut()
-            .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
-                x,
-                y,
-                event_name,
-                button,
-                buttons,
-                click_count,
-                delta_x,
-                delta_y,
-                pointer,
-                modifiers,
-                intercept_drags,
-            )?;
+        let mut outcome = self.vm_mut().dispatch_mouse_input(
+            x,
+            y,
+            event_name,
+            button,
+            buttons,
+            click_count,
+            delta_x,
+            delta_y,
+            pointer,
+            modifiers,
+            intercept_drags,
+            MouseDispatchCompletion::FinishTurn,
+        )?;
         self.bind_input_dispatch_file_chooser_backend_node_id(&mut outcome);
         Ok(outcome)
     }
