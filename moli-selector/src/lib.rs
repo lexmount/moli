@@ -22,7 +22,7 @@ pub use moli_dom as dom;
 pub use stylo::html_auto_directionality_root;
 pub use stylo::{
     MoliInvalidationResult, MoliInvalidationResultBuilder, MoliInvalidationSourceResultsSink,
-    MoliStyleMutationElementSnapshot, MoliStyleMutationSnapshot,
+    MoliStyleMutationElementSnapshot, MoliStyleMutationSnapshot, QueryContainerSizes,
     StyloDependencyInvalidationFallbackContext, StyloDocument, StyloDomHostBinding,
     StyloDomStyleAdapter, StyloElement, StyloElementDependencySnapshot, StyloNode,
     StyloPlannedFallbackRootInvalidationTarget,

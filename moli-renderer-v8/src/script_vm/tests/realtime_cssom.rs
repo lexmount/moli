@@ -1,5 +1,6 @@
 use super::*;
 use moli_page_types::LayoutPolicy;
+use std::fmt::Write as _;
 
 fn realtime_vm(markup: &str) -> StandaloneScriptVmHarness {
     let mut vm = new_parsed_test_vm("https://realtime-cssom.test/", markup);
@@ -50,6 +51,68 @@ fn realtime_size_container_queries_follow_nested_content_boxes() {
         .unwrap(),
         "[[320,110],[150,20],[320,110]]"
     );
+}
+
+#[test]
+fn on_demand_cssom_size_container_query_keeps_live_inline_sizes() {
+    let mut vm = new_parsed_test_vm(
+        "https://ondemand-cssom.test/",
+        r#"<!doctype html><style>
+        #target { color: red }
+        @container (width >= 300px) { #target { color: green } }
+        </style><div id=box style='container-type:inline-size;width:200px'>
+        <div id=target></div></div>"#,
+    );
+    vm.set_layout_policy(LayoutPolicy::OnDemand);
+    assert_eq!(vm.eval("box.offsetWidth").unwrap(), "200");
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval("box.style.width = '400px'; getComputedStyle(target).color")
+            .unwrap(),
+        "rgb(0, 128, 0)"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+}
+
+#[test]
+fn realtime_size_container_queries_converge_through_twelve_nested_containers() {
+    const DEPTH: usize = 12;
+    let mut markup = String::from(
+        "<!doctype html><style>.container {container-type:inline-size;width:100px}\
+         #c0 {width:400px} #target {width:20px}",
+    );
+    for child in 1..DEPTH {
+        writeln!(
+            markup,
+            "@container c{} (width >= 300px) {{ #c{child} {{width:400px}} }}",
+            child - 1,
+        )
+        .unwrap();
+    }
+    write!(
+        markup,
+        "@container c{} (width >= 300px) {{ #target {{width:110px}} }}</style>",
+        DEPTH - 1,
+    )
+    .unwrap();
+    for index in 0..DEPTH {
+        write!(
+            markup,
+            "<div id=c{index} class=container style='container-name:c{index}'>",
+        )
+        .unwrap();
+    }
+    markup.push_str("<div id=target></div>");
+    markup.push_str(&"</div>".repeat(DEPTH));
+
+    let mut vm = realtime_vm(&markup);
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval("JSON.stringify([target.offsetWidth, target.offsetWidth])")
+            .unwrap(),
+        "[110,110]"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 }
 
 #[test]

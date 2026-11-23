@@ -346,7 +346,7 @@ impl ScriptVm {
                     environment_override,
                 )
                 .and_then(|pass| {
-                    let Some(mut pass) = pass else {
+                    let Some((mut pass, feedback)) = pass else {
                         return Ok(None);
                     };
                     let css_images = match (discovers_css_images, request.includes_backgrounds()) {
@@ -362,7 +362,7 @@ impl ScriptVm {
                             .collect(),
                     };
                     let value = consume(&mut pass)?;
-                    context_host.finish_layout_publication(publication, pass)?;
+                    context_host.finish_layout_publication(publication, pass, feedback)?;
                     Ok(Some((value, css_images)))
                 });
             (document, publishes_layout, result)
@@ -594,6 +594,7 @@ impl ScriptVm {
             request,
             None,
         )
+        .map(|(pass, _)| pass)
     }
 
     #[cfg(feature = "devtools")]

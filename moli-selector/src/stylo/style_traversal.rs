@@ -97,13 +97,14 @@ pub type StyloDomHostBinding<'a> = StyleDomHostBinding<'a>;
 pub type StyloElement<'a> = StyleElement<'a>;
 pub type StyloNode<'a> = StyleNode<'a>;
 pub type StyloShadowRoot<'a> = StyleShadowRoot<'a>;
+pub type QueryContainerSizes = HashMap<NodeId, Size2D<Option<Au>>>;
 
 #[derive(Debug)]
 struct StyleDomState {
     host: Cell<*const DomHost>,
     shared_lock: SharedRwLock,
     element_data: StyloElementDataStore,
-    query_container_sizes: RefCell<HashMap<NodeId, HashMap<NodeId, Size2D<Option<Au>>>>>,
+    query_container_sizes: RefCell<HashMap<NodeId, QueryContainerSizes>>,
     atom_cache: QueryAtomCache,
     node_data: RefCell<HashMap<NodeId, Box<StyleNodeData>>>,
     slotted_node_data: RefCell<HashMap<NodeId, Box<[StyleNode<'static>]>>>,
@@ -240,38 +241,40 @@ impl StyloDomStyleAdapter {
         self.state.clear_element_data_for_document(document);
     }
 
-    /// Installs sizes from layout and returns the roots whose descendants must
-    /// re-evaluate their size queries.
-    pub fn update_query_container_sizes(
+    /// Installs changed sizes and returns the previous table together with
+    /// the roots whose descendants must re-evaluate their size queries.
+    pub fn replace_query_container_sizes(
         &self,
         document: NodeId,
-        sizes: HashMap<NodeId, Size2D<Option<Au>>>,
-    ) -> Vec<NodeId> {
+        sizes: QueryContainerSizes,
+    ) -> Option<(QueryContainerSizes, Vec<NodeId>)> {
         let mut documents = self.state.query_container_sizes.borrow_mut();
+        if documents
+            .get(&document)
+            .map_or_else(|| sizes.is_empty(), |current| *current == sizes)
+        {
+            return None;
+        }
         let previous = if sizes.is_empty() {
             documents.remove(&document)
         } else {
-            if documents.get(&document) == Some(&sizes) {
-                return Vec::new();
-            }
             documents.insert(document, sizes)
-        };
+        }
+        .unwrap_or_default();
         let current = documents.get(&document);
         let mut changed = Vec::new();
         if let Some(current) = current {
             changed.extend(current.iter().filter_map(|(&handle, size)| {
-                (previous.as_ref().and_then(|sizes| sizes.get(&handle)) != Some(size))
-                    .then_some(handle)
+                (previous.get(&handle) != Some(size)).then_some(handle)
             }));
         }
-        if let Some(previous) = previous {
-            changed.extend(
-                previous
-                    .into_keys()
-                    .filter(|handle| current.is_none_or(|sizes| !sizes.contains_key(handle))),
-            );
-        }
-        changed
+        changed.extend(
+            previous
+                .keys()
+                .copied()
+                .filter(|handle| current.is_none_or(|sizes| !sizes.contains_key(handle))),
+        );
+        Some((previous, changed))
     }
 
     /// Returns whether the canonical Stylo side table still contains any
