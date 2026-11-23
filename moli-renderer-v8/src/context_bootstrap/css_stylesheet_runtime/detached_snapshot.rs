@@ -93,7 +93,7 @@ fn bind_snapshot_declaration_sources<'s>(
         .expect("native declaration sources must cover every snapshot")
     {
         let id = NEXT_DECLARATION_SOURCE_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("detached declaration source id space exhausted");
         DECLARATION_SOURCES.with(|sources| sources.borrow_mut().insert(id, source));
         set_private_u64(scope, encoded.into(), DECLARATION_SOURCE_ID_SLOT, id);
