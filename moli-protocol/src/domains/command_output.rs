@@ -1887,7 +1887,7 @@ fn cdp_result_payload_from_devtools_result(result: AutomationResult) -> Value {
                 "clientWidth": result.layout_viewport_width,
                 "clientHeight": result.layout_viewport_height,
             });
-            let visual = json!({
+            let mut visual = json!({
                 "offsetX": 0,
                 "offsetY": 0,
                 "pageX": result.page_x,
@@ -1897,6 +1897,11 @@ fn cdp_result_payload_from_devtools_result(result: AutomationResult) -> Value {
                 "scale": result.device_pixel_ratio,
                 "zoom": 1,
             });
+            if let Some(mobile) = result.mobile_viewport {
+                visual["clientWidth"] = json!(mobile.width);
+                visual["clientHeight"] = json!(mobile.height);
+                visual["scale"] = json!(mobile.scale);
+            }
             let content = json!({
                 "x": 0,
                 "y": 0,

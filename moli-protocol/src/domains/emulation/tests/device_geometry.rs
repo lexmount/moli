@@ -124,6 +124,24 @@ async fn mobile_device_metrics_use_the_document_viewport_meta() {
         evaluate(&mut ctx, "[visualViewport.width, visualViewport.height]").await,
         json!([375, 667]),
     );
+    evaluate(
+        &mut ctx,
+        "document.querySelector('meta').content = 'width=device-width initial-scale=2'; undefined",
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut ctx, geometry).await,
+        json!([375, 667, 375, 667, 2, 2]),
+    );
+    ctx.process_async(json!({
+        "id": 88403, "sessionId": "SID-1", "method": "Page.getLayoutMetrics"
+    }))
+    .await;
+    let result = ctx.take_response_by_id(88403)["result"].clone();
+    assert_eq!(result["cssLayoutViewport"]["clientHeight"], 667);
+    assert_eq!(result["cssVisualViewport"]["clientWidth"], 187.5);
+    assert_eq!(result["cssVisualViewport"]["clientHeight"], 333.5);
+    assert_eq!(result["cssVisualViewport"]["scale"], 2.0);
     expect_session_command_result(
         &mut ctx,
         88402,

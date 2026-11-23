@@ -363,6 +363,7 @@ pub(super) fn layout_metrics_result_from_renderer(
         content_width: metrics.content_width,
         content_height: metrics.content_height,
         device_pixel_ratio: metrics.device_pixel_ratio,
+        mobile_viewport: metrics.mobile_viewport,
     }
 }
 

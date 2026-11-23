@@ -1829,6 +1829,7 @@ pub struct DevToolsLayoutMetricsResult {
     pub content_width: f64,
     pub content_height: f64,
     pub device_pixel_ratio: f64,
+    pub mobile_viewport: Option<moli_page_types::MobileViewport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
