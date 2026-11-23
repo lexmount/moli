@@ -399,6 +399,7 @@ async fn inline_svg_screencast_publishes_changed_geometry_and_skips_clean_polls(
             max_width: None,
             max_height: None,
             known_visual_state,
+            paint_session: Default::default(),
         };
         let before = page_vm.vm().layout_pass_observability_for_test().1;
         let parsed = crate::layout_renderer::svg_parse_count();

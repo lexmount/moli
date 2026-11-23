@@ -9,6 +9,10 @@ use super::realtime_animation_frames::RealtimeAnimationFrames;
 use super::realtime_environment::RealtimeEnvironmentState;
 use super::realtime_events::RealtimeRenderingEvents;
 use super::realtime_rendering::RealtimeFrameState;
+#[cfg(feature = "devtools")]
+use super::screencast_paint::{
+    RendererScreencastPaintSession, ScreenPaintEntry, ScreencastPaintState,
+};
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle, layout_renderer::ContainerSizeFeedback,
@@ -30,6 +34,7 @@ enum LayoutPublication {
     CurrentScreen {
         document: DomHandle,
         inputs: ScreenLayoutInputs,
+        paint_generation: Option<u64>,
     },
     Transient,
 }
@@ -38,15 +43,30 @@ impl PreparedLayoutPublication {
     pub(crate) fn publishes_screen(&self) -> bool {
         !matches!(self.0, LayoutPublication::Transient)
     }
+
+    pub(crate) fn layout_request(&self, request: LayoutPassRequest) -> LayoutPassRequest {
+        if let LayoutPublication::CurrentScreen {
+            paint_generation, ..
+        } = &self.0
+        {
+            request
+                .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
+                .with_scroll_projection(true)
+                .with_screen_paint(paint_generation.is_some())
+        } else {
+            request
+        }
+    }
 }
 
-/// Only allocated for Realtime. This owns validity metadata, never another
-/// layout tree or a per-node working cache. The existing single snapshot slot
-/// remains the only owner of published geometry.
+/// The validity and lifecycle state for one Realtime screen publication.
+/// An active screencast owns its optional paint input through a session lease.
 pub(super) struct RealtimeLayoutState {
     non_dom_revision: Cell<Option<u64>>,
     scroll_projection_dirty: Cell<bool>,
     published: RefCell<Option<ScreenLayoutInputs>>,
+    #[cfg(feature = "devtools")]
+    screencast_paint: ScreencastPaintState,
     pub(super) frame: RefCell<RealtimeFrameState>,
     pub(super) animation_frames: RefCell<RealtimeAnimationFrames>,
     pub(super) environment: RefCell<RealtimeEnvironmentState>,
@@ -60,6 +80,8 @@ impl Default for RealtimeLayoutState {
             non_dom_revision: Cell::new(Some(0)),
             scroll_projection_dirty: Cell::new(false),
             published: RefCell::new(None),
+            #[cfg(feature = "devtools")]
+            screencast_paint: ScreencastPaintState::default(),
             frame: RefCell::new(RealtimeFrameState::default()),
             animation_frames: RefCell::new(RealtimeAnimationFrames::default()),
             environment: RefCell::new(RealtimeEnvironmentState::default()),
@@ -82,6 +104,8 @@ impl RealtimeLayoutState {
 
     pub(super) fn clear_publication(&self) {
         self.published.borrow_mut().take();
+        #[cfg(feature = "devtools")]
+        self.screencast_paint.publish(None);
     }
 
     pub(super) fn reset(&self) {
@@ -156,7 +180,11 @@ impl PageScriptHost {
         let inputs = self.screen_layout_inputs(state)?;
         self.prepare_current_screen_styles(&inputs);
         Ok(PreparedLayoutPublication(
-            LayoutPublication::CurrentScreen { document, inputs },
+            LayoutPublication::CurrentScreen {
+                document,
+                inputs,
+                paint_generation: self.screen_paint_generation(state),
+            },
         ))
     }
 
@@ -170,7 +198,11 @@ impl PageScriptHost {
             LayoutPublication::LegacyLatest(document) => {
                 self.publish_layout_pass_for_document(document, pass);
             }
-            LayoutPublication::CurrentScreen { document, inputs } => {
+            LayoutPublication::CurrentScreen {
+                document,
+                inputs,
+                paint_generation,
+            } => {
                 let state = self.realtime_layout_state.as_ref().ok_or_else(|| {
                     LayoutError::source_contract(
                         "screen layout",
@@ -183,8 +215,24 @@ impl PageScriptHost {
                         "source inputs or Document owners changed during layout",
                     ));
                 }
+                #[cfg(feature = "devtools")]
+                let (pass, paint) = {
+                    let mut pass = pass;
+                    let paint = paint_generation.zip(pass.take_screen_paint()).map(
+                        |(resource_generation, layout)| ScreenPaintEntry {
+                            layout,
+                            resource_generation,
+                            css_images: pass.css_image_references().to_vec(),
+                        },
+                    );
+                    (pass, paint)
+                };
+                #[cfg(not(feature = "devtools"))]
+                let _ = paint_generation;
                 self.publish_layout_pass_for_document(document, pass);
                 feedback.commit();
+                #[cfg(feature = "devtools")]
+                state.screencast_paint.publish(paint);
                 self.did_publish_screen_layout(state, inputs);
             }
             LayoutPublication::Transient => {}
@@ -200,6 +248,65 @@ impl PageScriptHost {
         self.did_publish_realtime_font_layout();
     }
 
+    fn screen_paint_generation(&self, state: &RealtimeLayoutState) -> Option<u64> {
+        #[cfg(feature = "devtools")]
+        if state.screencast_paint.is_active() {
+            let generation = self.visual_resource_generation();
+            return (generation != u64::MAX).then_some(generation);
+        }
+        #[cfg(not(feature = "devtools"))]
+        let _ = state;
+        None
+    }
+
+    #[cfg(all(test, feature = "devtools"))]
+    pub(crate) fn has_screencast_paint_for_test(&self) -> bool {
+        self.realtime_layout_state
+            .as_ref()
+            .is_some_and(|state| state.screencast_paint.read(|_| ()).is_some())
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn paint_current_screencast_layout(
+        &self,
+        session: &RendererScreencastPaintSession,
+        viewport: LayoutViewport,
+        capture: moli_layout::PaintCaptureRequest,
+    ) -> Result<
+        Option<(
+            moli_layout::PaintSnapshot,
+            Vec<moli_layout::LayoutCssImageReference<DomHandle>>,
+        )>,
+        LayoutError,
+    > {
+        let Some(state) = &self.realtime_layout_state else {
+            return Ok(None);
+        };
+        let document = self.document_handle();
+        if viewport != self.layout_viewport_for_document(document) {
+            return Ok(None);
+        }
+        state.screencast_paint.attach(session);
+        self.ensure_current_screen_layout(LayoutFlushReason::Screencast)?;
+        let layout = self.document_layout_state.borrow();
+        let Some(tree) = layout.latest_layout(document) else {
+            return Ok(None);
+        };
+        let resource_generation = self.visual_resource_generation();
+        state
+            .screencast_paint
+            .read(|paint| {
+                if paint.resource_generation != resource_generation {
+                    return Ok(None);
+                }
+                Ok(Some((
+                    paint.layout.paint(tree, capture)?,
+                    paint.css_images.clone(),
+                )))
+            })
+            .unwrap_or(Ok(None))
+    }
+
     #[cfg(test)]
     pub(crate) fn realtime_layout_allocated_for_test(&self) -> bool {
         self.realtime_layout_state.is_some()
@@ -211,6 +318,16 @@ impl PageScriptHost {
         if let Some(state) = &self.realtime_layout_state {
             state.invalidate();
             self.request_realtime_rendering_opportunity();
+        }
+    }
+
+    pub(super) fn note_selection_paint_change(&self) {
+        #[cfg(feature = "devtools")]
+        if let Some(state) = &self.realtime_layout_state {
+            state.screencast_paint.publish(None);
+            self.document_layout_state
+                .borrow_mut()
+                .mark_visual_state_dirty();
         }
     }
 
@@ -302,9 +419,11 @@ impl PageScriptHost {
         // Native invalidation/geometry only: no input dispatch, callbacks,
         // network admission, or nested event-loop checkpoint at this boundary.
         self.prepare_current_screen_styles(&inputs);
+        let paint_generation = self.screen_paint_generation(state);
         let request = LayoutPassRequest::new(inputs.viewport, reason)
             .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
-            .with_scroll_projection(true);
+            .with_scroll_projection(true)
+            .with_screen_paint(paint_generation.is_some());
         let Some((pass, feedback)) =
             self.build_layout_pass_for_document_in_environment(document, request, None)?
         else {
@@ -319,11 +438,16 @@ impl PageScriptHost {
             self.document_layout_state
                 .borrow_mut()
                 .clear_latest_layout();
+            state.clear_publication();
             self.did_publish_screen_layout(state, inputs);
             return Ok(());
         };
         self.finish_layout_publication(
-            PreparedLayoutPublication(LayoutPublication::CurrentScreen { document, inputs }),
+            PreparedLayoutPublication(LayoutPublication::CurrentScreen {
+                document,
+                inputs,
+                paint_generation,
+            }),
             pass,
             feedback,
         )

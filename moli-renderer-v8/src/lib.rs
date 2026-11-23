@@ -237,6 +237,8 @@ pub use host::{
 };
 pub use local_executor::is_on_js_local_executor;
 pub use native_bridge::element::ClientRect as RendererClientRect;
+#[cfg(feature = "devtools")]
+pub use runtime::RendererScreencastPaintSession;
 pub use runtime::{
     CompletedWorkerRuntimeInspectorCommandDispatch, DetachedParserScriptFetchContinuation,
     DevToolsSessionKey, ExternalRawDocumentBodyStream, JsRuntime, JsRuntimeOwner, PageId,

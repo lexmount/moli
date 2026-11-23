@@ -190,6 +190,8 @@ pub struct RendererCaptureScreencastFrameRequest {
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,
     pub known_visual_state: Option<RendererVisualStateToken>,
+    #[cfg(feature = "devtools")]
+    pub paint_session: Option<super::RendererScreencastPaintSession>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -271,6 +273,8 @@ impl PageVm {
                 RendererScreenshotPurpose::Screenshot => None,
                 RendererScreenshotPurpose::Print { .. } => self.print_style_environment_override(),
             },
+            #[cfg(feature = "devtools")]
+            None,
         )
         .map(RendererImageCaptureOutcome::into_screenshot_reply)
     }
@@ -341,6 +345,15 @@ impl PageVm {
             max_width: request.max_width,
             max_height: request.max_height,
         };
+        // The fresh capture path defers resource admission while paused and
+        // revisits deferred work on the first resumed poll.
+        let paint_session = request.paint_session.as_ref().filter(|_| {
+            !debugger_paused
+                && !request
+                    .known_visual_state
+                    .as_ref()
+                    .is_some_and(|known| known.post_layout_work_deferred)
+        });
         let image = match self.capture_image(
             request.format,
             request.quality,
@@ -349,6 +362,7 @@ impl PageVm {
             moli_layout::LayoutFlushReason::Screencast,
             LayoutPublicationRequest::Screen,
             None,
+            paint_session,
         )? {
             RendererImageCaptureOutcome::Captured(image) => image,
             RendererImageCaptureOutcome::LayoutDisabled => {
@@ -387,6 +401,7 @@ impl PageVm {
         reason: moli_layout::LayoutFlushReason,
         publication: LayoutPublicationRequest,
         environment_override: Option<StyloStyleEnvironment>,
+        #[cfg(feature = "devtools")] paint_session: Option<&super::RendererScreencastPaintSession>,
     ) -> anyhow::Result<RendererImageCaptureOutcome> {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(Instant::now);
@@ -410,14 +425,27 @@ impl PageVm {
             surface.device_pixel_ratio as f32,
         );
         let layout_started = profile_enabled.then(Instant::now);
-        let Some(snapshot) = self.vm_mut().paint_layout_snapshot_with_capture(
-            viewport,
-            reason,
-            paint_capture,
-            publication,
-            environment_override,
-        )?
-        else {
+        #[cfg(feature = "devtools")]
+        let reusable = match paint_session {
+            Some(session) => {
+                self.vm_mut()
+                    .paint_current_screencast_layout(session, viewport, paint_capture)?
+            }
+            None => None,
+        };
+        #[cfg(not(feature = "devtools"))]
+        let reusable = None;
+        let snapshot = match reusable {
+            Some(snapshot) => Some(snapshot),
+            None => self.vm_mut().paint_layout_snapshot_with_capture(
+                viewport,
+                reason,
+                paint_capture,
+                publication,
+                environment_override,
+            )?,
+        };
+        let Some(snapshot) = snapshot else {
             return Ok(RendererImageCaptureOutcome::NoDocument);
         };
         let layout_us = layout_started

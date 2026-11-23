@@ -932,11 +932,14 @@ fn start_screencast_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandO
         Ok(None) => StartScreencastParams::default(),
         Err(message) => return CommandOutputPlan::error(-32602, message),
     };
-    let Some(config) = normalize_start_screencast_params(params) else {
+    let Some(mut config) = normalize_start_screencast_params(params) else {
         return CommandOutputPlan::error(-32602, "InvalidParams");
     };
     if conn.layout_policy() == moli_core::LayoutPolicy::Mock {
         return CommandOutputPlan::error(-32000, START_SCREENCAST_LAYOUT_DISABLED_MESSAGE);
+    }
+    if conn.layout_policy().is_realtime() {
+        config.paint_session = Some(Default::default());
     }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let every_nth_frame = config.every_nth_frame();
@@ -1060,6 +1063,7 @@ impl CdpConnection {
             max_width: config.max_width(),
             max_height: config.max_height(),
             known_visual_state,
+            paint_session: config.paint_session,
         };
         let pending = match self.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
             Ok(page) => match page.start_capture_screencast_frame(request) {

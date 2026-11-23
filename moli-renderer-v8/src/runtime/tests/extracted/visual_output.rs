@@ -223,6 +223,7 @@ async fn screenshot_and_screencast_paint_downloaded_svg_vectors() {
             max_width: None,
             max_height: None,
             known_visual_state: None,
+            paint_session: Default::default(),
         },
     )
     .await;
@@ -740,6 +741,7 @@ addEventListener("wheel", event => {
             max_width: None,
             max_height: None,
             known_visual_state: None,
+            paint_session: Default::default(),
         },
     )
     .await;

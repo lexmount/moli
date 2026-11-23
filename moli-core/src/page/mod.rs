@@ -87,6 +87,8 @@ pub use moli_page_types::{
     renderer_inspector_protocol_configuration_command_from_message,
     renderer_inspector_protocol_configuration_command_from_method,
 };
+#[cfg(feature = "devtools")]
+pub use moli_renderer_v8::RendererScreencastPaintSession;
 pub use moli_renderer_v8::dom::native::SelectedFile;
 pub use moli_renderer_v8::network::{
     RendererNetworkResourceLoadOutcome, RendererNetworkResourceLoadPreparation,

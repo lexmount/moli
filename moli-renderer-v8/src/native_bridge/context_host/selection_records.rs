@@ -210,13 +210,11 @@ impl SelectionRecordRegistry {
         }
     }
 
-    fn clear_record(&mut self, handle: SelectionRecordHandle) {
-        let owner_document = self
-            .records
-            .get(&handle)
-            .and_then(|record| record.owner_document);
-        self.records
-            .insert(handle, SelectionRecord::empty_with_owner(owner_document));
+    fn clear_record(&mut self, handle: SelectionRecordHandle) -> bool {
+        let record = self.record_mut(handle);
+        let had_selection = record.owner_document.is_some() && record.has_range();
+        *record = SelectionRecord::empty_with_owner(record.owner_document);
+        had_selection
     }
 
     fn set_owner_document(&mut self, handle: SelectionRecordHandle, owner_document: DomHandle) {
@@ -326,24 +324,12 @@ impl SelectionRecordRegistry {
         dom_host: &crate::dom::native::DomHost,
         document: DomHandle,
     ) -> Option<DocumentSelectionSnapshot> {
-        let record = self
-            .records
+        self.records
             .iter()
             .filter(|(_, record)| record.owner_document == Some(document) && record.has_range())
-            .min_by_key(|(handle, _)| handle.raw())
-            .map(|(_, record)| record)?;
-        let mut start = record.composed_start?;
-        let mut end = record.composed_end?;
-        Some(DocumentSelectionSnapshot {
-            start: SelectionBoundarySnapshot {
-                container: start.container(),
-                offset: start.offset(dom_host)?,
-            },
-            end: SelectionBoundarySnapshot {
-                container: end.container(),
-                offset: end.offset(dom_host)?,
-            },
-        })
+            .min_by_key(|(handle, _)| handle.raw())?
+            .1
+            .paint_snapshot(dom_host)
     }
 
     fn record_mut(&mut self, handle: SelectionRecordHandle) -> &mut SelectionRecord {
@@ -378,6 +364,24 @@ impl SelectionRecord {
             && self.composed_end.is_some()
     }
 
+    fn paint_snapshot(&self, dom: &DomHost) -> Option<DocumentSelectionSnapshot> {
+        if self.owner_document.is_none() || !self.has_range() {
+            return None;
+        }
+        let mut start = self.composed_start?;
+        let mut end = self.composed_end?;
+        Some(DocumentSelectionSnapshot {
+            start: SelectionBoundarySnapshot {
+                container: start.container(),
+                offset: start.offset(dom)?,
+            },
+            end: SelectionBoundarySnapshot {
+                container: end.container(),
+                offset: end.offset(dom)?,
+            },
+        })
+    }
+
     fn boundary_mut(&mut self, role: SelectionBoundaryRole) -> Option<&mut RangeBoundaryPoint> {
         self.boundary_slot_mut(role).as_mut()
     }
@@ -401,7 +405,9 @@ impl PageScriptHost {
     }
 
     pub(crate) fn clear_selection_record(&mut self, handle: SelectionRecordHandle) {
-        self.selection_record_registry.clear_record(handle);
+        if self.selection_record_registry.clear_record(handle) {
+            self.note_selection_paint_change();
+        }
     }
 
     pub(crate) fn set_selection_record_owner_document(
@@ -433,7 +439,13 @@ impl PageScriptHost {
     ) -> bool {
         let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
-        self.selection_record_registry.store(
+        // Selection methods and edits to their associated Range both store
+        // the composed endpoints here. Only those endpoints affect paint.
+        let track_paint = cfg!(feature = "devtools") && self.layout_policy().is_realtime();
+        let previous_paint = track_paint
+            .then(|| self.selection_paint_snapshot(handle))
+            .flatten();
+        let stored = self.selection_record_registry.store(
             dom_host,
             handle,
             associated_range,
@@ -442,7 +454,21 @@ impl PageScriptHost {
             direction,
             composed_start,
             composed_end,
-        )
+        );
+        if track_paint && stored && previous_paint != self.selection_paint_snapshot(handle) {
+            self.note_selection_paint_change();
+        }
+        stored
+    }
+
+    fn selection_paint_snapshot(
+        &self,
+        handle: SelectionRecordHandle,
+    ) -> Option<DocumentSelectionSnapshot> {
+        self.selection_record_registry
+            .records
+            .get(&handle)?
+            .paint_snapshot(self.dom_host())
     }
 
     pub(crate) fn selection_record_has_range(&self, handle: SelectionRecordHandle) -> bool {

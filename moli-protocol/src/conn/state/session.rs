@@ -1,7 +1,7 @@
 use super::devtools_session::DevToolsNetworkSessionState;
 use super::page_target_host::PageTargetHost;
 use crate::domains::audits_output_state::TargetAuditsSessionState;
-use moli_core::page::V8InspectorSessionState;
+use moli_core::page::{RendererScreencastPaintSession, V8InspectorSessionState};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum PerformanceTimeDomain {
@@ -295,6 +295,7 @@ pub(crate) struct PageScreencastConfig {
     max_width: Option<u32>,
     max_height: Option<u32>,
     every_nth_frame: u32,
+    pub(crate) paint_session: Option<RendererScreencastPaintSession>,
 }
 
 impl PageScreencastConfig {
@@ -312,6 +313,7 @@ impl PageScreencastConfig {
             max_width,
             max_height,
             every_nth_frame,
+            paint_session: None,
         }
     }
 

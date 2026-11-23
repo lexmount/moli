@@ -523,6 +523,8 @@ pub use crate::devtools::ingress::io::{
 pub use crate::devtools::ingress::main::{
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
 };
+#[cfg(feature = "devtools")]
+pub use crate::native_bridge::RendererScreencastPaintSession;
 pub(crate) use crate::renderer::PageVmInitStage;
 pub(crate) use crate::service_worker_runtime::{
     MaterializedServiceWorkerFetchResponseHead, ServiceWorkerClientFocus,

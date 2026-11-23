@@ -154,6 +154,7 @@ base_background_color: [255; 4],
             max_width: None,
             max_height: None,
             known_visual_state,
+            paint_session: Default::default(),
         };
         assert_eq!(read_sizes(&mut page, &["target"])?, json!({"target":["auto","10px"]}));
         let before = page.vm().layout_pass_observability_for_test().1;

@@ -193,6 +193,29 @@ impl ScriptVm {
         .map_err(anyhow::Error::new)
     }
 
+    #[cfg(all(test, feature = "devtools"))]
+    pub(crate) fn has_screencast_paint_for_test(&self) -> bool {
+        self._context_host.borrow().has_screencast_paint_for_test()
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn paint_current_screencast_layout(
+        &mut self,
+        session: &crate::runtime::RendererScreencastPaintSession,
+        viewport: moli_layout::PaintViewport,
+        capture: moli_layout::PaintCaptureRequest,
+    ) -> Result<Option<moli_layout::PaintSnapshot>> {
+        let painted = self
+            ._context_host
+            .borrow()
+            .paint_current_screencast_layout(session, viewport, capture)?;
+        let Some((snapshot, css_images)) = painted else {
+            return Ok(None);
+        };
+        self.start_css_images_discovered_by_layout(css_images);
+        Ok(Some(snapshot))
+    }
+
     #[cfg(feature = "devtools")]
     pub(crate) fn visual_state_token(
         &self,
@@ -332,13 +355,7 @@ impl ScriptVm {
             let publishes_layout = publication.publishes_screen();
             // Screen publication needs geometry from zero-sized frames too.
             // Transient captures use the coverage requested by their output path.
-            let request = if publishes_layout && context_host.layout_policy().is_realtime() {
-                request
-                    .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
-                    .with_scroll_projection(true)
-            } else {
-                request
-            };
+            let request = publication.layout_request(request);
             let result = context_host
                 .build_layout_pass_for_document_in_environment(
                     document,
