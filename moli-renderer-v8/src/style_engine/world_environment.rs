@@ -111,6 +111,7 @@ pub(crate) struct StyloStyleEnvironment {
     reduced_transparency: StyloStyleReducedPreference,
     contrast: StyloStyleContrastPreference,
     forced_colors: StyloStyleForcedColors,
+    preferred_text_scale_percent: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -189,7 +190,19 @@ impl StyloStyleEnvironment {
                 Some("none") | None => StyloStyleForcedColors::None,
                 Some(_) => StyloStyleForcedColors::None,
             },
+            preferred_text_scale_percent: overrides.os_text_scale_percent,
         }
+    }
+
+    pub(crate) fn for_document_text_scale(mut self, opted_in: bool) -> Self {
+        if !opted_in {
+            self.preferred_text_scale_percent = None;
+        }
+        self
+    }
+
+    pub(super) fn preferred_text_scale(self) -> f32 {
+        f32::from(self.preferred_text_scale_percent.unwrap_or(100)) / 100.0
     }
 
     pub(crate) fn with_page_color_schemes(mut self, color_schemes: ColorSchemeFlags) -> Self {

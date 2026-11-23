@@ -217,6 +217,8 @@ pub enum EmulationAction {
     SetUserAgentOverride,
     SetEmulatedMedia,
     SetEmulatedVisionDeficiency,
+    #[strum(serialize = "setEmulatedOSTextScale")]
+    SetEmulatedOsTextScale,
     SetDefaultBackgroundColorOverride,
 }
 

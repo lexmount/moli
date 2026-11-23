@@ -165,6 +165,12 @@ pub(super) fn stylo_style_environment(
     runtime.note_style_observation_environment_resolution_for_test();
     environment_override
         .unwrap_or_else(|| StyloStyleEnvironment::from_emulated_media(runtime.emulated_media()))
+        .for_document_text_scale(document.is_some_and(|document| {
+            runtime
+                .dom_host()
+                .document_meta_content_for_document(document, "text-scale")
+                .is_some_and(|content| content.trim_ascii().eq_ignore_ascii_case("scale"))
+        }))
         .with_page_color_schemes(
             document
                 .map(|document| {
