@@ -675,6 +675,9 @@ impl BrowserWindow {
             .child(
                 div()
                     .flex_1()
+                    .when(cfg!(target_os = "macos"), |region| {
+                        region.min_w(px(40.)).flex_shrink_0()
+                    })
                     .h_full()
                     .on_mouse_down(MouseButton::Left, |event, window, _| {
                         if event.click_count == 2 {
