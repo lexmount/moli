@@ -340,7 +340,7 @@ where
     world.boxes[id.index()].layout_parent.or(Some(world.root))
 }
 
-fn project_box<N>(
+pub(crate) fn project_box<N>(
     world: &LayoutWorld<N>,
     viewport: LayoutViewport,
     id: LayoutBoxId,

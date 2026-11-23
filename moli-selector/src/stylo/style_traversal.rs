@@ -103,6 +103,7 @@ struct StyleDomState {
     host: Cell<*const DomHost>,
     shared_lock: SharedRwLock,
     element_data: StyloElementDataStore,
+    query_container_sizes: RefCell<HashMap<NodeId, HashMap<NodeId, Size2D<Option<Au>>>>>,
     atom_cache: QueryAtomCache,
     node_data: RefCell<HashMap<NodeId, Box<StyleNodeData>>>,
     slotted_node_data: RefCell<HashMap<NodeId, Box<[StyleNode<'static>]>>>,
@@ -152,6 +153,7 @@ impl StyloDomStyleAdapter {
                     author_styles_disabled: !author_styles_enabled,
                     ..StyloElementDataStore::default()
                 },
+                query_container_sizes: RefCell::default(),
                 atom_cache: QueryAtomCache::default(),
                 node_data: RefCell::default(),
                 slotted_node_data: RefCell::default(),
@@ -236,6 +238,40 @@ impl StyloDomStyleAdapter {
 
     pub fn clear_element_data_for_document(&self, document: NodeId) {
         self.state.clear_element_data_for_document(document);
+    }
+
+    /// Installs sizes from layout and returns the roots whose descendants must
+    /// re-evaluate their size queries.
+    pub fn update_query_container_sizes(
+        &self,
+        document: NodeId,
+        sizes: HashMap<NodeId, Size2D<Option<Au>>>,
+    ) -> Vec<NodeId> {
+        let mut documents = self.state.query_container_sizes.borrow_mut();
+        let previous = if sizes.is_empty() {
+            documents.remove(&document)
+        } else {
+            if documents.get(&document) == Some(&sizes) {
+                return Vec::new();
+            }
+            documents.insert(document, sizes)
+        };
+        let current = documents.get(&document);
+        let mut changed = Vec::new();
+        if let Some(current) = current {
+            changed.extend(current.iter().filter_map(|(&handle, size)| {
+                (previous.as_ref().and_then(|sizes| sizes.get(&handle)) != Some(size))
+                    .then_some(handle)
+            }));
+        }
+        if let Some(previous) = previous {
+            changed.extend(
+                previous
+                    .into_keys()
+                    .filter(|handle| current.is_none_or(|sizes| !sizes.contains_key(handle))),
+            );
+        }
+        changed
     }
 
     /// Returns whether the canonical Stylo side table still contains any
@@ -2211,7 +2247,21 @@ impl<'a> TElement for StyleElement<'a> {
             .namespace(self.element().namespace())
     }
 
-    fn query_container_size(&self, _: &Display) -> Size2D<Option<Au>> {
+    fn query_container_size(&self, display: &Display) -> Size2D<Option<Au>> {
+        if display.is_none() || display.is_contents() {
+            return Size2D::new(None, None);
+        }
+        if let Some(sizes) = self
+            .style_state()
+            .query_container_sizes
+            .borrow()
+            .get(&self.document())
+        {
+            return sizes
+                .get(&self.handle())
+                .copied()
+                .unwrap_or_else(|| Size2D::new(None, None));
+        }
         inline_container_size(self.host(), self.handle())
     }
 

@@ -453,6 +453,18 @@ impl PageScriptHost {
             .clear_latest_layout();
     }
 
+    pub(crate) fn update_layout_container_sizes(
+        &self,
+        document: DomHandle,
+        pass: &moli_layout::MeasuredLayoutPass<DomHandle>,
+    ) -> bool {
+        self.style_engine.update_layout_container_sizes(
+            self.dom_host(),
+            document,
+            pass.query_container_sizes(),
+        )
+    }
+
     pub(crate) fn build_layout_pass_for_document(
         &self,
         document: DomHandle,
