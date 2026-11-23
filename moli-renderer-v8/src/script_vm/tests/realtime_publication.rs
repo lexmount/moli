@@ -61,6 +61,26 @@ fn realtime_publication_temporary_viewport_preserves_screen_and_child_geometry()
 }
 
 #[test]
+fn realtime_publication_temporary_viewport_preserves_screen_container_query_sizes() {
+    let (mut vm, viewport) = fixture(
+        r#"<!doctype html><style>
+        #box { container-type: inline-size; width: 50vw }
+        #target { color: red }
+        @container (width >= 100px) { #target { color: green } }
+        </style><div id=box><div id=target></div></div>"#,
+    );
+    assert!(viewport.css_width >= 200);
+    let color = "getComputedStyle(target).color";
+    assert_eq!(vm.eval(color).unwrap(), "rgb(0, 128, 0)");
+    let builds = vm.layout_pass_observability_for_test().1;
+    vm.screenshot_layout_snapshot(LayoutViewport::new(100, 120, 1.0))
+        .unwrap()
+        .unwrap();
+    assert_eq!(vm.eval(color).unwrap(), "rgb(0, 128, 0)");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+}
+
+#[test]
 fn realtime_publication_transient_intent_does_not_publish_even_with_screenshot_reason() {
     let (mut vm, viewport) = fixture("<!doctype html><div id=target style='width:100px'></div>");
     assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "100");

@@ -1,16 +1,21 @@
 use std::collections::HashMap;
 
 use moli_selector::{StyloDomHostBinding, StyloElement};
+use selectors::matching::{
+    MatchingContext, MatchingForInvalidation, MatchingMode, NeedsSelectorFlags, VisitedHandlingMode,
+};
 use style::{
     Atom,
     animation::DocumentAnimationSet,
+    applicable_declarations::ApplicableDeclarationList,
+    computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
     },
     dom::{TElement, TNode},
     properties::ComputedValues,
-    selector_parser::{PseudoElement, SnapshotMap},
+    selector_parser::{PseudoElement, SelectorImpl, SnapshotMap},
     servo_arc::Arc as ServoArc,
     shared_lock::StylesheetGuards,
     style_resolver::{PseudoElementResolution, StyleResolverForElement},
@@ -82,6 +87,42 @@ impl<'dom> ResolutionContext<'_, 'dom> {
             false,
             None,
         )
+    }
+
+    fn matches_size_container_query(
+        &mut self,
+        element: StyloElement<'dom>,
+        pseudo: Option<(&PseudoElement, &ComputedValues)>,
+    ) -> bool {
+        self.adapter.observes_query_container_size(|| {
+            self.with_stylo(|context| {
+                let mut declarations = ApplicableDeclarationList::new();
+                let mut matching = MatchingContext::<SelectorImpl>::new_for_visited(
+                    if pseudo.is_some() {
+                        MatchingMode::ForStatelessPseudoElement
+                    } else {
+                        MatchingMode::Normal
+                    },
+                    None,
+                    &mut context.thread_local.selector_caches,
+                    VisitedHandlingMode::AllLinksUnvisited,
+                    context.shared.quirks_mode(),
+                    NeedsSelectorFlags::No,
+                    MatchingForInvalidation::No,
+                );
+                matching.extra_data.originating_element_style = pseudo.map(|(_, style)| style);
+                context.shared.stylist.push_applicable_declarations(
+                    element,
+                    pseudo.map(|(pseudo, _)| pseudo),
+                    None,
+                    None,
+                    Default::default(),
+                    RuleInclusion::All,
+                    &mut declarations,
+                    &mut matching,
+                );
+            });
+        })
     }
 }
 
@@ -186,6 +227,49 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         Some(StyloComputedStyleSnapshot::from_element_styles(
             &data.styles,
         ))
+    }
+
+    /// Check matching conditions, including currently false conditions. A
+    /// declaration using only cqw units is handled by the property read path
+    /// and must not make an unrelated color read flush layout.
+    pub(crate) fn depends_on_size_container_query(
+        &mut self,
+        handle: DomHandle,
+        pseudo: Option<&str>,
+    ) -> bool {
+        let Some(element) = self.prepare(handle) else {
+            return false;
+        };
+        let pseudo = pseudo.and_then(stylo_pseudo_element_for_computed_style);
+        let mut current = Some(element);
+        while let Some(candidate) = current {
+            let Some(primary) = candidate
+                .borrow_data()
+                .and_then(|data| data.styles.get_primary().cloned())
+            else {
+                break;
+            };
+            if !primary
+                .flags
+                .contains(ComputedValueFlags::SELF_OR_ANCESTOR_HAS_SIZE_CONTAINER_TYPE)
+            {
+                break;
+            }
+            if candidate == element
+                && let Some(pseudo) = pseudo.as_ref()
+                && self
+                    .context
+                    .matches_size_container_query(candidate, Some((pseudo, &primary)))
+            {
+                return true;
+            }
+            // A matching condition on an ancestor can change inherited values.
+            if self.context.matches_size_container_query(candidate, None) {
+                return true;
+            }
+            current = candidate.traversal_parent();
+        }
+        false
     }
 
     #[cfg(feature = "devtools")]

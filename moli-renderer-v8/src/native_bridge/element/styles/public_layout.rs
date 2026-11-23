@@ -1,8 +1,8 @@
 use moli_layout::LayoutError;
 
 use super::declaration::{
-    property_uses_container_geometry, style_property_value_for_pseudo_with_context,
-    style_property_value_with_context,
+    StyleObservation, property_uses_container_geometry,
+    style_property_value_for_pseudo_with_context, style_property_value_with_context,
 };
 use super::{
     DomHandle, PageScriptHost, StyleMode, style_object_computation_context,
@@ -17,6 +17,7 @@ pub(super) fn prepare_public_style_property(
     handle: DomHandle,
     mode: StyleMode,
     property: &str,
+    pseudo: Option<&str>,
 ) -> Result<(), LayoutError> {
     if mode == StyleMode::Computed
         && runtime.layout_policy().is_realtime()
@@ -25,6 +26,7 @@ pub(super) fn prepare_public_style_property(
             handle,
             || property_may_observe_used_geometry(property),
             [property],
+            pseudo,
         )
     {
         runtime.ensure_observable_layout()?;
@@ -37,6 +39,7 @@ fn style_read_needs_layout<'a>(
     handle: DomHandle,
     observes_used_geometry: impl FnOnce() -> bool,
     properties: impl IntoIterator<Item = &'a str>,
+    pseudo: Option<&str>,
 ) -> bool {
     runtime.dom_host().is_connected_to_document(handle)
         && runtime.owner_dispatch_scope_for_node(handle).is_some()
@@ -50,7 +53,25 @@ fn style_read_needs_layout<'a>(
                 })
             || properties
                 .into_iter()
-                .any(|property| property_uses_container_geometry(runtime, handle, property)))
+                .any(|property| property_uses_container_geometry(runtime, handle, property))
+            || size_container_query_needs_layout(runtime, handle, pseudo))
+}
+
+fn size_container_query_needs_layout(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+    pseudo: Option<&str>,
+) -> bool {
+    if runtime.realtime_screen_layout_is_current() {
+        return false;
+    }
+    runtime
+        .layout_document_for_source(handle)
+        .is_some_and(|document| {
+            StyleObservation::new(runtime).with_resolution_pass(document, |pass| {
+                pass.depends_on_size_container_query(handle, pseudo)
+            })
+        })
 }
 
 /// Deliberately conservative for used-value families. A pure root-document
@@ -97,6 +118,7 @@ pub(super) fn prepare_public_style_batch(
             handle,
             || used_geometry,
             properties.iter().map(String::as_str),
+            None,
         )
     });
     if needs_layout {
@@ -113,7 +135,10 @@ pub(super) fn read_live_style_property<'s>(
     mode: StyleMode,
     property: &str,
 ) -> Option<String> {
-    if let Err(error) = prepare_public_style_property(runtime, handle, mode, property) {
+    let pseudo = style_object_pseudo_element(scope, style, mode);
+    if let Err(error) =
+        prepare_public_style_property(runtime, handle, mode, property, pseudo.as_deref())
+    {
         if let Some(message) = v8_string(scope, &format!("Layout failed: {error}")) {
             let exception = v8::Exception::error(scope, message);
             scope.throw_exception(exception);
@@ -122,7 +147,7 @@ pub(super) fn read_live_style_property<'s>(
     }
     // A screen layout pass can update the viewport of a child document.
     let context = style_object_computation_context(scope, style, runtime, handle, mode);
-    Some(match style_object_pseudo_element(scope, style, mode) {
+    Some(match pseudo {
         Some(pseudo) => style_property_value_for_pseudo_with_context(
             runtime, handle, &pseudo, property, context,
         ),

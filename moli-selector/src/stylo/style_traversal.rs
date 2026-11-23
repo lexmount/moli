@@ -105,6 +105,7 @@ struct StyleDomState {
     shared_lock: SharedRwLock,
     element_data: StyloElementDataStore,
     query_container_sizes: RefCell<HashMap<NodeId, QueryContainerSizes>>,
+    observed_query_container_size: Cell<Option<bool>>,
     atom_cache: QueryAtomCache,
     node_data: RefCell<HashMap<NodeId, Box<StyleNodeData>>>,
     slotted_node_data: RefCell<HashMap<NodeId, Box<[StyleNode<'static>]>>>,
@@ -155,6 +156,7 @@ impl StyloDomStyleAdapter {
                     ..StyloElementDataStore::default()
                 },
                 query_container_sizes: RefCell::default(),
+                observed_query_container_size: Cell::new(None),
                 atom_cache: QueryAtomCache::default(),
                 node_data: RefCell::default(),
                 slotted_node_data: RefCell::default(),
@@ -448,6 +450,15 @@ impl<'binding> StyleDomHostBinding<'binding> {
         &self.state.shared_lock
     }
 
+    /// Records container size lookups during a selector-only matching pass.
+    pub fn observes_query_container_size(&self, match_rules: impl FnOnce()) -> bool {
+        let observed = &self.state.observed_query_container_size;
+        debug_assert!(observed.get().is_none());
+        observed.set(Some(false));
+        match_rules();
+        observed.replace(None).unwrap_or(false)
+    }
+
     pub fn bound_node_count(&self) -> usize {
         self.state.node_data.borrow().len()
     }
@@ -515,6 +526,7 @@ impl<'binding> StyleDomHostBinding<'binding> {
 
 impl Drop for StyleDomHostBinding<'_> {
     fn drop(&mut self) {
+        self.state.observed_query_container_size.set(None);
         self.state.clear_node_data();
         self.state.clear_shadow_cascade_data_after_binding();
         self.state.host.set(std::ptr::null());
@@ -2251,6 +2263,16 @@ impl<'a> TElement for StyleElement<'a> {
     }
 
     fn query_container_size(&self, display: &Display) -> Size2D<Option<Au>> {
+        let observed = &self.style_state().observed_query_container_size;
+        if observed.get() == Some(false)
+            && self.borrow_data().is_some_and(|data| {
+                data.styles
+                    .get_primary()
+                    .is_some_and(|style| style.clone_container_type().is_size_container_type())
+            })
+        {
+            observed.set(Some(true));
+        }
         if display.is_none() || display.is_contents() {
             return Size2D::new(None, None);
         }
