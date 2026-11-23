@@ -2,6 +2,99 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn floated_min_width_text_aligns_in_the_constrained_content_box() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/float-min-width-alignment.html")?,
+        );
+        let markup = include_str!("float_min_width_alignment.html");
+        page.vm_mut().eval(&format!(
+            "document.documentElement.innerHTML={}",
+            serde_json::to_string(markup)?
+        ))?;
+        page.vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        page.vm_mut().publish_layout_for_test()?;
+        let geometry = page.vm_mut().eval(
+            r#"JSON.stringify([...document.querySelectorAll('a')].map(a=>{
+const box=a.getBoundingClientRect(),style=getComputedStyle(a),range=document.createRange();
+range.selectNodeContents(a.querySelector('span'));
+const left=box.left+parseFloat(style.borderLeftWidth)+parseFloat(style.paddingLeft);
+const right=box.right-parseFloat(style.borderRightWidth)-parseFloat(style.paddingRight);
+return {id:a.id,width:box.width,expectedWidth:Number(a.dataset.width),align:a.dataset.align,left,right,
+  rect:[box.x,box.y,box.width,box.height],
+  text:[...range.getClientRects()].filter(r=>r.width>0).map(r=>[r.left,r.right])};
+}))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let rows = geometry.as_array().expect("alignment rows");
+        assert_eq!(rows.len(), 13);
+        for row in rows {
+            let number = |key: &str| row[key].as_f64().expect("numeric geometry");
+            assert!(
+                (number("width") - number("expectedWidth")).abs() < 0.05,
+                "minimum width must retain the expected box model: {row}"
+            );
+            let lines = row["text"].as_array().expect("text rectangles");
+            assert!(!lines.is_empty(), "text must produce geometry: {row}");
+            for line in lines {
+                let left = line[0].as_f64().expect("text left");
+                let right = line[1].as_f64().expect("text right");
+                let delta = match row["align"].as_str().unwrap() {
+                    "left" => left - number("left"),
+                    "right" => right - number("right"),
+                    "center" => (left + right - number("left") - number("right")) / 2.0,
+                    alignment => panic!("unexpected alignment {alignment}"),
+                };
+                assert!(
+                    delta.abs() < 0.05,
+                    "text must align within the constrained content box; delta={delta}: {row}"
+                );
+            }
+        }
+
+        let snapshot = page
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 960, 1.0))?
+            .expect("alignment paint");
+        let image = moli_paint::raster_snapshot(&snapshot)?;
+        let minimum = &rows[0]["rect"];
+        let fixed = &rows[12]["rect"];
+        let pixel = |x: usize, y: usize| {
+            let offset = (y * image.width as usize + x) * 4;
+            &image.rgba[offset..offset + 4]
+        };
+        let mut white_glyph_pixels = 0;
+        for y in 0..40 {
+            for x in 0..85 {
+                let actual = pixel(
+                    minimum[0].as_f64().unwrap() as usize + x,
+                    minimum[1].as_f64().unwrap() as usize + y,
+                );
+                let expected = pixel(
+                    fixed[0].as_f64().unwrap() as usize + x,
+                    fixed[1].as_f64().unwrap() as usize + y,
+                );
+                assert_eq!(actual, expected, "button paint differs at ({x}, {y})");
+                if (12..73).contains(&x)
+                    && (10..28).contains(&y)
+                    && expected[..3].iter().all(|channel| *channel > 220)
+                {
+                    white_glyph_pixels += 1;
+                }
+            }
+        }
+        assert!(white_glyph_pixels > 0, "reference must paint its text");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("floated minimum-width text alignment fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn baseline_atomic_inline_keeps_parent_strut_descent_in_flex_header() {
     run_page_vm_async_test(async move {
         let loader =
