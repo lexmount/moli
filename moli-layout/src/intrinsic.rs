@@ -7,17 +7,61 @@
 
 use std::{fmt::Debug, hash::Hash};
 
+use style::values::computed::ContainIntrinsicSize;
 use taffy::{
-    AvailableSpace, LayoutInput, LayoutOutput, LayoutPartialTree, RequestedAxis, RunMode, Size,
-    SizingPurpose,
+    AvailableSpace, LayoutInput, LayoutOutput, LayoutPartialTree, LeafLayoutContext, RequestedAxis,
+    RunMode, Size, SizingPurpose, compute_leaf_layout_with_context,
 };
 
-use crate::{LayoutBoxId, LayoutDisplay, LayoutWorld};
+use crate::{LayoutBoxId, LayoutDisplay, LayoutWorld, style::resolve_stylo_calc_value};
 
 impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    /// A query container contributes the size of an empty box on its contained
+    /// axes. The final formatting-context layout still lays out the children.
+    pub(crate) fn measure_contained_intrinsic_size(
+        &self,
+        child: LayoutBoxId,
+        inputs: LayoutInput,
+    ) -> Option<LayoutOutput> {
+        let layout_box = &self.boxes[child.index()];
+        let axes = layout_box.size_query_axes()?;
+        let contains_requested_axes = match inputs.axis {
+            RequestedAxis::Horizontal => axes.width,
+            RequestedAxis::Vertical => axes.height,
+            RequestedAxis::Both => axes.width && axes.height,
+        };
+        if !contains_requested_axes || layout_box.is_replaced() {
+            return None;
+        }
+        let style = &layout_box.style;
+        let computed = style.stylo_computed_values()?;
+        let fallback_size = |size: ContainIntrinsicSize| match size {
+            ContainIntrinsicSize::None | ContainIntrinsicSize::AutoNone => 0.0,
+            ContainIntrinsicSize::Length(length) | ContainIntrinsicSize::AutoLength(length) => {
+                length.0.px()
+            }
+        };
+        let content = Size {
+            width: fallback_size(computed.clone_contain_intrinsic_width()),
+            height: fallback_size(computed.clone_contain_intrinsic_height()),
+        };
+        let context = LeafLayoutContext::new(
+            style.writing_mode(),
+            layout_box.resolved_aspect_ratio(),
+            self.get_scrollbar_insets(child.to_taffy()),
+        );
+        Some(compute_leaf_layout_with_context(
+            inputs,
+            &style.taffy,
+            context,
+            resolve_stylo_calc_value,
+            |_, _| content,
+        ))
+    }
+
     /// Measure the border-box width selected by CSS fit-content sizing.
     ///
     /// Taffy's block and flex absolute-layout paths use the same two intrinsic
@@ -80,6 +124,33 @@ where
         let layout_box = &self.boxes[child.index()];
         let preferred_width = layout_box.style.taffy.size.width;
         let is_replaced = layout_box.is_replaced();
+        if inputs.known_dimensions.width.is_none()
+            && (preferred_width.is_auto() || preferred_width.is_intrinsic())
+            && let Some(measured) = self.measure_contained_intrinsic_size(
+                child,
+                LayoutInput {
+                    axis: RequestedAxis::Horizontal,
+                    run_mode: RunMode::ComputeSize,
+                    sizing_purpose: SizingPurpose::IntrinsicContribution,
+                    ..inputs
+                },
+            )
+        {
+            return self.compute_child_layout(
+                child.to_taffy(),
+                LayoutInput {
+                    known_dimensions: Size {
+                        width: Some(measured.size.width),
+                        ..inputs.known_dimensions
+                    },
+                    known_dimensions_are_definite: Size {
+                        width: true,
+                        ..inputs.known_dimensions_are_definite
+                    },
+                    ..inputs
+                },
+            );
+        }
         let uses_fit_content = !layout_box.is_replaced()
             && (preferred_width.is_auto() || preferred_width.is_fit_content())
             && matches!(
