@@ -11,6 +11,10 @@ impl PageVm {
             content_width: f64::from(metrics.content_size.width),
             content_height: f64::from(metrics.content_size.height),
             device_pixel_ratio: f64::from(metrics.viewport.device_pixel_ratio),
+            mobile_viewport: self
+                .vm()
+                .viewport_surface()
+                .and_then(|surface| surface.emulated_view?.mobile_viewport),
         })
     }
 }
