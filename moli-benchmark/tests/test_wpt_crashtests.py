@@ -83,6 +83,7 @@ def phases() -> list[list[dict | BaseException]]:
     return [
         [{"result": {}}],
         [commit(), load(), {"result": {"frameId": "frame", "loaderId": "loader"}}],
+        [{"result": {}}],
         [value({"complete": True})],
     ]
 
@@ -163,7 +164,16 @@ class CrashtestTests(unittest.TestCase):
         self.assertEqual(result.test_type, "crashtest")
         self.assertEqual(result.payload_source, "crashtest-ready")
         self.assertEqual(case_result_to_dict(result)["subtests"]["total"], 0)
+        self.assertEqual([method for method, _ in client.commands[-2:]], [
+            "Page.bringToFront", "Runtime.evaluate",
+        ])
         self.assertTrue(client.commands[-1][1]["awaitPromise"])
+
+    def test_engine_without_bring_to_front_can_still_report_readiness(self):
+        replies = phases()
+        replies[-2] = [{"error": {"code": -32601, "message": "Method not found"}}]
+        result, _ = self.run_case(replies)
+        self.assertEqual(result.status, "pass")
 
     def test_waiting_page_times_out_without_a_completion_signal(self):
         replies = phases()
@@ -206,7 +216,7 @@ class CrashtestTests(unittest.TestCase):
         replies[1].extend([commit(), load()])
         result, client = self.run_case(replies)
         self.assertEqual(result.status, "pass")
-        self.assertEqual(len(client.commands), 3)
+        self.assertEqual(len(client.commands), 4)
 
     def test_missing_initial_commit_cannot_report_pass(self):
         replies = phases()
@@ -226,7 +236,7 @@ class CrashtestTests(unittest.TestCase):
         })
         result, client = self.run_case(replies)
         self.assertEqual(result.status, "pass")
-        self.assertEqual(len(client.commands), 3)
+        self.assertEqual(len(client.commands), 4)
 
     def test_navigation_replaces_pending_readiness_in_the_same_case(self):
         destination = "http://localhost/dom/after-navigation.html"
@@ -237,6 +247,7 @@ class CrashtestTests(unittest.TestCase):
                 replies = phases()
                 replies[-1] = messages
                 replies.extend([
+                    [{"result": {}}],
                     [value({"complete": True})],
                 ])
                 result, client = self.run_case(replies)
@@ -251,7 +262,7 @@ class CrashtestTests(unittest.TestCase):
             load("next-loader"),
             {"error": {"code": -32000, "message": "Execution context was destroyed."}},
         ]
-        replies.extend([[asyncio.TimeoutError()]])
+        replies.extend([[{"result": {}}], [asyncio.TimeoutError()]])
         result, _ = self.run_case(replies)
         self.assertEqual(result.status, "timeout")
         self.assertIsNone(result.payload_source)
@@ -275,7 +286,7 @@ class CrashtestTests(unittest.TestCase):
                 result, client = self.run_case(replies)
                 self.assertEqual(result.status, "timeout")
                 self.assertIsNone(result.payload_source)
-                self.assertEqual(len(client.commands), 3)
+                self.assertEqual(len(client.commands), 4)
 
     def test_replacement_document_crash_is_not_hidden(self):
         replies = phases()
@@ -332,7 +343,7 @@ class CrashtestTests(unittest.TestCase):
         self.assertEqual(result.status, "pass")
         seen = client.messages_before_command[-1]
         self.assertIn(load(), seen[seen.index(opened()) + 1:])
-        self.assertEqual(len(client.commands), 3)
+        self.assertEqual(len(client.commands), 4)
 
     def test_self_navigation_before_load_uses_the_new_loader(self):
         replies = phases()
@@ -341,7 +352,7 @@ class CrashtestTests(unittest.TestCase):
         result, client = self.run_case(replies)
         self.assertEqual(result.status, "pass")
         self.assertIn(load("replacement-loader"), client.messages_before_command[-1])
-        self.assertEqual(len(client.commands), 3)
+        self.assertEqual(len(client.commands), 4)
 
     def test_crash_while_waiting_for_load_is_not_hidden(self):
         replies = phases()
