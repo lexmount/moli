@@ -873,6 +873,13 @@ async def _run_one_crashtest(
             # realm. Observe the current main-frame load before injecting the
             # unchanged WPT readiness sequence into that Document.
             current = await wait_for_loaded_document(current)
+            # A popup opened during load can hide the test page and suspend
+            # its animation frame callbacks.
+            try:
+                await command("Page.bringToFront")
+            except RawCdpCommandError as error:
+                if error.error.get("code") != -32601:
+                    raise
             try:
                 response = await command(
                     "Runtime.evaluate",
