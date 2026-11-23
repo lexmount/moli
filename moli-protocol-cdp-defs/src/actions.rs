@@ -116,6 +116,9 @@ pub enum DomAction {
     GetBoxModel,
     GetContentQuads,
     GetNodeForLocation,
+    HighlightNode,
+    HighlightRect,
+    HideHighlight,
     ScrollIntoViewIfNeeded,
     SetFileInputFiles,
     PerformSearch,
@@ -148,6 +151,16 @@ impl DomAction {
             Self::Enable | Self::Disable | Self::DiscardSearchResults | Self::GetNodeForLocation
         )
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
+#[strum(serialize_all = "camelCase")]
+pub enum OverlayAction {
+    Enable,
+    Disable,
+    HighlightNode,
+    HighlightRect,
+    HideHighlight,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]

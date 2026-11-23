@@ -63,7 +63,7 @@ impl PaintFragmentProfile {
 /// The token retains generation metadata only. It never owns layout, paint,
 /// raster, or encoded-image data.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RendererVisualStateToken(Arc<RendererVisualState>);
+pub struct RendererVisualStateToken(Arc<RendererVisualState>, u64);
 
 #[derive(Debug, PartialEq, Eq)]
 struct RendererVisualState {
@@ -89,20 +89,29 @@ impl RendererVisualStateToken {
         viewport: PaintViewport,
         base_background_color: [u8; 4],
     ) -> Self {
-        Self(Arc::new(RendererVisualState {
-            document,
-            dom_generation,
-            style_generations: style_generations
-                .into_iter()
-                .map(|(document, source, input)| (document.index_u32(), source, input))
-                .collect(),
-            interaction_generation,
-            resource_generation,
-            viewport_width: viewport.css_width,
-            viewport_height: viewport.css_height,
-            device_pixel_ratio_bits: viewport.device_pixel_ratio.to_bits(),
-            base_background_color,
-        }))
+        Self(
+            Arc::new(RendererVisualState {
+                document,
+                dom_generation,
+                style_generations: style_generations
+                    .into_iter()
+                    .map(|(document, source, input)| (document.index_u32(), source, input))
+                    .collect(),
+                interaction_generation,
+                resource_generation,
+                viewport_width: viewport.css_width,
+                viewport_height: viewport.css_height,
+                device_pixel_ratio_bits: viewport.device_pixel_ratio.to_bits(),
+                base_background_color,
+            }),
+            0,
+        )
+    }
+
+    #[cfg(feature = "devtools")]
+    fn with_overlay_generation(mut self, generation: u64) -> Self {
+        self.1 = generation;
+        self
     }
 
     #[cfg(feature = "devtools")]
@@ -293,11 +302,14 @@ impl PageVm {
             surface.inner_height,
             surface.device_pixel_ratio as f32,
         );
-        let visual_state_before = self.vm().visual_state_token(
-            self.document_lifecycle.identity(),
-            viewport,
-            request.base_background_color,
-        );
+        let visual_state_before = self
+            .vm()
+            .visual_state_token(
+                self.document_lifecycle.identity(),
+                viewport,
+                request.base_background_color,
+            )
+            .with_overlay_generation(self.devtools.overlay.generation());
         if request.known_visual_state.as_ref() == Some(&visual_state_before) {
             return Ok(RendererCaptureScreencastFrameReply::Unchanged);
         }
@@ -327,11 +339,14 @@ impl PageVm {
                 return Ok(RendererCaptureScreencastFrameReply::NoDocument);
             }
         };
-        let visual_state_after = self.vm().visual_state_token(
-            self.document_lifecycle.identity(),
-            viewport,
-            request.base_background_color,
-        );
+        let visual_state_after = self
+            .vm()
+            .visual_state_token(
+                self.document_lifecycle.identity(),
+                viewport,
+                request.base_background_color,
+            )
+            .with_overlay_generation(self.devtools.overlay.generation());
         let visual_state = visual_state_for_rendered_frame(visual_state_before, visual_state_after);
         Ok(RendererCaptureScreencastFrameReply::Captured(
             RendererCapturedScreencastFrame {
@@ -377,6 +392,12 @@ impl PageVm {
         let layout_us = layout_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
+        #[cfg(feature = "devtools")]
+        let snapshot = if reason != moli_layout::LayoutFlushReason::Print {
+            self.paint_overlay_highlight(snapshot)
+        } else {
+            snapshot
+        };
 
         if profile_enabled {
             let profile = PaintFragmentProfile::from_snapshot(&snapshot);
@@ -597,3 +618,6 @@ fn paint_viewport_region(
         scroll_scale,
     })
 }
+
+#[cfg(feature = "devtools")]
+pub(super) mod overlay;

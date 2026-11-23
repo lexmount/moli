@@ -360,6 +360,10 @@ impl PageVm {
                     self.document_geometry_for_node(reference)?,
                 )),
             ),
+            RendererDevToolsPageCommand::SetOverlayHighlight { inspector_session_id, highlight } => {
+                self.set_overlay_highlight(inspector_session_id.as_deref(), highlight)?;
+                Ok(RendererPageReply::Unit)
+            }
             RendererDevToolsPageCommand::DocumentHitTest {
                 inspector_session_id,
                 x,

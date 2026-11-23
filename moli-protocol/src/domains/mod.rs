@@ -26,6 +26,7 @@ pub(crate) mod log_output_state;
 pub(crate) mod native;
 pub mod network;
 pub(crate) mod observable_output;
+pub(crate) mod overlay;
 pub mod page;
 pub mod performance;
 pub mod profiler;

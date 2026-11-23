@@ -371,6 +371,9 @@ pub(crate) fn frontend_attachment(
 }
 
 pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<NativeCommandStep> {
+    if let Some(step) = super::overlay::try_start(conn, cmd) {
+        return Some(step);
+    }
     let start: fn(&mut CdpConnection, &Cmd<'_>) -> Option<NativeCommandStep> =
         match cmd.method.split_once('.')?.0 {
             "DOMDebugger" => super::dom_debugger::native::try_start,

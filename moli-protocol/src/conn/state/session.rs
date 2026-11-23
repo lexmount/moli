@@ -427,6 +427,7 @@ pub(crate) struct TargetPageSessionState {
     pub(crate) input_events_ignored: bool,
     pub(crate) input_intercept_drags_enabled: bool,
     pub(crate) page_domain_enabled: bool,
+    pub(crate) overlay_enabled: bool,
     pub(crate) page_domain_subscription_generation: u64,
     pub(crate) page_lifecycle_events: bool,
     pub(crate) audits: TargetAuditsSessionState,
@@ -445,6 +446,7 @@ impl Default for TargetPageSessionState {
             input_events_ignored: false,
             input_intercept_drags_enabled: false,
             page_domain_enabled: false,
+            overlay_enabled: false,
             page_domain_subscription_generation: 0,
             page_lifecycle_events: false,
             audits: TargetAuditsSessionState::default(),
@@ -486,6 +488,7 @@ impl PartialEq for TargetPageSessionState {
         self.input_events_ignored == other.input_events_ignored
             && self.input_intercept_drags_enabled == other.input_intercept_drags_enabled
             && self.page_domain_enabled == other.page_domain_enabled
+            && self.overlay_enabled == other.overlay_enabled
             && self.page_lifecycle_events == other.page_lifecycle_events
             && self.audits == other.audits
             && self.log_enabled == other.log_enabled

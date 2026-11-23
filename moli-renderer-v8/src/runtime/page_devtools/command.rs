@@ -138,6 +138,10 @@ pub enum RendererDevToolsPageCommand {
     DocumentGeometryForNode {
         reference: RendererDomNodeReference,
     },
+    SetOverlayHighlight {
+        inspector_session_id: Option<String>,
+        highlight: Option<RendererOverlayHighlight>,
+    },
     DocumentHitTest {
         inspector_session_id: Option<String>,
         x: f64,
@@ -495,6 +499,7 @@ impl RendererDevToolsPageCommand {
             Self::ScrollNodeIntoViewIfNeeded { .. } => Some("ScrollNodeIntoViewIfNeeded"),
             Self::ClientRectForBackendNodeId { .. } => Some("ClientRectForBackendNodeId"),
             Self::DocumentGeometryForNode { .. } => Some("DocumentGeometryForNode"),
+            Self::SetOverlayHighlight { .. } => Some("SetOverlayHighlight"),
             Self::DocumentHitTest { .. } => Some("DocumentHitTest"),
             Self::NodeHasGeometryForBackendNodeId { .. } => Some("NodeHasGeometryForBackendNodeId"),
             Self::RemoveDocumentNode { .. } => Some("RemoveDocumentNode"),

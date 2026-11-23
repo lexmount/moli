@@ -357,6 +357,8 @@ pub use self::page_devtools::{RendererDevToolsPageCommand, RendererDevToolsPageR
 pub use self::page_print::{
     RendererPdfOptions, RendererPrintToPdfReply, RendererPrintToPdfRequest,
 };
+#[cfg(feature = "devtools")]
+pub use self::page_screenshot::overlay::{RendererOverlayHighlight, RendererOverlayNode};
 pub use self::page_screenshot::{
     RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
     RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,

@@ -487,6 +487,7 @@ enum CdpMethodDomain {
     DomSnapshot,
     Emulation,
     HeapProfiler,
+    Overlay,
     Page,
     Performance,
     Profiler,
@@ -505,6 +506,7 @@ impl CdpMethodDomain {
             "DOMSnapshot" => Self::DomSnapshot,
             "Emulation" => Self::Emulation,
             "HeapProfiler" => Self::HeapProfiler,
+            "Overlay" => Self::Overlay,
             "Page" => Self::Page,
             "Performance" => Self::Performance,
             "Profiler" => Self::Profiler,
@@ -699,6 +701,7 @@ impl CdpRendererCommandPolicy {
             | CdpMethodDomain::Dom
             | CdpMethodDomain::DomSnapshot
             | CdpMethodDomain::HeapProfiler
+            | CdpMethodDomain::Overlay
             | CdpMethodDomain::Profiler => CdpRendererCommandAccess::MainThread,
             CdpMethodDomain::Other => CdpRendererCommandAccess::OwnerIndependent,
         };

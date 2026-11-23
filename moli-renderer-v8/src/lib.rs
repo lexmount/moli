@@ -444,6 +444,6 @@ pub(crate) use moli_webapi::interfaces as web_api_interfaces;
 
 #[cfg(feature = "devtools")]
 pub use runtime::{
-    RendererDevToolsPageCommand, RendererDevToolsPageReply, RendererPageInspectorEndpoint,
-    RendererRuntimeInspectorSessionRetirement,
+    RendererDevToolsPageCommand, RendererDevToolsPageReply, RendererOverlayHighlight,
+    RendererOverlayNode, RendererPageInspectorEndpoint, RendererRuntimeInspectorSessionRetirement,
 };

@@ -6,6 +6,8 @@ use super::*;
 use crate::runtime::RendererPageStateCapturePolicy;
 
 pub(in crate::runtime) struct PageDevToolsState {
+    #[cfg(feature = "devtools")]
+    pub(in crate::runtime) overlay: crate::runtime::page_screenshot::overlay::OverlayState,
     pub(super) pending_dom_mutation_event_batches: Vec<RendererDomMutationEventBatch>,
     pub(super) css_agent_sessions: HashMap<Option<String>, RendererCssAgentSessionState>,
     pub(in crate::runtime) inspector_protocol_configurations:
@@ -15,6 +17,8 @@ pub(in crate::runtime) struct PageDevToolsState {
 impl PageDevToolsState {
     pub(super) fn new(env: &PageVmEnvConfig) -> Self {
         Self {
+            #[cfg(feature = "devtools")]
+            overlay: Default::default(),
             pending_dom_mutation_event_batches: Vec::new(),
             css_agent_sessions: HashMap::new(),
             inspector_protocol_configurations: env.inspector_protocol_configurations(),
