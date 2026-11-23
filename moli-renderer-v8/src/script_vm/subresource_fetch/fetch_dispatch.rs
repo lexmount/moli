@@ -160,12 +160,11 @@ impl ScriptVm {
                     scope,
                     pending.execution_context.dispatch_scope(),
                 );
-                let event_source = match &pending.continuation {
-                    PendingSubresourceContinuation::EventSource(event_source) => {
-                        v8::Local::new(scope, event_source)
-                    }
-                    _ => unreachable!("EventSource completion requires EventSource continuation"),
+                let PendingSubresourceContinuation::EventSource(request) = &pending.continuation
+                else {
+                    unreachable!("EventSource completion requires EventSource continuation");
                 };
+                let event_source = v8::Local::new(scope, &request.event_source);
                 let request_handle = pending.info.network_request_handle;
 
                 match result {
@@ -187,6 +186,10 @@ impl ScriptVm {
                         context_host
                             .borrow_mut()
                             .record_subresource_network(record);
+                        crate::context_bootstrap::record_resource_performance_entry(
+                            scope,
+                            request.failed_timing(),
+                        );
                         crate::network_host::fail_event_source_connection(
                             scope,
                             event_source,
@@ -236,6 +239,10 @@ impl ScriptVm {
                             context_host
                                 .borrow_mut()
                                 .record_subresource_network(record);
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                request.failed_timing(),
+                            );
                             crate::network_host::fail_event_source_connection(
                                 scope,
                                 event_source,
@@ -243,6 +250,15 @@ impl ScriptVm {
                             );
                         } else {
                             let head = response.head();
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                request.completed_timing(
+                                    &pending,
+                                    &head,
+                                    response.body_bytes().len(),
+                                    None,
+                                ),
+                            );
                             if let Some(handle) = request_handle {
                                 context_host
                                     .borrow_mut()

@@ -842,7 +842,7 @@ impl PageScriptHost {
         &mut self,
         execution_context: super::WindowExecutionContextBinding,
         resource_loader: &crate::network::context::DocumentResourceLoader,
-        event_source: v8::Global<v8::Object>,
+        event_source: crate::types::PendingWindowEventSource,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         network_partition_key: Option<String>,
@@ -1755,12 +1755,12 @@ impl PageScriptHost {
             .streaming_subresource_fetches
             .values_mut()
             .find(|state| state.body_source_id == body_source_id)?;
-        let PendingSubresourceContinuation::EventSource(event_source) = &state.pending.continuation
+        let PendingSubresourceContinuation::EventSource(request) = &state.pending.continuation
         else {
             return None;
         };
         let context = v8::Local::new(scope, state.pending.execution_context.context_global()?);
-        let event_source = v8::Local::new(scope, event_source);
+        let event_source = v8::Local::new(scope, &request.event_source);
         let parser = state.event_source_parser.as_mut()?;
         state.body_capture.append(bytes);
         let messages = parser.push(bytes);

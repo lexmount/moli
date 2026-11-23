@@ -2,6 +2,8 @@
 mod child_readiness;
 #[path = "scripts/child_script_text.rs"]
 mod child_script_text;
+#[path = "scripts/event_source_resource_timing.rs"]
+mod event_source_resource_timing;
 #[path = "scripts/integrity.rs"]
 mod integrity;
 #[path = "scripts/worker_fetch_metadata.rs"]
