@@ -109,12 +109,12 @@ impl InputPosition {
         self,
         runtime: &PageScriptHost,
         target: DomHandle,
-        sampled: Option<&PublishedFrameGeometry>,
+        fallback_sample: Option<&PublishedFrameGeometry>,
     ) -> InputEventCoordinates {
         let transform = runtime
             .dom_host()
             .owner_document_handle(target)
-            .and_then(|document| runtime.input_frame_transform(document, sampled));
+            .and_then(|document| runtime.input_frame_transform(document, fallback_sample));
         self.coordinates(transform)
     }
 }
@@ -1258,7 +1258,7 @@ impl ScriptVm {
                 .as_ref()
                 .is_some_and(|session| session.source.is_some())
         {
-            let target = surface_hit.input.map(|hit| hit.handle);
+            let target = surface_hit.target;
             let active = &mut self.active_drag_session as *mut Option<ActiveDragSession>;
             self.with_default_context_scope(|scope, runtime_ptr| {
                 let active = unsafe { &mut *active };
@@ -1287,7 +1287,7 @@ impl ScriptVm {
             return Ok(outcome);
         }
 
-        let hit_handle = surface_hit.input.map(|hit| hit.handle);
+        let hit_handle = surface_hit.target;
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
         let routed_target = self.mouse_routed_target(hit_handle, position, event_name, &prepared);
         if self.mouse_routed_frame.is_none()
@@ -2107,8 +2107,7 @@ impl ScriptVm {
                     &self._context_host.borrow(),
                     self.document_runtime.document_handle(),
                     moli_layout::LayoutPoint::new(point.x as f32, point.y as f32),
-                )?
-                .map(|hit| hit.handle),
+                )?,
                 "touchmove" if previous.is_some_and(|p| p.x != point.x || p.y != point.y) => {
                     previous.map(|p| p.target)
                 }
@@ -2214,7 +2213,7 @@ impl ScriptVm {
                     capture
                 } else {
                     observable_input_hit_test(runtime(), document, position.layout_point())?
-                        .map_or(*target, |hit| hit.handle)
+                        .unwrap_or(*target)
                 };
                 let chosen_target = capture.unwrap_or(route);
                 let Some(input_document) = InputDocument::for_target(runtime(), chosen_target)
@@ -2376,12 +2375,11 @@ impl ScriptVm {
                 .map(|()| input_dispatch_outcome(true));
             return self.finish_input_event_dispatch_turn(result);
         }
-        let hit = observable_input_hit_test(
+        let target = observable_input_hit_test(
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
             moli_layout::LayoutPoint::new(x as f32, y as f32),
         )?;
-        let target = hit.map(|hit| hit.handle);
         let position = InputPosition::headless(x, y);
         let sampled = self._context_host.borrow().published_frame_geometry();
         let drag_input = DragInput {

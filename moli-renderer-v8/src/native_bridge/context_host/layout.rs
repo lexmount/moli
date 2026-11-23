@@ -33,6 +33,8 @@ pub(crate) enum LayoutInputChange {
 }
 
 struct FrameLayoutPublication {
+    // An absent entry leaves the prior viewport alone. A visited frame with
+    // no box has an explicit None so publication can apply the layout policy.
     content_boxes: HashMap<DomHandle, Option<LayoutRect>>,
     #[cfg(feature = "devtools")]
     geometry: PublishedFrameGeometry,
@@ -84,10 +86,12 @@ impl FrameLayoutPublication {
                 .map(|(parent, child)| child.concatenate(parent))
                 .filter(|transform| transform.is_finite());
             #[cfg(feature = "devtools")]
-            if let Some(owner) = host.current_window_document_task_target_for_dispatch_scope(
-                super::OwnerDispatchScope::Child(frame),
-            ) {
-                self.geometry.insert(child_document, owner, child_transform);
+            if let Some(transform) = child_transform
+                && let Some(owner) = host.current_window_document_task_target_for_dispatch_scope(
+                    super::OwnerDispatchScope::Child(frame),
+                )
+            {
+                self.geometry.insert(child_document, owner, transform);
             }
             if let Some(child_tree) = child_tree {
                 self.collect(
@@ -647,17 +651,18 @@ impl PageScriptHost {
     pub(crate) fn input_frame_transform(
         &self,
         document: DomHandle,
-        sampled: Option<&PublishedFrameGeometry>,
+        fallback_sample: Option<&PublishedFrameGeometry>,
     ) -> Option<LayoutTransform2D> {
         if document == self.document_handle() || !self.layout_policy().uses_real_layout() {
             return Some(LayoutTransform2D::IDENTITY);
         }
         let state = self.document_layout_state.borrow();
-        state
+        // A current publication is authoritative even when the frame has no transform.
+        let publication = state
             .frame_geometry()
             .map(std::rc::Rc::as_ref)
-            .or(sampled)?
-            .root_to_viewport(self, document)
+            .or(fallback_sample)?;
+        publication.root_to_viewport(self, document)
     }
 
     pub(crate) fn answer_layout_for_document(
