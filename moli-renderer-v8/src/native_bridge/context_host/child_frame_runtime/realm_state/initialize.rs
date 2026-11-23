@@ -6,8 +6,8 @@ use super::{
 };
 use crate::{
     context_bootstrap::{
-        WINDOW_NAME_SLOT, bind_current_child_window_document, bind_window_navigator_identity_seed,
-        bind_window_performance_seed, install_navigation_bootstrap_entry_for_holder,
+        WINDOW_NAME_SLOT, bind_current_child_window_document, bind_window_document_performance,
+        bind_window_navigator_identity_seed, install_navigation_bootstrap_entry_for_holder,
         reset_window_location_history_navigation_runtime_state, set_window_origin_runtime_state,
         sync_window_location_history_navigation_runtime_surface,
     },
@@ -53,11 +53,11 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn initialize_ch
     bind_frame_element(host, scope, global, init.handle);
     bind_navigation(scope, global, &snapshot)?;
     set_window_origin_runtime_state(scope, global, &snapshot.origin)?;
-    bind_window_performance_seed(
+    bind_window_document_performance(
         scope,
         global,
         &snapshot.navigation_type,
-        snapshot.performance_time_origin,
+        snapshot.performance_timing,
     )?;
     let document = host
         .child_browsing_context_document_wrapper(scope, init.handle)
@@ -110,11 +110,11 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn rebind_child_
     bind_frame_element(host, scope, global, rebind.handle);
     bind_navigation(scope, global, &snapshot)?;
     set_window_origin_runtime_state(scope, global, &snapshot.origin)?;
-    bind_window_performance_seed(
+    bind_window_document_performance(
         scope,
         global,
         &snapshot.navigation_type,
-        snapshot.performance_time_origin,
+        snapshot.performance_timing,
     )?;
     bind_materialized_child_window_indexed_db_factory(scope, global, rebind.handle);
     let document = host
