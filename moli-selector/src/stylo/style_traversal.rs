@@ -1882,6 +1882,13 @@ impl<'a> TNode for StyleNode<'a> {
     }
 
     fn traversal_parent(&self) -> Option<Self::ConcreteElement> {
+        if let Some(slot) = self.host().assigned_slot_for_node(self.handle()) {
+            return StyleElement::from_handle_in_document(
+                self.style_state(),
+                self.document(),
+                slot,
+            );
+        }
         let parent = self.parent_node()?;
         if let Some(element) = parent.as_element() {
             return Some(element);
@@ -1952,16 +1959,25 @@ impl<'a> TElement for StyleElement<'a> {
         StyleNode(self.0, PhantomData)
     }
 
-    fn inheritance_parent(&self) -> Option<Self> {
-        // Shadow-tree roots inherit from their host. Keep this separate from
-        // the selector parent, which must not cross a ShadowRoot boundary.
-        self.traversal_parent()
-    }
-
     fn traversal_children(&self) -> LayoutIterator<Self::TraversalChildrenIterator> {
-        let children = self
-            .host()
-            .child_handles(self.handle())
+        let mut child_parent = self.handle();
+        let children = if self.element().is_html_element("slot") {
+            let assigned = self
+                .host()
+                .assigned_nodes_for_slot_with_options(self.handle(), false);
+            if assigned.is_empty() {
+                self.host().child_handles(child_parent).collect()
+            } else {
+                assigned
+            }
+        } else {
+            if let Some(shadow_root) = self.host().shadow_root_handle(self.handle()) {
+                child_parent = shadow_root;
+            }
+            self.host().child_handles(child_parent).collect()
+        };
+        let children = children
+            .into_iter()
             .map(|handle| {
                 StyleNode(
                     self.style_state().node_data(handle, self.document()),
@@ -1970,6 +1986,10 @@ impl<'a> TElement for StyleElement<'a> {
             })
             .collect::<Vec<_>>();
         LayoutIterator(children.into_iter())
+    }
+
+    fn inheritance_parent(&self) -> Option<Self> {
+        self.as_node().traversal_parent()
     }
 
     fn is_html_element(&self) -> bool {
