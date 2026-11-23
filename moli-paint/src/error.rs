@@ -47,7 +47,7 @@ pub enum PaintError {
         required_bytes: usize,
         max_bytes: usize,
     },
-    /// The backend returned a buffer with an unexpected length.
+    /// The buffer length does not match the raster dimensions.
     UnexpectedBufferLength {
         /// Checked expected byte length.
         expected: usize,
@@ -115,7 +115,7 @@ impl fmt::Display for PaintError {
             ),
             Self::UnexpectedBufferLength { expected, actual } => write!(
                 formatter,
-                "raster backend returned {actual} bytes, expected {expected}"
+                "raster buffer has {actual} bytes, expected {expected}"
             ),
             Self::LayerStackUnderflow { fragment_index } => write!(
                 formatter,
