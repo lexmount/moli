@@ -4,11 +4,13 @@ use gpui::{
     App, Context, Entity, FontWeight, MouseButton, Render, ScrollHandle, SharedString,
     Subscription, Window, actions, div, prelude::*, px,
 };
+use moli_core::page::RendererPopupDisposition;
+use tokio::sync::mpsc;
 
 use crate::{
     address::{Address, AddressEvent},
     download_page::{self, DownloadsPage},
-    host::{BrowserHost, TabCommand, TabConnection, TabState},
+    host::{BrowserEvent, BrowserHost, TabCommand, TabConnection, TabState},
     icons::{Icon, glyph},
     palette::Palette,
     surface::MoliSurface,
@@ -116,6 +118,7 @@ pub struct BrowserWindow {
 impl BrowserWindow {
     pub fn new(
         host: Rc<BrowserHost>,
+        mut host_events: mpsc::UnboundedReceiver<BrowserEvent>,
         initial_url: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -124,6 +127,21 @@ impl BrowserWindow {
         let address_updates = cx.observe(&address, |_, _, cx| cx.notify());
         let surface = cx.new(|cx| MoliSurface::new(window, cx));
         let downloads = cx.new(|cx| DownloadsPage::new(host.downloads.clone(), cx));
+        cx.spawn_in(window, async move |view, cx| {
+            while let Some(event) = host_events.recv().await {
+                if cx
+                    .update(|window, cx| {
+                        view.update(cx, |browser, cx| {
+                            browser.receive_host_event(event, window, cx)
+                        })
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         let address_events =
             cx.subscribe_in(
                 &address,
@@ -177,6 +195,81 @@ impl BrowserWindow {
                 return;
             }
         };
+        self.attach_tab(
+            connection,
+            RendererPopupDisposition::Foreground,
+            url.is_some(),
+            window,
+            cx,
+        );
+        if let Some(url) = url {
+            self.open_address(&url, window, cx);
+        }
+    }
+
+    fn receive_host_event(
+        &mut self,
+        event: BrowserEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            BrowserEvent::Popup(popup) => {
+                if popup
+                    .auxiliary_window
+                    .as_ref()
+                    .is_some_and(|window| window.is_closed())
+                {
+                    return;
+                }
+                let existing = popup.browsing_context_name.as_ref().and_then(|name| {
+                    self.tabs.iter().find_map(|tab| {
+                        let connection = tab.connection.as_ref()?;
+                        (connection.window_identity.name() == name).then_some((tab.id, connection))
+                    })
+                });
+                if let Some((id, connection)) = existing {
+                    if popup.navigation_requested {
+                        let _ = connection.commands.send(TabCommand::Navigate(Some(popup.url)));
+                        if popup.disposition != RendererPopupDisposition::Background {
+                            self.select_tab(id, window, cx);
+                        }
+                    }
+                } else if popup.pending_auxiliary_page.is_some() {
+                    let disposition = popup.disposition;
+                    match self.host.open_popup(popup) {
+                        Ok(connection) => {
+                            self.attach_tab(connection, disposition, true, window, cx)
+                        }
+                        Err(error) => eprintln!("Could not open auxiliary tab: {error:#}"),
+                    }
+                }
+            }
+            BrowserEvent::ClosePopup(popup) => {
+                if let Some(tab) = self
+                    .tabs
+                    .iter()
+                    .find(|tab| {
+                        tab.connection
+                            .as_ref()
+                            .and_then(|connection| connection.window_identity.auxiliary_window())
+                            == Some(&popup)
+                    })
+                {
+                    self.close_tab(tab.id, window, cx);
+                }
+            }
+        }
+    }
+
+    fn attach_tab(
+        &mut self,
+        connection: TabConnection,
+        disposition: RendererPopupDisposition,
+        page_focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let id = self.next_id;
         self.next_id += 1;
         let mut state = connection.state.clone();
@@ -223,11 +316,12 @@ impl BrowserWindow {
             connection: Some(connection),
             state: TabState::default(),
             zoom: 1.,
-            page_focus: url.is_some(),
+            page_focus,
         });
-        self.select_tab(id, window, cx);
-        if let Some(url) = url {
-            self.open_address(&url, window, cx);
+        if disposition != RendererPopupDisposition::Background {
+            self.select_tab(id, window, cx);
+        } else {
+            cx.notify();
         }
     }
 
@@ -288,6 +382,13 @@ impl BrowserWindow {
             return;
         };
         let tab = self.tabs.remove(index);
+        if let Some(auxiliary) = tab
+            .connection
+            .as_ref()
+            .and_then(|connection| connection.window_identity.auxiliary_window())
+        {
+            auxiliary.close();
+        }
         self.closed.push(tab.url().to_owned());
         if self.closed.len() > 20 {
             self.closed.remove(0);

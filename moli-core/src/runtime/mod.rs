@@ -134,6 +134,12 @@ struct BrowserLifetimeOwner {
     partition: Arc<StoragePartitionState>,
 }
 
+#[derive(Default)]
+struct StaticPageCreation<'a> {
+    window_identity: moli_renderer_v8::RendererPageWindowIdentity,
+    popup: Option<&'a moli_renderer_v8::RendererPopupActivationParts>,
+}
+
 impl std::fmt::Debug for Browser {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Browser")
@@ -346,6 +352,58 @@ impl Browser {
         sender: crate::RendererOutputTransportSender,
     ) {
         self.js_runtime.set_renderer_output_transport_sender(sender);
+    }
+
+    /// Subscribes a desktop browser to auxiliary browsing-context and download actions.
+    #[cfg(feature = "molio")]
+    pub fn subscribe_viewport_actions(&self) -> crate::RendererOutputTransportReceiver {
+        let (sender, receiver) = crate::renderer_output_transport_channel();
+        self.set_renderer_output_transport_sender(sender.with_desktop_downloads());
+        self.js_runtime
+            .browser_context_runtime()
+            .delegate_auxiliary_document_responses_to_browser();
+        receiver
+    }
+
+    /// Creates an empty desktop tab or adopts the renderer's already staged
+    /// auxiliary Page, preserving its Window, storage and opener relationship.
+    #[cfg(feature = "molio")]
+    pub async fn open_viewport_page(
+        &self,
+        window_identity: moli_renderer_v8::RendererPageWindowIdentity,
+        popup: Option<&moli_renderer_v8::RendererPopupActivationParts>,
+    ) -> Result<Page> {
+        let mut url = Url::parse("about:blank").expect("valid about:blank URL");
+        if let Some(popup) = popup {
+            let pending = popup
+                .pending_auxiliary_page
+                .as_ref()
+                .context("popup has no staged renderer Page")?;
+            anyhow::ensure!(
+                pending
+                    .renderer_runtime()
+                    .browser_context_runtime()
+                    .shares_state_with(&self.js_runtime.browser_context_runtime()),
+                "popup belongs to another browser context"
+            );
+            let target = Url::parse(&popup.url)?;
+            if is_about_blank_url(&target) {
+                url = target;
+            }
+        }
+        self.materialize_static_html_page(
+            url.as_str(),
+            url.clone(),
+            PageVmInitStage::DomContentLoaded,
+            RendererReplyBoundary::Stage,
+            None,
+            String::new(),
+            StaticPageCreation {
+                window_identity,
+                popup,
+            },
+        )
+        .await
     }
 
     pub fn session(&self) -> Session {
@@ -577,6 +635,7 @@ impl Browser {
                         reply_boundary,
                         lifecycle_decider,
                         String::new(),
+                        StaticPageCreation::default(),
                     ),
                 )
                 .await
@@ -934,6 +993,7 @@ impl Browser {
                     RendererReplyBoundary::Stage,
                     None,
                     String::new(),
+                    StaticPageCreation::default(),
                 )
                 .await;
         }
@@ -1004,6 +1064,7 @@ impl Browser {
                     RendererReplyBoundary::Stage,
                     None,
                     String::new(),
+                    StaticPageCreation::default(),
                 )
                 .await;
         }
@@ -1069,6 +1130,7 @@ impl Browser {
                     reply_boundary,
                     None,
                     String::new(),
+                    StaticPageCreation::default(),
                 )
                 .await
                 .map(FetchedDocument::Page);
@@ -1196,6 +1258,7 @@ impl Browser {
         reply_boundary: RendererReplyBoundary,
         lifecycle_decider: Option<RendererLifecycleDecider>,
         response_body: String,
+        creation: StaticPageCreation<'_>,
     ) -> Result<Page> {
         let started = Instant::now();
         debug!(
@@ -1218,8 +1281,22 @@ impl Browser {
                 bidi_channel_handoffs: Vec::new(),
             })
             .collect::<Vec<_>>();
-        let renderer_owner = self.js_runtime.renderer_owner_handle();
-        let mut create_page_request = renderer_owner.build_create_html_page_request(
+        let pending = creation
+            .popup
+            .and_then(|popup| popup.pending_auxiliary_page.as_ref());
+        let renderer =
+            pending.map_or_else(|| self.js_runtime.clone(), |page| page.renderer_runtime());
+        let renderer_owner = renderer.renderer_owner_handle();
+        let reservation = pending.map_or_else(
+            || renderer.reserve_page_for_creation(),
+            |page| page.page_reservation(),
+        );
+        let session_storage = creation
+            .popup
+            .and_then(|popup| popup.session_storage_store.clone())
+            .unwrap_or_else(|| self.partition.session_storage_store());
+        let mut create_page_request = renderer_owner.build_create_html_page_request_with_env(
+            reservation,
             requested_url.clone(),
             None,
             false,
@@ -1229,28 +1306,33 @@ impl Browser {
             &self.resource_request_client(),
             moli_renderer_v8::RendererWebStorageHandles::new(
                 self.partition.web_storage_store(),
-                self.partition.session_storage_store(),
+                session_storage,
             ),
             requested_url,
             response_body,
-            document_start_scripts,
-            vec![],
-            vec![],
-            Default::default(),
-            false,
-            Vec::new(),
-            crate::page::SubresourceInterceptionClasses::NONE,
             stage,
+            moli_renderer_v8::RendererDocumentOptions {
+                window_identity: creation.window_identity,
+                document_start_scripts,
+                document_settings: moli_page_types::DocumentSettings {
+                    script_execution_disabled: self.config.script_execution_disabled(),
+                    debugger_enabled: self.config.debugger_enabled(),
+                    ..Default::default()
+                },
+                indexed_db_manager: Some(self.partition.weak_indexed_db_manager()),
+                storage_bucket_store: Some(self.partition.storage_bucket_store()),
+                ..Default::default()
+            },
         );
-        create_page_request
-            .document_settings
-            .script_execution_disabled = self.config.script_execution_disabled();
         create_page_request.wpt_extensions_enabled = self.config.wpt_extensions_enabled();
-        create_page_request.document_settings.debugger_enabled = self.config.debugger_enabled();
         create_page_request.reply_boundary = reply_boundary;
         create_page_request.lifecycle_decider = lifecycle_decider;
-        create_page_request.indexed_db_manager = Some(self.partition.weak_indexed_db_manager());
-        create_page_request.storage_bucket_store = Some(self.partition.storage_bucket_store());
+        create_page_request.top_level_storage_key = creation
+            .popup
+            .and_then(|popup| popup.initial_empty_document_storage_key.clone());
+        if let Some(pending) = pending {
+            pending.bind_protocol_output();
+        }
         let reply = renderer_owner
             .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
             .await?;

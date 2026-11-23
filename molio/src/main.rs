@@ -37,7 +37,8 @@ fn main() -> anyhow::Result<()> {
             _ => anyhow::bail!("unexpected argument {argument}"),
         }
     }
-    let host = Rc::new(BrowserHost::start(profile)?);
+    let (host, host_events) = BrowserHost::start(profile)?;
+    let host = Rc::new(host);
     gpui_platform::application().run(move |cx: &mut App| {
         browser::bind_keys(cx);
         let quitting_host = Rc::clone(&host);
@@ -65,7 +66,9 @@ fn main() -> anyhow::Result<()> {
                 app_id: Some("org.lexmount.molio".into()),
                 ..Default::default()
             },
-            move |window, cx| cx.new(|cx| BrowserWindow::new(host, initial, window, cx)),
+            move |window, cx| {
+                cx.new(|cx| BrowserWindow::new(host, host_events, initial, window, cx))
+            },
         )
         .expect("open browser window");
         cx.activate(true);

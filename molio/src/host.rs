@@ -8,13 +8,13 @@ use moli_core::{
     RendererOutputTransportMessage, RendererOwnerAction, RendererViewportEdit,
     RendererViewportEditor, RendererViewportNavigation, RendererViewportWheelInput,
     page::{
-        BufferedViewportFrames, CompletedPageCommand, Page, PageInputExt, RendererDraggedFile,
-        RendererInputDispatchOutcome, RendererPointerEventProperties, ViewportBuffers,
+        BufferedViewportFrames, CompletedPageCommand, Page, PageInputExt, RendererAuxiliaryWindow,
+        RendererDraggedFile, RendererInputDispatchOutcome, RendererPageWindowIdentity,
+        RendererPointerEventProperties, RendererPopupActivationParts, ViewportBuffers,
         ViewportOutput, ViewportUpdate,
     },
     protocol_types::{DocumentActivity, ViewportSurface},
-    renderer_output_transport_channel,
-    runtime::{Browser, BrowserConfig, RenderedDomWaitUntil},
+    runtime::{Browser, BrowserConfig},
 };
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -29,10 +29,16 @@ pub struct BrowserHost {
     worker: RefCell<Option<(oneshot::Sender<()>, thread::JoinHandle<()>)>>,
 }
 
+pub enum BrowserEvent {
+    Popup(Box<RendererPopupActivationParts>),
+    ClosePopup(RendererAuxiliaryWindow),
+}
+
 pub struct TabConnection {
     pub commands: mpsc::UnboundedSender<TabCommand>,
     pub state: watch::Receiver<TabState>,
     pub viewport: Arc<ViewportOutput>,
+    pub window_identity: RendererPageWindowIdentity,
 }
 
 #[derive(Clone, Default)]
@@ -108,18 +114,26 @@ struct OpenTab {
     commands: mpsc::UnboundedReceiver<TabCommand>,
     state: watch::Sender<TabState>,
     viewport: Arc<ViewportOutput>,
+    window_identity: RendererPageWindowIdentity,
+    popup: Option<Box<RendererPopupActivationParts>>,
 }
 
 impl BrowserHost {
-    pub fn start(profile: Option<PathBuf>) -> Result<Self> {
+    pub fn start(
+        profile: Option<PathBuf>,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<BrowserEvent>)> {
         let directory = dirs::download_dir()
             .or_else(|| dirs::home_dir().map(|home| home.join("Downloads")))
             .unwrap_or_else(|| std::env::temp_dir().join("molio-downloads"));
         Self::start_with_download_directory(profile, directory)
     }
 
-    fn start_with_download_directory(profile: Option<PathBuf>, directory: PathBuf) -> Result<Self> {
+    fn start_with_download_directory(
+        profile: Option<PathBuf>,
+        directory: PathBuf,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<BrowserEvent>)> {
         let (sender, mut requests) = mpsc::unbounded_channel::<OpenTab>();
+        let (events, event_rx) = mpsc::unbounded_channel();
         let (client, mut download_commands, download_entries) =
             DownloadClient::channel(directory.clone());
         let (shutdown, mut stopping) = oneshot::channel();
@@ -159,8 +173,7 @@ impl BrowserHost {
                             return;
                         }
                     };
-                    let (output, mut renderer_output) = renderer_output_transport_channel();
-                    browser.set_renderer_output_transport_sender(output.with_desktop_downloads());
+                    let mut renderer_output = browser.subscribe_viewport_actions();
                     let downloads = Downloads::new(
                         browser.resource_request_client(), download_entries, directory, profile.as_deref(),
                     );
@@ -177,8 +190,17 @@ impl BrowserHost {
                             message = renderer_output.recv(), if !renderer_output.is_closed() => {
                                 if let Some(RendererOutputTransportMessage::Publication(output)) = message {
                                     for record in output.into_records() {
-                                        if let RendererOutputItem::OwnerAction(RendererOwnerAction::Download(activation)) = record.into_parts().1 {
-                                            downloads.start(activation);
+                                        match record.into_parts().1 {
+                                            RendererOutputItem::OwnerAction(RendererOwnerAction::Download(activation)) => {
+                                                downloads.start(activation);
+                                            }
+                                            RendererOutputItem::OwnerAction(RendererOwnerAction::Popup(activation)) => {
+                                                let _ = events.send(BrowserEvent::Popup(Box::new(activation.into_parts())));
+                                            }
+                                            RendererOutputItem::OwnerAction(RendererOwnerAction::CloseAuxiliaryWindow(window)) => {
+                                                let _ = events.send(BrowserEvent::ClosePopup(window));
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
@@ -194,11 +216,11 @@ impl BrowserHost {
                 });
             })
             .context("start browser host thread")?;
-        Ok(Self {
+        Ok((Self {
             tabs: sender,
             downloads: client,
             worker: RefCell::new(Some((shutdown, worker))),
-        })
+        }, event_rx))
     }
 
     pub fn shutdown(&self) {
@@ -212,6 +234,23 @@ impl BrowserHost {
     }
 
     pub fn open_tab(&self) -> Result<TabConnection> {
+        self.open_viewport(RendererPageWindowIdentity::default(), None)
+    }
+
+    pub fn open_popup(&self, popup: Box<RendererPopupActivationParts>) -> Result<TabConnection> {
+        let name = popup
+            .browsing_context_name
+            .clone()
+            .context("popup has no Window identity")?;
+        let identity = RendererPageWindowIdentity::new(name, popup.auxiliary_window.clone());
+        self.open_viewport(identity, Some(popup))
+    }
+
+    fn open_viewport(
+        &self,
+        window_identity: RendererPageWindowIdentity,
+        popup: Option<Box<RendererPopupActivationParts>>,
+    ) -> Result<TabConnection> {
         let (commands, request_rx) = mpsc::unbounded_channel();
         let (state_tx, state) = watch::channel(TabState::default());
         let viewport = Arc::new(ViewportOutput::default());
@@ -220,12 +259,15 @@ impl BrowserHost {
                 commands: request_rx,
                 state: state_tx,
                 viewport: viewport.clone(),
+                window_identity: window_identity.clone(),
+                popup,
             })
             .map_err(|_| anyhow::anyhow!("browser host is unavailable"))?;
         Ok(TabConnection {
             commands,
             state,
             viewport,
+            window_identity,
         })
     }
 }
@@ -269,13 +311,14 @@ fn start_favicon_load(
 }
 
 async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
-    let initial = browser.fetch_allow_http_error_with_wait_until(
-        "about:blank",
-        RenderedDomWaitUntil::DomContentLoaded,
+    let initial = tokio::time::timeout(
         Duration::from_secs(20),
-    );
-    tokio::pin!(initial);
-    let mut page = match initial.await {
+        browser.open_viewport_page(tab.window_identity, tab.popup.as_deref()),
+    )
+    .await
+    .context("opening the tab timed out")
+    .and_then(|result| result);
+    let mut page = match initial {
         Ok(page) => page,
         Err(error) => {
             tab.state
@@ -299,6 +342,18 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
         }
     };
     navigation_updates.mark_changed();
+    if let Some(popup) = tab.popup.take()
+        && popup.navigation_requested
+        && popup.url != page.final_url().as_str()
+        && !tab.commands.is_closed()
+    {
+        match start_navigation(&page, &tab.state, Some(popup.url)) {
+            Ok(task) => navigation = Some(task),
+            Err(error) => tab
+                .state
+                .send_modify(|state| state.error = Some(format!("{error:#}"))),
+        }
+    }
 
     loop {
         tokio::select! {
@@ -387,18 +442,8 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                         if let Some(previous) = navigation.take() {
                             previous.abort();
                         }
-                        match page.start_viewport_navigation(target.clone()) {
-                            Ok(pending) => {
-                                tab.state.send_modify(|state| {
-                                    state.loading = true;
-                                    state.error = None;
-                                    state.pending_url = target;
-                                });
-                                navigation = Some(tokio::task::spawn_local(pending.wait()));
-                                Ok(())
-                            }
-                            Err(error) => Err(error),
-                        }
+                        start_navigation(&page, &tab.state, target)
+                            .map(|task| navigation = Some(task))
                     }
                     TabCommand::History(delta) => {
                         tab.state.send_modify(|state| state.error = None);
@@ -523,6 +568,20 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
     if let Some(task) = favicon_task {
         task.abort();
     }
+}
+
+fn start_navigation(
+    page: &Page,
+    state: &watch::Sender<TabState>,
+    target: Option<String>,
+) -> Result<PendingNavigation> {
+    let pending = page.start_viewport_navigation(target.clone())?;
+    state.send_modify(|state| {
+        state.loading = true;
+        state.error = None;
+        state.pending_url = target;
+    });
+    Ok(tokio::task::spawn_local(pending.wait()))
 }
 
 async fn drop_files(
@@ -672,7 +731,8 @@ mod tests {
     #[tokio::test]
     async fn large_data_download_keeps_cross_tab_download_delivery_available() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let (host, _events) =
+            BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
         let mut entries = host.downloads.entries.clone();
         let data_tab = host.open_tab()?;
         navigate(
@@ -712,7 +772,8 @@ mod tests {
     #[tokio::test]
     async fn http_downloads_use_the_effective_link_referrer_policy() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let (host, _events) =
+            BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
         let mut entries = host.downloads.entries.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let origin = format!("http://{}", listener.local_addr()?);
@@ -771,7 +832,8 @@ mod tests {
     #[tokio::test]
     async fn background_navigation_download_works_without_a_viewport_subscription() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let (host, _events) =
+            BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
         let mut tab = host.open_tab()?;
         let mut entries = host.downloads.entries.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -829,7 +891,8 @@ mod tests {
     #[tokio::test]
     async fn attachment_download_survives_tab_close_and_blob_does_not_overwrite_it() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let (host, _events) =
+            BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
         let tab = host.open_tab()?;
         let mut entries = host.downloads.entries.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -906,7 +969,8 @@ mod tests {
     #[tokio::test]
     async fn canceling_a_download_removes_the_partial_file() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let host = BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+        let (host, _events) =
+            BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
         let (_tab, entry, server) = start_stalled_download(&host).await?;
         let mut entries = host.downloads.entries.clone();
         host.downloads.send(DownloadCommand::Cancel(entry.id));
@@ -928,7 +992,7 @@ mod tests {
         let root = tempfile::tempdir()?;
         let profile = root.path().join("profile");
         let directory = root.path().join("downloads");
-        let host =
+        let (host, _events) =
             BrowserHost::start_with_download_directory(Some(profile.clone()), directory.clone())?;
         let finished_tab = host.open_tab()?;
         let mut entries = host.downloads.entries.clone();
@@ -951,7 +1015,8 @@ mod tests {
         );
         assert_eq!(fs::read(directory.join("done.txt"))?, b"done");
         assert_eq!(fs::read_dir(&directory)?.count(), 1);
-        let restored = BrowserHost::start_with_download_directory(Some(profile), directory)?;
+        let (restored, _restored_events) =
+            BrowserHost::start_with_download_directory(Some(profile), directory)?;
         let mut entries = restored.downloads.entries.clone();
         let canceled = download_matching(&mut entries, |entry| entry.name == "slow.dat").await?;
         assert!(matches!(canceled.state, DownloadState::Canceled));
@@ -1015,7 +1080,7 @@ mod tests {
 
     #[tokio::test]
     async fn tabs_keep_their_documents_and_present_bgra_at_the_requested_scale() -> Result<()> {
-        let host = BrowserHost::start(None)?;
+        let (host, _events) = BrowserHost::start(None)?;
         let (mut red, mut blue) = (host.open_tab()?, host.open_tab()?);
         red.commands
             .send(TabCommand::Navigate(Some(
@@ -1097,7 +1162,7 @@ mod tests {
             }
         });
 
-        let host = BrowserHost::start(None)?;
+        let (host, _events) = BrowserHost::start(None)?;
         let mut tab = host.open_tab()?;
 
         for (path, title, pixel) in [
@@ -1184,6 +1249,67 @@ mod tests {
         )
         .await??;
         assert!(state.favicon.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn blank_target_click_adopts_a_separate_tab() -> Result<()> {
+        let (host, mut events) = BrowserHost::start(None)?;
+        let mut opener = host.open_tab()?;
+        opener.commands.send(TabCommand::Navigate(Some(
+            "data:text/html,<title>Videos</title><style>html{background:red}body{margin:0}a{display:block;width:36px;height:24px}</style><a target=_blank href='about:blank%23video'>Video</a>".into(),
+        ))).map_err(|_| anyhow::anyhow!("load opener"))?;
+        let original = show_tab(&mut opener, "Videos", 1, [0, 0, 255, 255]).await?;
+
+        for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+            opener
+                .commands
+                .send(TabCommand::Pointer(PointerInput {
+                    event,
+                    position: (12., 10.),
+                    button: 0,
+                    buttons,
+                    click_count: 1,
+                    delta: (0., 0.),
+                    modifiers: 0,
+                }))
+                .map_err(|_| anyhow::anyhow!("click video"))?;
+        }
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await?
+            .context("browser host closed before the click opened a tab")?;
+        let BrowserEvent::Popup(popup) = event else {
+            anyhow::bail!("expected a popup action from the click")
+        };
+        assert_eq!(popup.url, "about:blank#video");
+        assert!(matches!(
+            popup.source,
+            moli_core::page::RendererPopupActivationSource::Window {
+                exposes_opener: false,
+                ..
+            }
+        ));
+        let staged_page = popup
+            .pending_auxiliary_page
+            .as_ref()
+            .context("renderer staged the auxiliary Page")?
+            .page_reservation()
+            .page_id();
+        let mut child = host.open_popup(popup)?;
+        let child_document = show_tab(&mut child, "", 2, [255, 255, 255, 255]).await?;
+        assert_eq!(child_document.document.page_id, staged_page);
+        assert_eq!(
+            child
+                .state
+                .borrow()
+                .navigation
+                .as_ref()
+                .unwrap()
+                .url
+                .as_str(),
+            "about:blank#video"
+        );
+        assert_eq!(opener.state.borrow().document, Some(original));
         Ok(())
     }
 }
