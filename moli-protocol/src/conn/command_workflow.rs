@@ -259,14 +259,8 @@ impl CommandWorkflowContext {
         let plan = self
             .complete(CommandOutputPlan::default())
             .finish(connection, &mut local);
-        let (events, boundary, after_boundary) = local.take_renderer_fenced_protocol_events();
-        target.append_renderer_fenced_protocol_events(events, boundary, after_boundary);
-        super::dispatch::append_command_output_plan(&mut Vec::new(), target, plan, None, None);
-        target.extend_post_response_events(local.take_post_response_events());
-        for permit in local.take_runtime_output_projection_permits() {
-            target.retain_runtime_output_projection_permit(permit);
-        }
-        target.extend_renderer_output_dependencies(local.take_renderer_output_dependencies());
+        super::dispatch::append_command_output_plan(&mut Vec::new(), &mut local, plan, None, None);
+        target.append_projection_output(local);
     }
 
     /// Borrow the command context only for this synchronous state operation.
@@ -307,13 +301,6 @@ impl CommandWorkflowContext {
                 .retained_output
                 .extend(plan.into_composite_command_prefix());
         }
-    }
-
-    pub(crate) fn has_retained_terminal(&self) -> bool {
-        self.payload()
-            .terminal
-            .as_ref()
-            .is_some_and(|plan| plan.command_status().is_some())
     }
 
     /// Keep completed projection slots in their original event order before
@@ -542,6 +529,46 @@ mod tests {
     use super::*;
     use crate::conn::{BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn projected_deferred_events_survive_the_original_commands_recovery() {
+        let mut connection = CdpConnection::new();
+        let mut actor_context = CommandDispatchContext::default();
+        let mut local = CommandDispatchContext::default();
+        local.defer_command_events(vec![BackgroundProtocolEvent::page_file_chooser_opened(
+            None,
+            "FRAME-projection",
+            "selectSingle",
+            42,
+            Some("NODE-projection".into()),
+        )]);
+        actor_context.append_projection_output(local);
+        let (task, recovery) =
+            CommandWorkflowContext::take_from(&mut actor_context, Some(97), None);
+        drop(task);
+        let completed = recovery
+            .recover(CommandOutputPlan::error(-32000, "cancelled"))
+            .wait()
+            .await;
+        let plan = completed.finish(&mut connection, &mut actor_context);
+        let CdpCommandTaskStep::Complete(outcome) =
+            connection.complete_with_output_plan(&mut actor_context, plan, Some(97), None)
+        else {
+            panic!("completed projection has no pending native work");
+        };
+        let (events, _, _) = outcome.into_protocol_event_parts();
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].clone().into_protocol_message(),
+            json!({"id":97,"error":{"code":-32000,"message":"cancelled"}})
+        );
+        let (event, typed) = events[1].clone().into_parts();
+        assert_eq!(event["method"], "Page.fileChooserOpened");
+        assert!(matches!(
+            typed,
+            Some(crate::automation::AutomationEvent::PageFileChooserOpened(_))
+        ));
+    }
 
     #[tokio::test]
     async fn accepted_transport_terminal_is_durable_before_first_poll_and_after_ready_loss() {

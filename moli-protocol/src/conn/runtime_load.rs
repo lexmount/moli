@@ -215,7 +215,7 @@ pub(crate) struct InitialDocumentPageOwner {
 }
 
 pub(crate) struct PendingInitialDocumentPageBuild {
-    kind: PendingInitialDocumentPageBuildKind,
+    pub(super) kind: PendingInitialDocumentPageBuildKind,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -230,7 +230,7 @@ enum InitialDocumentBuildError {
     ReservationOwnerLost,
 }
 
-enum PendingInitialDocumentPageBuildKind {
+pub(super) enum PendingInitialDocumentPageBuildKind {
     Build {
         owner: InitialDocumentPageOwner,
         load_inputs: Box<TargetNavigationLoadInputs>,
@@ -393,7 +393,7 @@ impl PendingInitialDocumentPageBuild {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct LoadedPageCreationDiagnosticsParts {
     pub(crate) initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     pub(crate) renderer_output_predecessor: Option<RendererOutputFence>,
@@ -1904,7 +1904,16 @@ impl CdpConnection {
             .flatten()
     }
 
-    pub(crate) fn start_initial_document_page_ensure_for_owner(
+    /// Tests of pending adoption need the raw build without its Target installer.
+    #[cfg(test)]
+    pub(crate) fn start_initial_document_page_build_for_test(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Result<Option<PendingInitialDocumentPageBuild>> {
+        self.start_initial_document_page_build_for_owner(owner)
+    }
+
+    pub(super) fn start_initial_document_page_build_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Result<Option<PendingInitialDocumentPageBuild>> {
@@ -1930,14 +1939,6 @@ impl CdpConnection {
         }
 
         self.start_initial_empty_document_page_build_for_owner(owner)
-    }
-
-    pub(crate) fn runtime_session_owner_target_is_initial_about_blank(
-        &self,
-        session_id: Option<&str>,
-    ) -> bool {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.runtime_session_owner_target_is_initial_about_blank_for_owner(&owner)
     }
 
     fn runtime_session_owner_target_is_initial_about_blank_for_owner(
@@ -1975,30 +1976,6 @@ impl CdpConnection {
             return false;
         }
         true
-    }
-
-    /// Returns whether an ordinary Page/Target command may opportunistically
-    /// start the initial target-URL navigation.
-    ///
-    /// A target created with `waitForDebuggerOnStart` must remain on its
-    /// initial document until `Runtime.runIfWaitingForDebugger` has published
-    /// its terminal response.  Keeping that admission rule here prevents
-    /// commands such as `Page.enable` and `Page.createIsolatedWorld` from
-    /// racing each other into replacing the paused renderer attachment.
-    pub(crate) fn runtime_session_owner_can_start_initial_document_navigation(
-        &self,
-        session_id: Option<&str>,
-    ) -> bool {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.runtime_session_owner_can_start_initial_document_navigation_for_owner(&owner)
-    }
-
-    pub(crate) fn runtime_session_owner_can_start_initial_document_navigation_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-    ) -> bool {
-        !self.owner_target_has_waiting_for_debugger_session(owner)
-            && self.runtime_session_owner_needs_initial_document_navigation_for_owner(owner)
     }
 
     pub(crate) fn runtime_session_owner_initial_empty_document_has_replacement_url(

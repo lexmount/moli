@@ -450,7 +450,10 @@ impl TestContext {
         loop {
             match step {
                 crate::AutomationCommandTaskStep::Complete(outcome) => return *outcome,
-                crate::AutomationCommandTaskStep::Pending(pending) => {
+                crate::AutomationCommandTaskStep::Pending(mut pending) => {
+                    let public_work = pending.take_scheduler_events();
+                    self.route_direct_command_output_for_test(Vec::new(), public_work)
+                        .await;
                     let completed = self.drive_owned_wait(pending.wait()).await;
                     step = self
                         .state

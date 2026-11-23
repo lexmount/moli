@@ -2,8 +2,6 @@ use super::*;
 
 #[tokio::test]
 async fn page_subscription_changes_apply_before_initial_adoption_and_are_not_replayed() {
-    use futures_util::FutureExt as _;
-
     for reenable in [false, true] {
         let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
         ctx.with_fixture(|conn| {
@@ -25,16 +23,18 @@ async fn page_subscription_changes_apply_before_initial_adoption_and_are_not_rep
                 conn.start_parsed_command_dispatch_with_context(&command, &mut Default::default())
             })
         };
-        let CdpCommandTaskStep::Pending(enable) = start(
+        let (messages, _) = start(
             &mut ctx,
             1,
             "Page.enable",
             json!({"enableFileChooserOpenedEvent":true}),
-        ) else {
-            panic!("only the Page-dependent tail waits for adoption");
-        };
-        let mut enabled = Box::pin(enable.wait());
-        assert!(enabled.as_mut().now_or_never().is_none());
+        )
+        .into_parts();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message["id"] == 1 && message["result"] == json!({}))
+        );
         ctx.with_fixture(|conn| {
             assert_eq!(
                 conn.page_domain_enabled_for_session_owner(Some("SID-page-admission")),
@@ -46,17 +46,20 @@ async fn page_subscription_changes_apply_before_initial_adoption_and_are_not_rep
             start(&mut ctx, 2, "Page.disable", json!({})),
             CdpCommandTaskStep::Complete(_)
         ));
-        let newer_enable = reenable.then(|| {
-            let CdpCommandTaskStep::Pending(enable) = start(
+        if reenable {
+            let (messages, _) = start(
                 &mut ctx,
                 3,
                 "Page.enable",
                 json!({"enableFileChooserOpenedEvent":false}),
-            ) else {
-                panic!("a later enable joins the same initial installer");
-            };
-            enable
-        });
+            )
+            .into_parts();
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message["id"] == 3 && message["result"] == json!({}))
+            );
+        }
         let generation = ctx.with_fixture(|conn| {
             assert_eq!(
                 conn.page_domain_enabled_for_session_owner(Some("SID-page-admission")),
@@ -70,21 +73,6 @@ async fn page_subscription_changes_apply_before_initial_adoption_and_are_not_rep
                 .complete_initial_document_page_build();
             generation
         });
-        for completed in std::iter::once(enabled.await).chain(match newer_enable {
-            Some(enable) => Some(enable.wait().await),
-            None => None,
-        }) {
-            let step = ctx.with_fixture(|conn| {
-                conn.complete_command_dispatch_with_context(completed, &mut Default::default())
-            });
-            let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
-            assert!(
-                messages
-                    .iter()
-                    .any(|message| message["result"] == json!({})),
-                "{messages:?}"
-            );
-        }
         ctx.with_fixture(|conn| {
             assert_eq!(
                 conn.page_domain_enabled_for_session_owner(Some("SID-page-admission")),

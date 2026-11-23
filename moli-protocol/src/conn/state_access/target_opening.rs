@@ -10,7 +10,7 @@ use crate::domains::target::session_disposal::{LiveSessionDisposal, SessionDispo
 use crate::domains::target::{PreparedPopupNavigation, TargetCreationCommit};
 
 impl ProtocolWorkflowState<'_> {
-    pub(crate) fn prepare_attached_target_initial_navigation(
+    pub(crate) fn prepare_target_initial_navigation(
         self,
         owner: crate::conn::CommandOwnerScope,
         host: Option<crate::conn::PageTargetHostIdentity>,

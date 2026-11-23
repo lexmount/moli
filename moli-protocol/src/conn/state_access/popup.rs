@@ -1,5 +1,5 @@
 use super::ProtocolWorkflowState;
-use crate::conn::{BackgroundProtocolEvent, CommandOwnerScope, FailedInitialDocumentPageBuild};
+use crate::conn::{BackgroundProtocolEvent, CommandOwnerScope};
 
 impl ProtocolWorkflowState<'_> {
     pub(crate) fn finish_popup_navigation(
@@ -46,19 +46,12 @@ impl ProtocolWorkflowState<'_> {
                 .publish_page_target_termination_after_command_output(action, output);
         }
     }
-    pub(crate) fn fail_popup_initial_document(self, failed: FailedInitialDocumentPageBuild) {
-        let error = self
-            .connection
-            .reset_failed_initial_document_page_build_for_owner(failed);
-        tracing::debug!(%error, "failed to await popup initial document");
-    }
 
-    pub(crate) fn finish_popup_initialization(
+    pub(crate) fn fail_popup_initialization(
         self,
         owner: CommandOwnerScope,
         host: crate::conn::PageTargetHostIdentity,
         expected_page: Option<crate::conn::TargetPageResidenceIdentity>,
-        initialized: bool,
         predecessor: Option<moli_core::RendererOutputCursor>,
     ) {
         let conn = self.connection;
@@ -76,11 +69,7 @@ impl ProtocolWorkflowState<'_> {
             return;
         }
         let start = conn.scheduler_state.protocol_work_publication_mark();
-        if initialized && current_page.is_some() {
-            if let Some((_, Some(target_id))) = conn.target_owner_identity_for_owner(&owner) {
-                crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(conn, &target_id, &Default::default());
-            }
-        } else {
+        {
             let target_id = conn
                 .target_owner_identity_for_owner(&owner)
                 .and_then(|(_, target)| target);

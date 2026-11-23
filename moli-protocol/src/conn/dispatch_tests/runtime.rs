@@ -477,19 +477,14 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
     });
     let background_owner = CommandOwnerScope::for_route(background_route.clone());
     let pending_initial_document = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&background_owner)
+        conn.ensure_target_initialization(&background_owner)
             .expect("background target lifecycle ensure should start")
             .expect("fresh background target should need an initial document page build")
     });
-    let completed_initial_document = pending_initial_document
+    pending_initial_document
         .wait()
         .await
         .expect("background initial document page build should complete");
-    (completed_initial_document)
-        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
-        .await
-        .map(|_| ())
-        .expect("background initial document should install on captured owner");
 
     let background_session =
         attach_page_session_for_test(&mut ctx, second_target_id.as_str()).await;
