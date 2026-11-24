@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 image = { version = "0.25.10", default-features = false, features = ["gif", "webp", "bmp"] }
 jpeg-decoder = "0.3"
-jpeg-encoder = "0.6"
+jpeg-encoder = { version = "0.6", features = ["simd"] }
 png = "0.18"
 thiserror = "2.0.17"
 usvg = { version = "=0.48.1", default-features = true }
