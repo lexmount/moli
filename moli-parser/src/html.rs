@@ -1172,6 +1172,10 @@ impl Drop for RuntimeDomSinksParserFinish {
 }
 
 impl ParserStreamDocumentSnapshot {
+    pub(crate) fn native_dom(&self) -> &NativeDom {
+        &self.0
+    }
+
     pub fn into_document(self) -> NativeDom {
         self.0
     }

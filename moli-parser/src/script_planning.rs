@@ -26,10 +26,12 @@ pub struct ParserScriptRead {
     pub script_async: bool,
     pub async_attribute_present: bool,
     pub defer_attribute_present: bool,
+    before_body: bool,
     pub fetch_metadata: ScriptFetchMetadata,
 }
 
 fn parser_script_read_from_node(
+    dom: &NativeDom,
     node: &Node,
     script_src: Option<String>,
     script_text: Option<String>,
@@ -84,6 +86,11 @@ fn parser_script_read_from_node(
         script_async: element.script_async(),
         async_attribute_present: element.attribute("async").is_some(),
         defer_attribute_present: is_html_script && element.attribute("defer").is_some(),
+        before_body: is_html_script
+            && node.is_connected()
+            && node
+                .owner_document()
+                .is_some_and(|document| dom.document_body_handle_for_document(document).is_none()),
         fetch_metadata: ScriptFetchMetadata::from_script_attributes(
             element.attribute("crossorigin"),
             element.attribute("referrerpolicy"),
@@ -139,6 +146,7 @@ impl ParserPlanningReadView for NativeDom {
     fn parser_script_read(&self, node_id: NativeNodeId) -> Option<ParserScriptRead> {
         let node = self.node(node_id)?;
         parser_script_read_from_node(
+            self,
             node,
             self.script_src(node_id).map(str::to_owned),
             self.script_text(node_id),
@@ -179,6 +187,7 @@ impl ParserPlanningReadView for DomHost {
             .and_then(|text| (!text.is_empty()).then_some(text));
 
         parser_script_read_from_node(
+            self.dom(),
             node,
             node.as_element()
                 .and_then(|element| element.script_source_attribute())
@@ -216,6 +225,7 @@ impl ParserPlanningReadView for ParserStreamDocumentSnapshot {
     fn parser_script_read(&self, node_id: NativeNodeId) -> Option<ParserScriptRead> {
         let node = self.node(node_id)?;
         parser_script_read_from_node(
+            self.native_dom(),
             node,
             self.script_src(node_id).map(str::to_owned),
             self.script_text(node_id),
@@ -287,6 +297,7 @@ pub struct ScriptFetchMetadata {
     /// not equivalent to whether the eventual fetch runs on a parser-owned
     /// scheduler lane.
     pub parser_inserted: bool,
+    pub render_blocking: bool,
 }
 
 impl ScriptFetchMetadata {
@@ -308,6 +319,7 @@ impl ScriptFetchMetadata {
             nonce: normalize_non_empty_attr(nonce),
             fetch_priority: FetchPriorityHint::from_attribute(fetch_priority),
             parser_inserted: false,
+            render_blocking: false,
         }
     }
 
@@ -447,7 +459,7 @@ pub fn classify_parser_script(
     document: &impl ParserPlanningReadView,
     node_id: NativeNodeId,
 ) -> Option<ScriptClassification> {
-    let script = document.parser_script_read(node_id)?;
+    let mut script = document.parser_script_read(node_id)?;
     let source_kind = ScriptSourceKind::from_script_src(&script.script_src);
     let classification = classify_script_preparation(ScriptPreparationClassificationInput {
         element: ScriptElementClassificationInput {
@@ -463,6 +475,12 @@ pub fn classify_parser_script(
         defer_attribute_present: script.defer_attribute_present,
         source_kind,
     });
+    script.fetch_metadata.render_blocking = script.before_body
+        && script.parser_inserted
+        && source_kind == ScriptSourceKind::External
+        && !script.async_attribute_present
+        && !script.defer_attribute_present
+        && classification.disposition.kind() == ScriptKind::Classic;
     Some(ScriptClassification {
         script,
         disposition: classification.disposition,

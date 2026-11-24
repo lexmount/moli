@@ -502,6 +502,7 @@ impl<'a> ParserPendingClassicScriptSourceResultAction<'a> {
 pub(crate) struct ParserClassicScriptNetworkRecordUrls {
     initiator_url: Url,
     script_url: Url,
+    render_blocking: bool,
 }
 
 impl ParserClassicScriptNetworkRecordUrls {
@@ -509,7 +510,12 @@ impl ParserClassicScriptNetworkRecordUrls {
         Self {
             initiator_url: script.initiator_url.clone(),
             script_url: script.url.clone(),
+            render_blocking: script.fetch_metadata.render_blocking,
         }
+    }
+
+    pub(crate) fn render_blocking(&self) -> bool {
+        self.render_blocking
     }
 
     pub(crate) fn initiator_url(&self) -> &Url {

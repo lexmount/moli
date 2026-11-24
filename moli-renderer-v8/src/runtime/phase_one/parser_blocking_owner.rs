@@ -142,6 +142,7 @@ impl ParserScriptSourceResultOwner<PendingParsingBlockingClassicScriptContext>
                     urls.script_url().clone(),
                     network_result,
                     action.network_request_handle(),
+                    urls.render_blocking(),
                 );
         }
         Some(notification)
