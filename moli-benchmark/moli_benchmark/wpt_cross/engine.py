@@ -126,6 +126,15 @@ class EngineDriver:
             return replace(self, build_command=command)
         raise RuntimeError(f"engine {self.name} has no local WPT certificate trust configuration")
 
+    def with_http_host_resolutions(self, entries: tuple[str, ...]) -> "EngineDriver":
+        original_command = self.build_command
+        args = [arg for entry in entries for arg in ("--http-host-resolve", entry)]
+
+        def command(binary: Path, port: int, profile: Path | None) -> list[str]:
+            return [*original_command(binary, port, profile), *args]
+
+        return replace(self, build_command=command)
+
     def resolve_binary(self, override: str | None = None) -> Path:
         raw = override or os.environ.get(self.binary_env_var)
         if raw:
