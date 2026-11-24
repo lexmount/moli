@@ -133,3 +133,74 @@ fn initialize_extendable_event_object<'s>(
         .initialize(scope, event)
         .expect("extendable event state should initialize");
 }
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::InstallEvent, prototype = "Object")]
+struct InstallEventStateDeclaration {}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+pub struct InstallEventInit {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "InstallEvent")]
+struct InstallEventConstructorArgs {
+    #[webidl(required, converter = "raw")]
+    event_type: webidl::DomString16,
+    #[webidl(dictionary)]
+    init: InstallEventInit,
+}
+
+pub fn install_event_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if !args.is_construct_call() {
+        throw_type_error(scope, "InstallEvent requires the new operator");
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<InstallEventConstructorArgs>(scope, &args) else {
+        return;
+    };
+    let event_type =
+        v8::String::new_from_two_byte(scope, &parsed.event_type.0, v8::NewStringType::Normal)
+            .expect("InstallEvent type");
+    let event = args.this();
+    if initialize_install_event_object(scope, event, event_type, parsed.init).is_none() {
+        return;
+    }
+    rv.set(event.into());
+}
+
+pub fn initialize_install_event_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    event_type: v8::Local<'s, v8::String>,
+    init: InstallEventInit,
+) -> Option<()> {
+    let state = super::state::new_event_state(scope);
+    super::initialize_event_object_with_type(
+        scope,
+        state,
+        event_type,
+        init.bubbles,
+        init.cancelable,
+    );
+    let _ = state.set(
+        scope,
+        moli_v8_util::v8str(scope, "composed").into(),
+        v8::Boolean::new(scope, init.composed).into(),
+    );
+    super::initialize_event_wrapper(scope, event, state)?;
+    InstallEventStateDeclaration {}
+        .initialize(scope, event)
+        .expect("InstallEvent state");
+    Some(())
+}

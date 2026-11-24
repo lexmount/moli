@@ -100,6 +100,7 @@ mod console;
 mod content_security_policy;
 mod event_handlers;
 mod extendable_events;
+pub(in crate::worker) use extendable_events::initialize_native_install_event;
 mod fetch;
 mod import_scripts;
 mod messaging;
