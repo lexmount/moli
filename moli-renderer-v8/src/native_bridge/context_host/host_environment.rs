@@ -11,7 +11,7 @@ use super::{
 use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::{
-        DocumentReadyState, DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind, Node,
+        DocumentReadyState, DomHost, DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind, Node,
     },
     network::context::DocumentResourceLoader,
     style_engine::{
@@ -2579,9 +2579,11 @@ impl PageScriptHost {
         // The native DOM revision already covers removals from a live tree,
         // even when the removed roots themselves are now disconnected.
         if self.layout_policy().is_realtime()
-            && effects
-                .iter()
-                .any(|effect| effect.touches_connected_tree(self.dom_host()))
+            && effects.iter().any(|effect| {
+                effect.touches_connected_tree(self.dom_host())
+                    && !matches!(effect, StyleMutationEffect::Attribute { name, .. }
+                            if !DomHost::attribute_affects_native_layout(name))
+            })
         {
             self.note_realtime_layout_input_change();
         }

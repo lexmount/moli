@@ -79,6 +79,14 @@ pub(super) struct StyleDocumentGenerationSnapshot {
     pub(super) target_context_epoch: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ScreenStyleInvalidation {
+    #[default]
+    Clean,
+    Pending,
+    Affected,
+}
+
 pub(super) struct StyleDocumentState {
     pub(super) retained_style_system: RefCell<Option<RetainedStyleSystem>>,
     selector_caches: RefCell<SelectorCaches>,
@@ -90,6 +98,8 @@ pub(super) struct StyleDocumentState {
     /// Source-side invalidation only. The target context also advances when
     /// derived styles are cleared, including temporary capture environments.
     visual_input_generation: Cell<u64>,
+    screen_cache_generation: Cell<Option<u64>>,
+    pub(super) screen_style_invalidation: Cell<ScreenStyleInvalidation>,
     pub(super) lazy_invalidation_roots: LazyStyleInvalidationRoots,
     #[cfg(debug_assertions)]
     completed_style_observation: RefCell<Option<CompletedStyleObservation>>,
@@ -116,6 +126,8 @@ impl StyleDocumentState {
             retained_style_system_generation: Cell::new(0),
             target_context_epoch: Cell::new(0),
             visual_input_generation: Cell::new(0),
+            screen_cache_generation: Cell::new(None),
+            screen_style_invalidation: Cell::new(ScreenStyleInvalidation::Clean),
             lazy_invalidation_roots: LazyStyleInvalidationRoots::default(),
             #[cfg(debug_assertions)]
             completed_style_observation: RefCell::new(None),
@@ -148,6 +160,45 @@ impl StyleDocumentState {
     pub(super) fn bump_computed_cache_generation(&self) {
         self.computed_cache_generation
             .set(self.computed_cache_generation().saturating_add(1));
+    }
+
+    pub(super) fn note_screen_style_attribute_change(&self) {
+        if self.screen_cache_generation.get().is_some()
+            && self.screen_style_invalidation.get() == ScreenStyleInvalidation::Clean
+        {
+            self.screen_style_invalidation
+                .set(ScreenStyleInvalidation::Pending);
+        }
+    }
+
+    pub(super) fn note_affected_screen_styles(&self) {
+        if self.screen_style_invalidation.get() == ScreenStyleInvalidation::Pending {
+            self.screen_style_invalidation
+                .set(ScreenStyleInvalidation::Affected);
+        }
+    }
+
+    pub(super) fn finish_screen_style_invalidation(&self) {
+        if self.screen_style_invalidation.get() == ScreenStyleInvalidation::Pending {
+            // Computed values and attr() dependencies must come from the
+            // screen's style context. Another observation can replace it.
+            let generation = self.computed_cache_generation();
+            let result = if generation != u64::MAX
+                && self.screen_cache_generation.get() == Some(generation)
+            {
+                ScreenStyleInvalidation::Clean
+            } else {
+                ScreenStyleInvalidation::Affected
+            };
+            self.screen_style_invalidation.set(result);
+        }
+    }
+
+    pub(super) fn publish_screen_styles(&self) {
+        self.screen_cache_generation
+            .set(Some(self.computed_cache_generation()));
+        self.screen_style_invalidation
+            .set(ScreenStyleInvalidation::Clean);
     }
 
     #[cfg(test)]

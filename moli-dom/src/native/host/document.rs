@@ -198,7 +198,8 @@ impl DomHost {
         self.dom_version.get()
     }
 
-    /// Revision of the connected DOM inputs to one Document's layout.
+    /// Revision of the connected native layout inputs for one Document.
+    /// CSS-only attribute changes are tracked by style invalidation.
     pub fn document_layout_version(&self, document: DomHandle) -> u64 {
         self.document_layout_versions
             .borrow()

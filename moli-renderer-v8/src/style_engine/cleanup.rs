@@ -167,6 +167,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
         &self,
         context: &StyleInvalidationCleanupApplicationContext,
     ) {
+        self.document_state.note_affected_screen_styles();
         let generations_before = self.document_state.generation_snapshot();
         self.document_state
             .record_invalidation_clear_all_fallback_reasons(
@@ -256,6 +257,14 @@ impl<'a> StyleInvalidationCleanup<'a> {
     ) -> Option<IndexSet<DomHandle>> {
         if roots.is_empty() {
             return None;
+        }
+        if self.document_state.screen_style_invalidation.get()
+            == super::state::ScreenStyleInvalidation::Pending
+            && roots.iter().any(|&root| {
+                host.is_connected(root) && host.owner_document_handle(root) == Some(self.document)
+            })
+        {
+            self.document_state.note_affected_screen_styles();
         }
         self.document_state.lazy_invalidation_roots.record_roots(
             host,

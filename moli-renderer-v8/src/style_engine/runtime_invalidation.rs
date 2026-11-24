@@ -82,6 +82,12 @@ impl MoliStyleEngine {
             let document = *document;
             let document_effects = document_effects.as_ref();
             let world = self.world_for_document(document);
+            if document_effects.iter().any(|effect| {
+                matches!(effect, StyleMutationEffect::Attribute { element, name, .. }
+                    if !DomHost::attribute_affects_native_layout(name) && host.is_connected(*element))
+            }) {
+                world.document_state.note_screen_style_attribute_change();
+            }
             let no_cached_style_started = profile_enabled.then(std::time::Instant::now);
             if self.style_invalidation_without_cached_styles_is_complete(document_effects, &world) {
                 no_cached_style_us += no_cached_style_started
@@ -148,6 +154,7 @@ impl MoliStyleEngine {
         if world_has_style_state(self, world) {
             return false;
         }
+        world.document_state.note_affected_screen_styles();
         if mutation_effects_have_source_scope(effects) {
             world.document_state.note_style_input_change();
         }
