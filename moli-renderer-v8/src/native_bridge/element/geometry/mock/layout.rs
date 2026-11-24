@@ -1,6 +1,6 @@
 use crate::document_runtime::DomHandle;
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
-use moli_layout::LayoutPoint;
+use moli_layout::{LayoutPoint, LayoutTransform2D};
 use std::time::Instant;
 
 use super::super::super::super::PageScriptHost;
@@ -591,6 +591,7 @@ pub(crate) struct MockHitTestOptions {
     pub(crate) clip_to_viewport: bool,
     pub(crate) use_viewport_fallback: bool,
     pub(crate) include_empty_viewport: bool,
+    pub(crate) stay_in_document: bool,
 }
 
 pub(crate) fn mock_hit_test_handle(
@@ -599,7 +600,16 @@ pub(crate) fn mock_hit_test_handle(
     point: LayoutPoint,
     options: MockHitTestOptions,
 ) -> Option<DomHandle> {
-    mock_hit_test_handle_with_child_frames(
+    mock_input_hit_test(runtime, document_handle, point, options).map(|(node, _)| node)
+}
+
+pub(in crate::native_bridge::element::geometry) fn mock_input_hit_test(
+    runtime: &PageScriptHost,
+    document_handle: DomHandle,
+    point: LayoutPoint,
+    options: MockHitTestOptions,
+) -> Option<(DomHandle, LayoutTransform2D)> {
+    mock_hit_test_with_child_frames(
         runtime,
         document_handle,
         f64::from(point.x),
@@ -661,14 +671,14 @@ fn hit_test_shadow_root_handle(
     None
 }
 
-fn mock_hit_test_handle_with_child_frames(
+fn mock_hit_test_with_child_frames(
     runtime: &PageScriptHost,
     document_handle: DomHandle,
     x: f64,
     y: f64,
     options: MockHitTestOptions,
     depth: usize,
-) -> Option<DomHandle> {
+) -> Option<(DomHandle, LayoutTransform2D)> {
     if !x.is_finite() || !y.is_finite() {
         return None;
     }
@@ -679,6 +689,14 @@ fn mock_hit_test_handle_with_child_frames(
     {
         return None;
     }
+    let root = runtime
+        .dom_host()
+        .dom()
+        .document_element_handle_for_document(document_handle);
+    if root.is_some_and(|root| scroll_layout_display(runtime, root) == "none") {
+        return (options.use_viewport_fallback && options.include_empty_viewport)
+            .then_some((document_handle, LayoutTransform2D::IDENTITY));
+    }
     let elements = document_elements_in_hit_order(runtime, document_handle);
     for element in elements.into_iter().rev() {
         let rect = mock_client_rect(runtime, element);
@@ -687,9 +705,10 @@ fn mock_hit_test_handle_with_child_frames(
         }
         let eligible = is_live_hit_source(runtime, element, options.ignore_inert);
         if eligible
+            && !options.stay_in_document
             && depth < HIT_TEST_CHILD_FRAME_DEPTH_LIMIT
             && let Some(child_document) = runtime.child_browsing_context_document_handle(element)
-            && let Some(child_hit) = mock_hit_test_handle_with_child_frames(
+            && let Some((child_hit, transform)) = mock_hit_test_with_child_frames(
                 runtime,
                 child_document,
                 x - rect.left,
@@ -698,7 +717,13 @@ fn mock_hit_test_handle_with_child_frames(
                 depth + 1,
             )
         {
-            return Some(child_hit);
+            return Some((
+                child_hit,
+                transform.concatenate(LayoutTransform2D::translation(
+                    -rect.left as f32,
+                    -rect.top as f32,
+                )),
+            ));
         }
         // An active modal in a shadow tree can escape its host's inertness.
         if let Some(shadow_root) = runtime.dom_host().shadow_root_handle(element)
@@ -711,18 +736,19 @@ fn mock_hit_test_handle_with_child_frames(
                 depth + 1,
             )
         {
-            return Some(shadow_hit);
+            return Some((shadow_hit, LayoutTransform2D::IDENTITY));
         }
         if eligible {
-            return Some(element);
+            return Some((element, LayoutTransform2D::IDENTITY));
         }
     }
     if options.use_viewport_fallback {
-        runtime
-            .dom_host()
-            .dom()
-            .document_element_handle_for_document(document_handle)
-            .or(options.include_empty_viewport.then_some(document_handle))
+        root.filter(|root| {
+            is_mock_rendered_element(runtime, *root)
+                && scroll_layout_display(runtime, *root) != "contents"
+        })
+        .or(options.include_empty_viewport.then_some(document_handle))
+        .map(|node| (node, LayoutTransform2D::IDENTITY))
     } else {
         None
     }

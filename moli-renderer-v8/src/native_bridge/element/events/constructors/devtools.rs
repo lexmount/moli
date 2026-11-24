@@ -1,30 +1,10 @@
 use super::*;
+#[cfg(feature = "devtools")]
+use crate::native_bridge::node_owner_document_relevant_context;
 use crate::runtime::RendererPointerEventProperties;
 use moli_webapi::events::subclasses::{
     construct_native_drag_event, construct_native_pointer_event, construct_native_wheel_event,
 };
-
-#[cfg(feature = "devtools")]
-pub(crate) fn construct_mouse_event_with_modifiers<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    coordinates: InputEventCoordinates,
-    button: i32,
-    buttons: i32,
-    modifiers: u8,
-) -> Option<v8::Local<'s, v8::Object>> {
-    construct_mouse_event_with_detail_and_related_target(
-        scope,
-        event_type,
-        coordinates,
-        0,
-        button,
-        buttons,
-        modifiers,
-        None,
-        Some(scope.get_current_context().global(scope)),
-    )
-}
 
 pub(crate) fn construct_mouse_event_with_detail_and_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -133,6 +113,36 @@ pub(crate) fn construct_pointer_event<'s>(
     construct_native_pointer_event(scope, event_type, mouse, pointer)
 }
 
+#[cfg(feature = "devtools")]
+pub(crate) fn construct_pointer_event_with_related_target_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    target: DomHandle,
+    event_type: &str,
+    coordinates: InputEventCoordinates,
+    button: i32,
+    buttons: i32,
+    pointer: &RendererPointerEventProperties,
+    related_target: Option<v8::Local<'s, v8::Value>>,
+    modifiers: u8,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let runtime = unsafe { &*runtime_ptr };
+    let document = runtime.dom_host().owner_document_handle(target)?;
+    runtime.input_owner_for_document(document)?;
+    let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    construct_pointer_event(
+        scope,
+        event_type,
+        coordinates,
+        button,
+        buttons,
+        pointer,
+        related_target,
+        modifiers,
+    )
+}
+
 pub(crate) fn construct_drag_event_with_related_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -203,23 +213,6 @@ pub(crate) fn construct_drop_input_event<'s>(
         None,
         Some(data_transfer),
     )
-}
-
-#[cfg(feature = "devtools")]
-pub(crate) fn construct_mouse_event_for_target<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    target: DomHandle,
-    event_type: &str,
-    coordinates: InputEventCoordinates,
-    button: i32,
-    buttons: i32,
-    modifiers: u8,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let context =
-        crate::native_bridge::node::node_target_relevant_context(scope, runtime_ptr, target)?;
-    let scope = &mut v8::ContextScope::new(scope, context);
-    construct_mouse_event_with_modifiers(scope, event_type, coordinates, button, buttons, modifiers)
 }
 
 #[cfg(feature = "devtools")]

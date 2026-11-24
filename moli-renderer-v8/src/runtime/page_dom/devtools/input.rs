@@ -17,6 +17,37 @@ impl PageVm {
         modifiers: u8,
         intercept_drags: bool,
     ) -> Result<RendererInputDispatchOutcome> {
+        self.dispatch_mouse_input(
+            x,
+            y,
+            event_name,
+            button,
+            buttons,
+            click_count,
+            delta_x,
+            delta_y,
+            pointer,
+            modifiers,
+            intercept_drags,
+            MouseDispatchCompletion::FinishTurn,
+        )
+    }
+
+    pub(in crate::runtime) fn dispatch_mouse_input(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        button: i32,
+        buttons: Option<i32>,
+        click_count: i32,
+        delta_x: f64,
+        delta_y: f64,
+        pointer: RendererPointerEventProperties,
+        modifiers: u8,
+        intercept_drags: bool,
+        completion: MouseDispatchCompletion,
+    ) -> Result<RendererInputDispatchOutcome> {
         #[cfg(feature = "molio")]
         let tracks_viewport_cursor = pointer.pointer_type == "mouse"
             && matches!(event_name, "mousemove" | "mousedown" | "mouseup" | "wheel");
@@ -32,7 +63,7 @@ impl PageVm {
             pointer,
             modifiers,
             intercept_drags,
-            MouseDispatchCompletion::FinishTurn,
+            completion,
         )?;
         #[cfg(feature = "molio")]
         if tracks_viewport_cursor {

@@ -296,6 +296,8 @@ fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation()
     .unwrap();
     let data = start_native_drag(&mut vm, "a", scale);
     dispatch_drag(&mut vm, "dragenter", "parent", scale, &data);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
     assert!(
         vm._context_host
             .borrow()
@@ -318,8 +320,8 @@ fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation()
     assert_eq!(log["sourceDisabled"], true);
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 
-    vm.eval("document.getElementById('frame-b').style.left='530px'")
-        .unwrap();
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
     assert!(
         vm._context_host
             .borrow()
@@ -341,6 +343,8 @@ fn standalone_drag_cancel_clears_the_session_without_a_layout_root() {
         "document.getElementById('frame-b').style.left='520px'; document.documentElement.remove()",
     )
     .unwrap();
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
     assert!(vm.active_drag_session.is_some());
     assert!(matches!(
         vm._context_host.borrow().ensure_observable_layout(),

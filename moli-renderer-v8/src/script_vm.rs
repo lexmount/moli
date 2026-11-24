@@ -1044,10 +1044,13 @@ pub(super) struct ScriptVm {
     runtime_observable_source_queue: RendererRuntimeObservableSourceQueue,
     page_context_cancel_tx: RendererPageContextCancelSender,
     pressed_mouse_buttons: i32,
-    hovered_mouse_handle: Option<DomHandle>,
     #[cfg(feature = "devtools")]
-    mouse_routed_frame: Option<crate::native_bridge::WindowDocumentTaskTarget>,
-    active_touch_pointer_handles: BTreeMap<i32, DomHandle>,
+    mouse_frame_captures: BTreeMap<i32, MouseFrameCapture>,
+    /// Last hover target and ancestry, retaining its frame transform for exits.
+    #[cfg(feature = "devtools")]
+    hovered_mouse: Option<HoverTarget>,
+    #[cfg(feature = "devtools")]
+    hovered_pointers: HashMap<i32, HoverTarget>,
     active_touch_points: BTreeMap<i32, ActiveTouchPoint>,
     #[cfg(feature = "devtools")]
     pending_touch_tap: Option<PendingTouchTap>,
@@ -1120,6 +1123,7 @@ pub(super) struct ActiveTouchPoint {
     pub x: f64,
     pub y: f64,
     pub target: DomHandle,
+    pub pointer_target: Option<DomHandle>,
     pub is_primary: bool,
 }
 
@@ -1151,15 +1155,14 @@ pub(super) struct ActiveDragSession {
     /// An enter update already emitted source `drag`; its following over
     /// update must not emit it twice (Blink EventHandler's corresponding bit).
     pub only_drag_over_next: bool,
-    position: input_dispatch::InputPosition,
+    pub coordinates: crate::native_bridge::element::InputEventCoordinates,
     pub modifiers: u8,
 }
 
 #[cfg(feature = "devtools")]
 #[derive(Clone, Copy)]
 pub(super) struct PendingDragGesture {
-    pub handle: DomHandle,
-    position: input_dispatch::InputPosition,
+    pub document: DomHandle,
     pub x: f64,
     pub y: f64,
     pub root_to_frame: moli_layout::LayoutTransform2D,
@@ -2650,10 +2653,12 @@ impl ScriptVmDefaultWorldBootstrap {
                 script_execution_memory::ScriptExecutionMemoryCounters::default(),
             runtime_observable_source_queue: RendererRuntimeObservableSourceQueue::default(),
             pressed_mouse_buttons: 0,
-            hovered_mouse_handle: None,
             #[cfg(feature = "devtools")]
-            mouse_routed_frame: None,
-            active_touch_pointer_handles: BTreeMap::new(),
+            mouse_frame_captures: BTreeMap::new(),
+            #[cfg(feature = "devtools")]
+            hovered_mouse: None,
+            #[cfg(feature = "devtools")]
+            hovered_pointers: HashMap::new(),
             active_touch_points: BTreeMap::new(),
             #[cfg(feature = "devtools")]
             pending_touch_tap: None,

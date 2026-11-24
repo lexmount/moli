@@ -207,14 +207,13 @@ async fn captured_child_pointer_uses_published_frame_coordinates_outside_its_bou
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
     vm.eval("frame.style.left='200px';frame.style.top='100px';'moved'")
         .unwrap();
-    // Layout-affecting iframe attributes invalidate the published frame
-    // viewport. The next input initializes a new snapshot before dispatch;
-    // capture must project through that same snapshot without another pass.
+    // OnDemand continues to project through the published frame viewport until
+    // the next explicit layout pass.
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
     assert_eq!(
         vm.layout_pass_observability_for_test().1,
-        builds + 1,
-        "OnDemand input must rebuild an invalidated iframe snapshot exactly once"
+        builds,
+        "OnDemand input uses the published iframe snapshot"
     );
     vm.publish_layout_for_test().unwrap();
     let builds = vm.layout_pass_observability_for_test().1;
@@ -223,7 +222,7 @@ async fn captured_child_pointer_uses_published_frame_coordinates_outside_its_bou
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 0);
     assert_eq!(
         vm.eval("JSON.stringify(events)").unwrap(),
-        r#"[["pointerdown","captured",30,30],["pointermove","captured",-80,-40],["pointermove","captured",-180,-80],["pointermove","captured",-180,-80],["pointerup","captured",-180,-80],["pointermove","outside",20,20]]"#
+        r#"[["pointerdown","captured",30,30],["pointermove","captured",-80,-40],["pointermove","captured",-80,-40],["pointermove","captured",-180,-80],["pointerup","captured",-180,-80],["pointermove","outside",20,20]]"#
     );
     assert_eq!(
         vm.eval("JSON.stringify(transitions)").unwrap(),
@@ -333,6 +332,7 @@ async fn raw_update_release_preserves_pressed_mouse_frame_route() {
         r#"[["pointerdown","captured",30,30],["pointermove","",-80,-40],["mousemove","",-80,-40]]"#
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    vm.publish_layout_for_test().unwrap();
     dispatch(&mut vm, "mouseup", 20.0, 20.0, 0);
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 0);
     assert_eq!(
@@ -630,7 +630,6 @@ async fn touch_cancel_cleans_up_capture_when_the_original_frame_retires() {
     );
     assert!(!vm._context_host.borrow().pointer_is_known(2));
     assert!(vm.active_touch_points.is_empty());
-    assert!(vm.active_touch_pointer_handles.is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]

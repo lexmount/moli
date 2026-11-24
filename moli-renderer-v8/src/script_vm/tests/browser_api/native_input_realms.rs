@@ -37,7 +37,11 @@ fn input_hit_test_policy_can_bypass_css_or_inert_separately() {
                 mode,
             )
             .unwrap();
-            assert_eq!(hit.target, Some(expected_handle), "expected {expected}");
+            assert_eq!(
+                hit.input.map(|hit| hit.handle),
+                Some(expected_handle),
+                "expected {expected}"
+            );
         }
     }
 }
@@ -88,7 +92,8 @@ fn input_hit_test_policy_keeps_viewport_clipping_independent_of_fallback() {
             )
             .unwrap();
             assert_eq!(
-                hit.target, expected,
+                hit.input.map(|hit| hit.handle),
+                expected,
                 "{layout_policy:?}, inert={inert}, x={x}, fallback={use_viewport_fallback}"
             );
         }

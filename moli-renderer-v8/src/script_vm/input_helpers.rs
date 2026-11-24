@@ -1,23 +1,262 @@
 use super::ScriptVm;
 use crate::document_runtime::DomHandle;
+#[cfg(feature = "devtools")]
+use crate::document_runtime::EventTargetHandle;
 use crate::host::ModuleFailurePolicy;
 use crate::module_runtime::{ModuleGraphHandle, ModuleLoadError, ModuleLoadStage};
+#[cfg(feature = "devtools")]
+use crate::native_bridge::PageScriptHost;
 use crate::types::ScriptErrorValue;
+
+#[cfg(feature = "devtools")]
+/// Native hover ancestry retained independently of later author DOM mutations.
+#[derive(Clone)]
+pub(super) struct HoverTarget {
+    pub(super) handle: DomHandle,
+    document: Option<DomHandle>,
+    pub(super) root_to_frame: moli_layout::LayoutTransform2D,
+    path: Vec<DomHandle>,
+}
+
+#[cfg(feature = "devtools")]
+#[derive(Clone, Copy)]
+pub(super) enum HoverBoundaryKind {
+    Out,
+    Leave,
+    Over,
+    Enter,
+}
+
+#[cfg(feature = "devtools")]
+impl HoverBoundaryKind {
+    pub(super) fn event_names(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Out => ("pointerout", "mouseout"),
+            Self::Leave => ("pointerleave", "mouseleave"),
+            Self::Over => ("pointerover", "mouseover"),
+            Self::Enter => ("pointerenter", "mouseenter"),
+        }
+    }
+}
+
+#[cfg(feature = "devtools")]
+pub(super) struct HoverBoundary {
+    pub(super) kind: HoverBoundaryKind,
+    pub(super) handle: DomHandle,
+    pub(super) related: Option<DomHandle>,
+    pub(super) root_to_frame: moli_layout::LayoutTransform2D,
+}
+
+#[cfg(feature = "devtools")]
+impl HoverTarget {
+    pub(super) fn for_input(
+        runtime: &PageScriptHost,
+        handle: DomHandle,
+        hit: Option<crate::native_bridge::element::InputHit>,
+        previous: Option<&Self>,
+    ) -> Self {
+        let document = runtime.dom_host().owner_document_handle(handle);
+        let root_to_frame = hit
+            .filter(|hit| runtime.dom_host().owner_document_handle(hit.handle) == document)
+            .map(|hit| hit.root_to_frame)
+            .or_else(|| {
+                previous
+                    .filter(|previous| previous.document == document)
+                    .map(|previous| previous.root_to_frame)
+            })
+            .unwrap_or(moli_layout::LayoutTransform2D::IDENTITY);
+        Self::capture(runtime, handle, root_to_frame)
+    }
+
+    pub(super) fn capture(
+        runtime: &PageScriptHost,
+        handle: DomHandle,
+        root_to_frame: moli_layout::LayoutTransform2D,
+    ) -> Self {
+        let path = runtime
+            .build_propagation_path(EventTargetHandle::Node(handle), true)
+            .into_iter()
+            .filter_map(|target| {
+                let EventTargetHandle::Node(handle) = target else {
+                    return None;
+                };
+                runtime
+                    .dom_host()
+                    .node(handle)
+                    .is_some_and(|node| node.is_element())
+                    .then_some(handle)
+            })
+            .collect();
+        Self {
+            handle,
+            document: runtime.dom_host().owner_document_handle(handle),
+            root_to_frame,
+            path,
+        }
+    }
+
+    pub(super) fn boundaries(
+        previous: Option<&Self>,
+        current: Option<&Self>,
+    ) -> Vec<HoverBoundary> {
+        if previous.map(|target| target.handle) == current.map(|target| target.handle) {
+            return Vec::new();
+        }
+        let mut boundaries = Vec::new();
+        let same_document = previous.is_some_and(|previous| {
+            previous.document.is_some()
+                && current.is_some_and(|current| previous.document == current.document)
+        });
+        if let Some(previous) = previous {
+            boundaries.push(HoverBoundary {
+                kind: HoverBoundaryKind::Out,
+                handle: previous.handle,
+                related: current
+                    .filter(|_| same_document)
+                    .map(|current| current.handle),
+                root_to_frame: previous.root_to_frame,
+            });
+            for &handle in &previous.path {
+                if current.is_none_or(|current| !current.path.contains(&handle)) {
+                    boundaries.push(HoverBoundary {
+                        kind: HoverBoundaryKind::Leave,
+                        handle,
+                        related: current
+                            .filter(|_| same_document)
+                            .map(|current| current.handle),
+                        root_to_frame: previous.root_to_frame,
+                    });
+                }
+            }
+        }
+        let Some(current) = current else {
+            return boundaries;
+        };
+        let related = previous
+            .filter(|_| same_document)
+            .map(|previous| previous.handle);
+        boundaries.push(HoverBoundary {
+            kind: HoverBoundaryKind::Over,
+            handle: current.handle,
+            related,
+            root_to_frame: current.root_to_frame,
+        });
+        for &handle in current.path.iter().rev() {
+            if previous.is_none_or(|previous| !previous.path.contains(&handle)) {
+                boundaries.push(HoverBoundary {
+                    kind: HoverBoundaryKind::Enter,
+                    handle,
+                    related,
+                    root_to_frame: current.root_to_frame,
+                });
+            }
+        }
+        boundaries
+    }
+}
+
+#[cfg(feature = "devtools")]
+/// Native input ancestry saved before author listeners mutate the tree.
+pub(super) struct InputTargetPath {
+    document: DomHandle,
+    path: Vec<DomHandle>,
+}
+
+#[cfg(feature = "devtools")]
+impl InputTargetPath {
+    pub(super) fn capture_composed(runtime: &PageScriptHost, target: DomHandle) -> Option<Self> {
+        Some(Self {
+            document: runtime.dom_host().owner_document_handle(target)?,
+            path: runtime
+                .build_propagation_path(EventTargetHandle::Node(target), true)
+                .into_iter()
+                .filter_map(|target| match target {
+                    EventTargetHandle::Node(handle) => Some(handle),
+                    _ => None,
+                })
+                .collect(),
+        })
+    }
+
+    pub(super) fn resolve(&self, runtime: &PageScriptHost) -> Option<DomHandle> {
+        let dom = runtime.dom_host();
+        self.path.iter().copied().find(|&handle| {
+            // ShadowRoot participates in propagation, but a native mouse
+            // target must be a surviving element or its Document.
+            dom.node(handle)
+                .is_some_and(|node| node.is_element() || node.is_document())
+                && dom.owner_document_handle(handle) == Some(self.document)
+                && dom.is_connected_to_document(handle)
+        })
+    }
+}
+
+#[cfg(feature = "devtools")]
+#[derive(Clone, Copy)]
+pub(super) enum MouseFrameCaptureOwner {
+    Main(crate::frame_owner_model::FrameDocumentTaskOwner),
+    Child {
+        frame: DomHandle,
+        owner: crate::frame_owner_model::FrameLaneTaskOwner,
+    },
+}
+
+#[cfg(feature = "devtools")]
+#[derive(Clone, Copy)]
+pub(super) struct MouseFrameCapture {
+    // A navigation replaces the Document, but retains this browsing context.
+    // Removing and reattaching the same iframe creates a different lane.
+    pub(super) owner: MouseFrameCaptureOwner,
+    pub(super) root_to_frame: moli_layout::LayoutTransform2D,
+}
+
+#[cfg(feature = "devtools")]
+pub(super) fn mouse_button_mask(button: i32) -> i32 {
+    match button {
+        0 => 1,
+        1 => 4,
+        2 => 2,
+        3 => 8,
+        4 => 16,
+        _ => 0,
+    }
+}
+
+#[cfg(feature = "devtools")]
+pub(super) fn mouse_button_from_mask(mask: i32) -> Option<i32> {
+    match mask {
+        1 => Some(0),
+        4 => Some(1),
+        2 => Some(2),
+        8 => Some(3),
+        16 => Some(4),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "devtools")]
+pub(super) fn single_changed_mouse_button(mask: i32) -> Option<i32> {
+    if mask.count_ones() == 1 {
+        mouse_button_from_mask(mask)
+    } else {
+        None
+    }
+}
 
 pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.pressed_mouse_buttons = 0;
-    vm.hovered_mouse_handle = None;
     vm._context_host
         .borrow()
         .dom_host()
         .clear_hovered_element_handles();
-    vm.active_touch_pointer_handles.clear();
     vm.active_touch_points.clear();
     #[cfg(feature = "devtools")]
     {
         vm._context_host.borrow_mut().clear_mouse_input_state();
+        vm.mouse_frame_captures.clear();
+        vm.hovered_mouse = None;
+        vm.hovered_pointers.clear();
         vm.pending_touch_tap = None;
-        vm.mouse_routed_frame = None;
         // Target views were disabled when their dispatch ended. Retiring the
         // Document must also disable its protected source view without dragend.
         if let Some(session) = vm.active_drag_session.take()

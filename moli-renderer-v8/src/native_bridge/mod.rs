@@ -18,7 +18,8 @@ pub(crate) use context_host::{
 };
 #[cfg(feature = "devtools")]
 pub(crate) use context_host::{
-    MouseReleaseFollowUp, PublishedFrameGeometry, WindowDocumentTaskTarget,
+    MouseReleaseFollowUp, PointerCaptureDispatchEvent, PublishedFrameGeometry,
+    WindowDocumentTaskTarget,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use current_input::CurrentInputEventScope;

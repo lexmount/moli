@@ -27,7 +27,7 @@ impl ScriptVm {
     }
 
     fn cursor_for_viewport_hit(&self, hit: InputSurfaceHit) -> CursorKind {
-        let Some(target) = hit.target else {
+        let Some(target) = hit.input.map(|input| input.handle) else {
             // Native scrollbars and the viewport outside the document use the arrow.
             return CursorKind::Default;
         };
@@ -109,8 +109,8 @@ fn auto_cursor_uses_text(
         select != UserSelect::None
     });
     selectable_text
-        || hit.target.is_some_and(|target| {
-            is_text_control_user_editable(host, target)
-                || contenteditable_editing_host(host, target).is_some()
+        || hit.input.is_some_and(|input| {
+            is_text_control_user_editable(host, input.handle)
+                || contenteditable_editing_host(host, input.handle).is_some()
         })
 }

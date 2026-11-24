@@ -317,7 +317,11 @@ use event_handlers::{
     HtmlBodyWindowEventHandlersDeclaration, HtmlFrameSetWindowEventHandlersDeclaration,
 };
 #[cfg(any(test, feature = "devtools"))]
+pub(crate) use events::construct_drag_event_with_related_target;
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) use events::construct_keyboard_event;
+#[cfg(test)]
+pub(crate) use events::construct_pointer_event;
 use events::{ClickEventSource, construct_click_event};
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
@@ -330,12 +334,11 @@ pub(crate) use events::{TouchEventPoint, construct_touch_event_with_points};
 #[cfg(feature = "devtools")]
 pub(crate) use events::{
     construct_activation_pointer_event, construct_drop_input_event,
-    construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target, construct_wheel_event_for_target,
+    construct_mouse_event_with_detail_for_target,
+    construct_mouse_event_with_related_target_for_target,
+    construct_pointer_event_with_related_target_for_target, construct_wheel_event_for_target,
 };
 pub(crate) use events::{construct_clipboard_event, construct_focus_event};
-#[cfg(any(test, feature = "devtools"))]
-pub(crate) use events::{construct_drag_event_with_related_target, construct_pointer_event};
 #[cfg(feature = "devtools")]
 pub(crate) use focus::focus_live_element_for_inspector;
 pub(crate) use focus::is_disabled_form_control;
@@ -489,9 +492,11 @@ pub(crate) use geometry::observable_input_hit_test;
 pub(crate) use geometry::observable_scrollbar_hit_test;
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::{
-    InputHitTestMode, InputHitTestPolicy, InputSurfaceHit, apply_scroll_observable_effects,
-    input_surface_hit_test, input_target_in_document, observable_geometry_query,
-    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
+    InputHit, InputHitTestMode, InputHitTestPolicy, InputSurfaceHit,
+    apply_scroll_observable_effects, captured_frame_input_surface_hit_test,
+    drag_start_frame_input_surface_hit_test, draggable_source_at_point, input_surface_hit_test,
+    observable_geometry_query, perform_scrollbar_scroll_default_action,
+    perform_wheel_scroll_default_action,
 };
 pub(super) use geometry::{element_for_hit_source, live_interaction_target};
 pub(super) use geometry::{

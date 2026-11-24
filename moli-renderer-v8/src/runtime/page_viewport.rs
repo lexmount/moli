@@ -10,6 +10,7 @@ use super::{
     RendererVisualStateToken,
 };
 use crate::native_bridge::LayoutPublicationRequest;
+use crate::script_vm::MouseDispatchCompletion;
 
 pub use style::values::specified::ui::CursorKind as RendererViewportCursorKind;
 
@@ -342,7 +343,7 @@ impl PageVm {
         {
             return Ok(None);
         }
-        match self.dispatch_mouse_event_at_point_with_pointer(
+        match self.dispatch_mouse_input(
             input.position.0,
             input.position.1,
             input.event,
@@ -354,6 +355,7 @@ impl PageVm {
             super::RendererPointerEventProperties::default(),
             input.modifiers,
             false,
+            MouseDispatchCompletion::FinishViewportTurn,
         ) {
             Ok(outcome) => Ok(Some(outcome)),
             // A document can lose its geometry after the last frame was painted.

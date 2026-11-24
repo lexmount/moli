@@ -574,7 +574,7 @@ fn native_non_primary_releases_dispatch_pointer_activation_events_in_each_world(
                 twist: 31.0,
             };
             let buttons = if event_name == "mousedown" {
-                super::super::super::input_dispatch::mouse_button_mask(button)
+                crate::script_vm::mouse_button_mask(button)
             } else {
                 0
             };

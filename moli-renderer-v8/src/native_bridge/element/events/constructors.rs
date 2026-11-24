@@ -14,15 +14,17 @@ use moli_webapi::events::subclasses::{
 #[cfg(any(test, feature = "devtools"))]
 mod devtools;
 #[cfg(any(test, feature = "devtools"))]
-pub(crate) use devtools::{construct_drag_event_with_related_target, construct_pointer_event};
+pub(crate) use devtools::construct_drag_event_with_related_target;
 #[cfg(feature = "devtools")]
 pub(crate) use devtools::{
-    construct_drop_input_event, construct_mouse_event_for_target,
-    construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target, construct_wheel_event_for_target,
+    construct_drop_input_event, construct_mouse_event_with_detail_for_target,
+    construct_mouse_event_with_related_target_for_target,
+    construct_pointer_event_with_related_target_for_target, construct_wheel_event_for_target,
 };
 #[cfg(test)]
-pub(crate) use devtools::{construct_mouse_event_with_detail_and_modifiers, construct_wheel_event};
+pub(crate) use devtools::{
+    construct_mouse_event_with_detail_and_modifiers, construct_pointer_event, construct_wheel_event,
+};
 
 use crate::runtime::RendererPointerEventProperties;
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};

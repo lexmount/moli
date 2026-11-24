@@ -15,11 +15,6 @@ pub(crate) enum MouseReleaseFollowUp {
 }
 
 impl PageScriptHost {
-    #[cfg(feature = "devtools")]
-    pub(crate) fn has_mouse_button_press(&self, button: i32) -> bool {
-        self.mouse_input.presses.contains_key(&button)
-    }
-
     #[cfg(test)]
     pub(crate) fn has_mouse_press(&self) -> bool {
         !self.mouse_input.presses.is_empty()
@@ -60,6 +55,11 @@ impl PageScriptHost {
         {
             *slot = owner;
         }
+    }
+
+    #[cfg(feature = "molio")]
+    pub(crate) fn mouse_press_target(&self, button: i32) -> Option<DomHandle> {
+        self.mouse_input.presses.get(&button).copied()
     }
 
     #[cfg(feature = "molio")]

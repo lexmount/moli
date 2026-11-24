@@ -15,6 +15,13 @@ pub(crate) struct PointerCaptureTarget {
     document: WindowDocumentTaskTarget,
 }
 
+#[cfg(feature = "devtools")]
+pub(crate) struct PointerCaptureDispatchEvent {
+    pub(crate) event_name: &'static str,
+    pub(crate) target: DomHandle,
+    pub(crate) pending: Option<PointerCaptureTarget>,
+}
+
 impl PageScriptHost {
     #[cfg(feature = "molio")]
     pub(crate) fn pointer_buttons_active(&self, pointer_id: i32) -> bool {
@@ -101,30 +108,22 @@ impl PageScriptHost {
 
 #[cfg(feature = "devtools")]
 impl PageScriptHost {
-    pub(crate) fn set_pointer_buttons_active(&mut self, pointer_id: i32, active: bool) {
-        self.pointers.entry(pointer_id).or_default().buttons_active = active;
+    pub(crate) fn update_pointer_input(&mut self, pointer_id: i32, buttons: i32) {
+        self.pointers.entry(pointer_id).or_default().buttons_active = buttons != 0;
     }
 
-    pub(crate) fn set_pointer_active_document(
-        &mut self,
-        pointer_id: i32,
-        document: WindowDocumentTaskTarget,
-    ) {
+    pub(crate) fn record_pointer_input_target(&mut self, pointer_id: i32, target: DomHandle) {
+        let owner = self
+            .dom_host()
+            .owner_document_handle(target)
+            .and_then(|document| self.input_owner_for_document(document));
         if let Some(state) = self.pointers.get_mut(&pointer_id) {
-            state.active_document = Some(document);
+            state.active_document = owner;
         }
     }
 
-    pub(crate) fn remove_touch_pointer_input(&mut self, pointer_id: i32) {
+    pub(crate) fn finish_touch_pointer_input(&mut self, pointer_id: i32) {
         self.pointers.remove(&pointer_id);
-    }
-
-    pub(crate) fn pending_pointer_capture_target(&self, pointer_id: i32) -> Option<DomHandle> {
-        self.pointers
-            .get(&pointer_id)?
-            .pending
-            .filter(|capture| self.pointer_capture_target_is_current(*capture))
-            .map(|capture| capture.element)
     }
 
     pub(crate) fn active_pointer_capture_target(&self, pointer_id: i32) -> Option<DomHandle> {
@@ -133,6 +132,15 @@ impl PageScriptHost {
             .active
             .filter(|capture| self.pointer_capture_target_is_current(*capture))
             .map(|capture| capture.element)
+    }
+
+    pub(crate) fn pointer_capture_document_has_retired(&self, pointer_id: i32) -> bool {
+        self.pointers.get(&pointer_id).is_some_and(|state| {
+            state
+                .active
+                .or(state.pending)
+                .is_some_and(|capture| self.input_document_for_owner(capture.document).is_none())
+        })
     }
 
     pub(crate) fn pointer_capture_target_for_click(&self, pointer_id: i32) -> Option<DomHandle> {
@@ -144,7 +152,26 @@ impl PageScriptHost {
             .then_some(capture.element)
     }
 
-    pub(crate) fn begin_pointer_capture_transition(
+    pub(crate) fn process_pending_pointer_capture(
+        &mut self,
+        pointer_id: i32,
+    ) -> Vec<PointerCaptureDispatchEvent> {
+        let (lost, pending) = self.begin_pointer_capture_transition(pointer_id);
+        lost.into_iter()
+            .map(|target| PointerCaptureDispatchEvent {
+                event_name: "lostpointercapture",
+                target,
+                pending: None,
+            })
+            .chain(pending.map(|capture| PointerCaptureDispatchEvent {
+                event_name: "gotpointercapture",
+                target: capture.element,
+                pending: Some(capture),
+            }))
+            .collect()
+    }
+
+    fn begin_pointer_capture_transition(
         &mut self,
         pointer_id: i32,
     ) -> (Option<DomHandle>, Option<PointerCaptureTarget>) {

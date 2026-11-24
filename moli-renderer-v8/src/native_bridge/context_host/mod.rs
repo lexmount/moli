@@ -182,6 +182,8 @@ mod navigator_overrides;
 mod opfs_tasks;
 mod permissions;
 mod pointer_capture;
+#[cfg(feature = "devtools")]
+pub(crate) use pointer_capture::PointerCaptureDispatchEvent;
 mod popups;
 mod range_records;
 mod resource_loading;
