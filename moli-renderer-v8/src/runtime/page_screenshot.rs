@@ -13,6 +13,8 @@ use std::time::Instant;
 #[cfg(feature = "devtools")]
 use super::RendererDevToolsPageReply;
 use super::{PageVm, RendererDocumentLifecycleIdentity};
+#[cfg(feature = "devtools")]
+use crate::raster_worker::RendererRasterStream;
 
 mod vision;
 
@@ -398,6 +400,7 @@ impl PageVm {
         let mut visual_state =
             visual_state_for_rendered_frame(visual_state_before, visual_state_after);
         visual_state.post_layout_work_deferred = debugger_paused;
+        let realtime = self.layout_configuration.policy.is_realtime();
         let job = RendererScreencastFrameRasterJob {
             capture,
             viewport_size: surface.visible_size(),
@@ -405,8 +408,13 @@ impl PageVm {
             format: request.format,
             quality: request.quality,
             optimize_for_speed: request.optimize_for_speed,
+            stream: request
+                .paint_session
+                .as_ref()
+                .filter(|_| realtime)
+                .map(super::RendererScreencastPaintSession::raster_stream),
         };
-        if self.layout_configuration.policy == LayoutPolicy::Realtime {
+        if realtime {
             Ok(RendererDevToolsPageReply::ScreencastFrameRasterJob(
                 Box::new(job),
             ))
@@ -616,10 +624,27 @@ pub struct RendererScreencastFrameRasterJob {
     format: RendererScreenshotFormat,
     quality: u8,
     optimize_for_speed: bool,
+    stream: Option<std::sync::Weak<RendererRasterStream>>,
 }
 
 #[cfg(feature = "devtools")]
 impl RendererScreencastFrameRasterJob {
+    pub(super) async fn finish_on_worker(
+        mut self,
+    ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
+        if let Some(stream) = self.stream.take() {
+            let pending = stream
+                .upgrade()
+                .ok_or_else(|| anyhow::anyhow!("screencast subscription has closed"))?
+                .submit(move || self.finish())?;
+            pending.await?
+        } else {
+            // Native callers can capture one frame without a CDP subscription.
+            let stream = RendererRasterStream::default();
+            stream.submit(move || self.finish())?.await?
+        }
+    }
+
     pub(super) fn finish(self) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
         let image = self
             .capture

@@ -1809,7 +1809,7 @@ impl RendererCommandTurnOutput {
         {
             // The outstanding capture and its ACK continue to fence later
             // frames. Only the owned snapshot crosses onto the worker.
-            let reply = tokio::task::spawn_blocking(move || job.finish()).await??;
+            let reply = job.finish_on_worker().await?;
             self.completion.reply = RendererPageReply::DevTools(
                 RendererDevToolsPageReply::CaptureScreencastFrame(reply),
             );
