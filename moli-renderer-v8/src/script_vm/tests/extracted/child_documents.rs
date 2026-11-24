@@ -3196,3 +3196,6 @@ async fn child_realm_sync_repairs_window_proxy_created_after_materialization() {
         .expect("late WindowProxy wrapper should sync child Function constructor");
     assert_eq!(result, "13");
 }
+
+#[path = "../cross_origin_symbol_fallback.rs"]
+mod cross_origin_symbol_fallback;
