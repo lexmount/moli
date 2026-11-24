@@ -63,6 +63,10 @@ impl PageVm {
         &mut self,
         activity: moli_page_types::DocumentActivity,
     ) -> anyhow::Result<()> {
+        #[cfg(feature = "molio")]
+        if !activity.visible {
+            self.update_viewport_pointer_position(None);
+        }
         self.apply_document_setting(DocumentSetting::DocumentActivity(activity))
     }
 }

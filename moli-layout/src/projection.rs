@@ -1105,6 +1105,8 @@ where
                         geometry_source,
                         principal_source,
                         hit_source,
+                        #[cfg(feature = "molio")]
+                        pseudo: layout_box.pseudo,
                         css_sizing,
                         resolved_grid_tracks,
                         control_paint_order,

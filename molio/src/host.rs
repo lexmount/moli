@@ -57,9 +57,17 @@ pub enum TabCommand {
     Navigate(Option<String>),
     History(i64),
     Stop,
-    Viewport(ViewportSurface, u64),
+    Viewport {
+        surface: ViewportSurface,
+        revision: u64,
+        pointer_position: Option<(f64, f64)>,
+    },
     Activity(DocumentActivity),
     Pointer(PointerInput),
+    PointerPosition {
+        viewport_revision: u64,
+        position: Option<(f64, f64)>,
+    },
     Wheel(RendererViewportWheelInput),
     Key(KeyInput),
     InsertText(String),
@@ -79,7 +87,7 @@ pub enum TabCommand {
 impl TabCommand {
     fn superseded_by(&self, next: &Self) -> bool {
         match (self, next) {
-            (Self::Viewport(..), Self::Viewport(..)) => true,
+            (Self::Viewport { .. }, Self::Viewport { .. }) => true,
             (Self::Pointer(previous), Self::Pointer(next)) => {
                 previous.event == "mousemove"
                     && next.event == "mousemove"
@@ -452,10 +460,10 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                         });
                         page.stop_document_lifecycle_async().await
                     }
-                    TabCommand::Viewport(viewport, revision) => {
+                    TabCommand::Viewport { surface: viewport, revision, pointer_position } => {
                         surface = Some((viewport, revision));
                         if activity.visible {
-                            refresh_capture(&mut page, &mut capture, surface, &tab.viewport).await
+                            refresh_capture(&mut page, &mut capture, surface, pointer_position, &tab.viewport).await
                         } else {
                             Ok(())
                         }
@@ -480,7 +488,7 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                                     });
                                 }
                             }
-                            refresh_capture(&mut page, &mut capture, surface, &tab.viewport).await
+                            refresh_capture(&mut page, &mut capture, surface, None, &tab.viewport).await
                         } else if next.focused {
                             refresh_editor(&mut page, &tab.state).await
                         } else {
@@ -495,6 +503,9 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                             }
                         });
                         if refresh && result.is_ok() { refresh_editor(&mut page, &tab.state).await } else { result }
+                    }
+                    TabCommand::PointerPosition { viewport_revision, position } if activity.visible => {
+                        page.set_viewport_pointer_position(viewport_revision, position).await
                     }
                     TabCommand::Wheel(input) if activity.visible => {
                         page.enqueue_viewport_wheel(input)
@@ -629,6 +640,7 @@ async fn refresh_capture(
     page: &mut Page,
     capture: &mut Option<BufferedViewportFrames>,
     surface: Option<(ViewportSurface, u64)>,
+    pointer_position: Option<(f64, f64)>,
     output: &Arc<ViewportOutput>,
 ) -> Result<()> {
     if let Some((surface, revision)) = surface {
@@ -641,8 +653,14 @@ async fn refresh_capture(
         ];
         let buffers = ViewportBuffers::new(layout, storage)?;
         *capture = Some(
-            page.subscribe_viewport_buffer(surface, revision, buffers, output.clone())
-                .await?,
+            page.subscribe_viewport_buffer_with_pointer(
+                surface,
+                revision,
+                pointer_position,
+                buffers,
+                output.clone(),
+            )
+            .await?,
         );
     }
     Ok(())
@@ -672,6 +690,7 @@ async fn dispatch_pointer(
 mod tests {
     use super::*;
     use crate::downloads::{Download, DownloadCommand, DownloadState};
+    use moli_core::RendererViewportCursorKind;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpListener;
 
@@ -1090,15 +1109,16 @@ mod tests {
             .send(TabCommand::Activity(DocumentActivity::new(true, true)))
             .map_err(|_| anyhow::anyhow!("show tab"))?;
         tab.commands
-            .send(TabCommand::Viewport(
-                ViewportSurface {
+            .send(TabCommand::Viewport {
+                surface: ViewportSurface {
                     inner_width: 40,
                     inner_height: 30,
                     device_pixel_ratio: 2.,
                     ..ViewportSurface::default()
                 },
                 revision,
-            ))
+                pointer_position: None,
+            })
             .map_err(|_| anyhow::anyhow!("resize tab"))?;
         let state = tokio::time::timeout(
             Duration::from_secs(5),
@@ -1166,6 +1186,53 @@ mod tests {
             show_tab(&mut red, "Red", 3, [0, 0, 255, 255]).await?,
             red_document
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn viewport_resize_uses_the_pointer_position_for_its_revision() -> Result<()> {
+        let (host, _events) = BrowserHost::start(None)?;
+        let mut tab = host.open_tab()?;
+        let html = concat!(
+            "data:text/html,<title>Cursor</title><style>",
+            "body{margin:0}div{display:inline-block;width:40px;height:40px;cursor:crosshair}",
+            "div+div{cursor:text}</style><div></div><div></div>"
+        );
+        tab.commands
+            .send(TabCommand::Navigate(Some(html.into())))
+            .map_err(|_| anyhow::anyhow!("load cursor tab"))?;
+        let document = show_tab(&mut tab, "Cursor", 1, [255; 4]).await?;
+        let mut updates = tab.viewport.subscribe();
+
+        for (revision, width, x) in [(2, 84, 16.), (3, 88, 60.)] {
+            tab.commands
+                .send(TabCommand::Viewport {
+                    surface: ViewportSurface {
+                        inner_width: width,
+                        inner_height: 60,
+                        ..ViewportSurface::default()
+                    },
+                    revision,
+                    pointer_position: Some((x, 16.)),
+                })
+                .map_err(|_| anyhow::anyhow!("resize cursor tab"))?;
+        }
+
+        let cursor = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(cursor) = tab
+                    .viewport
+                    .cursor()
+                    .filter(|cursor| cursor.viewport_revision == 3)
+                {
+                    break Ok::<_, watch::error::RecvError>(cursor);
+                }
+                updates.changed().await?;
+            }
+        })
+        .await??;
+        assert_eq!(cursor.document, document);
+        assert_eq!(cursor.kind, RendererViewportCursorKind::Text);
         Ok(())
     }
 

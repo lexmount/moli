@@ -8,6 +8,16 @@ use tokio::sync::{Notify, watch};
 use super::{PageVm, RendererDocumentLifecycleIdentity, RendererVisualStateToken};
 use crate::native_bridge::LayoutPublicationRequest;
 
+pub use style::values::specified::ui::CursorKind as RendererViewportCursorKind;
+
+/// The resolved native cursor keyword for the current viewport pointer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RendererViewportCursor {
+    pub document: RendererDocumentLifecycleIdentity,
+    pub viewport_revision: u64,
+    pub kind: RendererViewportCursorKind,
+}
+
 /// Owned input for presenting one version of a live viewport on another thread.
 #[derive(Clone, Debug)]
 pub struct RendererViewportFrame {
@@ -82,7 +92,9 @@ pub struct RendererPageNavigationState {
 pub struct RendererViewportSubscription {
     pub surface: ViewportSurface,
     pub viewport_revision: u64,
+    pub initial_pointer_position: Option<(f64, f64)>,
     pub updates: watch::Sender<Option<RendererViewportFrame>>,
+    pub cursor: watch::Sender<Option<RendererViewportCursor>>,
     pub resource_wake: Arc<Notify>,
 }
 
@@ -144,6 +156,8 @@ pub(super) struct ViewportFrameState {
     painted: Option<RendererVisualStateToken>,
     sequence: u64,
     editing: crate::context_bootstrap::viewport_edit::ViewportEditing,
+    pointer: Option<(f64, f64)>,
+    sampled_pointer: Option<(f64, f64)>,
 }
 
 impl ViewportFrameState {
@@ -151,10 +165,54 @@ impl ViewportFrameState {
         self.painted = None;
         self.editing = Default::default();
         self.subscription.updates.send_replace(None);
+        self.clear_cursor();
+    }
+
+    fn clear_cursor(&mut self) {
+        self.sampled_pointer = None;
+        self.subscription
+            .cursor
+            .send_if_modified(|cursor| cursor.take().is_some());
     }
 }
 
 impl PageVm {
+    /// Synchronizes pointer position within an existing viewport revision.
+    /// These updates do not dispatch a DOM mouse event.
+    pub(super) fn set_viewport_pointer_position(
+        &mut self,
+        viewport_revision: u64,
+        position: Option<(f64, f64)>,
+    ) {
+        if self
+            .viewport_frames
+            .as_ref()
+            .is_some_and(|state| state.subscription.viewport_revision == viewport_revision)
+        {
+            self.update_viewport_pointer_position(position);
+        }
+    }
+
+    pub(super) fn update_viewport_pointer_position(&mut self, position: Option<(f64, f64)>) {
+        let Some(state) = self.viewport_frames.as_mut() else {
+            return;
+        };
+        let position = visible_pointer_position(
+            state.subscription.surface,
+            self.document_settings.document_activity.visible,
+            position,
+        );
+        if state.pointer != position {
+            state.pointer = position;
+            if position.is_some() {
+                self.wake_viewport_frames();
+            } else {
+                state.clear_cursor();
+                self.vm().clear_viewport_hover();
+            }
+        }
+    }
+
     pub(super) fn dispatch_viewport_wheel(
         &mut self,
         input: RendererViewportWheelInput,
@@ -271,13 +329,21 @@ impl PageVm {
 
     pub(super) fn subscribe_viewport_frames(
         &mut self,
-        subscription: RendererViewportSubscription,
+        mut subscription: RendererViewportSubscription,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.layout_configuration.policy.is_realtime(),
             "Viewport frames require the Realtime layout policy"
         );
         self.set_viewport_surface(Some(subscription.surface))?;
+        let pointer = visible_pointer_position(
+            subscription.surface,
+            self.document_settings.document_activity.visible,
+            subscription.initial_pointer_position.take(),
+        );
+        if pointer.is_none() {
+            self.vm().clear_viewport_hover();
+        }
         let editing = self
             .viewport_frames
             .as_mut()
@@ -288,6 +354,8 @@ impl PageVm {
             painted: None,
             sequence: 0,
             editing,
+            pointer,
+            sampled_pointer: None,
         }));
         Ok(())
     }
@@ -318,6 +386,7 @@ impl PageVm {
         };
         if state.subscription.updates.is_closed() {
             self.viewport_frames = None;
+            self.vm().clear_viewport_hover();
             return;
         }
         let surface = state.subscription.surface;
@@ -328,7 +397,13 @@ impl PageVm {
         );
         let document = self.document_lifecycle.identity();
         let before = self.vm().visual_state_token(document, viewport, [255; 4]);
-        if state.painted.as_ref() == Some(&before) {
+        let pixels_current = state.painted.as_ref() == Some(&before);
+        let pointer_to_sample = state
+            .pointer
+            .filter(|_| !pixels_current || state.pointer != state.sampled_pointer);
+        let hover_changed = pointer_to_sample
+            .is_some_and(|position| self.publish_viewport_cursor(document, position));
+        if pixels_current && !hover_changed {
             return;
         }
 
@@ -370,4 +445,47 @@ impl PageVm {
                 snapshot: snapshot.map(Arc::new),
             }));
     }
+
+    fn publish_viewport_cursor(
+        &mut self,
+        document: RendererDocumentLifecycleIdentity,
+        position: (f64, f64),
+    ) -> bool {
+        let (kind, hover_changed) =
+            self.vm()
+                .refresh_viewport_cursor(position)
+                .unwrap_or_else(|error| {
+                    tracing::debug!(%error, "could not resolve viewport cursor");
+                    (RendererViewportCursorKind::Default, false)
+                });
+        let state = self
+            .viewport_frames
+            .as_mut()
+            .expect("viewport subscription");
+        // Recheck on the next frame if the hover change moves the hit geometry.
+        state.sampled_pointer = (!hover_changed).then_some(position);
+        let next = Some(RendererViewportCursor {
+            document,
+            viewport_revision: state.subscription.viewport_revision,
+            kind,
+        });
+        state.subscription.cursor.send_if_modified(|cursor| {
+            let changed = *cursor != next;
+            *cursor = next;
+            changed
+        });
+        hover_changed
+    }
+}
+
+fn visible_pointer_position(
+    surface: ViewportSurface,
+    visible: bool,
+    position: Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    position.filter(|&(x, y)| {
+        visible
+            && (0.0..f64::from(surface.inner_width)).contains(&x)
+            && (0.0..f64::from(surface.inner_height)).contains(&y)
+    })
 }

@@ -5101,6 +5101,11 @@ pub enum RendererPageCommand {
     #[cfg(feature = "molio")]
     DispatchViewportWheel(super::RendererViewportWheelInput),
     #[cfg(feature = "molio")]
+    SetViewportPointerPosition {
+        viewport_revision: u64,
+        position: Option<(f64, f64)>,
+    },
+    #[cfg(feature = "molio")]
     NavigateViewport(Option<String>),
     #[cfg(feature = "molio")]
     TraverseViewportHistory(i64),

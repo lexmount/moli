@@ -474,7 +474,7 @@ pub enum LayoutPseudo {
 }
 
 impl LayoutPseudo {
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Marker => "::marker",
             Self::Before => "::before",

@@ -16,6 +16,11 @@ const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
 pub(crate) struct InputSurfaceHit {
     pub(crate) target: Option<DomHandle>,
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
+    /// The painted source before mapping it to an element for DOM events.
+    #[cfg(feature = "molio")]
+    pub(crate) cursor_source: Option<(DomHandle, Option<moli_layout::LayoutPseudo>)>,
+    #[cfg(feature = "molio")]
+    pub(crate) is_text: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -121,6 +126,10 @@ pub(crate) fn input_surface_hit_test(
                 },
             ),
             control: None,
+            #[cfg(feature = "molio")]
+            cursor_source: None,
+            #[cfg(feature = "molio")]
+            is_text: false,
         });
     }
     runtime.ensure_observable_layout()?;
@@ -185,6 +194,10 @@ fn input_surface_hit_test_in_tree(
                     return Ok(InputSurfaceHit {
                         target: None,
                         control: Some(control),
+                        #[cfg(feature = "molio")]
+                        cursor_source: None,
+                        #[cfg(feature = "molio")]
+                        is_text: false,
                     });
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
@@ -210,11 +223,24 @@ fn input_surface_hit_test_in_tree(
         return Ok(InputSurfaceHit {
             target: use_viewport_target.then_some(tree.source_root()),
             control: None,
+            #[cfg(feature = "molio")]
+            cursor_source: None,
+            #[cfg(feature = "molio")]
+            is_text: false,
         });
     };
     let target_hit = InputSurfaceHit {
         target: Some(target),
         control: None,
+        #[cfg(feature = "molio")]
+        cursor_source: Some((
+            layout_hit.source,
+            layout_hit
+                .fragment
+                .and_then(|fragment| tree.fragment_pseudo(fragment)),
+        )),
+        #[cfg(feature = "molio")]
+        is_text: layout_hit.is_text,
     };
     if depth >= CHILD_FRAME_DEPTH_LIMIT {
         return Ok(target_hit);

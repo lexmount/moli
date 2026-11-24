@@ -17,6 +17,9 @@ impl PageVm {
         modifiers: u8,
         intercept_drags: bool,
     ) -> Result<RendererInputDispatchOutcome> {
+        #[cfg(feature = "molio")]
+        let tracks_viewport_cursor = pointer.pointer_type == "mouse"
+            && matches!(event_name, "mousemove" | "mousedown" | "mouseup" | "wheel");
         let mut outcome = self.vm_mut().dispatch_mouse_input(
             x,
             y,
@@ -31,6 +34,10 @@ impl PageVm {
             intercept_drags,
             MouseDispatchCompletion::FinishTurn,
         )?;
+        #[cfg(feature = "molio")]
+        if tracks_viewport_cursor {
+            self.update_viewport_pointer_position(Some((x, y)));
+        }
         self.bind_input_dispatch_file_chooser_backend_node_id(&mut outcome);
         Ok(outcome)
     }

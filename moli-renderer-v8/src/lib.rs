@@ -356,10 +356,10 @@ pub use runtime::{
 };
 #[cfg(feature = "molio")]
 pub use runtime::{
-    RendererPageNavigationState, RendererViewportEdit, RendererViewportEditAction,
-    RendererViewportEditReply, RendererViewportEditor, RendererViewportFrame,
-    RendererViewportNavigation, RendererViewportSubscription, RendererViewportWheelInput,
-    RendererViewportWheelPhase,
+    RendererPageNavigationState, RendererViewportCursor, RendererViewportCursorKind,
+    RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
+    RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
+    RendererViewportSubscription, RendererViewportWheelInput, RendererViewportWheelPhase,
 };
 pub use runtime::{RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder};
 pub use service_worker_runtime::{
