@@ -549,10 +549,18 @@ pub struct RendererInterceptedDrag {
     pub drag_operations_mask: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RendererWheelDispatchOutcome {
+    Canceled,
+    Scrolled,
+    Unconsumed,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RendererInputDispatchOutcome {
     pub handled: bool,
-    pub wheel_default_prevented: bool,
+    /// Present once a wheel event was dispatched to a document.
+    pub wheel: Option<RendererWheelDispatchOutcome>,
     pub triggered_top_level_navigation: bool,
     pub pending_download: Option<RendererPendingDownloadActivation>,
     pub pending_file_chooser: Option<RendererPendingFileChooserActivation>,

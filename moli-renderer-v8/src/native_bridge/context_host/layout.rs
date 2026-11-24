@@ -602,6 +602,8 @@ impl PageScriptHost {
             Vec::new()
         };
         let tree = pass.into_tree();
+        #[cfg(feature = "devtools")]
+        self.note_synthetic_scroll_target_layout(document, &tree);
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));

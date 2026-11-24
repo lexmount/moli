@@ -58,7 +58,7 @@ use crate::native_bridge::{
 };
 use crate::runtime::{
     RendererDragData, RendererInputDispatchOutcome, RendererInterceptedDrag,
-    RendererPointerEventProperties, RendererTouchPoint,
+    RendererPointerEventProperties, RendererTouchPoint, RendererWheelDispatchOutcome,
 };
 use crate::util::{
     node_wrapper_from_handle, utf16_len, utf16_next_scalar_boundary,
@@ -1160,8 +1160,11 @@ impl ScriptVm {
         );
         if let Some(gesture) = gesture {
             let mut targets = gesture.targets.lock();
-            match &result {
-                Ok(outcome) if !outcome.wheel_default_prevented => {
+            match result.as_ref().ok().and_then(|outcome| outcome.wheel) {
+                Some(
+                    RendererWheelDispatchOutcome::Scrolled
+                    | RendererWheelDispatchOutcome::Unconsumed,
+                ) => {
                     targets.scroll_target = wheel_scroll_target;
                 }
                 _ => {
@@ -1915,17 +1918,15 @@ impl ScriptVm {
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
                     if event_name == "wheel" {
-                        let mut outcome = input_dispatch_outcome(true);
-                        outcome.wheel_default_prevented = !dispatched.allows_default();
-                        if dispatched.allows_default() {
-                            if let Some(scroll_target) = wheel_scroll_target {
+                        let wheel = if dispatched.allows_default() {
+                            let scrolled = if let Some(scroll_target) = wheel_scroll_target {
                                 perform_latched_wheel_scroll_default_action(
                                     scope,
                                     runtime_ptr,
                                     scroll_target,
                                     delta_x,
                                     delta_y,
-                                )?;
+                                )?
                             } else {
                                 perform_wheel_scroll_default_action(
                                     scope,
@@ -1933,10 +1934,20 @@ impl ScriptVm {
                                     pointer_dispatch_handle,
                                     delta_x,
                                     delta_y,
-                                )?;
+                                )?
+                            };
+                            if scrolled {
+                                RendererWheelDispatchOutcome::Scrolled
+                            } else {
+                                RendererWheelDispatchOutcome::Unconsumed
                             }
-                        }
-                        return Ok(outcome);
+                        } else {
+                            RendererWheelDispatchOutcome::Canceled
+                        };
+                        return Ok(RendererInputDispatchOutcome {
+                            wheel: Some(wheel),
+                            ..input_dispatch_outcome(true)
+                        });
                     }
                     if event_name == "mousedown" && !dispatched.allows_default() {
                         mouse_down_allows_drag.set(false);
@@ -2163,7 +2174,7 @@ impl ScriptVm {
                     if follow_up_event_name == "auxclick" {
                         return Ok(RendererInputDispatchOutcome {
                             handled: true,
-                            wheel_default_prevented: false,
+                            wheel: None,
                             triggered_top_level_navigation:
                                 !had_pending_top_level_navigation_before_event
                                     && unsafe { &*runtime_ptr }.has_pending_location_navigation(),

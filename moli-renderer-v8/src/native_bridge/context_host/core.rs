@@ -495,6 +495,8 @@ impl PageScriptHost {
             pointers: HashMap::new(),
             #[cfg(feature = "devtools")]
             mouse_input: mouse_click::MouseInputState::default(),
+            #[cfg(feature = "devtools")]
+            synthetic_scroll_targets: RefCell::default(),
             lazy_media_load_candidates: HashSet::new(),
             canvas_resources: super::canvas_resources::CanvasResourceStore::new(
                 visual_resource_generation.clone(),

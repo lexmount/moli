@@ -459,3 +459,4 @@ pub use runtime::{
 
 #[cfg(feature = "devtools")]
 pub use runtime::RendererSyntheticWheelGesture;
+pub use runtime::RendererWheelDispatchOutcome;

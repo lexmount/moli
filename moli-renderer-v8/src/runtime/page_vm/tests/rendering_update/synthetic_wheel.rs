@@ -96,6 +96,40 @@ fn synthetic_wheel_removed_scroller_stays_invalid_after_reinsertion() {
 }
 
 #[test]
+fn synthetic_wheel_does_not_scroll_a_rebuilt_box() {
+    run_page_vm_large_stack_async_test("synthetic-wheel-rebuilt-box", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/wheel").unwrap(),
+        );
+        for rebuild in [
+            "a.style.display='flow-root'",
+            "a.style.display='flow-root'; void a.offsetWidth",
+            "a.style.display='flow-root'; void a.offsetWidth; a.style.display='block'; void a.offsetWidth",
+        ] {
+            install(&mut page);
+            let gesture = RendererSyntheticWheelGesture::default();
+            wheel(&mut page, &gesture, 40.0, 0.0, 50.0).unwrap();
+            assert_eq!(page.vm_mut().eval("String(a.scrollTop)").unwrap(), "50");
+
+            page.vm_mut().eval(rebuild).unwrap();
+            wheel(&mut page, &gesture, 40.0, 0.0, 100.0).unwrap();
+            assert_eq!(
+                page.vm_mut()
+                    .eval("JSON.stringify([a.scrollTop,scrollY])")
+                    .unwrap(),
+                "[50,0]",
+                "{rebuild}"
+            );
+
+            wheel(&mut page, &gesture.next_sequence(), 40.0, 0.0, 40.0).unwrap();
+            assert_eq!(page.vm_mut().eval("String(a.scrollTop)").unwrap(), "90");
+        }
+    });
+}
+
+#[test]
 fn synthetic_wheel_adopted_scroller_does_not_follow_old_gesture() {
     run_page_vm_large_stack_async_test("synthetic-wheel-adoption", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
@@ -203,7 +237,7 @@ fn synthetic_wheel_survives_unrelated_mutations() {
         install(&mut page);
         let gesture = RendererSyntheticWheelGesture::default();
         wheel(&mut page, &gesture, 40.0, 0.0, 50.0).unwrap();
-        page.vm_mut().eval("const unrelated=document.createElement('div');document.body.append(unrelated);unrelated.remove()").unwrap();
+        page.vm_mut().eval("const unrelated=document.createElement('div');document.body.append(unrelated);unrelated.remove();a.style.height='140px';void a.offsetWidth").unwrap();
         wheel(&mut page, &gesture, 40.0, 0.0, 25.0).unwrap();
         assert_eq!(
             page.vm_mut()

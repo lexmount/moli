@@ -2,7 +2,7 @@
 
 use std::{fmt::Debug, hash::Hash, ops::Deref};
 
-use crate::LayoutError;
+use crate::{LayoutDisplay, LayoutError};
 
 use super::model::{
     FrozenCoordinateSpace, LayoutBoxGeometry, LayoutClipNode, LayoutCoordinateSpaceId,
@@ -47,6 +47,8 @@ pub(crate) struct CssSizing {
 /// element without manufacturing CSSOM rects for that element.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrozenLayoutBox<N> {
+    /// Computed display used to construct this box.
+    pub display: LayoutDisplay,
     pub geometry: LayoutBoxGeometry,
     pub scroll_extent: LayoutScrollExtent,
     pub coordinate_space: FrozenCoordinateSpace,
