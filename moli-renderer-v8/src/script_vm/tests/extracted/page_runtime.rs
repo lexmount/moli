@@ -59,7 +59,7 @@ async fn connected_modulepreload_csp_hash_admission_preserves_integrity_metadata
             integrity = serde_json::to_string(&integrity).unwrap()
         ))
         .unwrap();
-        vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        vm.prime_document_lifecycle_and_publish_stylesheets();
         let fetched = matches!(case, "match" | "tampered");
         if fetched {
             wait_for_one_page_resource_completion_selected_task_executor_test_turn(
@@ -954,7 +954,7 @@ fn cached_connected_modulepreload_never_acquires_a_load_delay() {
         "modulepreload network admission must retain only owner identity, not a load-delay token"
     );
 
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     let ready = vm
         .take_next_connected_style_event_body_for_test()
         .expect("cached modulepreload terminal should publish its link event")
@@ -1002,7 +1002,7 @@ async fn in_flight_connected_modulepreload_does_not_delay_window_load() {
         .expect("modulepreload fixture must retain a current Document owner");
 
     vm.queue_initial_connected_style_loads_for_current_owner();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     let request = tokio::time::timeout(std::time::Duration::from_secs(2), request_rx)
         .await
         .expect("modulepreload request should reach the server")
@@ -1105,7 +1105,7 @@ async fn connected_modulepreload_invalid_as_dispatches_link_error_event() {
         .current_main_document_task_owner()
         .expect("invalid modulepreload fixture must retain a current Document owner");
 
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     assert_eq!(
         vm.current_main_document_has_style_load_event_delay(owner),
         Some(false),

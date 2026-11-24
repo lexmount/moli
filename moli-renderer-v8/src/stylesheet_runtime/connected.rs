@@ -257,11 +257,19 @@ impl ConnectedStyleOwnerKind {
 
 impl DocumentRuntime {
     /// Parser discovery may need an inline import before the initial scan.
-    /// Reuse connected-owner admission without visiting unrelated DOM nodes.
-    pub(crate) fn prepare_parser_style_import_loads(
+    /// Bind the live owner to its canonical operation before a completed
+    /// graph can be published. An owner queued at the DOM mutation boundary
+    /// already has a load-event admission and keeps it here.
+    pub(crate) fn accept_parser_stylesheet_inputs(
         &mut self,
+        host_ptr: *mut PageScriptHost,
         inputs: &[crate::stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput],
-    ) -> Vec<PreparedConnectedStyleLoad> {
+    ) -> ConnectedStyleLoadPrimeResult {
+        let mut result = ConnectedStyleLoadPrimeResult {
+            completed_stylesheet_clients: self
+                .note_discovered_document_owned_stylesheet_inputs(inputs.iter()),
+            ..Default::default()
+        };
         let handles = inputs
             .iter()
             .filter(|input| {
@@ -272,11 +280,49 @@ impl DocumentRuntime {
             })
             .map(|input| DomHandle::new(input.node_id().index()))
             .collect::<Vec<_>>();
-        let mut prepared = self.prepare_connected_style_load_handles(&handles, true);
-        for load in &mut prepared {
-            load.remember_before_initial_scan = !self.initial_connected_style_loads_queued;
+        if handles.is_empty() {
+            return result;
         }
-        prepared
+        for mut load in self.prepare_connected_style_load_handles(&handles, true) {
+            load.remember_before_initial_scan = !self.initial_connected_style_loads_queued;
+            result.extend(self.commit_prepared_connected_style_load(host_ptr, load));
+        }
+        let queued_loads = std::mem::take(&mut self.stylesheet_lifecycle.pending_connected_loads);
+        for load in queued_loads {
+            if handles.contains(&load.owner()) {
+                result.extend(self.prime_connected_style_load_handle(
+                    load.owner(),
+                    load.inline_source().cloned(),
+                    host_ptr,
+                    load.event_admission(),
+                ));
+            } else {
+                self.stylesheet_lifecycle
+                    .pending_connected_loads
+                    .push_back(load);
+            }
+        }
+        result
+    }
+
+    pub(crate) fn accept_parser_stylesheet_inputs_in_current_scope(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        inputs: &[crate::stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput],
+    ) {
+        if inputs.is_empty() {
+            return;
+        }
+        let mut result = self.accept_parser_stylesheet_inputs(host_ptr, inputs);
+        self.settle_stylesheet_link_clients_in_current_scope(
+            scope,
+            host_ptr,
+            result.take_completed_stylesheet_clients(),
+        );
+        self.pending_connected_style_load_prime_result
+            .extend(result);
+        self.publish_ready_stylesheet_results_in_current_scope(scope, host_ptr);
     }
 
     pub(crate) fn prepare_initial_connected_style_loads(
@@ -456,6 +502,26 @@ impl DocumentRuntime {
                 ))
             })
             .collect()
+    }
+
+    /// Complete the synchronous prepare/commit/apply transaction on the
+    /// owner thread. The host commits only the FrameOwnerStore admission.
+    pub(crate) fn commit_prepared_connected_style_load(
+        &mut self,
+        host_ptr: *mut PageScriptHost,
+        prepared: PreparedConnectedStyleLoad,
+    ) -> ConnectedStyleLoadPrimeResult {
+        let host = unsafe { &mut *host_ptr };
+        let inline_source = host.owner_style_sheet_processing_source(prepared.owner());
+        let Some(admission) = host.commit_connected_style_load_event_plan(prepared.event_plan())
+        else {
+            tracing::debug!(
+                owner = ?prepared.owner(),
+                "discarded connected-style plan rejected by the current main Document"
+            );
+            return ConnectedStyleLoadPrimeResult::default();
+        };
+        self.apply_prepared_connected_style_load(prepared, inline_source, admission, host_ptr)
     }
 
     /// Apply one already-committed plan without consulting ContextHost for
@@ -4404,13 +4470,13 @@ mod tests {
         let signatures = stylesheet_inputs
             .iter()
             .map(|input| input.signature().clone())
-            .collect::<Vec<_>>();
+            .collect::<std::collections::HashSet<_>>();
         assert!(
             !runtime.has_pending_document_owned_blocking_stylesheet_signatures(signatures.iter()),
             "the completed failure must settle the physical stylesheet blocker"
         );
         assert!(
-            !runtime.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
+            !runtime.has_pending_parser_script_blocking_stylesheet_signatures(&signatures),
             "a terminal stylesheet failure must release script execution before its error task"
         );
 
@@ -4431,7 +4497,7 @@ mod tests {
             "dispatch must not recreate the settled physical stylesheet blocker"
         );
         assert!(
-            !runtime.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
+            !runtime.has_pending_parser_script_blocking_stylesheet_signatures(&signatures),
             "dispatching the exact link error task must not recreate the released script gate"
         );
         assert!(

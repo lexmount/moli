@@ -99,7 +99,7 @@ impl PageVm {
 
         if applied {
             self.vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
         }
         tracing::debug!(
             kind,

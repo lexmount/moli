@@ -735,6 +735,63 @@ fn document_write_stylesheet_before_source_executes_once_after_both_are_ready() 
     assert_parser_insertion_resource_order(false);
 }
 
+#[test]
+fn document_write_publishes_parser_inline_import_before_resuming_script() {
+    super::tests::run_phase_one_large_stack_test("document-write-inline-import", || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let _js_runtime = crate::JsRuntime::initialize();
+            let (css, release_css, css_server) =
+                spawn_gated_parser_resource("text/css", "html { color: green; }").await;
+            let html = format!(
+                r#"<!doctype html><html><head><script>
+document.write(`<style id="written-style" onload="globalThis.styleLoaded = true">@import url("{css}");</style>
+<script>
+const sheet = document.getElementById('written-style').sheet;
+globalThis.importAtScript = JSON.stringify({{
+  color: sheet.cssRules[0].styleSheet?.cssRules[0]?.style.color,
+  loadDispatched: !!globalThis.styleLoaded
+}});
+<\/script>`);
+</script></head><body></body></html>"#,
+            );
+            let pending = start_standalone_parser_page(
+                PageId::new_for_testing(904),
+                html,
+                css.join("page.html").unwrap(),
+            )
+            .await;
+            let document = &pending.runtime.page_vm.vm().document_runtime;
+            let style = document
+                .dom_host()
+                .element_handle_by_id("written-style")
+                .expect("document.write parsed the style owner");
+            assert_eq!(
+                document.pending_style_import_binding_for_test(style),
+                Some((1, true)),
+                "the inline import must bind its live root to the parser's operation"
+            );
+            let (pending, result) =
+                evaluate_pending_on_owner_local_task(pending, "typeof importAtScript").await;
+            assert_eq!(result["value"], "undefined");
+
+            release_css.send(()).expect("release imported stylesheet");
+            let (outcome, wake) = resume_after_stylesheet_completion(pending).await;
+            let (outcome, _) =
+                resume_standalone_main_parser_continuation_if_ready(outcome, wake).await;
+            let ParseTimePageVmCreationOutcome::ContinuePhaseTwo { page_vm, .. } = outcome else {
+                panic!("stylesheet completion should let document.write finish parsing");
+            };
+            let result = evaluate_on_owner_local_task(page_vm, "globalThis.importAtScript").await;
+            assert_eq!(result["value"], r#"{"color":"green","loadDispatched":false}"#);
+            css_server.await.unwrap();
+        }));
+    });
+}
+
 fn assert_parser_insertion_resource_order(source_first: bool) {
     super::tests::run_phase_one_large_stack_test("parser-insertion-resource-order", move || {
         let runtime = tokio::runtime::Builder::new_current_thread()

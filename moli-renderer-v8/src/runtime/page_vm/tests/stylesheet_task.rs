@@ -86,7 +86,7 @@ document.head.append(cachedPreload);
     ))?;
     page_vm
         .vm_mut()
-        .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        .prime_document_lifecycle_and_publish_stylesheets();
     wait_for_stylesheet_source(wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
     assert!(
         page_vm
@@ -668,7 +668,7 @@ probe.className = 'replayed-import';
             ))?;
             page_vm
                 .vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
             wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
             assert!(
                 page_vm
@@ -814,7 +814,7 @@ document.body.append(target);
             );
             page_vm
                 .vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
             wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask)
                 .await;
             assert!(
@@ -894,7 +894,7 @@ async fn integrity_rejected_stylesheets_skip_cssom_for_network_and_cached_loads(
             if index == 0 {
                 page_vm
                     .vm_mut()
-                    .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                    .prime_document_lifecycle_and_publish_stylesheets();
                 wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask)
                     .await;
                 assert!(
@@ -1172,7 +1172,7 @@ document.head.append(physical);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
 
         page_vm
@@ -1221,7 +1221,7 @@ document.head.append(link);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
 
         queue_stylesheet_checkpoint_marker(&mut page_vm, "__stylesheetBodyCheckpoint")?;
@@ -1284,7 +1284,7 @@ document.head.append(link);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
 
         queue_stylesheet_checkpoint_marker(&mut page_vm, "__selectedStylesheetCheckpoint")?;
@@ -1359,7 +1359,7 @@ document.head.append(retired);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         let claimed = page_vm
             .claim_exact_selected_page_task_for_test(
@@ -1448,7 +1448,7 @@ document.head.append(retired);
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         assert!(
             page_vm
@@ -1589,7 +1589,7 @@ document.head.appendChild(style);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         let task = take_next_style_element_event_task_for_test(&mut page_vm)
             .expect("one exact connected-style event task should be ready");
@@ -1649,7 +1649,7 @@ document.head.appendChild(style);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let task = take_next_style_element_event_task_for_test(&mut page_vm)
             .expect("one exact connected-style event task should be ready");
 
@@ -1709,7 +1709,7 @@ document.head.appendChild(style);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         assert!(
             page_vm
@@ -1777,7 +1777,7 @@ document.head.append(first);
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::DomManipulationTask)
             .await;
@@ -1841,7 +1841,7 @@ async fn failed_inline_import_transitions_from_null_to_an_empty_child_stylesheet
         );
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         assert!(
@@ -1940,7 +1940,7 @@ document.head.append(link);
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         assert!(
@@ -2098,7 +2098,7 @@ document.head.append(link);
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         for _ in 0..2 {
             wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
@@ -2195,7 +2195,7 @@ document.head.append(link);
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         assert!(
@@ -2331,11 +2331,11 @@ document.head.append(link);
         let signatures = blocking_inputs
             .iter()
             .map(|input| input.signature().clone())
-            .collect::<Vec<_>>();
+            .collect::<std::collections::HashSet<_>>();
         note_parser_captured_stylesheet_inputs_for_test(&mut page_vm, &blocking_inputs);
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         assert!(
@@ -2350,7 +2350,7 @@ document.head.append(link);
             page_vm
                 .vm_mut()
                 .document_runtime
-                .has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
+                .has_pending_parser_script_blocking_stylesheet_signatures(&signatures),
             "the parser must remain blocked while the failing import is pending"
         );
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
@@ -2366,7 +2366,7 @@ document.head.append(link);
             !page_vm
                 .vm_mut()
                 .document_runtime
-                .has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
+                .has_pending_parser_script_blocking_stylesheet_signatures(&signatures),
             "a failed import graph must release script execution before reporting the error"
         );
         assert!(page_vm.has_ready_page_networking_task());
@@ -2465,7 +2465,7 @@ document.head.append(link);
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         assert!(
             page_vm
@@ -2564,7 +2564,7 @@ document.head.appendChild(style);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         let task = take_next_style_element_event_task_for_test(&mut page_vm)
             .expect("one exact connected-style event task should be ready");
@@ -2627,7 +2627,7 @@ document.head.appendChild(style);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         page_vm.vm_mut().eval(
             r#"
 const details = document.createElement("details");
@@ -2707,7 +2707,7 @@ document.head.appendChild(retiredStyle);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let retired_owner = page_vm
             .vm()
             .current_main_document_task_owner()
@@ -2729,7 +2729,7 @@ document.head.appendChild(currentStyle);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let current_owner = page_vm
             .vm()
             .current_main_document_task_owner()
@@ -2809,7 +2809,7 @@ document.head.append(retired);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         assert!(page_vm.vm().document_runtime.has_pending_style_loads());
         page_vm.vm_mut().eval(
             r#"
@@ -2853,7 +2853,7 @@ document.head.append(current);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         assert!(
             page_vm
@@ -2927,7 +2927,7 @@ for (const id of ["first", "second"]) {
         note_parser_captured_stylesheet_inputs_for_test(&mut page_vm, &blocking_inputs);
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         assert!(
@@ -3049,11 +3049,11 @@ document.head.append(blockingImport);
         let signatures = blocking_inputs
             .iter()
             .map(|input| input.signature().clone())
-            .collect::<Vec<_>>();
+            .collect::<std::collections::HashSet<_>>();
         note_parser_captured_stylesheet_inputs_for_test(&mut page_vm, &blocking_inputs);
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         assert!(
@@ -3069,7 +3069,7 @@ document.head.append(blockingImport);
             page_vm
                 .vm_mut()
                 .document_runtime
-                .has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
+                .has_pending_parser_script_blocking_stylesheet_signatures(&signatures),
             "root settlement must not release the parser while its nested import graph is pending"
         );
         assert!(
@@ -3095,7 +3095,7 @@ document.head.append(blockingImport);
             !page_vm
                 .vm_mut()
                 .document_runtime
-                .has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
+                .has_pending_parser_script_blocking_stylesheet_signatures(&signatures),
             "the complete import graph must release the parser gate"
         );
         assert!(page_vm.has_ready_page_networking_task());
@@ -3174,16 +3174,16 @@ document.head.append(removedBlocking);
         let signatures = blocking_inputs
             .iter()
             .map(|input| input.signature().clone())
-            .collect::<Vec<_>>();
+            .collect::<std::collections::HashSet<_>>();
         note_parser_captured_stylesheet_inputs_for_test(&mut page_vm, &blocking_inputs);
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         assert!(
             page_vm
                 .vm_mut()
                 .document_runtime
-                .has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter())
+                .has_pending_parser_script_blocking_stylesheet_signatures(&signatures)
         );
 
         page_vm
@@ -3193,7 +3193,7 @@ document.head.append(removedBlocking);
             !page_vm
                 .vm_mut()
                 .document_runtime
-                .has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
+                .has_pending_parser_script_blocking_stylesheet_signatures(&signatures),
             "disconnecting the owner must remove its exact parser blocker"
         );
         assert!(
@@ -3253,7 +3253,7 @@ document.head.append(dynamicStyle);
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
         assert!(
             page_vm

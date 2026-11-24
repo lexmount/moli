@@ -89,7 +89,7 @@ async fn linked_stylesheet_client_terminal_installs_source_before_its_load_event
     .expect("linked stylesheet listeners should install");
 
     vm.queue_initial_connected_style_loads_for_current_owner();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
@@ -150,7 +150,7 @@ async fn failed_linked_stylesheet_client_terminal_installs_empty_source_before_i
     .expect("failed linked stylesheet listeners should install");
 
     vm.queue_initial_connected_style_loads_for_current_owner();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
@@ -212,7 +212,7 @@ async fn style_preload_client_terminal_dispatches_load_without_installing_source
     .expect("style preload listeners should install");
 
     vm.queue_initial_connected_style_loads_for_current_owner();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
@@ -306,7 +306,7 @@ async fn ownerless_stylesheet_terminal_installs_for_a_late_link_client() {
     );
 
     vm.queue_initial_connected_style_loads_for_current_owner();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     assert!(
         !vm.apply_next_stylesheet_networking_body_for_test(),
         "late client attachment must not enqueue another physical network terminal"
@@ -509,7 +509,7 @@ async fn imported_web_font_keeps_its_response_base_slot_through_layout_reconcili
         );
 
     vm.queue_initial_connected_style_loads_for_current_owner();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     for phase in ["root stylesheet", "import graph"] {
         assert!(
             tokio::time::timeout(
@@ -1217,7 +1217,7 @@ async fn connected_preload_stylesheet_consumers_keep_their_load_delay() {
                 None,
             )
             .unwrap();
-            vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            vm.prime_document_lifecycle_and_publish_stylesheets();
             assert_eq!(
                 vm.current_main_document_has_style_load_event_delay(owner),
                 Some(true),

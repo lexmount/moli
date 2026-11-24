@@ -92,7 +92,7 @@ impl ScriptVm {
                     self.settle_stylesheet_link_clients(completed_stylesheet_clients);
                 }
             }
-            self.record_ready_stylesheet_network_results();
+            self.publish_ready_stylesheet_results();
         }
         if prepared_script_uses_external_module_graph(script) {
             debug!(

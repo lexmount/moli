@@ -16,7 +16,7 @@ async fn floated_min_width_text_aligns_in_the_constrained_content_box() {
             serde_json::to_string(markup)?
         ))?;
         page.vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         page.vm_mut().publish_layout_for_test()?;
         let geometry = page.vm_mut().eval(
             r#"JSON.stringify([...document.querySelectorAll('a')].map(a=>{
@@ -120,7 +120,7 @@ document.body.innerHTML = `<div id=bar><header id=header><div id=wrapper><span i
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         page_vm.vm_mut().publish_layout_for_test()?;
         let geometry = page_vm.vm_mut().eval(
@@ -173,7 +173,7 @@ document.body.innerHTML = `<p id=line>All the <span id=atomic>words</span> after
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         page_vm.vm_mut().publish_layout_for_test()?;
         let geometry = page_vm.vm_mut().eval(
@@ -247,7 +247,7 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         page_vm.vm_mut().publish_layout_for_test()?;
         let geometry = page_vm.vm_mut().eval(
@@ -392,7 +392,7 @@ document.body.innerHTML = `
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(100, 90, 1.0))?
@@ -474,7 +474,7 @@ return 'installed';
         page_vm.vm_mut().eval(&install_font("FirstDocumentFace"))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         assert_eq!(
             page_vm.vm_mut().document_web_font_counts_for_test(),
             (1, 1, 1),
@@ -528,7 +528,7 @@ document.close();
             .eval(&install_font("ReplacementDocumentFace"))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         assert_eq!(
             page_vm.vm_mut().document_web_font_counts_for_test(),
             (1, 1, 1),
@@ -551,7 +551,7 @@ document.close();
             .eval("document.querySelector('#layout-web-font').remove(); 'removed'")?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))?
@@ -614,7 +614,7 @@ document.body.textContent = 'R中';
 
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 80, 1.0))?
@@ -685,7 +685,7 @@ document.body.innerHTML = '<div id=normal class=case>中</div><div id=medium cla
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 160, 1.0))?
@@ -1050,7 +1050,7 @@ html,body{{margin:0;padding:0}}
 
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(180, 120, 1.0))?
@@ -1131,7 +1131,7 @@ html,body{{margin:0;padding:0;background:white}}
 
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 100, 1.0))?
@@ -1212,7 +1212,7 @@ html,body{{margin:0;padding:0}}
             ))?;
             page_vm
                 .vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
             page_vm
                 .vm_mut()
                 .screenshot_layout_snapshot(moli_layout::PaintViewport::new(180, 200, 1.0))?

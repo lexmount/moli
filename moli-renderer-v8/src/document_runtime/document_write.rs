@@ -457,13 +457,10 @@ impl DocumentRuntime {
                 .discovery_signals
                 .modulepreload_link_candidates,
         );
-        let completed_stylesheet_clients = self.note_discovered_document_owned_stylesheet_inputs(
-            finish_signals.discovery_signals.stylesheet_inputs.iter(),
-        );
-        self.settle_stylesheet_link_clients_in_current_scope(
+        self.accept_parser_stylesheet_inputs_in_current_scope(
             scope,
             host_ptr,
-            completed_stylesheet_clients,
+            &finish_signals.discovery_signals.stylesheet_inputs,
         );
         unsafe { &mut *host_ptr }.resync_child_browsing_contexts(scope);
         self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
@@ -1016,15 +1013,13 @@ impl DocumentRuntime {
             .is_some_and(|pending| !pending.blocking_signatures.is_empty())
     }
 
-    pub(crate) fn document_write_stylesheet_blocked_script_is_ready(&mut self) -> bool {
-        let Some(signatures) = self
-            .pending_parser_insertion()
-            .filter(|pending| !pending.blocking_signatures.is_empty())
-            .map(|pending| pending.blocking_signatures.clone())
-        else {
-            return false;
-        };
-        !self.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter())
+    pub(crate) fn document_write_stylesheet_blocked_script_is_ready(&self) -> bool {
+        self.pending_parser_insertion().is_some_and(|pending| {
+            !pending.blocking_signatures.is_empty()
+                && !self.has_pending_parser_script_blocking_stylesheet_signatures(
+                    &pending.blocking_signatures,
+                )
+        })
     }
 
     fn allocate_document_write_external_script_load_id(&mut self) -> u64 {
@@ -1801,7 +1796,7 @@ impl DocumentRuntime {
         host_ptr: *mut PageScriptHost,
     ) -> Option<DocumentWriteExternalScriptLoadApplication> {
         let signatures = self.pending_parser_insertion()?.blocking_signatures.clone();
-        if self.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()) {
+        if self.prepare_parser_stylesheet_gate_in_current_scope(scope, host_ptr, &signatures) {
             return None;
         }
         let pending = self.pending_parser_insertion_mut()?;
@@ -2160,8 +2155,10 @@ impl DocumentRuntime {
                 blocking_signatures_before,
                 script,
             } => {
-                if self.has_pending_parser_script_blocking_stylesheet_signatures(
-                    blocking_signatures_before.iter(),
+                if self.prepare_parser_stylesheet_gate_in_current_scope(
+                    scope,
+                    host_ptr,
+                    &blocking_signatures_before,
                 ) {
                     if matches!(script.source, crate::planning::ScriptSource::External) {
                         self.start_document_write_stylesheet_blocked_external_script(
@@ -2302,6 +2299,7 @@ impl DocumentRuntime {
         // pump frame, matching Blink's nested PumpTokenizer session boundary.
         let _pump_guard = parser_bridge.begin_pump();
         let _parser_insertion_session = self.enter_parser_insertion_session();
+        let document_incarnation = self.document_incarnation.clone();
         let mut begin_insertion = !chunk.is_empty();
 
         loop {
@@ -2344,17 +2342,16 @@ impl DocumentRuntime {
                 discovered_modulepreload_link_candidates,
             );
             self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
+            if self.document_incarnation != document_incarnation {
+                return true;
+            }
             chunk.clear();
             begin_insertion = false;
 
-            let completed_stylesheet_clients = self
-                .note_discovered_document_owned_stylesheet_inputs(
-                    discovered_stylesheet_inputs.iter(),
-                );
-            self.settle_stylesheet_link_clients_in_current_scope(
+            self.accept_parser_stylesheet_inputs_in_current_scope(
                 scope,
                 host_ptr,
-                completed_stylesheet_clients,
+                &discovered_stylesheet_inputs,
             );
 
             match result {
@@ -2376,18 +2373,17 @@ impl DocumentRuntime {
                         .iter()
                         .map(|input| input.signature().clone())
                         .collect::<HashSet<_>>();
-                    if !blocking_signatures.is_empty()
-                        && self.has_pending_parser_script_blocking_stylesheet_signatures(
-                            blocking_signatures.iter(),
-                        )
-                        && self.suspend_document_write_stylesheet_parser_pause(
-                            host_ptr,
-                            document_handle,
-                            parser_bridge,
-                            pause.node_id,
-                            blocking_signatures,
-                        )
-                    {
+                    if self.prepare_parser_stylesheet_gate_in_current_scope(
+                        scope,
+                        host_ptr,
+                        &blocking_signatures,
+                    ) && self.suspend_document_write_stylesheet_parser_pause(
+                        host_ptr,
+                        document_handle,
+                        parser_bridge,
+                        pause.node_id,
+                        blocking_signatures,
+                    ) {
                         return true;
                     }
                 }

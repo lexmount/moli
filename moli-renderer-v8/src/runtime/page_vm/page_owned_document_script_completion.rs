@@ -61,7 +61,7 @@ impl PageVm {
         // after task completion: terminal callbacks and their reactions must
         // settle before DCL/load or stylesheet successors become observable.
         self.vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         let owner_transition = completion.owner_transition();
         let target = match owner_transition.owner_after_body() {

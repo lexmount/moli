@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::ScriptVm;
 use crate::{
     document_runtime::StylesheetImportCompletionAuthority,
@@ -9,9 +11,37 @@ use crate::{
         RendererPageStylesheetTaskOwner,
     },
     runtime::RendererDocumentToken,
+    stylesheet_blocking::DocumentBlockingStylesheetSignature,
 };
 
 impl ScriptVm {
+    pub(crate) fn publish_ready_stylesheet_results(&mut self) {
+        let Some(publication) = self.document_runtime.take_ready_stylesheet_publication() else {
+            return;
+        };
+        if let Err(error) =
+            self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
+                document_runtime.publish_stylesheet_results_in_current_scope(
+                    scope,
+                    host_ptr,
+                    publication,
+                );
+                Ok(())
+            })
+        {
+            self.record_runtime_warning(format_args!("stylesheet publication failed: {error}"));
+        }
+    }
+
+    pub(crate) fn prepare_parser_stylesheet_gate(
+        &mut self,
+        signatures: &HashSet<DocumentBlockingStylesheetSignature>,
+    ) -> bool {
+        self.publish_ready_stylesheet_results();
+        self.document_runtime
+            .has_pending_parser_script_blocking_stylesheet_signatures(signatures)
+    }
+
     /// Project one stylesheet task owner onto the currently installed main
     /// Document.
     ///
@@ -53,7 +83,7 @@ impl ScriptVm {
                 .document_runtime
                 .apply_live_stylesheet_import_load_completion(completion, import_authority),
         }
-        self.record_ready_stylesheet_network_results();
+        self.publish_ready_stylesheet_results();
         if current {
             PageStylesheetNetworkingTargetEffect::AppliedToCurrentOwner
         } else {

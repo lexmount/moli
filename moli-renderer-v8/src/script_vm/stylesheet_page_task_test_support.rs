@@ -18,7 +18,7 @@ impl ScriptVm {
     /// lifecycle-domain fixtures. It does not emulate the selected Page-task
     /// completion loop.
     pub(super) fn apply_connected_style_lifecycle_bodies_for_test(&mut self) -> bool {
-        self.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        self.prime_document_lifecycle_and_publish_stylesheets();
         while self.apply_next_stylesheet_networking_body_for_test() {}
         let mut dispatched_any = false;
         while self.apply_next_connected_style_event_body_for_test() {

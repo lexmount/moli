@@ -131,8 +131,7 @@ impl DocumentRuntime {
         work: &PostParsePageOwnedWork,
     ) -> bool {
         if let Some(signatures) = work.post_parse_blocking_signatures_before() {
-            return self
-                .has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter());
+            return self.has_pending_parser_script_blocking_stylesheet_signatures(signatures);
         }
         let Some(script) = Self::defer_like_script_from_post_parse_work(work) else {
             return false;

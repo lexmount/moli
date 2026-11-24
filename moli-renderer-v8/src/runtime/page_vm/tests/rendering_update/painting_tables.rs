@@ -709,7 +709,7 @@ async fn screenshot_preserves_table_cell_dimension_hints_and_avatar_columns() {
             serde_json::to_string(fixture)?,
         ))?;
         page.vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         for phase in 0..3 {
             page.vm_mut()
@@ -940,7 +940,7 @@ async fn screenshot_table_row_heights_match_chromium() {
         page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
         let fixture = include_str!("../../../../../tests/fixtures/table-row-heights.html");
         page.vm_mut().eval(&format!("document.open();document.write({});document.close()", serde_json::to_string(fixture)?))?;
-        page.vm_mut().prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        page.vm_mut().prime_document_lifecycle_and_publish_stylesheets();
         page.vm_mut().eval("if (!cases.length) buildTableRowHeightCases()")?;
         let expected: serde_json::Value = serde_json::from_str(include_str!("../../../../../tests/fixtures/table-row-heights.chromium.json"))?;
         let mut failures = Vec::new();
@@ -1019,7 +1019,7 @@ async fn screenshot_recascades_table_part_dimension_hints() {
             serde_json::to_string(fixture)?,
         ))?;
         page.vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         for phase in 0..4 {
             page.vm_mut()
