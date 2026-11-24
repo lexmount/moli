@@ -53,6 +53,8 @@ mod message_port_events;
 mod message_port_lifecycle;
 mod midi_events;
 mod misc;
+#[cfg(feature = "devtools")]
+mod move_button;
 mod native_owner_xhr;
 mod navigation;
 mod navigation_event_init;
