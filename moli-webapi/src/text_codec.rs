@@ -213,6 +213,11 @@ impl TextDecoderState {
     }
 
     pub fn decode(&mut self, bytes: &[u8], stream: bool) -> Result<String, TextDecodeError> {
+        // An empty streaming chunk leaves any buffered lead byte pending.
+        if stream && bytes.is_empty() {
+            return Ok(String::new());
+        }
+
         let last = !stream;
         let mut output = String::new();
 
@@ -408,6 +413,37 @@ mod tests {
                     actual.extend(state.flush());
                     assert_eq!(actual, expected, "input={input:?}, cuts={first}/{second}");
                     assert!(state.flush().is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn text_decoder_state_preserves_multibyte_sequences_across_empty_chunks() {
+        let cases: &[(&'static Encoding, &[u8], &str)] = &[
+            (encoding_rs::BIG5, &[0xfe, 0x40], "\u{9442}"),
+            (encoding_rs::SHIFT_JIS, &[0x81, 0x87], "\u{221e}"),
+            (encoding_rs::EUC_KR, &[0x81, 0x41], "\u{ac02}"),
+        ];
+        for &(encoding, input, expected) in cases {
+            for fatal in [false, true] {
+                for split in 0..=input.len() {
+                    let mut state = TextDecoderState::new(encoding, fatal, false);
+                    let mut output = state.decode(&input[..split], true).unwrap();
+                    for _ in 0..4 {
+                        assert_eq!(state.decode(&[], true).unwrap(), "");
+                    }
+                    output.push_str(&state.decode(&input[split..], true).unwrap());
+                    for _ in 0..4 {
+                        assert_eq!(state.decode(&[], true).unwrap(), "");
+                    }
+                    output.push_str(&state.decode(&[], false).unwrap());
+                    assert_eq!(
+                        output,
+                        expected,
+                        "{} fatal={fatal} split={split}",
+                        encoding.name()
+                    );
                 }
             }
         }
