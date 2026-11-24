@@ -8154,6 +8154,7 @@ html/semantics/popovers/popover-active-document.html
 html/semantics/popovers/popover-auto-reentrant-crash.html
 html/semantics/popovers/popover-beforetoggle-opening-event.html
 html/semantics/popovers/popover-document-open.html
+html/semantics/popovers/popover-events.html
 html/semantics/popovers/popover-focus-blur-crash.html
 html/semantics/popovers/popover-focus-previous-crash.html
 html/semantics/popovers/popover-hint-crash.html
@@ -8165,6 +8166,7 @@ html/semantics/popovers/popover-nested-in-button.html
 html/semantics/popovers/popover-open-overflow-display-2.html
 html/semantics/popovers/popover-removal-2.html
 html/semantics/popovers/popover-removal.html
+html/semantics/popovers/popover-remove-attribute-during-focusing-steps.html
 html/semantics/popovers/popover-remove-reentrant-crash.html
 html/semantics/popovers/popover-root-crash.html
 html/semantics/popovers/popover-shadowhost-focus.html

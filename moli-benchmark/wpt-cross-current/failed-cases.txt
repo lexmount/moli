@@ -2136,9 +2136,7 @@ html/semantics/menu/tentative/menulist-popover-attribute.html
 html/semantics/permission-element/usermedia/onstream-attribute.html
 html/semantics/permission-element/usermedia/usermedia-error-attribute.html
 html/semantics/popovers/popover-anchor-multicol-display.html
-html/semantics/popovers/popover-events.html
 html/semantics/popovers/popover-overlay.html
-html/semantics/popovers/popover-remove-attribute-during-focusing-steps.html
 html/semantics/popovers/popover-shadow-dom.html
 html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
