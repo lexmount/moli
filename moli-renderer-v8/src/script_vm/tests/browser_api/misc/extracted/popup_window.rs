@@ -361,7 +361,7 @@ fn window_open_about_blank_returns_lightweight_popup_window() {
 
     assert_eq!(
         result,
-        "[object Window]|true|about:blank#1|true|function:close:0:false:true:true:true|undefined;about:blank#2;false"
+        "[object Window]|true|about:blank#1|true|function:close:0:false:true:true:true|undefined;about:blank;false"
     );
 }
 #[test]

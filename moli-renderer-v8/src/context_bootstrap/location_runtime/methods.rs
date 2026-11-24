@@ -75,7 +75,7 @@ pub(super) fn location_to_string_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(href) = require_location_href_slot(scope, args.this()) else {
+    let Some(href) = super::helpers::relevant_location_href(scope, args.this()) else {
         return;
     };
     set_return_string(scope, &mut rv, &href);
