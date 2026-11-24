@@ -2247,7 +2247,6 @@ service-workers/service-worker/next-hop-protocol.https.html
 service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-cross-origin.https.html
 service-workers/service-worker/sandboxed-iframe-navigator-serviceworker.https.html
-service-workers/service-worker/static-router-main-resource.https.html
 service-workers/service-worker/xsl-base-url.https.html
 shadow-dom/DocumentOrShadowRoot-prototype-elementFromPoint.html
 streams/readable-streams/owning-type-message-port.any.js?moli-wpt-any=dedicatedworker

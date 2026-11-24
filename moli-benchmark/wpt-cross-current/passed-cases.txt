@@ -10085,6 +10085,7 @@ service-workers/service-worker/state.https.html
 service-workers/service-worker/static-router-cross-origin-navigation.https.html
 service-workers/service-worker/static-router-fetch-event.https.html
 service-workers/service-worker/static-router-invalid-rules.https.html
+service-workers/service-worker/static-router-main-resource.https.html
 service-workers/service-worker/static-router-no-fetch-handler.https.html
 service-workers/service-worker/static-router-request-destination.https.html
 service-workers/service-worker/static-router-subresource.https.html
