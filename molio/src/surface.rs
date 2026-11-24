@@ -1,15 +1,15 @@
 use std::{ops::Range, sync::Arc};
 
 use gpui::{
-    App, BgraImage, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler,
-    ExternalPaths, FocusHandle, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent,
-    Subscription, TouchPhase, UTF16Selection, Window, canvas, div, point, prelude::*, px, rgb,
-    size,
+    App, BgraImage, Bounds, ClipboardItem, Context, CursorStyle, ElementInputHandler,
+    EntityInputHandler, ExternalPaths, FocusHandle, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    ScrollWheelEvent, Subscription, TouchPhase, UTF16Selection, Window, canvas, div, point,
+    prelude::*, px, rgb, size,
 };
 use moli_core::{
-    RendererDocumentLifecycleIdentity, RendererViewportEditAction, RendererViewportEditor,
-    RendererViewportWheelInput, RendererViewportWheelPhase,
+    RendererDocumentLifecycleIdentity, RendererViewportCursorKind, RendererViewportEditAction,
+    RendererViewportEditor, RendererViewportWheelInput, RendererViewportWheelPhase,
     page::{ViewportFrameRef, ViewportOutput},
     protocol_types::{DocumentActivity, ViewportSurface},
 };
@@ -28,6 +28,7 @@ pub struct MoliSurface {
     revision: u64,
     zoom: f64,
     buttons: i32,
+    pointer_over: bool,
     image: Option<BgraImage>,
     document: Option<RendererDocumentLifecycleIdentity>,
     presented: Option<(RendererDocumentLifecycleIdentity, u64)>,
@@ -61,6 +62,7 @@ impl MoliSurface {
             revision: 0,
             zoom: 1.,
             buttons: 0,
+            pointer_over: false,
             image: None,
             document: None,
             presented: None,
@@ -240,7 +242,10 @@ impl MoliSurface {
     }
 
     fn measure(&mut self, bounds: Bounds<Pixels>, window: &Window, app: &App) {
-        self.bounds = Some(bounds);
+        let moved = self
+            .bounds
+            .replace(bounds)
+            .is_some_and(|old| old.origin != bounds.origin);
         if self.commands.is_none() || bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
             return;
         }
@@ -268,7 +273,13 @@ impl MoliSurface {
             self.viewport = Some(surface);
             self.revision += 1;
             self.presented = None;
-            self.send(TabCommand::Viewport(surface, self.revision));
+            self.send(TabCommand::Viewport {
+                surface,
+                revision: self.revision,
+                pointer_position: self.pointer_position(window),
+            });
+        } else if moved && self.pointer_over {
+            self.sync_pointer_position(window);
         }
     }
 
@@ -281,6 +292,28 @@ impl MoliSurface {
             f64::from((point.y - bounds.origin.y) / bounds.size.height)
                 * f64::from(surface.inner_height),
         ))
+    }
+
+    fn set_pointer_over(&mut self, over: bool, window: &Window) {
+        if self.pointer_over != over {
+            self.pointer_over = over;
+            self.sync_pointer_position(window);
+        }
+    }
+
+    fn sync_pointer_position(&self, window: &Window) {
+        self.send(TabCommand::PointerPosition {
+            viewport_revision: self.revision,
+            position: self.pointer_position(window),
+        });
+    }
+
+    fn pointer_position(&self, window: &Window) -> Option<(f64, f64)> {
+        if self.pointer_over {
+            self.css_point(window.mouse_position())
+        } else {
+            None
+        }
     }
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -321,6 +354,7 @@ impl MoliSurface {
     }
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.pointer_over = true;
         if let Some(position) = self.css_point(event.position) {
             self.send(TabCommand::Pointer(PointerInput {
                 event: "mousemove",
@@ -449,6 +483,16 @@ impl Render for MoliSurface {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let surface = cx.entity();
         let focus = self.focus.clone();
+        let cursor = self
+            .output
+            .as_ref()
+            .and_then(|output| output.cursor())
+            .filter(|cursor| {
+                self.viewport.is_some()
+                    && Some(cursor.document) == self.document
+                    && cursor.viewport_revision == self.revision
+            })
+            .map_or(CursorStyle::Arrow, native_cursor);
         let mut content = div()
             .id("moli-surface")
             .relative()
@@ -456,6 +500,13 @@ impl Render for MoliSurface {
             .overflow_hidden()
             .bg(rgb(0xffffff))
             .track_focus(&self.focus)
+            .cursor(cursor)
+            .on_hover(cx.listener(|surface, &over, window, _| {
+                surface.set_pointer_over(over, window);
+            }))
+            .on_mouse_exit(cx.listener(|surface, _, window, _| {
+                surface.set_pointer_over(false, window);
+            }))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_scroll_wheel(cx.listener(Self::wheel))
             .on_drop(cx.listener(Self::drop_files))
@@ -501,6 +552,47 @@ impl Render for MoliSurface {
             .inset_0()
             .size_full(),
         )
+    }
+}
+
+fn native_cursor(cursor: moli_core::RendererViewportCursor) -> CursorStyle {
+    use RendererViewportCursorKind as Kind;
+    match cursor.kind {
+        Kind::Pointer => CursorStyle::PointingHand,
+        Kind::Text => CursorStyle::IBeam,
+        Kind::VerticalText => CursorStyle::IBeamCursorForVerticalLayout,
+        Kind::Crosshair | Kind::Cell => CursorStyle::Crosshair,
+        Kind::Grab => CursorStyle::OpenHand,
+        Kind::Grabbing => CursorStyle::ClosedHand,
+        Kind::Alias => CursorStyle::DragLink,
+        Kind::Copy => CursorStyle::DragCopy,
+        Kind::ContextMenu => CursorStyle::ContextualMenu,
+        Kind::NotAllowed | Kind::NoDrop => CursorStyle::OperationNotAllowed,
+        Kind::EResize => CursorStyle::ResizeRight,
+        Kind::NResize => CursorStyle::ResizeUp,
+        Kind::NeResize => CursorStyle::ResizeUpRight,
+        Kind::NwResize => CursorStyle::ResizeUpLeft,
+        Kind::SResize => CursorStyle::ResizeDown,
+        Kind::SeResize => CursorStyle::ResizeDownRight,
+        Kind::SwResize => CursorStyle::ResizeDownLeft,
+        Kind::WResize => CursorStyle::ResizeLeft,
+        Kind::EwResize => CursorStyle::ResizeLeftRight,
+        Kind::NsResize => CursorStyle::ResizeUpDown,
+        Kind::NeswResize => CursorStyle::ResizeUpRightDownLeft,
+        Kind::NwseResize => CursorStyle::ResizeUpLeftDownRight,
+        Kind::ColResize => CursorStyle::ResizeColumn,
+        Kind::RowResize => CursorStyle::ResizeRow,
+        // The platform API only exposes a subset of CSS cursor keywords.
+        Kind::Auto
+        | Kind::Default
+        | Kind::None
+        | Kind::Help
+        | Kind::Progress
+        | Kind::Wait
+        | Kind::Move
+        | Kind::AllScroll
+        | Kind::ZoomIn
+        | Kind::ZoomOut => CursorStyle::Arrow,
     }
 }
 

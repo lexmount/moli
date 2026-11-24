@@ -1001,6 +1001,8 @@ mod tests {
                 geometry_source: Some(1),
                 principal_source: Some(1),
                 hit_source: Some(1),
+                #[cfg(feature = "molio")]
+                pseudo: None,
                 css_sizing: None,
                 resolved_grid_tracks: None,
                 control_paint_order: None,

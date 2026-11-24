@@ -359,6 +359,11 @@ impl PageVm {
                 .dispatch_viewport_wheel(input)
                 .map(|()| RendererPageReply::Unit),
             #[cfg(feature = "molio")]
+            RendererPageCommand::SetViewportPointerPosition { viewport_revision, position } => {
+                self.set_viewport_pointer_position(viewport_revision, position);
+                Ok(RendererPageReply::Unit)
+            }
+            #[cfg(feature = "molio")]
             RendererPageCommand::NavigateViewport(target) => self
                 .vm_mut()
                 .navigate_top_level_from_browser(target)
@@ -425,9 +430,9 @@ fn renderer_page_command_action_barrier(
             Some(moli_action_window::ActionBarrier::Screenshot)
         }
         #[cfg(feature = "molio")]
-        RendererPageCommand::WakeViewportFrames | RendererPageCommand::DispatchViewportWheel(_) => {
-            None
-        }
+        RendererPageCommand::WakeViewportFrames
+        | RendererPageCommand::DispatchViewportWheel(_)
+        | RendererPageCommand::SetViewportPointerPosition { .. } => None,
         _ => Some(moli_action_window::ActionBarrier::Explicit),
     }
 }

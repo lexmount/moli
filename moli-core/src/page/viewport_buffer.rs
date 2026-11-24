@@ -6,7 +6,8 @@ use moli_paint::{
     RasterBufferLayout, RasterPixelFormat, raster_buffer_layout, raster_snapshot_into,
 };
 use moli_renderer_v8::{
-    RendererDocumentLifecycleIdentity, RendererViewportEditor, RendererViewportFrame,
+    RendererDocumentLifecycleIdentity, RendererViewportCursor, RendererViewportEditor,
+    RendererViewportFrame,
 };
 use parking_lot::Mutex;
 use tokio::{sync::watch, task::JoinHandle};
@@ -86,6 +87,17 @@ struct ReadyFrame {
 struct OutputState {
     binding: u64,
     frame: Option<ReadyFrame>,
+    cursor: Option<RendererViewportCursor>,
+}
+
+impl OutputState {
+    fn advance_binding(&mut self) -> bool {
+        self.binding += 1;
+        let cleared = self.frame.is_some() || self.cursor.is_some();
+        self.frame = None;
+        self.cursor = None;
+        cleared
+    }
 }
 
 /// Shared presentation endpoint for one tab. The watch channel carries only
@@ -113,6 +125,10 @@ impl ViewportOutput {
         self.changes.subscribe()
     }
 
+    pub fn cursor(&self) -> Option<RendererViewportCursor> {
+        self.state.lock().cursor
+    }
+
     /// Reads a completed frame without waiting for rasterization. A callback
     /// pins one slot and does its work outside the output-state lock.
     pub fn read<R>(&self, read: impl FnOnce(ViewportFrameRef<'_>) -> R) -> Option<R> {
@@ -130,8 +146,8 @@ impl ViewportOutput {
     fn bind(&self) -> u64 {
         let (binding, cleared) = {
             let mut state = self.state.lock();
-            state.binding += 1;
-            (state.binding, state.frame.take().is_some())
+            let cleared = state.advance_binding();
+            (state.binding, cleared)
         };
         if cleared {
             self.changes.send_replace(());
@@ -142,12 +158,20 @@ impl ViewportOutput {
     fn unbind(&self, binding: u64) {
         let mut state = self.state.lock();
         if state.binding == binding {
-            state.binding += 1;
-            let cleared = state.frame.take().is_some();
+            let cleared = state.advance_binding();
             drop(state);
             if cleared {
                 self.changes.send_replace(());
             }
+        }
+    }
+
+    fn publish_cursor(&self, binding: u64, cursor: Option<RendererViewportCursor>) {
+        let mut state = self.state.lock();
+        if state.binding == binding && state.cursor != cursor {
+            state.cursor = cursor;
+            drop(state);
+            self.changes.send_replace(());
         }
     }
 
@@ -182,9 +206,16 @@ pub struct BufferedViewportFrames {
 
 impl BufferedViewportFrames {
     pub async fn changed(&mut self) -> Result<ViewportUpdate, watch::error::RecvError> {
-        tokio::select! {
-            update = self.frames.updates.changed() => update.map(|()| ViewportUpdate::StateChanged),
-            () = self.frames.resource_wake.notified() => Ok(ViewportUpdate::ResourceChanged),
+        loop {
+            tokio::select! {
+                update = self.frames.updates.changed() => return update.map(|()| ViewportUpdate::StateChanged),
+                () = self.frames.resource_wake.notified() => return Ok(ViewportUpdate::ResourceChanged),
+                cursor = self.frames.cursor.changed() => {
+                    cursor?;
+                    let cursor = *self.frames.cursor.borrow_and_update();
+                    self.output.publish_cursor(self.binding, cursor);
+                }
+            }
         }
     }
 
@@ -216,12 +247,35 @@ impl Page {
         buffers: ViewportBuffers,
         output: Arc<ViewportOutput>,
     ) -> Result<BufferedViewportFrames> {
+        self.subscribe_viewport_buffer_with_pointer(
+            surface,
+            viewport_revision,
+            None,
+            buffers,
+            output,
+        )
+        .await
+    }
+
+    /// Binds the buffers and the pointer's CSS coordinates to one viewport revision.
+    pub async fn subscribe_viewport_buffer_with_pointer(
+        &mut self,
+        surface: ViewportSurface,
+        viewport_revision: u64,
+        initial_pointer_position: Option<(f64, f64)>,
+        buffers: ViewportBuffers,
+        output: Arc<ViewportOutput>,
+    ) -> Result<BufferedViewportFrames> {
         anyhow::ensure!(
             buffers.layout == ViewportBuffers::layout_for(surface)?,
             "buffer layout does not match the viewport",
         );
         let frames = self
-            .subscribe_viewport_frames(surface, viewport_revision)
+            .subscribe_viewport_frames_with_pointer(
+                surface,
+                viewport_revision,
+                initial_pointer_position,
+            )
             .await?;
         let binding = output.bind();
         let rasterizer = tokio::spawn(rasterize_frames(

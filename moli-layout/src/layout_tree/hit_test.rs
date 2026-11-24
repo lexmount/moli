@@ -421,6 +421,14 @@ where
         }
     }
 
+    /// The generated box's pseudo-element, whose style can differ from its hit source.
+    #[cfg(feature = "molio")]
+    pub fn fragment_pseudo(&self, fragment: LayoutFragmentId) -> Option<crate::LayoutPseudo> {
+        self.boxes
+            .get(self.fragment_box_id(fragment)?.index())?
+            .pseudo
+    }
+
     fn box_is_construction_descendant_of(
         &self,
         mut candidate: LayoutOutputBoxId,

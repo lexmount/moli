@@ -2,7 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use moli_core::{
-    LayoutPolicy, RendererPageNavigationState, RendererViewportFrame, RendererViewportWheelInput,
+    LayoutPolicy, RendererPageNavigationState, RendererViewportCursor,
+    RendererViewportCursorKind as Cursor, RendererViewportFrame, RendererViewportWheelInput,
     RendererViewportWheelPhase,
     page::{PageInputExt, ViewportBuffers, ViewportFrames, ViewportOutput},
     protocol_types::{DocumentActivity, ViewportSurface},
@@ -124,6 +125,273 @@ async fn background_popup_activity_is_set_before_exposure_and_preserved_by_adopt
         .await?;
     let selected = child.evaluate_runtime_expression_async(ACTIVITY).await?;
     assert_eq!(selected["value"], "visible:true", "selected tab");
+    Ok(())
+}
+
+async fn cursor(frames: &mut ViewportFrames, kind: Cursor) -> Result<RendererViewportCursor> {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        frames
+            .cursor
+            .wait_for(|cursor| cursor.is_some_and(|cursor| cursor.kind == kind)),
+    )
+    .await
+    .with_context(|| format!("waiting for {kind:?} cursor"))??
+    .context("viewport cursor disappeared")
+}
+
+#[tokio::test]
+async fn viewport_cursor_uses_the_hit_element_text_and_computed_style() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser.fetch(&html_url(r##"<!doctype html><style>
+        body { margin: 0; font: 20px/30px sans-serif; }
+        .row { position: absolute; height: 30px; width: 100px; }
+        #link { top: 0; }
+        #overlay { top: 0; pointer-events: none; cursor: wait; }
+        #input { top: 40px; }
+        #hover { top: 80px; cursor: crosshair; }
+        #hover:hover { cursor: grab; }
+        #text { top: 120px; }
+        #noselect { top: 160px; user-select: none; }
+        #editable { top: 200px; }
+        iframe { position: absolute; left: 120px; top: 0; border: 0; width: 80px; height: 50px; }
+    </style>
+    <a class="row" id="link" href="#link"><span>Link</span></a>
+    <div class="row" id="overlay"></div>
+    <input class="row" id="input" value="Text box">
+    <div class="row" id="hover"><span>Hover</span></div>
+    <div class="row" id="text">Read this</div>
+    <div class="row" id="noselect"><span>Static</span></div>
+    <div class="row" id="editable" contenteditable></div>
+    <iframe srcdoc='<style>body { margin:0 } div { width:80px; height:50px; cursor:ew-resize }</style><div></div>'></iframe>
+    <script>globalThis.moves = 0; addEventListener('mousemove', () => ++moves);</script>"##)).await?;
+    let surface = ViewportSurface {
+        inner_width: 240,
+        inner_height: 280,
+        ..ViewportSurface::default()
+    };
+    let mut frames = page.subscribe_viewport_frames(surface, 1).await?;
+    frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+
+    for (x, y, kind) in [
+        (10., 15., Cursor::Pointer),
+        (10., 55., Cursor::Text),
+        (10., 95., Cursor::Grab),
+        (10., 135., Cursor::Text),
+        (10., 175., Cursor::Default),
+        (80., 215., Cursor::Text),
+        (140., 15., Cursor::EwResize),
+        (200., 250., Cursor::Default),
+        (10., 55., Cursor::Text),
+    ] {
+        page.dispatch_mouse_event_at_point_async(x, y, "mousemove", -1, Some(0), 0., 0.)
+            .await?;
+        cursor(&mut frames, kind)
+            .await
+            .with_context(|| format!("point ({x}, {y})"))?;
+    }
+
+    let before = page.evaluate_runtime_expression_async("moves").await?;
+    page.evaluate_runtime_expression_async("input.style.cursor = 'url(missing.cur), crosshair'")
+        .await?;
+    cursor(&mut frames, Cursor::Crosshair).await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async("moves").await?["value"],
+        before["value"]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_cursor_uses_pseudo_and_slotted_text_styles() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser
+        .fetch(&html_url(
+            r#"<!doctype html><style>
+                body { margin: 0; font: 20px/30px sans-serif; }
+                #generated, #slotted { width: 150px; height: 30px; cursor: default; }
+                #generated::before {
+                    content: ""; display: block; width: 60px; height: 30px;
+                    background: silver; cursor: text;
+                }
+                #generated:hover::before { cursor: crosshair; }
+            </style><div id="generated"></div><div id="slotted">Slotted text</div>
+            <script>
+                slotted.attachShadow({ mode: "open" }).innerHTML =
+                    '<style>slot { cursor: wait; }</style><slot></slot>';
+            </script>"#,
+        ))
+        .await?;
+    let surface = ViewportSurface {
+        inner_width: 160,
+        inner_height: 100,
+        ..ViewportSurface::default()
+    };
+    let mut frames = page.subscribe_viewport_frames(surface, 1).await?;
+    let initial = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+
+    page.set_viewport_pointer_position(1, Some((20., 15.)))
+        .await?;
+    cursor(&mut frames, Cursor::Crosshair).await?;
+    let hovered = frame(&mut frames, |frame| frame.sequence > initial.sequence).await?;
+
+    page.set_viewport_pointer_position(1, Some((100., 15.)))
+        .await?;
+    cursor(&mut frames, Cursor::Default).await?;
+    assert_eq!(
+        frames.updates.borrow().as_ref().unwrap().sequence,
+        hovered.sequence
+    );
+
+    page.set_viewport_pointer_position(1, Some((20., 45.)))
+        .await?;
+    cursor(&mut frames, Cursor::Wait).await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async(
+            "slotted.shadowRoot.querySelector('slot').matches(':hover')"
+        )
+        .await?["value"],
+        true
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_cursor_auto_respects_generated_text_selectability() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser
+        .fetch(&html_url(
+            r#"<!doctype html><style>
+                body { margin: 0; font: 32px/48px monospace; }
+                #generated::before, #generated::after {
+                    content: "ICON"; display: block;
+                    cursor: auto; user-select: auto;
+                }
+                #generated.explicit::before, #generated.explicit::after { cursor: text; }
+                #generated.selectable::before, #generated.selectable::after { user-select: text; }
+            </style><div id="generated"></div>"#,
+        ))
+        .await?;
+    let surface = ViewportSurface {
+        inner_width: 160,
+        inner_height: 104,
+        ..ViewportSurface::default()
+    };
+    let mut frames = page.subscribe_viewport_frames(surface, 1).await?;
+    frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+
+    for (y, pseudo) in [(24., "::before"), (72., "::after")] {
+        page.evaluate_runtime_expression_async("generated.className = ''")
+            .await?;
+        page.set_viewport_pointer_position(1, Some((12., y)))
+            .await?;
+        let automatic = tokio::time::timeout(
+            Duration::from_secs(5),
+            frames.cursor.wait_for(Option::is_some),
+        )
+        .await??
+        .context("generated text cursor disappeared")?;
+        assert_eq!(automatic.kind, Cursor::Default, "{pseudo}");
+
+        for (class, expected) in [
+            ("explicit", Cursor::Text),
+            ("", Cursor::Default),
+            ("selectable", Cursor::Text),
+        ] {
+            page.evaluate_runtime_expression_async(&format!("generated.className = '{class}'"))
+                .await?;
+            cursor(&mut frames, expected)
+                .await
+                .with_context(|| format!("{pseudo} with class {class:?}"))?;
+        }
+        page.set_viewport_pointer_position(1, None).await?;
+        assert_eq!(*frames.cursor.borrow(), None);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_cursor_follows_scroll_document_and_viewport_without_a_mouse_move() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let html = r#"<!doctype html><style>
+        body { margin: 0; }
+        div { height: 100px; cursor: pointer; }
+        div + div { cursor: crosshair; height: 500px; }
+        div + div:hover { cursor: grab; }
+    </style><div id="first"></div><div id="second"></div>
+    <script>
+        globalThis.moves = 0;
+        addEventListener('mousemove', () => ++moves);
+    </script>"#;
+    let mut page = browser.fetch(&html_url(html)).await?;
+    let surface = ViewportSurface {
+        inner_width: 160,
+        inner_height: 120,
+        ..ViewportSurface::default()
+    };
+    let mut frames = page.subscribe_viewport_frames(surface, 7).await?;
+    let initial = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+
+    page.set_viewport_pointer_position(7, Some((40., 40.)))
+        .await?;
+    let first = cursor(&mut frames, Cursor::Pointer).await?;
+    assert_eq!(
+        (first.document, first.viewport_revision),
+        (initial.document, 7)
+    );
+    assert_eq!(
+        page.evaluate_runtime_expression_async("first.matches(':hover')")
+            .await?["value"],
+        true
+    );
+    page.set_viewport_pointer_position(6, None).await?;
+    assert_eq!(*frames.cursor.borrow(), Some(first));
+
+    page.evaluate_runtime_expression_async("scrollTo(0, 120)")
+        .await?;
+    cursor(&mut frames, Cursor::Grab).await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async(
+            "JSON.stringify([first.matches(':hover'), second.matches(':hover'), moves])"
+        )
+        .await?["value"],
+        "[false,true,0]"
+    );
+    let pending = page.start_viewport_navigation(Some(html_url(
+        "<textarea style='width:100px;height:80px'></textarea>",
+    )))?;
+    assert!(page.finish_viewport_navigation(pending.wait().await?)?);
+    let second = cursor(&mut frames, Cursor::Text).await?;
+    assert_ne!(second.document, first.document);
+    assert_eq!(second.viewport_revision, 7);
+
+    let resized = ViewportSurface {
+        inner_width: 200,
+        ..surface
+    };
+    let mut resized_frames = page.subscribe_viewport_frames(resized, 8).await?;
+    frame(&mut resized_frames, |frame| frame.snapshot.is_some()).await?;
+    assert_eq!(*resized_frames.cursor.borrow(), None);
+    page.set_viewport_pointer_position(8, Some((40., 40.)))
+        .await?;
+    let cursor = cursor(&mut resized_frames, Cursor::Text).await?;
+    assert_eq!(
+        (cursor.document, cursor.viewport_revision),
+        (second.document, 8)
+    );
+    page.set_viewport_pointer_position(8, None).await?;
+    assert_eq!(*resized_frames.cursor.borrow(), None);
+    assert_eq!(
+        page.evaluate_runtime_expression_async(
+            "document.querySelector('textarea').matches(':hover')"
+        )
+        .await?["value"],
+        false
+    );
     Ok(())
 }
 

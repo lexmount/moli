@@ -1,8 +1,8 @@
 use anyhow::Result;
 use moli_page_types::ViewportSurface;
 use moli_renderer_v8::{
-    RendererPageNavigationState, RendererViewportFrame, RendererViewportSubscription,
-    RendererViewportWheelInput,
+    RendererPageNavigationState, RendererViewportCursor, RendererViewportFrame,
+    RendererViewportSubscription, RendererViewportWheelInput,
 };
 use std::sync::Arc;
 use tokio::sync::{Notify, watch};
@@ -14,6 +14,7 @@ use super::{
 /// A document's latest viewport paint, without queuing intermediate frames.
 pub struct ViewportFrames {
     pub updates: watch::Receiver<Option<RendererViewportFrame>>,
+    pub cursor: watch::Receiver<Option<RendererViewportCursor>>,
     pub resource_wake: Arc<Notify>,
 }
 
@@ -114,13 +115,26 @@ impl Page {
         surface: ViewportSurface,
         viewport_revision: u64,
     ) -> Result<ViewportFrames> {
+        self.subscribe_viewport_frames_with_pointer(surface, viewport_revision, None)
+            .await
+    }
+
+    pub(super) async fn subscribe_viewport_frames_with_pointer(
+        &mut self,
+        surface: ViewportSurface,
+        viewport_revision: u64,
+        initial_pointer_position: Option<(f64, f64)>,
+    ) -> Result<ViewportFrames> {
         let (updates, receiver) = watch::channel(None);
+        let (cursor, cursor_receiver) = watch::channel(None);
         let resource_wake = Arc::new(Notify::new());
         self.dispatch_unit_page_command_async(
             RendererPageCommand::SubscribeViewportFrames(RendererViewportSubscription {
                 surface,
                 viewport_revision,
+                initial_pointer_position,
                 updates,
+                cursor,
                 resource_wake: Arc::clone(&resource_wake),
             }),
             "subscribe to viewport frames",
@@ -128,8 +142,24 @@ impl Page {
         .await?;
         Ok(ViewportFrames {
             updates: receiver,
+            cursor: cursor_receiver,
             resource_wake,
         })
+    }
+
+    pub async fn set_viewport_pointer_position(
+        &mut self,
+        viewport_revision: u64,
+        position: Option<(f64, f64)>,
+    ) -> Result<()> {
+        self.dispatch_unit_page_command_async(
+            RendererPageCommand::SetViewportPointerPosition {
+                viewport_revision,
+                position,
+            },
+            "set viewport pointer position",
+        )
+        .await
     }
 
     pub async fn wake_viewport_frames(&mut self) -> Result<()> {

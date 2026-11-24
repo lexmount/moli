@@ -53,6 +53,8 @@ pub struct FrozenLayoutBox<N> {
     pub geometry_source: Option<N>,
     pub principal_source: Option<N>,
     pub hit_source: Option<N>,
+    #[cfg(feature = "molio")]
+    pub(crate) pseudo: Option<crate::LayoutPseudo>,
     /// Box selection and logical-axis orientation for CSSOM sizes, sampled
     /// with the geometry. `None` means no used size (for example, a non-replaced
     /// inline). Retaining this discriminator avoids consulting live display

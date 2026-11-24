@@ -51,9 +51,10 @@ pub use moli_renderer_v8::{
 pub use moli_renderer_v8::{RendererPageAccessError, RendererPageCommand, RendererPageReply};
 #[cfg(feature = "molio")]
 pub use moli_renderer_v8::{
-    RendererPageNavigationState, RendererViewportEdit, RendererViewportEditAction,
-    RendererViewportEditReply, RendererViewportEditor, RendererViewportFrame,
-    RendererViewportNavigation, RendererViewportWheelInput, RendererViewportWheelPhase,
+    RendererPageNavigationState, RendererViewportCursor, RendererViewportCursorKind,
+    RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
+    RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
+    RendererViewportWheelInput, RendererViewportWheelPhase,
 };
 
 /// ACE page tasks executed on the renderer owner thread.

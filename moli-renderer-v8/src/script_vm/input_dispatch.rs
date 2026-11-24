@@ -9,6 +9,8 @@ use std::rc::Rc;
 
 #[cfg(feature = "ace-protocol")]
 mod ace_page_tasks;
+#[cfg(feature = "molio")]
+mod cursor;
 mod drag_source;
 mod mouse_boundary;
 mod touch_tap;
