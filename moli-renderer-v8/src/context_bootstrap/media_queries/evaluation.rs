@@ -96,6 +96,7 @@ fn media_query_list_attribute_getter_callback<'s>(
 }
 
 const REALTIME_MEDIA_QUERY_ID_SLOT: &str = "__moliRealtimeMediaQueryId";
+const REALTIME_MEDIA_LISTENERS_SLOT: &str = "__moliRealtimeMediaListeners";
 
 fn realtime_media_query_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -133,8 +134,9 @@ pub(in crate::context_bootstrap) fn read_media_query_matches<'s>(
     }
     if host.layout_policy().is_realtime()
         && let Some(id) = realtime_media_query_id(scope, list)
+        && let Some(matches) = host.realtime_media_query_matches(id)
     {
-        return Some(host.realtime_media_query_matches(id));
+        return Some(matches);
     }
     Some(host.media_query_matches_for_document(document, &media))
 }
@@ -147,6 +149,9 @@ pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
     if event_type != "change" {
         return;
     }
+    let Some(id) = realtime_media_query_id(scope, list) else {
+        return;
+    };
     let Some(context) = list.get_creation_context(scope) else {
         return;
     };
@@ -154,14 +159,54 @@ pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    if !unsafe { &*host_ptr }.layout_policy().is_realtime() {
+    let host = unsafe { &*host_ptr };
+    if !host.layout_policy().is_realtime() {
         return;
     }
-    let Some(id) = realtime_media_query_id(scope, list) else {
+    let active = !super::simple_object_event_listeners_snapshot(scope, list, event_type).is_empty();
+    if active == host.realtime_media_query_matches(id).is_some() {
+        return;
+    }
+    let global = context.global(scope);
+    let registry = get_private_value(scope, global, REALTIME_MEDIA_LISTENERS_SLOT)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok());
+    let key = v8::BigInt::new_from_u64(scope, id);
+    if !active {
+        host.retire_realtime_media_query(id);
+        if let Some(registry) = registry {
+            registry.delete(scope, key.into());
+        }
+        return;
+    }
+    let Some(target) = host.current_window_document_task_target(scope) else {
         return;
     };
-    let active = !super::simple_object_event_listeners_snapshot(scope, list, event_type).is_empty();
-    unsafe { &*host_ptr }.set_realtime_media_query_listening(id, active);
+    let Some(document) = host.window_document_handle_for_dispatch_scope(target.dispatch_scope())
+    else {
+        return;
+    };
+    let Some(media) = media_query_list_media_slot(scope, list) else {
+        return;
+    };
+    let matches = host.media_query_matches_for_document(document, &media);
+    if let Err(error) = host.register_realtime_media_query(scope, id, target, media, matches, list)
+    {
+        crate::context_bootstrap::throw_error(scope, &error.to_string());
+        return;
+    }
+    // The realm roots only lists that can receive a change event. Read-only
+    // queries use the current environment in their matches getter.
+    let registry = registry.unwrap_or_else(|| {
+        let registry = v8::Map::new(scope);
+        set_private_value(
+            scope,
+            global,
+            REALTIME_MEDIA_LISTENERS_SLOT,
+            registry.into(),
+        );
+        registry
+    });
+    registry.set(scope, key.into(), list.into());
 }
 
 /// These strong roots exist only for a Document's current media phase. The
@@ -290,19 +335,15 @@ pub(crate) fn window_match_media_callback<'s>(
     } else {
         evaluate_match_media_query_list(&serialized_query, None)
     };
-    let realtime_registration = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && unsafe { &*host_ptr }.layout_policy().is_realtime()
-        && let Some(target) = unsafe { &*host_ptr }.current_window_document_task_target(scope)
-    {
-        Some((host_ptr, target, serialized_query.clone()))
-    } else {
-        None
-    };
+    let realtime_host = context_host_ptr_from_global_bridge(scope)
+        .map(|host| unsafe { &*host })
+        .filter(|host| host.layout_policy().is_realtime());
     let mql = new_media_query_list(scope, serialized_query, matches);
-    if let Some((host_ptr, target, media)) = realtime_registration {
-        let id = match unsafe { &*host_ptr }
-            .register_realtime_media_query(scope, target, media, matches, mql)
-        {
+    initialize_simple_event_target(scope, mql);
+    if let Some(host) = realtime_host {
+        // Media change events follow creation order, even when listeners were
+        // added later. Only subscribed lists enter the native map.
+        let id = match host.allocate_realtime_media_query_id() {
             Ok(id) => id,
             Err(error) => {
                 crate::context_bootstrap::throw_error(scope, &error.to_string());
@@ -311,20 +352,18 @@ pub(crate) fn window_match_media_callback<'s>(
         };
         let value = v8::BigInt::new_from_u64(scope, id);
         set_private_value(scope, mql, REALTIME_MEDIA_QUERY_ID_SLOT, value.into());
+    } else {
+        if global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT).is_none() {
+            let registry = v8::Array::new(scope, 0);
+            set_private_value(
+                scope,
+                global,
+                MEDIA_QUERY_LIST_REGISTRY_SLOT,
+                registry.into(),
+            );
+        }
+        push_object_to_global_registry(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT, mql);
     }
-    initialize_simple_event_target(scope, mql);
-
-    if global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT).is_none() {
-        let global = scope.get_current_context().global(scope);
-        let registry = v8::Array::new(scope, 0);
-        set_private_value(
-            scope,
-            global,
-            MEDIA_QUERY_LIST_REGISTRY_SLOT,
-            registry.into(),
-        );
-    }
-    push_object_to_global_registry(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT, mql);
     rv.set(mql.into());
 }
 

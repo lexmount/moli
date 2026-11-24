@@ -141,6 +141,38 @@ fn realtime_environment_respects_media_listener_lifetime_and_live_event_matches(
 }
 
 #[test]
+fn realtime_environment_delivers_media_changes_in_query_creation_order() {
+    run_page_vm_large_stack_async_test("realtime-media-creation-order", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/media-order").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut()
+            .eval(
+                r#"
+                document.body.innerHTML='<iframe id=frame style="width:320px;height:100px;border:0"></iframe>';
+                const child = frame.contentWindow;
+                const first = child.matchMedia('(min-width:400px)');
+                const second = child.matchMedia('(min-width:400px)');
+                globalThis.events = [];
+                second.onchange = () => events.push('second');
+                first.onchange = () => events.push('first');
+                frame.style.width = '480px';
+                void child.innerWidth;
+            "#,
+            )
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("events.join(',')").unwrap(),
+            "first,second"
+        );
+    });
+}
+
+#[test]
 fn realtime_environment_cache_reset_and_document_open_do_not_fabricate_resize() {
     run_page_vm_large_stack_async_test("realtime-environment-reset", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
