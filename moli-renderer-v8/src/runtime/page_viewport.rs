@@ -98,6 +98,7 @@ pub struct RendererViewportSubscription {
     pub initial_pointer_position: Option<(f64, f64)>,
     pub updates: watch::Sender<Option<RendererViewportFrame>>,
     pub cursor: watch::Sender<Option<RendererViewportCursor>>,
+    pub display_tick_requests: watch::Sender<Option<u64>>,
     pub resource_wake: Arc<Notify>,
 }
 
@@ -572,18 +573,37 @@ impl PageVm {
     pub(super) fn restore_viewport_frames(&mut self, state: Box<ViewportFrameState>) {
         self.vm()
             .set_viewport_resource_wake(&state.subscription.resource_wake);
+        self.vm().set_viewport_display_clock(Some((
+            state.subscription.viewport_revision,
+            state.subscription.display_tick_requests.clone(),
+        )));
         self.viewport_frames = Some(state);
         self.wake_viewport_frames();
     }
 
-    pub(super) fn accept_viewport_display_tick(&self, revision: u64, time: std::time::Instant) {
-        if self.document_settings.document_activity.visible
-            && self
-                .viewport_frames
-                .as_ref()
-                .is_some_and(|state| state.subscription.viewport_revision == revision)
+    pub(super) fn take_viewport_frames(&mut self) -> Option<Box<ViewportFrameState>> {
+        let frames = self.viewport_frames.take()?;
+        if let Some(vm) = &self.vm {
+            vm.set_viewport_display_clock(None);
+        }
+        Some(frames)
+    }
+
+    pub(super) fn accept_viewport_display_tick(
+        &self,
+        revision: u64,
+        time: std::time::Instant,
+    ) -> bool {
+        if let Some(vm) = &self.vm
+            && self.document_settings.document_activity.visible
+            && self.viewport_frames.as_ref().is_some_and(|state| {
+                state.subscription.viewport_revision == revision
+                    && !state.subscription.updates.is_closed()
+            })
         {
-            self.vm().accept_viewport_display_tick(time);
+            vm.accept_viewport_display_tick(time)
+        } else {
+            false
         }
     }
 
@@ -605,7 +625,7 @@ impl PageVm {
             return;
         };
         if state.subscription.updates.is_closed() {
-            self.viewport_frames = None;
+            drop(self.take_viewport_frames());
             self.vm().clear_viewport_hover();
             return;
         }

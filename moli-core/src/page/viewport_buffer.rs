@@ -181,14 +181,17 @@ struct OutputState {
     binding: u64,
     frame: Option<ReadyFrame>,
     cursor: Option<RendererViewportCursor>,
+    display_tick_request: Option<u64>,
 }
 
 impl OutputState {
     fn advance_binding(&mut self) -> bool {
         self.binding += 1;
-        let cleared = self.frame.is_some() || self.cursor.is_some();
+        let cleared =
+            self.frame.is_some() || self.cursor.is_some() || self.display_tick_request.is_some();
         self.frame = None;
         self.cursor = None;
+        self.display_tick_request = None;
         cleared
     }
 }
@@ -220,6 +223,10 @@ impl ViewportOutput {
         self.state.lock().cursor
     }
 
+    pub fn display_tick_request(&self) -> Option<u64> {
+        self.state.lock().display_tick_request
+    }
+
     /// Reads a completed frame without waiting for rasterization. A callback
     /// pins one slot and does its work outside the output-state lock.
     pub fn read<R>(&self, read: impl FnOnce(ViewportFrameRef<'_>) -> R) -> Option<R> {
@@ -238,13 +245,14 @@ impl ViewportOutput {
         }))
     }
 
-    fn bind(&self) -> u64 {
-        let (binding, cleared) = {
+    fn bind(&self, display_tick_request: Option<u64>) -> u64 {
+        let (binding, changed) = {
             let mut state = self.state.lock();
             let cleared = state.advance_binding();
-            (state.binding, cleared)
+            state.display_tick_request = display_tick_request;
+            (state.binding, cleared || display_tick_request.is_some())
         };
-        if cleared {
+        if changed {
             self.changes.send_replace(());
         }
         binding
@@ -265,6 +273,15 @@ impl ViewportOutput {
         let mut state = self.state.lock();
         if state.binding == binding && state.cursor != cursor {
             state.cursor = cursor;
+            drop(state);
+            self.changes.send_replace(());
+        }
+    }
+
+    fn publish_display_tick_request(&self, binding: u64, request: Option<u64>) {
+        let mut state = self.state.lock();
+        if state.binding == binding && state.display_tick_request != request {
+            state.display_tick_request = request;
             drop(state);
             self.changes.send_replace(());
         }
@@ -309,6 +326,11 @@ impl BufferedViewportFrames {
                     cursor?;
                     let cursor = *self.frames.cursor.borrow_and_update();
                     self.output.publish_cursor(self.binding, cursor);
+                }
+                request = self.frames.display_tick_requests.changed() => {
+                    request?;
+                    let request = *self.frames.display_tick_requests.borrow_and_update();
+                    self.output.publish_display_tick_request(self.binding, request);
                 }
             }
         }
@@ -365,14 +387,14 @@ impl Page {
             buffers.layout == ViewportBuffers::layout_for(surface)?,
             "buffer layout does not match the viewport",
         );
-        let frames = self
+        let mut frames = self
             .subscribe_viewport_frames_with_pointer(
                 surface,
                 viewport_revision,
                 initial_pointer_position,
             )
             .await?;
-        let binding = output.bind();
+        let binding = output.bind(*frames.display_tick_requests.borrow_and_update());
         let rasterizer = tokio::spawn(rasterize_frames(
             frames.updates.clone(),
             buffers,

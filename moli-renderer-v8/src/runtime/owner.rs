@@ -288,6 +288,12 @@ pub enum RendererOwnerCommand {
     SubscribePageNavigation {
         token: RendererPageToken,
     },
+    #[cfg(feature = "molio")]
+    ViewportDisplayTick {
+        token: RendererPageToken,
+        viewport_revision: u64,
+        time: std::time::Instant,
+    },
     TestingCurrentPageState {
         token: RendererPageToken,
     },
@@ -336,6 +342,8 @@ pub enum RendererOwnerReply {
     PageNavigationSubscription(
         tokio::sync::watch::Receiver<Option<super::RendererPageNavigationState>>,
     ),
+    #[cfg(feature = "molio")]
+    ViewportDisplayTickProcessed,
     TestingCurrentPageState(Arc<RendererPageState>),
     TestingRendererPageView(RendererPageView),
     TestingOwnerSlot(RendererPageSlotHandle),

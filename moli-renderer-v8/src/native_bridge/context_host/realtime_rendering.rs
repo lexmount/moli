@@ -59,6 +59,38 @@ enum FramePhase {
     Running(RunningRealtimeFrame),
 }
 
+#[cfg(feature = "molio")]
+struct ViewportDisplayClock {
+    revision: u64,
+    requests: tokio::sync::watch::Sender<Option<u64>>,
+    requested: bool,
+    tick: Option<Instant>,
+    consumed: Option<Instant>,
+}
+
+#[cfg(feature = "molio")]
+impl ViewportDisplayClock {
+    fn set_requested(&mut self, requested: bool) {
+        if self.requested == requested {
+            return;
+        }
+        self.requested = requested;
+        if !requested {
+            self.tick = None;
+            self.consumed = None;
+        }
+        self.requests
+            .send_replace(requested.then_some(self.revision));
+    }
+}
+
+#[cfg(feature = "molio")]
+impl Drop for ViewportDisplayClock {
+    fn drop(&mut self) {
+        self.set_requested(false);
+    }
+}
+
 #[derive(Default)]
 pub(super) struct RealtimeFrameState {
     next_id: u64,
@@ -68,9 +100,7 @@ pub(super) struct RealtimeFrameState {
     last_deadline: Option<Instant>,
     max_fps: Option<u32>,
     #[cfg(feature = "molio")]
-    display_tick: Option<Instant>,
-    #[cfg(feature = "molio")]
-    consumed_display_tick: Option<Instant>,
+    display_clock: Option<ViewportDisplayClock>,
     source_requested: bool,
     #[cfg(test)]
     now_for_test: Option<Instant>,
@@ -90,8 +120,10 @@ impl RealtimeFrameState {
     fn next_frame_deadline(&self) -> Instant {
         let now = self.sampled_now();
         #[cfg(feature = "molio")]
-        if let Some(tick) = self.display_tick {
-            if self.consumed_display_tick != Some(tick) {
+        if let Some(clock) = &self.display_clock
+            && let Some(tick) = clock.tick
+        {
+            if clock.consumed != Some(tick) {
                 return now;
             }
             // Display callbacks can stop during a native resize or occlusion.
@@ -125,6 +157,24 @@ impl RealtimeFrameState {
         }
     }
 
+    #[cfg(feature = "molio")]
+    fn publish_display_tick_request(&mut self) {
+        let requested = match &self.phase {
+            FramePhase::Idle => false,
+            FramePhase::Scheduled(frame) => frame.sample_all_intersections,
+            FramePhase::Running(frame) => frame.sample_all_intersections,
+        };
+        if let Some(clock) = &mut self.display_clock {
+            clock.set_requested(requested);
+        }
+    }
+
+    fn clear_cadence(&mut self) {
+        self.last_deadline = None;
+        #[cfg(feature = "molio")]
+        self.publish_display_tick_request();
+    }
+
     pub(super) fn retire_document(&mut self) {
         // Do not reuse ids across document.open(), or a stale claimed task
         // could retire the replacement's payload during discard.
@@ -133,7 +183,7 @@ impl RealtimeFrameState {
         if matches!(self.phase, FramePhase::Scheduled(_)) {
             self.phase = FramePhase::Idle;
         }
-        self.last_deadline = None;
+        self.clear_cadence();
         self.source_requested = false;
         #[cfg(test)]
         self.completed_for_test.take();
@@ -243,25 +293,49 @@ impl PageScriptHost {
     }
 
     #[cfg(feature = "molio")]
-    pub(crate) fn accept_viewport_display_tick(&self, time: Instant) {
+    pub(crate) fn set_viewport_display_clock(
+        &self,
+        clock: Option<(u64, tokio::sync::watch::Sender<Option<u64>>)>,
+    ) {
+        if let Some(state) = &self.realtime_layout_state {
+            let mut frame = state.frame.borrow_mut();
+            frame.display_clock = clock.map(|(revision, requests)| ViewportDisplayClock {
+                revision,
+                requests,
+                requested: false,
+                tick: None,
+                consumed: None,
+            });
+            frame.publish_display_tick_request();
+        }
+    }
+
+    /// Returns whether the owner needs to reindex the frame deadline.
+    #[cfg(feature = "molio")]
+    pub(crate) fn accept_viewport_display_tick(&self, time: Instant) -> bool {
         let Some(state) = &self.realtime_layout_state else {
-            return;
+            return false;
         };
         let mut frame = state.frame.borrow_mut();
-        if frame.display_tick.is_some_and(|previous| previous >= time) {
-            return;
+        let Some(clock) = frame.display_clock.as_mut().filter(|clock| clock.requested) else {
+            return false;
+        };
+        if clock.tick.is_some_and(|previous| previous >= time) {
+            return false;
         }
-        frame.display_tick = Some(time);
+        clock.tick = Some(time);
         let now = frame.sampled_now();
-        if frame
+        if !frame
             .scheduled()
             .is_some_and(|scheduled| scheduled.sample_all_intersections && scheduled.deadline > now)
         {
-            // Replace a timer deadline with this display opportunity.
-            frame.phase = FramePhase::Idle;
+            return false;
         }
+        // Replace a timer deadline with this display opportunity.
+        frame.phase = FramePhase::Idle;
         drop(frame);
         self.refresh_realtime_rendering_opportunity();
+        true
     }
 
     pub(crate) fn set_realtime_max_fps(&self, max_fps: u32) {
@@ -269,10 +343,10 @@ impl PageScriptHost {
             let mut frame = state.frame.borrow_mut();
             if frame.max_fps != Some(max_fps) {
                 frame.max_fps = Some(max_fps);
-                frame.last_deadline = None;
                 if matches!(frame.phase, FramePhase::Scheduled(_)) {
                     frame.phase = FramePhase::Idle;
                 }
+                frame.clear_cadence();
             }
             drop(frame);
             self.refresh_realtime_rendering_opportunity();
@@ -309,12 +383,7 @@ impl PageScriptHost {
         let mut frame = state.frame.borrow_mut();
         if !self.document_activity().visible {
             frame.phase = FramePhase::Idle;
-            frame.last_deadline = None;
-            #[cfg(feature = "molio")]
-            {
-                frame.display_tick = None;
-                frame.consumed_display_tick = None;
-            }
+            frame.clear_cadence();
             return;
         }
         let sample_all_intersections = frame.source_requested
@@ -336,17 +405,20 @@ impl PageScriptHost {
         };
         let Some(deadline) = deadline else {
             frame.phase = FramePhase::Idle;
-            frame.last_deadline = None;
+            frame.clear_cadence();
             return;
         };
         if let Some(mut pending) = pending.filter(|pending| pending.deadline == deadline) {
             pending.sample_all_intersections = sample_all_intersections;
             frame.phase = FramePhase::Scheduled(pending);
             frame.last_deadline = sample_all_intersections.then_some(deadline);
+            #[cfg(feature = "molio")]
+            frame.publish_display_tick_request();
             return;
         }
         frame.phase = FramePhase::Idle;
         let Some(next_id) = frame.next_id.checked_add(1) else {
+            frame.clear_cadence();
             tracing::error!("realtime rendering opportunity id exhausted");
             return;
         };
@@ -376,6 +448,8 @@ impl PageScriptHost {
             // can have an arbitrary offset from a previous rendering tick.
             frame.last_deadline = sample_all_intersections.then_some(deadline);
         }
+        #[cfg(feature = "molio")]
+        frame.publish_display_tick_request();
     }
 
     #[cfg(all(test, feature = "devtools"))]
@@ -412,6 +486,8 @@ impl PageScriptHost {
         let mut frame = state.frame.borrow_mut();
         if frame.scheduled().is_some_and(|pending| pending.id == id) {
             frame.phase = FramePhase::Idle;
+            #[cfg(feature = "molio")]
+            frame.publish_display_tick_request();
             true
         } else {
             false
@@ -432,16 +508,19 @@ impl PageScriptHost {
         let scheduled = frame.scheduled().expect("authorized rendering opportunity");
         frame.phase = FramePhase::Idle;
         if !self.document_activity().visible {
+            frame.clear_cadence();
             return Ok(false);
         }
         let documents = self.realtime_animation_frame_documents();
-        anyhow::ensure!(
-            documents.first() == Some(&target),
-            "rendering root changed before its batch"
-        );
+        if documents.first() != Some(&target) {
+            frame.clear_cadence();
+            anyhow::bail!("rendering root changed before its batch");
+        }
         #[cfg(feature = "molio")]
-        if scheduled.sample_all_intersections {
-            frame.consumed_display_tick = frame.display_tick;
+        if scheduled.sample_all_intersections
+            && let Some(clock) = &mut frame.display_clock
+        {
+            clock.consumed = clock.tick;
         }
         frame.phase = FramePhase::Running(RunningRealtimeFrame {
             ticket: (id, target),
@@ -563,7 +642,7 @@ impl PageScriptHost {
                 // Retain uncalled callbacks but require new explicit demand
                 // after a fatal layout/checkpoint/watchdog failure.
                 frame.source_requested = false;
-                frame.last_deadline = None;
+                frame.clear_cadence();
                 return;
             }
         }
@@ -619,19 +698,37 @@ mod tests {
     #[test]
     fn viewport_display_clock_consumes_each_tick_once_and_resumes_timer_pacing() {
         let tick = Instant::now();
+        let (requests, needed) = tokio::sync::watch::channel(None);
         let mut frame = RealtimeFrameState {
             now_for_test: Some(tick),
-            display_tick: Some(tick),
+            display_clock: Some(ViewportDisplayClock {
+                revision: 1,
+                requests,
+                requested: true,
+                tick: Some(tick),
+                consumed: None,
+            }),
             ..Default::default()
         };
         assert_eq!(frame.next_frame_deadline(), tick);
-        frame.consumed_display_tick = Some(tick);
+        frame.display_clock.as_mut().unwrap().consumed = Some(tick);
         let fallback = tick + Duration::from_millis(250);
         assert_eq!(frame.next_frame_deadline(), fallback);
         frame.now_for_test = Some(fallback);
         assert_eq!(
             frame.next_frame_deadline(),
             fallback + Duration::from_nanos(16_666_667)
+        );
+        let resumed = fallback + Duration::from_millis(10);
+        frame.now_for_test = Some(resumed);
+        frame.display_clock.as_mut().unwrap().tick = Some(resumed);
+        assert_eq!(frame.next_frame_deadline(), resumed);
+
+        frame.clear_cadence();
+        assert_eq!(*needed.borrow(), None);
+        assert_eq!(
+            frame.next_frame_deadline(),
+            resumed + Duration::from_nanos(16_666_667)
         );
     }
 }

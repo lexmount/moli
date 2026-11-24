@@ -225,7 +225,6 @@ impl MoliSurface {
         self.commands = connection.map(|tab| tab.commands.clone());
         self.output = connection.map(|tab| tab.viewport.clone());
         self.display_ticks = connection.and_then(|tab| tab.display_ticks.clone());
-        self.request_display_tick(window, cx);
         self.activity = None;
         self.viewport = None;
         self.document = document;
@@ -233,17 +232,28 @@ impl MoliSurface {
         self.sync_activity(window);
     }
 
-    fn request_display_tick(&mut self, window: &mut Window, cx: &Context<Self>) {
-        if self.display_ticks.is_none() || self.display_tick_pending {
+    fn display_tick_sender(&self) -> Option<&watch::Sender<(u64, std::time::Instant)>> {
+        self.display_ticks.as_ref().filter(|clock| {
+            !clock.is_closed()
+                && self.viewport.is_some()
+                && self
+                    .output
+                    .as_ref()
+                    .is_some_and(|output| output.display_tick_request() == Some(self.revision))
+        })
+    }
+
+    pub(crate) fn request_display_tick(&mut self, window: &mut Window, cx: &Context<Self>) {
+        if self.display_tick_pending || self.display_tick_sender().is_none() {
             return;
         }
         self.display_tick_pending = true;
         cx.on_next_frame(window, |surface, window, cx| {
             surface.display_tick_pending = false;
-            if let Some(clock) = surface.display_ticks.as_ref() {
+            if let Some(clock) = surface.display_tick_sender() {
                 clock.send_replace((surface.revision, std::time::Instant::now()));
+                surface.request_display_tick(window, cx);
             }
-            surface.request_display_tick(window, cx);
         });
     }
 

@@ -4745,6 +4745,46 @@ async fn renderer_page_testing_handle_page_state_refresh_works_on_current_thread
     Ok(())
 }
 
+#[cfg(feature = "molio")]
+#[tokio::test]
+async fn viewport_display_ticks_do_not_capture_idle_page_state() -> Result<()> {
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let url = concat!(
+        "data:text/html,<body><script>",
+        "document.body.innerHTML='<main hidden>'+'<span data-item=1>text</span>'.repeat(4096)+'</main>'",
+        "</script>",
+    );
+    let mut page = browser.fetch(url).await?;
+    let mut frames = page
+        .subscribe_viewport_frames(Default::default(), 1)
+        .await?;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        frames
+            .updates
+            .wait_for(|frame| frame.as_ref().is_some_and(|frame| frame.snapshot.is_some())),
+    )
+    .await??;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        frames.display_tick_requests.wait_for(Option::is_none),
+    )
+    .await??;
+
+    let handle = page.handle_for_testing();
+    let before = handle.current_page_state_async().await?.snapshot_revision;
+    for _ in 0..4 {
+        page.viewport_display_tick(1, std::time::Instant::now())
+            .await?;
+    }
+    assert_eq!(
+        handle.current_page_state_async().await?.snapshot_revision,
+        before
+    );
+    assert!(!frames.display_tick_requests.has_changed()?);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn renderer_owner_removed_page_releases_last_page_state() -> Result<()> {
     let server = FixtureServer::spawn().await?;

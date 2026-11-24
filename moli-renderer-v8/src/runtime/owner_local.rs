@@ -573,6 +573,26 @@ impl RendererPageHandle {
     }
 
     #[cfg(feature = "molio")]
+    pub async fn viewport_display_tick(
+        &self,
+        viewport_revision: u64,
+        time: std::time::Instant,
+    ) -> Result<()> {
+        match self
+            .render_runtime
+            .dispatch(RendererOwnerCommand::ViewportDisplayTick {
+                token: self.token(),
+                viewport_revision,
+                time,
+            })
+            .await?
+        {
+            RendererOwnerReply::ViewportDisplayTickProcessed => Ok(()),
+            _ => anyhow::bail!("unexpected viewport display tick reply"),
+        }
+    }
+
+    #[cfg(feature = "molio")]
     pub async fn subscribe_navigation_state(
         &self,
     ) -> Result<tokio::sync::watch::Receiver<Option<super::RendererPageNavigationState>>> {

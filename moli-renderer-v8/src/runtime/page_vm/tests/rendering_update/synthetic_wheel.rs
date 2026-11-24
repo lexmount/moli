@@ -407,6 +407,7 @@ fn synthetic_wheel_and_viewport_wheel_share_phases_and_coordinate_free_end() {
             initial_pointer_position: None,
             updates,
             cursor,
+            display_tick_requests: tokio::sync::watch::Sender::new(None),
             resource_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
         })
         .unwrap();
