@@ -32,7 +32,7 @@ pub(in crate::native_bridge) fn media_play_callback<'s>(
         return;
     };
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -86,7 +86,7 @@ pub(in crate::native_bridge) fn media_pause_callback<'s>(
     let runtime = unsafe { &mut *runtime_ptr };
     let changed = runtime.set_media_paused(handle, true);
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -110,7 +110,7 @@ pub(in crate::native_bridge) fn media_load_callback<'s>(
     };
     let runtime = unsafe { &mut *runtime_ptr };
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -137,7 +137,7 @@ pub(in crate::native_bridge) fn media_load_callback<'s>(
 }
 
 #[cfg(all(
-    feature = "video",
+    feature = "media-ext",
     any(target_os = "linux", target_os = "macos"),
     target_pointer_width = "64"
 ))]

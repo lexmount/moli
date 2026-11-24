@@ -230,7 +230,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         let attribute_height = numeric_dimension_attribute(self.host(), node, "height");
         let intrinsic = self.runtime.image_resource_intrinsic_size(node);
         #[cfg(all(
-            feature = "video",
+            feature = "media-ext",
             any(target_os = "linux", target_os = "macos"),
             target_pointer_width = "64"
         ))]
@@ -282,7 +282,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
                 })
             }
             #[cfg(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             ))]

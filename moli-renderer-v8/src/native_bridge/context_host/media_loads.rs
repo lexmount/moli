@@ -334,7 +334,7 @@ impl PageScriptHost {
         document_handle: DomHandle,
     ) -> usize {
         #[cfg(all(
-            feature = "video",
+            feature = "media-ext",
             any(target_os = "linux", target_os = "macos"),
             target_pointer_width = "64"
         ))]

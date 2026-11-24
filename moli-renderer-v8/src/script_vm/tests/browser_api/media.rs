@@ -150,7 +150,7 @@ async fn media_report_only_csp_reports_without_blocking_load() {
     )
     .await;
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -189,7 +189,7 @@ async fn media_report_only_csp_reports_without_blocking_load() {
 }
 
 #[cfg(all(
-    feature = "video",
+    feature = "media-ext",
     any(target_os = "linux", target_os = "macos"),
     target_pointer_width = "64"
 ))]

@@ -125,7 +125,7 @@ pub(crate) use self::image::{
 };
 pub(in crate::network_host) use self::js_values::defined_object_string_property;
 #[cfg(all(
-    feature = "video",
+    feature = "media-ext",
     any(target_os = "linux", target_os = "macos"),
     target_pointer_width = "64"
 ))]

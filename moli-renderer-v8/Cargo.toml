@@ -7,7 +7,7 @@ edition = "2024"
 [features]
 default = ["devtools"]
 devtools = ["moli-command-types/devtools", "dep:moli-protocol-cdp"]
-video = ["dep:moli-video", "moli-video?/video"]
+media-ext = ["dep:moli-video", "moli-video?/media-ext"]
 # Desktop viewport streaming and native editing use the existing input dispatch.
 molio = ["devtools", "moli-layout/molio"]
 # Native ACE page tasks for embedders. Public browser builds leave this disabled.

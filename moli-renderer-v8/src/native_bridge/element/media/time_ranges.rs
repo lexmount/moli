@@ -35,13 +35,13 @@ fn media_ranges_getter<'s>(
     };
     let ranges: &[(f64, f64)] = &[];
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
     let video_ranges;
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]

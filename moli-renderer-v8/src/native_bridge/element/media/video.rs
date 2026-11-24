@@ -73,7 +73,7 @@ pub(in crate::native_bridge) fn media_video_width_getter_function<'s>(
     };
     let width = 0;
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -94,7 +94,7 @@ pub(in crate::native_bridge) fn media_video_height_getter_function<'s>(
     };
     let height = 0;
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]

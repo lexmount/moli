@@ -5,7 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [features]
-video = ["dep:anyhow", "dep:bytes", "dep:moli-image", "dep:parking_lot", "dep:rsmpeg"]
+media-ext = ["dep:anyhow", "dep:bytes", "dep:moli-image", "dep:parking_lot", "dep:rsmpeg"]
 
 [target.'cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))'.dependencies]
 anyhow = { version = "1.0.100", optional = true }
