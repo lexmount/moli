@@ -21,6 +21,15 @@ pub(crate) fn is_window_receiver<'s>(
         && context_host_ptr_from_context_slot(current_context).is_some()
 }
 
+/// Apply Window access policy to the Window subtype of EventTarget receivers.
+pub(crate) fn require_same_origin_event_target_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, receiver).unwrap_or(receiver);
+    !is_window_receiver(scope, receiver) || require_same_origin_window_receiver(scope, receiver)
+}
+
 pub(crate) fn require_same_origin_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
