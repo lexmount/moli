@@ -174,106 +174,73 @@ fn perform_wheel_scroll_chain_default_action(
     Ok(changed)
 }
 
-/// Gesture scroll targets are chosen once per axis. Reaching a boundary or
-/// removing the selected scroller must not hand the active gesture to another
-/// container. An axis first used by a later overscroll segment can start then.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct WheelScrollTargets {
-    x: Option<DomHandle>,
-    y: Option<DomHandle>,
-    x_started: bool,
-    y_started: bool,
-}
+/// The scroller selected for both axes of one synthetic wheel gesture.
+/// Keep this selection at a boundary and after the scroller is removed.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WheelScrollTarget(Option<DomHandle>);
 
-pub(crate) fn select_wheel_scroll_targets(
+pub(crate) fn select_wheel_scroll_target(
     runtime: &PageScriptHost,
     handle: DomHandle,
     delta_x: f64,
     delta_y: f64,
-    mut targets: WheelScrollTargets,
-) -> Result<WheelScrollTargets, moli_layout::LayoutError> {
-    let select_x = !targets.x_started && delta_x != 0.0;
-    let select_y = !targets.y_started && delta_y != 0.0;
-    if !select_x && !select_y {
-        return Ok(targets);
-    }
+) -> Result<WheelScrollTarget, moli_layout::LayoutError> {
+    let can_scroll = |current, minimum: f32, maximum: f32, delta| {
+        delta > 0.0 && current < f64::from(maximum) || delta < 0.0 && current > f64::from(minimum)
+    };
     for container in wheel_scroll_chain(runtime, handle)? {
         let source = container.source;
         let metrics = container.metrics;
         let (x, y) = node_scroll_position(runtime, source);
-        let can_scroll = |current, minimum: f32, maximum: f32, delta| {
-            delta > 0.0 && current < f64::from(maximum)
-                || delta < 0.0 && current > f64::from(minimum)
-        };
-        if select_x
-            && targets.x.is_none()
-            && metrics.allows_user_scroll_x
+        let can_scroll_x = metrics.allows_user_scroll_x
             && can_scroll(
                 x,
                 metrics.minimum_scroll_offset.x,
                 metrics.maximum_scroll_offset.x,
                 delta_x,
-            )
-        {
-            targets.x = Some(source);
-        }
-        if select_y
-            && targets.y.is_none()
-            && metrics.allows_user_scroll_y
+            );
+        let can_scroll_y = metrics.allows_user_scroll_y
             && can_scroll(
                 y,
                 metrics.minimum_scroll_offset.y,
                 metrics.maximum_scroll_offset.y,
                 delta_y,
-            )
-        {
-            targets.y = Some(source);
+            );
+        if can_scroll_x || can_scroll_y {
+            return Ok(WheelScrollTarget(Some(source)));
         }
     }
-    targets.x_started |= select_x;
-    targets.y_started |= select_y;
-    Ok(targets)
+
+    // The initial delta can point out of the viewport's scroll range even
+    // though the overscroll segment will reverse and scroll the viewport.
+    let host = runtime.dom_host();
+    let viewport = host
+        .owner_document_handle(handle)
+        .and_then(|document| host.dom().document_element_handle_for_document(document));
+    Ok(WheelScrollTarget(viewport))
 }
 
 pub(crate) fn perform_latched_wheel_scroll_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
-    targets: &WheelScrollTargets,
+    target: WheelScrollTarget,
     delta_x: f64,
     delta_y: f64,
 ) -> Result<bool, moli_layout::LayoutError> {
-    let mut changed = false;
-    for (source, dx, dy) in [
-        (
-            targets.x,
-            delta_x,
-            if targets.x == targets.y { delta_y } else { 0.0 },
-        ),
-        (
-            targets.y.filter(|target| Some(*target) != targets.x),
-            0.0,
-            delta_y,
-        ),
-    ] {
-        let Some(source) = source else {
-            continue;
-        };
-        let runtime = unsafe { &*runtime_ptr };
-        if !runtime.dom_host().is_connected(source) {
-            continue;
-        }
-        let Some(metrics) = read_element_metrics(runtime, source)? else {
-            continue;
-        };
-        changed |= perform_wheel_scroll_chain_default_action(
-            scope,
-            runtime_ptr,
-            &[moli_layout::LayoutScrollContainerMetrics { source, metrics }],
-            dx,
-            dy,
-        )?;
-    }
-    Ok(changed)
+    let WheelScrollTarget(Some(source)) = target else {
+        return Ok(false);
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(metrics) = read_element_metrics(runtime, source)? else {
+        return Ok(false);
+    };
+    perform_wheel_scroll_chain_default_action(
+        scope,
+        runtime_ptr,
+        &[moli_layout::LayoutScrollContainerMetrics { source, metrics }],
+        delta_x,
+        delta_y,
+    )
 }
 
 #[cfg(test)]

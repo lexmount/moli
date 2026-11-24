@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 
 use crate::{
     document_runtime::DomHandle,
-    native_bridge::{WindowDocumentTaskTarget, element::WheelScrollTargets},
+    native_bridge::{WindowDocumentTaskTarget, element::WheelScrollTarget},
 };
 
 /// One mouse-wheel sequence, shared only with its in-flight renderer commands.
@@ -20,5 +20,5 @@ pub(crate) struct SyntheticWheelTargets {
     pub(crate) document: Option<WindowDocumentTaskTarget>,
     pub(crate) wheel: Option<(DomHandle, WindowDocumentTaskTarget)>,
     pub(crate) ancestors: Vec<DomHandle>,
-    pub(crate) scroll_targets: WheelScrollTargets,
+    pub(crate) scroll_target: Option<WheelScrollTarget>,
 }

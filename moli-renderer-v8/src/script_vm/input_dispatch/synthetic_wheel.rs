@@ -1,6 +1,6 @@
 use super::*;
 use crate::native_bridge::element::{
-    InputSurfaceHit, WheelScrollTargets, select_wheel_scroll_targets,
+    InputSurfaceHit, WheelScrollTarget, select_wheel_scroll_target,
 };
 use crate::runtime::RendererSyntheticWheelGesture;
 
@@ -40,7 +40,7 @@ impl ScriptVm {
         y: f64,
         delta_x: f64,
         delta_y: f64,
-    ) -> Result<Option<(InputSurfaceHit, WheelScrollTargets)>> {
+    ) -> Result<Option<(InputSurfaceHit, WheelScrollTarget)>> {
         let runtime = self._context_host.borrow();
         let mut targets = gesture.targets.lock().clone();
         let document = runtime.input_owner_for_document(self.document_runtime.document_handle());
@@ -87,20 +87,17 @@ impl ScriptVm {
             targets.ancestors = ancestors(target);
             target
         };
-        let scroll_targets = select_wheel_scroll_targets(
-            &runtime,
-            target,
-            delta_x,
-            delta_y,
-            targets.scroll_targets.clone(),
-        )?;
+        let scroll_target = match targets.scroll_target {
+            Some(scroll_target) => scroll_target,
+            None => select_wheel_scroll_target(&runtime, target, delta_x, delta_y)?,
+        };
         *gesture.targets.lock() = targets;
         Ok(Some((
             InputSurfaceHit {
                 target: Some(target),
                 ..Default::default()
             },
-            scroll_targets,
+            scroll_target,
         )))
     }
 }

@@ -193,6 +193,61 @@ async fn scroll_gesture_does_not_chain_after_latched_scroller_hits_boundary_or_i
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_latches_viewport_at_boundary_for_reverse_overscroll() {
+    let mut ctx = TestContext::new_with_layout_policy(LayoutPolicy::Realtime);
+    with_loaded_document(
+        &mut ctx,
+        "<!doctype html><body style='margin:0;height:4000px'>content</body>",
+    )
+    .await;
+    ctx.capture_fixture_layout(None).await;
+
+    gesture(
+        &mut ctx,
+        json!({"x":40,"y":40,"yDistance":100,"yOverscroll":100}),
+    )
+    .await;
+
+    let scroll_y: f64 = evaluate_string(&mut ctx, "String(scrollY)")
+        .await
+        .parse()
+        .unwrap();
+    assert!((scroll_y - 100.0).abs() < 0.05, "scrollY was {scroll_y}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_latches_one_scroller_for_diagonal_delta() {
+    let mut ctx = TestContext::new_with_layout_policy(LayoutPolicy::Realtime);
+    with_loaded_document(
+        &mut ctx,
+        r#"<!doctype html><html style="overflow:hidden"><body style="margin:0;overflow:hidden">
+        <div id="outer" style="width:200px;height:200px;overflow:auto">
+          <div style="width:1000px">
+            <div id="inner" style="width:160px;height:160px;overflow:auto">
+              <div style="height:1500px">content</div>
+            </div>
+          </div>
+        </div></body></html>"#,
+    )
+    .await;
+    ctx.capture_fixture_layout(None).await;
+
+    gesture(&mut ctx, json!({"xDistance":-120,"yDistance":-120})).await;
+
+    let positions = evaluate_string(
+        &mut ctx,
+        "JSON.stringify([document.getElementById('outer').scrollLeft, document.getElementById('inner').scrollTop])",
+    )
+    .await;
+    let (outer_x, inner_y): (f64, f64) = serde_json::from_str(&positions).unwrap();
+    assert_eq!(outer_x, 0.0, "outer container scrolled horizontally");
+    assert!(
+        (inner_y - 120.0).abs() < 0.05,
+        "inner scrollTop was {inner_y}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn scroll_gesture_coalesces_progress_when_wheel_handler_is_slow() {
     // Each handler deliberately occupies at least 50ms. A 375ms gesture should
     // catch up in at most nine dispatches rather than sending all 23 original

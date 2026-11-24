@@ -35,7 +35,7 @@ use crate::dom::{
 };
 use crate::native_bridge::element::{
     InputEventCoordinates, InputHitTestMode, InputHitTestPolicy, TextEditInputType,
-    TextInputSource, TouchEventPoint, WheelScrollTargets, activate_handle_after_pointer_release,
+    TextInputSource, TouchEventPoint, WheelScrollTarget, activate_handle_after_pointer_release,
     activate_handle_after_touch_release, activate_handle_via_keyboard,
     cache_input_files_from_selected_files, construct_drag_event_with_related_target,
     construct_keyboard_event, construct_mouse_event_for_target,
@@ -1107,13 +1107,13 @@ impl ScriptVm {
         completion: MouseDispatchCompletion,
         gesture: Option<&crate::runtime::RendererSyntheticWheelGesture>,
     ) -> Result<RendererInputDispatchOutcome> {
-        let (surface_hit, wheel_targets) = if let Some(gesture) = gesture {
-            let Some((hit, targets)) =
+        let (surface_hit, wheel_scroll_target) = if let Some(gesture) = gesture {
+            let Some((hit, scroll_target)) =
                 self.prepare_gesture_wheel(gesture, x, y, delta_x, delta_y)?
             else {
                 return self.finish_input_event_dispatch_turn(Ok(input_dispatch_outcome(false)));
             };
-            (hit, Some(targets))
+            (hit, Some(scroll_target))
         } else {
             (self.mouse_input_surface_hit(x, y, event_name)?, None)
         };
@@ -1156,15 +1156,13 @@ impl ScriptVm {
             modifiers,
             intercept_drags,
             wheel_cancelable,
-            wheel_targets.as_ref(),
+            wheel_scroll_target,
         );
         if let Some(gesture) = gesture {
             let mut targets = gesture.targets.lock();
             match &result {
                 Ok(outcome) if !outcome.wheel_default_prevented => {
-                    if let Some(scroll_targets) = wheel_targets {
-                        targets.scroll_targets = scroll_targets;
-                    }
+                    targets.scroll_target = wheel_scroll_target;
                 }
                 _ => {
                     // Blink retargets the next wheel after a canceled event.
@@ -1469,7 +1467,7 @@ impl ScriptVm {
         modifiers: u8,
         intercept_drags: bool,
         wheel_cancelable: bool,
-        wheel_targets: Option<&WheelScrollTargets>,
+        wheel_scroll_target: Option<WheelScrollTarget>,
     ) -> Result<RendererInputDispatchOutcome> {
         let PreparedMouseInputDispatch {
             button, buttons, ..
@@ -1920,11 +1918,11 @@ impl ScriptVm {
                         let mut outcome = input_dispatch_outcome(true);
                         outcome.wheel_default_prevented = !dispatched.allows_default();
                         if dispatched.allows_default() {
-                            if let Some(targets) = wheel_targets {
+                            if let Some(scroll_target) = wheel_scroll_target {
                                 perform_latched_wheel_scroll_default_action(
                                     scope,
                                     runtime_ptr,
-                                    targets,
+                                    scroll_target,
                                     delta_x,
                                     delta_y,
                                 )?;
