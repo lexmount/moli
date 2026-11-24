@@ -3,7 +3,7 @@ mod inline_svg;
 mod screen_styles;
 #[cfg(test)]
 pub(crate) use inline_svg::parse_count as svg_parse_count;
-pub(crate) use screen_styles::{ScreenStyleBaseline, screen_styles_are_equivalent};
+pub(crate) use screen_styles::{ScreenStyleBaseline, refreshable_screen_styles};
 mod source_view;
 pub(crate) use source_view::native_scroll_offset;
 mod style_resolver;

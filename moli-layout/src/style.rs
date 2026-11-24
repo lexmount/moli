@@ -1134,6 +1134,10 @@ impl ResolvedLayoutStyle {
         self.background_color
     }
 
+    pub(crate) fn update_background_color(&mut self, computed: &ComputedValues) {
+        self.background_color = stylo_background_color(computed);
+    }
+
     pub(crate) fn border_colors(&self) -> PaintBorderColors {
         self.border_colors
     }

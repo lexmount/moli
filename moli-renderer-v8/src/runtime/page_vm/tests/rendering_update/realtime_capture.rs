@@ -276,6 +276,60 @@ fn realtime_screencast_releases_paint_when_the_document_becomes_empty() {
 }
 
 #[test]
+fn realtime_screencast_repaints_background_colors_without_layout() {
+    run_page_vm_large_stack_async_test("realtime-background-color", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut()
+            .eval(
+                r#"
+document.body.style.margin = '0';
+document.body.innerHTML = '<div id="target" style="width:24px;height:20px;background:red"></div>';
+"#,
+            )
+            .unwrap();
+
+        let session = RendererScreencastPaintSession::default();
+        let request = |known_visual_state| crate::runtime::RendererCaptureScreencastFrameRequest {
+            paint_session: Some(session.clone()),
+            ..viewport_screencast_request(known_visual_state)
+        };
+        let Reply::Captured(initial) = page.capture_screencast_frame(request(None)).unwrap() else {
+            panic!("initial capture");
+        };
+        let builds = page.vm().layout_pass_observability_for_test().1;
+        assert_eq!(
+            page.vm_mut()
+                .eval("target.style.backgroundColor='blue'; String(target.offsetWidth)")
+                .unwrap(),
+            "24",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+        let Reply::Captured(changed) = page
+            .capture_screencast_frame(request(Some(initial.visual_state)))
+            .unwrap()
+        else {
+            panic!("paint-only changes must produce a frame");
+        };
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+        let rgb = moli_image::decode_png(&changed.image.bytes).unwrap();
+        assert_eq!(&rgb.rgba[..4], &[0, 0, 255, 255]);
+        let RendererCaptureScreenshotReply::Captured(fresh) = page
+            .capture_screenshot(RendererCaptureScreenshotRequest::viewport_png())
+            .unwrap()
+        else {
+            panic!("fresh screenshot");
+        };
+        assert_eq!(moli_image::decode_png(&fresh.bytes).unwrap().rgba, rgb.rgba);
+    });
+}
+
+#[test]
 fn realtime_screencast_reuses_published_scroll_and_matches_fresh_pixels() {
     run_page_vm_large_stack_async_test("realtime-screencast-scroll", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

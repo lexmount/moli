@@ -553,6 +553,9 @@ impl MoliStyleEngine {
         let Some(world) = self.owner_document_world(host, root) else {
             return;
         };
+        if host.is_connected(root) {
+            world.document_state.note_screen_style_attribute_change();
+        }
         world.document_state.note_visual_input_change();
         self.invalidation_cleanup_for_world(&world)
             .invalidate_inline_style_subtree(host, root);

@@ -240,6 +240,25 @@ where
 }
 
 impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
+    /// Updates colors that have already been checked against the screen's
+    /// computed styles. Box placements and their numeric styles stay paired.
+    pub fn update_background_colors(
+        &mut self,
+        colors: &HashMap<N, style::servo_arc::Arc<style::properties::ComputedValues>>,
+    ) {
+        for layout_box in &mut self.world.boxes {
+            if layout_box.pseudo.is_none()
+                && layout_box.anonymous_reason.is_none()
+                && let Some(computed) = layout_box.source.and_then(|source| colors.get(&source))
+            {
+                layout_box.style.update_background_color(computed);
+            }
+        }
+        for (_, frame) in self.frames.values_mut() {
+            frame.update_background_colors(colors);
+        }
+    }
+
     /// Projects the viewport of the paired tree, using its latest scroll offsets.
     pub fn paint(
         &self,

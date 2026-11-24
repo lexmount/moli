@@ -129,6 +129,10 @@ impl ScreencastPaintState {
         self.0.get()?.borrow().entry.as_ref().map(read)
     }
 
+    pub(super) fn update<T>(&self, update: impl FnOnce(&mut ScreenPaintEntry) -> T) -> Option<T> {
+        self.0.get()?.borrow_mut().entry.as_mut().map(update)
+    }
+
     pub(super) fn publish(&self, entry: Option<ScreenPaintEntry>) {
         if let Some(store) = self.0.get() {
             let active = self.is_active();

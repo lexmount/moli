@@ -16,8 +16,8 @@ use super::screencast_paint::{
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
-    layout_renderer::{LayoutPassFeedback, ScreenStyleBaseline, screen_styles_are_equivalent},
-    style_engine::StyloStyleEnvironment,
+    layout_renderer::{LayoutPassFeedback, ScreenStyleBaseline, refreshable_screen_styles},
+    style_engine::{StyloComputedStyleSnapshot, StyloStyleEnvironment},
 };
 
 /// The consumer explicitly decides whether a pass may update screen geometry.
@@ -143,6 +143,12 @@ struct ScreenLayoutInputs {
     // Membership and exact owners are inputs. Child viewports are results of
     // the parent pass and must not invalidate their own successful publication.
     documents: Vec<DocumentLayoutInputs>,
+}
+
+#[derive(Default)]
+struct ScreenStyleRefresh {
+    documents: Vec<DomHandle>,
+    backgrounds: Vec<(DomHandle, DomHandle, StyloComputedStyleSnapshot)>,
 }
 
 impl ScreenLayoutInputs {
@@ -439,13 +445,22 @@ impl PageScriptHost {
         if resolve_style_changes {
             self.prepare_current_screen_styles(&inputs);
         }
-        if self.screen_layout_matches_inputs(state, &inputs)
-            && (!resolve_style_changes || self.reuse_equivalent_screen_styles(state, &inputs))
+        let reusable_styles = if self.screen_layout_matches_inputs(state, &inputs) {
+            if resolve_style_changes {
+                self.prepare_screen_style_refresh(state, &inputs)
+            } else {
+                Some(ScreenStyleRefresh::default())
+            }
+        } else {
+            None
+        };
+        if let Some(refresh) = reusable_styles
             && (inputs.documents[0].root.is_none()
                 || !state.scroll_projection_dirty.get()
                 || self.refresh_published_scroll_projection()?
                     != ScrollProjectionRefresh::Unavailable)
         {
+            self.commit_screen_style_refresh(state, refresh);
             state.scroll_projection_dirty.set(false);
             return Ok(());
         }
@@ -539,32 +554,57 @@ impl PageScriptHost {
         })
     }
 
-    fn reuse_equivalent_screen_styles(
+    fn prepare_screen_style_refresh(
         &self,
         state: &RealtimeLayoutState,
         inputs: &ScreenLayoutInputs,
-    ) -> bool {
+    ) -> Option<ScreenStyleRefresh> {
         let baseline = state.screen_styles.borrow();
-        let mut checked_documents = Vec::new();
+        let mut refresh = ScreenStyleRefresh::default();
         for document in &inputs.documents {
-            let Some(roots) = self
+            let roots = self
                 .style_engine
-                .affected_screen_style_roots(document.document)
-            else {
-                return false;
-            };
+                .affected_screen_style_roots(document.document)?;
             if roots.is_empty() {
                 continue;
             }
-            if !screen_styles_are_equivalent(self, document.document, roots, &baseline) {
-                return false;
-            }
-            checked_documents.push(document.document);
+            let backgrounds = refreshable_screen_styles(self, document.document, roots, &baseline)?;
+            refresh.documents.push(document.document);
+            refresh.backgrounds.extend(
+                backgrounds
+                    .into_iter()
+                    .map(|(node, style)| (document.document, node, style)),
+            );
         }
-        for document in checked_documents {
+        Some(refresh)
+    }
+
+    fn commit_screen_style_refresh(
+        &self,
+        state: &RealtimeLayoutState,
+        refresh: ScreenStyleRefresh,
+    ) {
+        if !refresh.backgrounds.is_empty() {
+            #[cfg(feature = "devtools")]
+            state.screencast_paint.update(|paint| {
+                let colors = refresh
+                    .backgrounds
+                    .iter()
+                    .map(|(_, node, style)| (*node, style.computed_values()))
+                    .collect();
+                paint.layout.update_background_colors(&colors);
+            });
+            let mut baseline = state.screen_styles.borrow_mut();
+            for (document, node, style) in refresh.backgrounds {
+                baseline
+                    .get_mut(&document)
+                    .expect("checked screen styles")
+                    .insert(node, style);
+            }
+        }
+        for document in refresh.documents {
             self.style_engine.publish_screen_styles(document);
         }
-        true
     }
 
     fn prepare_current_screen_styles(&self, inputs: &ScreenLayoutInputs) {

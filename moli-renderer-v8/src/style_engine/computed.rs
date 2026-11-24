@@ -339,6 +339,28 @@ impl StyloComputedStyleSnapshot {
     }
 }
 
+impl StyloComputedStyleSnapshot {
+    /// A block's background color is read while projecting paint. Its
+    /// geometry, ordering, image layers and pseudo styles must match.
+    pub(crate) fn only_background_color_changed(&self, current: &Self) -> bool {
+        if self.primary.clone_display().outside() != DisplayOutside::Block
+            || self.primary.clone_background_color() == current.primary.clone_background_color()
+        {
+            return false;
+        }
+        let mut comparison_style = (*current.primary).clone();
+        comparison_style
+            .mutate_background()
+            .set_background_color(self.primary.clone_background_color());
+        let comparison = Self {
+            primary: ServoArc::new(comparison_style),
+            before: current.before.clone(),
+            after: current.after.clone(),
+        };
+        self.has_same_rendering_as(&comparison)
+    }
+}
+
 fn content_visibility_applies(display: Display) -> bool {
     !display.is_none()
         && !display.is_contents()

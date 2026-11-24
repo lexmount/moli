@@ -9,9 +9,9 @@ struct AttributeBeforeMutation {
 }
 
 impl DomHost {
-    /// Class and data attributes can affect CSS without changing native box inputs.
+    /// Style, class and data attributes reach layout through CSS.
     pub fn attribute_affects_native_layout(name: &str) -> bool {
-        name != "class" && !name.starts_with("data-")
+        !matches!(name, "style" | "class") && !name.starts_with("data-")
     }
 
     fn record_attribute_mutation(
