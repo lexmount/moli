@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -25,6 +26,15 @@ from ..config import REPO_ROOT, ReservedPort, clear_proxy_env, reserve_port
 from ..sampling import ResourceSampler
 from ..serve import _join_log_drain_threads, _start_log_drain_threads, probe_url
 from ..versions import sha256_file
+
+
+def fixture_browser_environment() -> dict[str, str]:
+    env = clear_proxy_env(os.environ)
+    if sys.platform == "linux":
+        # Fixture hosts resolve locally. Bound DNS waits for cases that
+        # exercise a deliberately unavailable hostname.
+        env.setdefault("RES_OPTIONS", "attempts:1 timeout:1")
+    return env
 
 
 @dataclass
@@ -161,7 +171,7 @@ class EngineDriver:
             try:
                 port = reserved.port
                 command = self.build_command(binary, port, temp_dir)
-                env = clear_proxy_env(os.environ)
+                env = fixture_browser_environment()
                 env.update(self.extra_env)
                 reserved.release_socket()
                 process = subprocess.Popen(
