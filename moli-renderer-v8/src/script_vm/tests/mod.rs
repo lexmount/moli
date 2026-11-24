@@ -2338,6 +2338,7 @@ mod node_root_dictionary;
 
 mod document_traversal_factory_realms;
 
+mod intersection_observers;
 mod observer_callbacks;
 
 mod svg_text_position_native_receivers;
