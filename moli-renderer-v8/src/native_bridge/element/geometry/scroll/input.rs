@@ -1,5 +1,9 @@
 use super::super::provider::{read_element_metrics, read_scroll_into_view_geometry};
 use super::*;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 pub(crate) fn perform_scrollbar_scroll_default_action(
     scope: &mut v8::PinScope<'_, '_>,
@@ -176,8 +180,27 @@ fn perform_wheel_scroll_chain_default_action(
 
 /// The scroller selected for both axes of one synthetic wheel gesture.
 /// Keep this selection at a boundary and after the scroller is removed.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct WheelScrollTarget(Option<DomHandle>);
+#[derive(Clone, Debug)]
+pub(crate) struct WheelScrollTarget(Option<LatchedScrollBox>);
+
+#[derive(Clone, Debug)]
+struct LatchedScrollBox {
+    source: DomHandle,
+    document: DomHandle,
+    alive: Arc<AtomicBool>,
+}
+
+impl WheelScrollTarget {
+    fn new(runtime: &PageScriptHost, source: Option<DomHandle>) -> Self {
+        Self(source.and_then(|source| {
+            Some(LatchedScrollBox {
+                source,
+                document: runtime.dom_host().owner_document_handle(source)?,
+                alive: runtime.watch_synthetic_scroll_target(source),
+            })
+        }))
+    }
+}
 
 pub(crate) fn select_wheel_scroll_target(
     runtime: &PageScriptHost,
@@ -207,7 +230,7 @@ pub(crate) fn select_wheel_scroll_target(
                 delta_y,
             );
         if can_scroll_x || can_scroll_y {
-            return Ok(WheelScrollTarget(Some(source)));
+            return Ok(WheelScrollTarget::new(runtime, Some(source)));
         }
     }
 
@@ -217,23 +240,43 @@ pub(crate) fn select_wheel_scroll_target(
     let viewport = host
         .owner_document_handle(handle)
         .and_then(|document| host.dom().document_element_handle_for_document(document));
-    Ok(WheelScrollTarget(viewport))
+    Ok(WheelScrollTarget::new(runtime, viewport))
 }
 
 pub(crate) fn perform_latched_wheel_scroll_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
-    target: WheelScrollTarget,
+    target: &WheelScrollTarget,
     delta_x: f64,
     delta_y: f64,
 ) -> Result<bool, moli_layout::LayoutError> {
-    let WheelScrollTarget(Some(source)) = target else {
+    let Some(target) = &target.0 else {
         return Ok(false);
     };
+    if !target.alive.load(Ordering::Relaxed) {
+        return Ok(false);
+    }
+    let source = target.source;
     let runtime = unsafe { &*runtime_ptr };
+    if !runtime.dom_host().is_connected(source)
+        || runtime.dom_host().owner_document_handle(source) != Some(target.document)
+    {
+        target.alive.store(false, Ordering::Relaxed);
+        return Ok(false);
+    }
     let Some(metrics) = read_element_metrics(runtime, source)? else {
+        target.alive.store(false, Ordering::Relaxed);
         return Ok(false);
     };
+    let is_viewport = runtime
+        .dom_host()
+        .dom()
+        .document_element_handle_for_document(target.document)
+        == Some(source);
+    if !is_viewport && !metrics.is_scroll_container {
+        target.alive.store(false, Ordering::Relaxed);
+        return Ok(false);
+    }
     perform_wheel_scroll_chain_default_action(
         scope,
         runtime_ptr,

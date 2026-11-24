@@ -87,7 +87,7 @@ impl ScriptVm {
             targets.ancestors = ancestors(target);
             target
         };
-        let scroll_target = match targets.scroll_target {
+        let scroll_target = match targets.scroll_target.clone() {
             Some(scroll_target) => scroll_target,
             None => select_wheel_scroll_target(&runtime, target, delta_x, delta_y)?,
         };

@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use parking_lot::Mutex;
 
@@ -13,6 +16,7 @@ use crate::{
 #[derive(Clone, Debug, Default)]
 pub struct RendererSyntheticWheelGesture {
     pub(crate) targets: Arc<Mutex<SyntheticWheelTargets>>,
+    anchor_validated: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -21,4 +25,24 @@ pub(crate) struct SyntheticWheelTargets {
     pub(crate) wheel: Option<(DomHandle, WindowDocumentTaskTarget)>,
     pub(crate) ancestors: Vec<DomHandle>,
     pub(crate) scroll_target: Option<WheelScrollTarget>,
+}
+
+impl RendererSyntheticWheelGesture {
+    /// Start a repeat with fresh targets, retaining the command's initial anchor
+    /// validation so a later viewport resize only skips out-of-bounds updates.
+    pub fn next_sequence(&self) -> Self {
+        Self {
+            targets: Arc::default(),
+            anchor_validated: Arc::clone(&self.anchor_validated),
+        }
+    }
+
+    pub(crate) fn validate_anchor(&self, in_bounds: bool) -> bool {
+        if in_bounds {
+            self.anchor_validated.store(true, Ordering::Relaxed);
+            true
+        } else {
+            self.anchor_validated.load(Ordering::Relaxed)
+        }
+    }
 }
