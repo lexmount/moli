@@ -213,6 +213,7 @@ impl PageScriptHost {
         drop(std::mem::take(&mut self.file_entry_file_callbacks));
         drop(std::mem::take(&mut self.user_interaction_tasks));
         self.pending_font_face_loads.clear();
+        self.lazy_image_updates.clear();
         self.pending_image_load_events.clear();
         self.pending_media_load_sequences.clear();
         self.pending_text_track_load_sequences.clear();

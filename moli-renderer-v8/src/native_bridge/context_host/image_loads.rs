@@ -440,6 +440,8 @@ impl PageScriptHost {
         &mut self,
         document_handle: DomHandle,
     ) -> usize {
+        self.lazy_image_updates
+            .retain(|_, (owner, _)| *owner != document_handle);
         let handles = self
             .pending_image_load_events
             .iter()

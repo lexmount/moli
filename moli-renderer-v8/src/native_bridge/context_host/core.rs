@@ -487,6 +487,7 @@ impl PageScriptHost {
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
             user_interaction_tasks:
                 super::user_interaction_tasks::UserInteractionTaskState::default(),
+            lazy_image_updates: HashMap::new(),
             pending_image_load_events: HashMap::new(),
             next_image_load_event_id: 1,
             pending_media_load_sequences: HashMap::new(),
