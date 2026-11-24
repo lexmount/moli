@@ -219,8 +219,14 @@ async fn viewport_cursor_uses_pseudo_and_slotted_text_styles() -> Result<()> {
                 #generated:hover::before { cursor: crosshair; }
             </style><div id="generated"></div><div id="slotted">Slotted text</div>
             <script>
-                slotted.attachShadow({ mode: "open" }).innerHTML =
+                const shadow = slotted.attachShadow({ mode: "open" });
+                shadow.innerHTML =
                     '<style>slot { cursor: wait; }</style><slot></slot>';
+                const slot = shadow.querySelector('slot');
+                globalThis.pointerSamples = [];
+                addEventListener('mousemove', event => {
+                    pointerSamples.push(event.target.id + ':' + slot.matches(':hover'));
+                });
             </script>"#,
         ))
         .await?;
@@ -232,7 +238,7 @@ async fn viewport_cursor_uses_pseudo_and_slotted_text_styles() -> Result<()> {
     let mut frames = page.subscribe_viewport_frames(surface, 1).await?;
     let initial = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
 
-    page.set_viewport_pointer_position(1, Some((20., 15.)))
+    page.dispatch_mouse_event_at_point_async(20., 15., "mousemove", -1, Some(0), 0., 0.)
         .await?;
     cursor(&mut frames, Cursor::Crosshair).await?;
     let hovered = frame(&mut frames, |frame| frame.sequence > initial.sequence).await?;
@@ -245,6 +251,12 @@ async fn viewport_cursor_uses_pseudo_and_slotted_text_styles() -> Result<()> {
         hovered.sequence
     );
 
+    page.dispatch_mouse_event_at_point_async(20., 45., "mousemove", -1, Some(0), 0., 0.)
+        .await?;
+    cursor(&mut frames, Cursor::Wait).await?;
+
+    page.set_viewport_pointer_position(1, None).await?;
+    assert_eq!(*frames.cursor.borrow(), None);
     page.set_viewport_pointer_position(1, Some((20., 45.)))
         .await?;
     cursor(&mut frames, Cursor::Wait).await?;
@@ -254,6 +266,11 @@ async fn viewport_cursor_uses_pseudo_and_slotted_text_styles() -> Result<()> {
         )
         .await?["value"],
         true
+    );
+    assert_eq!(
+        page.evaluate_runtime_expression_async("JSON.stringify(pointerSamples)")
+            .await?["value"],
+        r#"["generated:false","slotted:true"]"#
     );
     Ok(())
 }

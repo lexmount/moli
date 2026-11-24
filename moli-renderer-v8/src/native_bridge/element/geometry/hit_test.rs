@@ -18,9 +18,24 @@ pub(crate) struct InputSurfaceHit {
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
     /// The painted source before mapping it to an element for DOM events.
     #[cfg(feature = "molio")]
-    pub(crate) cursor_source: Option<(DomHandle, Option<moli_layout::LayoutPseudo>)>,
-    #[cfg(feature = "molio")]
+    pub(crate) painted_source: Option<PaintedInputSource>,
+}
+
+#[cfg(feature = "molio")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PaintedInputSource {
+    pub(crate) node: DomHandle,
+    pub(crate) pseudo: Option<moli_layout::LayoutPseudo>,
     pub(crate) is_text: bool,
+}
+
+#[cfg(feature = "molio")]
+impl InputSurfaceHit {
+    pub(crate) fn hover_source(&self) -> Option<DomHandle> {
+        self.painted_source
+            .map(|source| source.node)
+            .or(self.target)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -127,9 +142,7 @@ pub(crate) fn input_surface_hit_test(
             ),
             control: None,
             #[cfg(feature = "molio")]
-            cursor_source: None,
-            #[cfg(feature = "molio")]
-            is_text: false,
+            painted_source: None,
         });
     }
     runtime.ensure_observable_layout()?;
@@ -195,9 +208,7 @@ fn input_surface_hit_test_in_tree(
                         target: None,
                         control: Some(control),
                         #[cfg(feature = "molio")]
-                        cursor_source: None,
-                        #[cfg(feature = "molio")]
-                        is_text: false,
+                        painted_source: None,
                     });
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
@@ -224,23 +235,20 @@ fn input_surface_hit_test_in_tree(
             target: use_viewport_target.then_some(tree.source_root()),
             control: None,
             #[cfg(feature = "molio")]
-            cursor_source: None,
-            #[cfg(feature = "molio")]
-            is_text: false,
+            painted_source: None,
         });
     };
     let target_hit = InputSurfaceHit {
         target: Some(target),
         control: None,
         #[cfg(feature = "molio")]
-        cursor_source: Some((
-            layout_hit.source,
-            layout_hit
+        painted_source: Some(PaintedInputSource {
+            node: layout_hit.source,
+            pseudo: layout_hit
                 .fragment
                 .and_then(|fragment| tree.fragment_pseudo(fragment)),
-        )),
-        #[cfg(feature = "molio")]
-        is_text: layout_hit.is_text,
+            is_text: layout_hit.is_text,
+        }),
     };
     if depth >= CHILD_FRAME_DEPTH_LIMIT {
         return Ok(target_hit);

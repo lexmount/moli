@@ -1320,7 +1320,11 @@ impl ScriptVm {
         let initial_target = {
             let mut runtime = self._context_host.borrow_mut();
             if tracks_hover {
-                runtime.set_hovered_element_for_input(hit_handle);
+                #[cfg(feature = "molio")]
+                let hover_source = surface_hit.hover_source();
+                #[cfg(not(feature = "molio"))]
+                let hover_source = hit_handle;
+                runtime.set_hovered_element_for_input(hover_source);
             }
             if pointer_event_name.is_some() {
                 if event_name == "mousemove" && buttons == 0 {

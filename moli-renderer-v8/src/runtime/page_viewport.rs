@@ -174,6 +174,23 @@ impl ViewportFrameState {
             .cursor
             .send_if_modified(|cursor| cursor.take().is_some());
     }
+
+    fn publish_cursor(
+        &self,
+        document: RendererDocumentLifecycleIdentity,
+        kind: RendererViewportCursorKind,
+    ) {
+        let next = Some(RendererViewportCursor {
+            document,
+            viewport_revision: self.subscription.viewport_revision,
+            kind,
+        });
+        self.subscription.cursor.send_if_modified(|cursor| {
+            let changed = *cursor != next;
+            *cursor = next;
+            changed
+        });
+    }
 }
 
 impl PageVm {
@@ -377,7 +394,7 @@ impl PageVm {
         }
     }
 
-    pub(super) fn publish_viewport_frame(&mut self) {
+    pub(super) fn update_viewport_frame(&mut self) {
         if !self.document_settings.document_activity.visible {
             return;
         }
@@ -401,8 +418,25 @@ impl PageVm {
         let pointer_to_sample = state
             .pointer
             .filter(|_| !pixels_current || state.pointer != state.sampled_pointer);
-        let hover_changed = pointer_to_sample
-            .is_some_and(|position| self.publish_viewport_cursor(document, position));
+        let hover_changed = if let Some(position) = pointer_to_sample {
+            let (kind, hover_changed) = self
+                .vm()
+                .refresh_viewport_pointer(position)
+                .unwrap_or_else(|error| {
+                    tracing::debug!(%error, "could not resolve viewport cursor");
+                    (RendererViewportCursorKind::Default, false)
+                });
+            let state = self
+                .viewport_frames
+                .as_mut()
+                .expect("viewport subscription");
+            // Recheck on the next frame if the hover change moves the hit geometry.
+            state.sampled_pointer = (!hover_changed).then_some(position);
+            state.publish_cursor(document, kind);
+            hover_changed
+        } else {
+            false
+        };
         if pixels_current && !hover_changed {
             return;
         }
@@ -444,37 +478,6 @@ impl PageVm {
                 editor,
                 snapshot: snapshot.map(Arc::new),
             }));
-    }
-
-    fn publish_viewport_cursor(
-        &mut self,
-        document: RendererDocumentLifecycleIdentity,
-        position: (f64, f64),
-    ) -> bool {
-        let (kind, hover_changed) =
-            self.vm()
-                .refresh_viewport_cursor(position)
-                .unwrap_or_else(|error| {
-                    tracing::debug!(%error, "could not resolve viewport cursor");
-                    (RendererViewportCursorKind::Default, false)
-                });
-        let state = self
-            .viewport_frames
-            .as_mut()
-            .expect("viewport subscription");
-        // Recheck on the next frame if the hover change moves the hit geometry.
-        state.sampled_pointer = (!hover_changed).then_some(position);
-        let next = Some(RendererViewportCursor {
-            document,
-            viewport_revision: state.subscription.viewport_revision,
-            kind,
-        });
-        state.subscription.cursor.send_if_modified(|cursor| {
-            let changed = *cursor != next;
-            *cursor = next;
-            changed
-        });
-        hover_changed
     }
 }
 
