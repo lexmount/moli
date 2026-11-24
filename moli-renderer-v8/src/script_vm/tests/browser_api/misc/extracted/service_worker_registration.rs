@@ -1360,3 +1360,76 @@ async fn navigator_service_worker_periodic_sync_register_respects_permission() {
         .await
         .expect("service worker periodic sync permission script server should finish");
 }
+
+#[tokio::test]
+async fn navigator_service_worker_registration_refreshes_cached_workers_through_unregister() {
+    let worker_body = "self.addEventListener('install', () => {});";
+    let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            vec![("Cache-Control", "no-store")],
+            worker_body,
+        ),
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            vec![("Cache-Control", "no-store")],
+            worker_body,
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+            (() => {
+              globalThis.__serviceWorkerRegistrationPhaseProbe = "pending";
+              (async () => {
+                const sw = navigator.serviceWorker;
+                const newest = registration =>
+                  registration.installing || registration.waiting || registration.active;
+                const first = await sw.register("././worker.js", { scope: "./scope/" });
+                const firstScriptURL = newest(first) && newest(first).scriptURL;
+                const unregistered = await first.unregister();
+                const cleared =
+                  first.installing === null && first.waiting === null && first.active === null;
+                const second = await sw.register("../app/worker.js", { scope: "./scope/" });
+                const secondScriptURL = newest(second) && newest(second).scriptURL;
+
+                globalThis.__serviceWorkerRegistrationPhaseProbe = JSON.stringify({
+                  firstScriptURL,
+                  unregistered,
+                  cleared,
+                  secondScriptURL
+                });
+              })().catch((error) => {
+                globalThis.__serviceWorkerRegistrationPhaseProbe =
+                  "error:" + String(error && error.message);
+              });
+            })()
+            "#,
+    )
+    .expect("service worker registration phase probe should evaluate");
+
+    let expected = format!(
+        r#"{{"firstScriptURL":"{base_url}/app/worker.js","unregistered":true,"cleared":true,"secondScriptURL":"{base_url}/app/worker.js"}}"#
+    );
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__serviceWorkerRegistrationPhaseProbe)",
+        &expected,
+    )
+    .await;
+
+    server
+        .await
+        .expect("service worker registration phase server should finish");
+}
