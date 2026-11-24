@@ -243,6 +243,7 @@ class WptCrossRunnerOrchestrationTests(WptCrossTestCase):
         )
     def test_layout_testharness_profile_forces_cdp_and_fixed_viewport(self) -> None:
         captured: dict[str, object] = {}
+        fixture_host_resolution = "web-platform.localhost:8000:127.0.0.1"
 
         class FakeServer:
             def __init__(self, wpt_root: Path, *, primary_hostname: str) -> None:
@@ -272,6 +273,9 @@ class WptCrossRunnerOrchestrationTests(WptCrossTestCase):
             def url_for_case(self, case_path: str, *, external: bool = False) -> str:
                 return f"{self.base_url}/{case_path}"
 
+            def loopback_host_resolutions(self) -> tuple[str, ...]:
+                return (fixture_host_resolution,)
+
         def fake_cdp_run(**kwargs: object) -> EngineRunResult:
             captured.update(kwargs)
             cases_arg = kwargs["cases"]
@@ -295,10 +299,6 @@ class WptCrossRunnerOrchestrationTests(WptCrossTestCase):
                     "moli_benchmark.wpt_cross.__main__.enumerate_cases",
                     return_value=[case],
                 ) as enumerate_mock,
-                patch(
-                    "moli_benchmark.wpt_cross.__main__.build_driver",
-                    return_value=SimpleNamespace(cli_fetch_command=lambda *_: []),
-                ),
                 patch(
                     "moli_benchmark.wpt_cross.__main__.run_engine_on_cases",
                     side_effect=fake_cdp_run,
@@ -329,6 +329,8 @@ class WptCrossRunnerOrchestrationTests(WptCrossTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(captured["viewport"], LAYOUT_VIEWPORT)
         self.assertIsNone(captured["artifact_output_dir"])
+        command = captured["driver"].build_command(Path("/bin/moli"), 9222, None)
+        self.assertEqual(command[-2:], ["--http-host-resolve", fixture_host_resolution])
         self.assertTrue(enumerate_mock.call_args.kwargs["layout_static_only"])
         self.assertEqual(summary["profile"], "layout-testharness")
         self.assertEqual(summary["viewport"]["width"], 800)

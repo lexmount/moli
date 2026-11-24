@@ -835,6 +835,8 @@ def main(argv: list[str] | None = None) -> int:
                     parallelism=args.parallelism,
                 )
             else:
+                if engine == "moli":
+                    driver = driver.with_http_host_resolutions(server.loopback_host_resolutions())
                 print(
                     f"[wpt-cross] running {engine} (CDP mode) on {len(cases_for_engine)} cases via fixture origins",
                     file=sys.stderr,

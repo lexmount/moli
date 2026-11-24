@@ -644,6 +644,7 @@ _HOST_TEMPLATE_RE = re.compile(
 # wptserve configures these labels and their two-label combinations. Template
 # keys retain Unicode while the resulting hostnames use ASCII IDNA labels.
 _WPT_SUBDOMAIN_LABELS = ("www", "www1", "www2", "天気の良い日", "élève")
+_WPT_ALTERNATE_HOSTNAME = "alt.localhost"
 _WPT_SUBDOMAIN_PREFIXES = {
     b"": b"",
     **{
@@ -1458,7 +1459,7 @@ def _substitute_wpt_template_variables(
             subdomain = match.group("subdomain")
             namespace = match.group("namespace")
         prefix = _WPT_SUBDOMAIN_PREFIXES.get(subdomain)
-        host = {b"": template_primary_host, b"alt": b"alt.localhost"}.get(namespace)
+        host = {b"": template_primary_host, b"alt": _WPT_ALTERNATE_HOSTNAME.encode("ascii")}.get(namespace)
         if prefix is None or host is None:
             return match.group(0)
         return prefix + host
@@ -4615,6 +4616,14 @@ class WptFixtureServer:
     @property
     def alternate_base_url(self) -> str:
         return f"http://{self.primary_hostname}:{self.alternate_port}"
+
+    def loopback_host_resolutions(self) -> tuple[str, ...]:
+        """Resolve the fixture's template hostnames directly to its local listeners."""
+        hostnames = {"localhost"}
+        for base in (self.primary_hostname, _WPT_ALTERNATE_HOSTNAME):
+            hostnames.update(prefix.decode("ascii") + base for prefix in _WPT_SUBDOMAIN_PREFIXES.values())
+        ports = (self.port, self.alternate_port, self.https_port, self.alternate_https_port)
+        return tuple(f"{host}:{port}:127.0.0.1" for host in sorted(hostnames) for port in ports)
 
     def _configure_httpd_defaults(
         self, httpd: ThreadingHTTPServer, *, primary_port: int, alternate_port: int,

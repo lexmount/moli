@@ -33,7 +33,7 @@ class WptTlsFixtureTests(unittest.TestCase):
         stack.enter_context(patch(
             "moli_benchmark.wpt_cross.server._global_ipv6_address", return_value=None,
         ))
-        self.server = stack.enter_context(WptFixtureServer(root))
+        self.server = stack.enter_context(WptFixtureServer(root, primary_hostname="web-platform.localhost"))
         self.context = ssl.create_default_context(cafile=str(self.server.tls.ca_certificate))
 
     def test_http_and_https_ports_and_request_templates_are_independent(self):
@@ -143,3 +143,17 @@ class WptTlsFixtureTests(unittest.TestCase):
         command = chrome.build_command(Path("/bin/chrome"), 9222, Path("/tmp/profile"))
         self.assertIn("--ignore-certificate-errors-spki-list=" + server.tls.server_spki_sha256, command)
         self.assertNotIn("--ignore-certificate-errors", command)
+
+    def test_loopback_host_resolutions_cover_fixture_origins_and_ports(self):
+        server = self.server
+        entries = server.loopback_host_resolutions()
+        ports = (server.port, server.alternate_port, server.https_port, server.alternate_https_port)
+        hostnames = (
+            "localhost", "web-platform.localhost", "www1.web-platform.localhost",
+            "alt.localhost", "www2.xn--lve-6lad.alt.localhost",
+        )
+        for host in hostnames:
+            for port in ports:
+                self.assertIn(f"{host}:{port}:127.0.0.1", entries)
+        self.assertEqual({int(entry.split(":")[1]) for entry in entries}, set(ports))
+        self.assertFalse(any(entry.startswith("*:") for entry in entries))
