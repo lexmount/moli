@@ -107,7 +107,36 @@ def default_binary_path(target: str) -> Path:
     return target_dir / "release" / f"moli{suffix}"
 
 
-def build_release() -> None:
+def verify_release_features(target: str) -> None:
+    output = run_checked(
+        [
+            "cargo", "tree", "--locked", "--package", "moli", "--target", target,
+            "--edges", "features,no-dev",
+        ],
+        capture_output=True,
+    ).stdout
+    desktop = re.compile(r'\bfeature "molio"|\bmolio v|\bgpui(?:[-_]ce[\w-]*)? (?:v|feature\b)')
+    for line in output.splitlines():
+        if desktop.search(line):
+            raise ReleaseError(f"desktop dependency in moli release build: {line.strip()}")
+
+
+def verify_linux_release_dependencies(binary: Path, target: str) -> None:
+    if "-linux-" not in target:
+        return
+    output = run_checked(["readelf", "-d", str(binary)], capture_output=True).stdout
+    libraries = re.findall(r"\(NEEDED\).*?\[([^\]\n]+)\]", output)
+    desktop = re.compile(
+        r"^lib(?:X11|Xcursor|Xext|Xi|Xrandr|Xrender|xcb|wayland|xkbcommon|gtk|gdk)[-_.]"
+    )
+    for library in libraries:
+        if desktop.match(Path(library).name):
+            raise ReleaseError(f"desktop shared library in moli release binary: {library}")
+    print(f"Linux release shared libraries: {', '.join(libraries)}")
+
+
+def build_release(target: str) -> None:
+    verify_release_features(target)
     command = ["cargo", "build", "--locked", "--release", "--package", "moli"]
     run_checked(command)
 
@@ -250,6 +279,7 @@ def package_release(
             packaged_binary.chmod(packaged_binary.stat().st_mode | 0o111)
 
         original_size, stripped_size = strip_and_sign(packaged_binary, target)
+        verify_linux_release_dependencies(packaged_binary, target)
         reported_version = binary_reported_version(packaged_binary)
         if reported_version != version:
             raise ReleaseError(
@@ -315,7 +345,7 @@ def main() -> int:
             )
 
         if not args.skip_build:
-            build_release()
+            build_release(target)
 
         binary = (
             resolve_repo_path(args.binary)
