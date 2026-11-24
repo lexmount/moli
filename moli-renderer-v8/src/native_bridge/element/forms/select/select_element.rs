@@ -799,8 +799,15 @@ pub(in crate::native_bridge) fn resize_select_options(
             }
         }
         let current_len = options.len();
+        let Some(document) = (unsafe { &*runtime_ptr })
+            .dom_host()
+            .owner_document_handle(select_handle)
+        else {
+            return;
+        };
         for _ in current_len..next_len {
-            let option = unsafe { &mut *runtime_ptr }.create_element("option");
+            let option =
+                unsafe { &mut *runtime_ptr }.create_html_element_for_document(document, "option");
             let _ =
                 append_child_to_current_reaction_queue(scope, runtime_ptr, select_handle, option);
         }

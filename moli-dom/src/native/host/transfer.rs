@@ -7,6 +7,7 @@ use super::*;
 pub struct DomSubtreeTransfer {
     root: DomHandle,
     handles: HashMap<DomHandle, DomHandle>,
+    source_documents: HashMap<DomHandle, DomHandle>,
 }
 
 impl DomSubtreeTransfer {
@@ -16,6 +17,10 @@ impl DomSubtreeTransfer {
 
     pub fn handles(&self) -> &HashMap<DomHandle, DomHandle> {
         &self.handles
+    }
+
+    pub fn source_document(&self, old: DomHandle) -> Option<DomHandle> {
+        self.source_documents.get(&old).copied()
     }
 }
 
@@ -100,12 +105,16 @@ impl DomHost {
             .enumerate()
             .map(|(offset, (old, _))| (*old, DomHandle::new(first_slot + offset)))
             .collect();
+        let mut source_documents = HashMap::with_capacity(plan.nodes.len());
         for (old, owner) in &plan.nodes {
             let mut node = source
                 .dom
                 .nodes
                 .take(old.index())
                 .expect("preflight retained every source node");
+            if let Some(document) = node.owner_document() {
+                source_documents.insert(*old, document);
+            }
             let document = match owner {
                 TransferDocument::Target => document,
                 TransferDocument::TemplateContents => template_document,
@@ -162,9 +171,12 @@ impl DomHost {
             .retain(|node| !plan.membership.contains(node));
         source.invalidate_indexes_after_transfer();
         self.invalidate_indexes_after_transfer();
+        source.dom.record_tree_mutation();
+        self.dom.record_tree_mutation();
         Ok(DomSubtreeTransfer {
             root: handles[&root],
             handles,
+            source_documents,
         })
     }
 

@@ -3,8 +3,19 @@ use crate::{
     custom_elements, document_runtime::DomHandle,
     native_bridge::node_runtime_and_handle_from_object_or_detached,
 };
+use moli_dom::native::{DomAdoptionTarget, NativeDom};
 
 impl PageScriptHost {
+    pub(crate) fn remember_node_creation_documents(
+        &mut self,
+        dom: &NativeDom,
+        targets: &[DomAdoptionTarget],
+    ) {
+        self.bridge
+            .identity
+            .remember_node_creation_documents(dom, targets);
+    }
+
     pub(in crate::native_bridge) fn adopt_node_from_host(
         scope: &mut v8::PinScope<'_, '_>,
         target: *mut Self,
@@ -50,7 +61,7 @@ impl PageScriptHost {
                 &mut source_host.bridge.identity,
                 source,
                 owner,
-                handles,
+                &transfer,
             );
             for (&old, &new) in handles {
                 if let Some(style) = source_host.inline_style_declarations.remove(&old) {
@@ -67,6 +78,10 @@ impl PageScriptHost {
                 .transfer_from(&mut source_host.canvas_resources, handles);
             let callbacks = target_host.transfer_native_event_targets_from(source_host, handles);
             target_host.transfer_node_event_callbacks_from(scope, source_host, &callbacks, owner);
+            target_host
+                .bridge
+                .identity
+                .synchronize_node_creation_references(scope, target);
             Some(transfer.root())
         })
     }

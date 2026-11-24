@@ -71,6 +71,9 @@ impl TreeAdoptionPlan {
         } else {
             Vec::new()
         };
+        if transition.is_some_and(TreeDocumentTransition::crosses_documents) {
+            unsafe { &mut *host_ptr }.remember_node_creation_documents(dom_host.dom(), &targets);
+        }
         let shadow_roots = targets
             .iter()
             .filter(|target| {

@@ -748,14 +748,13 @@ pub(in crate::native_bridge::element) fn table_create_t_body_callback<'s>(
         rv.set_null();
         return;
     };
-    let tbody = unsafe { &mut *runtime_ptr }.create_element("tbody");
     let reference = create_tbody_reference(unsafe { &*runtime_ptr }, table);
-    insert_table_child(
+    create_and_insert_table_child(
         scope,
         args.this(),
         runtime_ptr,
         table,
-        tbody,
+        "tbody",
         reference,
         &mut rv,
     );
@@ -784,9 +783,14 @@ pub(in crate::native_bridge::element) fn table_insert_row_callback<'s>(
         throw_index_size_error(scope);
         return;
     }
-    let row = unsafe { &mut *runtime_ptr }.create_element("tr");
     if rows.is_empty() {
-        let tbody = unsafe { &mut *runtime_ptr }.create_element("tbody");
+        let runtime = unsafe { &mut *runtime_ptr };
+        let Some(document) = runtime.dom_host().owner_document_handle(table) else {
+            rv.set_null();
+            return;
+        };
+        let row = runtime.create_html_element_for_document(document, "tr");
+        let tbody = runtime.create_html_element_for_document(document, "tbody");
         let inserted =
             custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
                 append_child_to_current_reaction_queue(scope, runtime_ptr, table, tbody)
@@ -817,12 +821,12 @@ pub(in crate::native_bridge::element) fn table_insert_row_callback<'s>(
         .and_then(|row| unsafe { &*runtime_ptr }.dom_host().node(row))
         .and_then(Node::parent_node)
         .unwrap_or(table);
-    insert_table_child(
+    create_and_insert_table_child(
         scope,
         args.this(),
         runtime_ptr,
         parent,
-        row,
+        "tr",
         reference,
         &mut rv,
     );
@@ -876,14 +880,13 @@ pub(in crate::native_bridge::element) fn table_section_insert_row_callback<'s>(
         throw_index_size_error(scope);
         return;
     }
-    let row = unsafe { &mut *runtime_ptr }.create_element("tr");
     let reference = (index != -1 && index < len).then(|| rows[index as usize]);
-    insert_table_child(
+    create_and_insert_table_child(
         scope,
         args.this(),
         runtime_ptr,
         section,
-        row,
+        "tr",
         reference,
         &mut rv,
     );
@@ -936,14 +939,13 @@ pub(in crate::native_bridge::element) fn table_row_insert_cell_callback<'s>(
         throw_index_size_error(scope);
         return;
     }
-    let cell = unsafe { &mut *runtime_ptr }.create_element("td");
     let reference = (index != -1 && index < len).then(|| cells[index as usize]);
-    insert_table_child(
+    create_and_insert_table_child(
         scope,
         args.this(),
         runtime_ptr,
         row,
-        cell,
+        "td",
         reference,
         &mut rv,
     );
@@ -1170,9 +1172,16 @@ fn create_or_return_table_slot<'s>(
         );
         return;
     }
-    let child = unsafe { &mut *runtime_ptr }.create_element(local_name);
     let reference = table_slot_reference(unsafe { &*runtime_ptr }, table, placement, None);
-    insert_table_child(scope, args.this(), runtime_ptr, table, child, reference, rv);
+    create_and_insert_table_child(
+        scope,
+        args.this(),
+        runtime_ptr,
+        table,
+        local_name,
+        reference,
+        rv,
+    );
 }
 
 fn delete_table_slot<'s>(
@@ -1200,15 +1209,21 @@ fn delete_direct_html_child(
     let _ = remove_child_in_reaction_scope(scope, runtime_ptr, table, child);
 }
 
-fn insert_table_child<'s>(
+fn create_and_insert_table_child<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     runtime_ptr: *mut PageScriptHost,
     parent: DomHandle,
-    child: DomHandle,
+    local_name: &str,
     reference: Option<DomHandle>,
     rv: &mut v8::ReturnValue<'s, v8::Value>,
 ) {
+    let runtime = unsafe { &mut *runtime_ptr };
+    let Some(document) = runtime.dom_host().owner_document_handle(parent) else {
+        rv.set_null();
+        return;
+    };
+    let child = runtime.create_html_element_for_document(document, local_name);
     let inserted =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
             insert_table_child_to_current_reaction_queue(

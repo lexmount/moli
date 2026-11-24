@@ -219,6 +219,7 @@ impl NativeDom {
             let child_node = self.node_mut(child).expect("child must exist");
             child_node.adopt_into(parent, previous, reference_child);
         }
+        self.record_tree_mutation();
 
         match previous {
             Some(previous) => {
@@ -354,6 +355,7 @@ impl NativeDom {
         self.node_mut(child)
             .expect("child must exist")
             .clear_tree_links();
+        self.record_tree_mutation();
         let changes = self.retarget_subtree_and_unregister_stylesheet_candidates(
             child,
             owner_document,

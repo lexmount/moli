@@ -315,6 +315,20 @@ impl PageScriptHost {
         self.dom_host_mut().adopt_node(document_handle, handle)
     }
 
+    pub(crate) fn create_html_element_for_document(
+        &mut self,
+        document: DomHandle,
+        local_name: &str,
+    ) -> DomHandle {
+        self.dom_host_mut()
+            .create_element_without_attributes_for_document(
+                document,
+                local_name.to_owned(),
+                "http://www.w3.org/1999/xhtml".to_owned(),
+                None,
+            )
+    }
+
     pub(crate) fn set_popover_focus_restore_target(
         &mut self,
         popover: DomHandle,

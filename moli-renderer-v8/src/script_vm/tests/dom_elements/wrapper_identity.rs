@@ -83,6 +83,48 @@ fn cached_dom_wrapper_adoption_preserves_identity_and_prototype() {
 }
 
 #[test]
+fn unwrapped_nodes_keep_their_creation_realm_across_adoption() {
+    let mut vm = new_parsed_test_vm(
+        "https://wrapper-unwrapped-adoption.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+    let result = vm
+        .eval(
+            r##"
+        (() => {
+          const sourceFrame = document.body.appendChild(document.createElement("iframe"));
+          const source = sourceFrame.contentWindow;
+          const target = document.body.appendChild(document.createElement("iframe")).contentWindow;
+          const paragraphType = source.HTMLParagraphElement;
+          const sourceTextType = source.Text;
+          const container = source.document.createElement("div");
+          source.document.body.appendChild(container);
+          container.innerHTML = "<p id='before'>old text</p>";
+          sourceFrame.remove();
+
+          document.body.appendChild(container);
+          const oldParagraph = document.getElementById("before");
+          const oldText = oldParagraph.firstChild;
+
+          container.insertAdjacentHTML("beforeend", "<p id='after'>new text</p>");
+          target.document.body.appendChild(target.document.adoptNode(container));
+          const newParagraph = target.document.getElementById("after");
+          const newText = newParagraph.firstChild;
+
+          return [oldParagraph instanceof paragraphType, oldText instanceof sourceTextType,
+                  oldParagraph.ownerDocument === target.document,
+                  oldParagraph === target.document.getElementById("before"),
+                  newParagraph instanceof HTMLParagraphElement, newText instanceof Text,
+                  newParagraph.ownerDocument === target.document,
+                  newParagraph === container.querySelector("#after")].join(":");
+        })()
+    "##,
+        )
+        .expect("lazy wrappers should use the document that created their native node");
+    assert_eq!(result, "true:true:true:true:true:true:true:true");
+}
+
+#[test]
 fn new_dom_wrappers_use_child_realm_prototypes() {
     let mut vm = new_storage_test_vm("https://wrapper-initialization.test/");
     let result = vm.eval(r##"
@@ -195,7 +237,18 @@ fn borrowed_dom_methods_create_wrappers_in_the_receiver_realm() {
             nodes.push([childNodes.call(root), target.NodeList.prototype]);
             nodes.push([methods.getElementsByTagName.call(doc, "span"), target.HTMLCollection.prototype]);
             const table = doc.createElement("table");
-            nodes.push([source.HTMLTableElement.prototype.createTBody.call(table), target.HTMLTableSectionElement.prototype]);
+            const tableMethods = source.HTMLTableElement.prototype;
+            const tableRow = tableMethods.insertRow.call(table);
+            const section = tableMethods.createTBody.call(table);
+            const sectionRow = source.HTMLTableSectionElement.prototype.insertRow.call(section);
+            const cell = source.HTMLTableRowElement.prototype.insertCell.call(sectionRow);
+            nodes.push([section, target.HTMLTableSectionElement.prototype],
+                       [tableRow, target.HTMLTableRowElement.prototype],
+                       [sectionRow, target.HTMLTableRowElement.prototype],
+                       [cell, target.HTMLTableCellElement.prototype]);
+            const select = doc.createElement("select");
+            Object.getOwnPropertyDescriptor(source.HTMLSelectElement.prototype, "length").set.call(select, 1);
+            nodes.push([select.options[0], target.HTMLOptionElement.prototype]);
             for (const [node, prototype] of nodes) {
               if (Object.getPrototypeOf(node) !== prototype) failures.push(cases);
               cases++;
@@ -204,11 +257,11 @@ fn borrowed_dom_methods_create_wrappers_in_the_receiver_realm() {
           return JSON.stringify({cases, failures});
         })()
     "#).expect("borrowed DOM methods should wrap returned nodes in their receiver's realm");
-    assert_eq!(result, r#"{"cases":22,"failures":[]}"#);
+    assert_eq!(result, r#"{"cases":30,"failures":[]}"#);
 }
 
 #[test]
-fn borrowed_split_text_preserves_receiver_realm_after_adoption() {
+fn borrowed_split_text_uses_the_node_document_realm_after_adoption() {
     let mut vm = new_parsed_test_vm(
         "https://wrapper-split-text.test/",
         "<!doctype html><html><body></body></html>",
@@ -227,7 +280,7 @@ fn borrowed_split_text_preserves_receiver_realm_after_adoption() {
               const parent = owner.createElement("div");
               parent.appendChild(text);
               const result = source.Text.prototype.splitText.call(text, 1);
-              if (Object.getPrototypeOf(result) !== receiverRealm.Text.prototype ||
+              if (Object.getPrototypeOf(result) !== owner.defaultView.Text.prototype ||
                   result.ownerDocument !== owner || text.data !== "a" || result.data !== "b" ||
                   text.nextSibling !== result || parent.lastChild !== result) {
                 failures.push({childReceiver: receiverRealm === child, adopt});
@@ -238,7 +291,7 @@ fn borrowed_split_text_preserves_receiver_realm_after_adoption() {
         })()
     "#,
         )
-        .expect("splitText should create its result in the receiver's realm even after adoption");
+        .expect("splitText should create its result in the node document's realm");
     assert_eq!(result, "[]");
 }
 

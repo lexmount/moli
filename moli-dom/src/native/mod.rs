@@ -72,6 +72,7 @@ const NATIVE_DOM_NODE_CHUNK_CAPACITY: usize = 256;
 pub struct NativeDom {
     nodes: NativeNodeStorage,
     document_node_id: NativeNodeId,
+    tree_version: u64,
     stylesheet_candidate_registries: StylesheetCandidateRegistries,
     pending_base_url_documents: Vec<NativeNodeId>,
     parse_errors: Vec<String>,
@@ -84,6 +85,7 @@ impl Clone for NativeDom {
         Self {
             nodes: self.nodes.clone(),
             document_node_id: self.document_node_id,
+            tree_version: self.tree_version,
             stylesheet_candidate_registries: self.stylesheet_candidate_registries.clone(),
             pending_base_url_documents: self.pending_base_url_documents.clone(),
             parse_errors: self.parse_errors.clone(),
@@ -121,6 +123,7 @@ impl NativeDom {
         Self {
             nodes: NativeNodeStorage::from_node(document_node),
             document_node_id,
+            tree_version: 0,
             stylesheet_candidate_registries: StylesheetCandidateRegistries::default(),
             pending_base_url_documents: Vec::new(),
             parse_errors: Vec::new(),
@@ -139,6 +142,7 @@ impl NativeDom {
         Self {
             nodes: NativeNodeStorage::from_node(document_node),
             document_node_id,
+            tree_version: 0,
             stylesheet_candidate_registries: StylesheetCandidateRegistries::default(),
             pending_base_url_documents: Vec::new(),
             parse_errors: Vec::new(),
@@ -266,6 +270,15 @@ impl NativeDom {
 
     pub fn parent_node(&self, node_id: NativeNodeId) -> Option<NativeNodeId> {
         self.node(node_id).and_then(Node::parent_node)
+    }
+
+    /// Version of the parent and fragment host links, independent of attribute changes.
+    pub fn tree_version(&self) -> u64 {
+        self.tree_version
+    }
+
+    fn record_tree_mutation(&mut self) {
+        self.tree_version = self.tree_version.wrapping_add(1);
     }
 
     pub fn first_child(&self, node_id: NativeNodeId) -> Option<NativeNodeId> {
@@ -493,6 +506,9 @@ impl NativeDom {
         host: Option<NativeNodeId>,
     ) -> NativeNodeId {
         let owner_document = self.appropriate_template_contents_owner_document(document_handle);
+        if host.is_some() {
+            self.record_tree_mutation();
+        }
         self.create_node(
             NodeData::DocumentFragment(DocumentFragment::new(host)),
             Some(owner_document),
@@ -540,6 +556,7 @@ impl NativeDom {
             return false;
         }
         fragment.set_host(host);
+        self.record_tree_mutation();
         true
     }
 

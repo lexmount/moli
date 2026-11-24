@@ -3747,6 +3747,89 @@ fn collect_isolate_garbage_for_test(vm: &StandaloneScriptVmHarness) {
     }
 }
 
+#[test]
+fn adopted_unwrapped_nodes_keep_the_creation_realm_until_removed() {
+    let mut vm = new_storage_html_test_vm("https://adopted-node-realm.test/");
+    vm.eval(
+        r#"
+(() => {
+    const frame = document.body.appendChild(document.createElement('iframe'));
+    const oldWindow = frame.contentWindow;
+    const Paragraph = oldWindow.HTMLParagraphElement;
+    Paragraph.prototype.creationRealmMarker = 'removed-frame';
+    globalThis.originParagraph = new WeakRef(Paragraph);
+    const section = oldWindow.document.createElement('section');
+    section.id = 'adopted-section';
+    section.innerHTML = '<p id="unseen-child">text</p>';
+    document.body.appendChild(section);
+    frame.remove();
+})()
+"#,
+    )
+    .expect("set up an adopted subtree with an unwrapped child");
+
+    collect_isolate_garbage_for_test(&vm);
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+    const child = document.getElementById('unseen-child');
+    return JSON.stringify([child.creationRealmMarker ?? null, child.ownerDocument === document]);
+})()
+"#,
+        )
+        .expect("read the original prototype after collecting the iframe"),
+        r#"["removed-frame",true]"#,
+    );
+    vm.eval("document.getElementById('adopted-section').remove()")
+        .expect("remove the last root retaining the adopted subtree");
+    collect_isolate_garbage_for_test(&vm);
+    assert_eq!(
+        vm.eval("String(originParagraph.deref() === undefined)")
+            .expect("the source realm can be collected"),
+        "true",
+    );
+}
+
+#[test]
+fn retained_sibling_traces_adopted_shadow_and_template_contents() {
+    let mut vm = new_storage_html_test_vm("https://adopted-detached-tree-realm.test/");
+    vm.eval(
+        r#"
+(() => {
+    const frame = document.body.appendChild(document.createElement('iframe'));
+    const oldWindow = frame.contentWindow;
+    oldWindow.HTMLParagraphElement.prototype.creationRealmMarker = 'removed-frame';
+    const section = oldWindow.document.createElement('section');
+    section.attachShadow({ mode: 'open' }).innerHTML = '<p>shadow</p>';
+    section.innerHTML = '<template><p>template</p></template>';
+    const fragment = document.createDocumentFragment();
+    globalThis.retainedSibling = fragment.appendChild(document.createElement('span'));
+    fragment.appendChild(section);
+    frame.remove();
+})()
+"#,
+    )
+    .expect("set up a detached tree with adopted associated children");
+
+    collect_isolate_garbage_for_test(&vm);
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+    const section = retainedSibling.nextSibling;
+    return JSON.stringify([
+        section.shadowRoot.firstChild.creationRealmMarker ?? null,
+        section.firstChild.content.firstChild.creationRealmMarker ?? null,
+    ]);
+})()
+"#,
+        )
+        .expect("read associated trees through a retained sibling"),
+        r#"["removed-frame","removed-frame"]"#,
+    );
+}
+
 #[cfg(feature = "devtools")]
 fn context_weak_was_collected_for_test(
     vm: &mut StandaloneScriptVmHarness,

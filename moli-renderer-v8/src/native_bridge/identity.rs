@@ -19,6 +19,7 @@ use super::{PageScriptHost, RuntimeObservableContextToken};
 use dense_reflector_map::DenseReflectorMap;
 
 mod dense_reflector_map;
+mod node_creation;
 mod node_ownership;
 mod registry_references;
 #[cfg(test)]
@@ -790,6 +791,14 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
         unsafe { &mut *host }.retire_beacon_timings_for_context(scope, *realm_token);
     }
     let _ = context.set_slot(Rc::new(RetiredWrapperContext));
+    // Active frame realms are already rooted by the runtime. Install any
+    // adoption edges while the retiring context is still in scope.
+    if let Some(host) = crate::util::context_host_ptr_from_context_slot(context) {
+        unsafe { &mut *host }
+            .native_bridge_mut()
+            .identity
+            .retire_node_creation_realm(scope, host);
+    }
     crate::network_host::retire_window_xhrs_in_current_context(scope);
     let _ = crate::context_bootstrap::retain_window_document_in_retired_realm(scope);
     crate::context_bootstrap::retire_idle_detectors_in_current_context(scope);
@@ -842,6 +851,7 @@ pub(super) struct BridgeIdentityStore {
     cache_host_id: NativeDomHostId,
     reflector_handles: IndexSet<BridgeHandle>,
     node_ownership: HashMap<DomHandle, Rc<node_ownership::NodeOwnership>>,
+    node_creation_realms: Option<Box<node_creation::NodeCreationRealms>>,
     node_owner_realm: Option<v8::Weak<v8::Context>>,
     live_collections: LiveCollectionStore,
     static_handle_collections: Rc<RefCell<StaticHandleCollectionStore>>,

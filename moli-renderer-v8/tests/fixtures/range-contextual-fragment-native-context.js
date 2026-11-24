@@ -67,12 +67,12 @@
         catch (error) { return error === sentinel; }
       });
     }
-    for (const [rangeName, rangeOwner] of realms) check(`${rangeName}/${ownerName}/${flavor}/moved range owner realm`, () => {
+    for (const [rangeName, rangeOwner] of realms) check(`${rangeName}/${ownerName}/${flavor}/moved range document realm`, () => {
       const range = new rangeOwner.Range(), context = doc.createElement('table');
       range.selectNodeContents(context);
       const fragment = rangeOwner.Range.prototype.createContextualFragment.call(range, '<tr><td>x</td></tr>');
-      return fragment.ownerDocument === doc && Object.getPrototypeOf(fragment) === rangeOwner.DocumentFragment.prototype &&
-        Object.getPrototypeOf(fragment.firstChild) === rangeOwner.HTMLTableSectionElement.prototype &&
+      return fragment.ownerDocument === doc && Object.getPrototypeOf(fragment) === owner.DocumentFragment.prototype &&
+        Object.getPrototypeOf(fragment.firstChild) === owner.HTMLTableSectionElement.prototype &&
         fragment.firstChild.localName === 'tbody';
     });
   }

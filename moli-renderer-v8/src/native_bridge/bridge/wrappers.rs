@@ -41,13 +41,15 @@ impl NativeDomBridge {
         self.wrap_bridge_handle(scope, host_ptr, BridgeHandle::Node(handle))
     }
 
-    pub(crate) fn synchronize_custom_element_registry_references(
+    pub(crate) fn synchronize_node_references(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
     ) {
         self.identity
             .synchronize_registry_references(scope, host_ptr);
+        self.identity
+            .synchronize_node_creation_references(scope, host_ptr);
     }
 
     pub(crate) fn cached_handle_wrapper<'s>(
@@ -104,7 +106,7 @@ impl NativeDomBridge {
             handle,
             BridgeWrapperIdentity::Canonical,
         );
-        self.synchronize_custom_element_registry_references(scope, host_ptr);
+        self.synchronize_node_references(scope, host_ptr);
         result
     }
 
@@ -118,21 +120,57 @@ impl NativeDomBridge {
         let current = scope.get_current_context();
         let current_host = crate::util::context_host_ptr_from_context_slot(current)?;
         let foreign_host = current_host != host_ptr;
+        let creation_realm = if identity == BridgeWrapperIdentity::Canonical
+            && let BridgeHandle::Node(node) = handle
+        {
+            if let Some(wrapper) = self.cached_handle_wrapper(scope, node) {
+                return Some(wrapper);
+            }
+            self.identity
+                .node_creation_realm(scope, unsafe { &*host_ptr }, node)
+                .filter(|realm| {
+                    crate::util::context_host_ptr_from_context_slot(*realm).is_some()
+                        && super::super::identity::contexts_share_wrapper_world(current, *realm)
+                })
+        } else {
+            None
+        };
         let producer = if handle.node_handle().is_some() {
             self.identity.node_owner_context(scope, host_ptr)
         } else {
             unsafe { &*host_ptr }.page_default_context(scope)
         };
-        if identity == BridgeWrapperIdentity::Canonical
-            && foreign_host
-            && let Some(producer) = producer
-            && super::super::identity::contexts_share_wrapper_world(current, producer)
+        let realm = creation_realm.or_else(|| {
+            (identity == BridgeWrapperIdentity::Canonical && foreign_host)
+                .then_some(producer)
+                .flatten()
+                .filter(|realm| {
+                    super::super::identity::contexts_share_wrapper_world(current, *realm)
+                })
+        });
+        if let Some(realm) = realm
+            && realm != current
         {
-            // One-field wrappers resolve their native host from the creation
-            // context. Canonical wrappers retain their producer realm.
-            let scope = &mut v8::ContextScope::new(scope, producer);
-            return self.materialize_bridge_wrapper(scope, host_ptr, handle, identity);
+            let scope = &mut v8::ContextScope::new(scope, realm);
+            return self
+                .materialize_bridge_wrapper_in_realm(scope, host_ptr, handle, identity, producer);
         }
+        self.materialize_bridge_wrapper_in_realm(scope, host_ptr, handle, identity, producer)
+    }
+
+    fn materialize_bridge_wrapper_in_realm<'s, 'i>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, 'i>,
+        host_ptr: *mut PageScriptHost,
+        handle: BridgeHandle,
+        identity: BridgeWrapperIdentity,
+        producer: Option<v8::Local<'s, v8::Context>>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        let current_host =
+            crate::util::context_host_ptr_from_context_slot(scope.get_current_context())?;
+        let foreign_host = current_host != host_ptr;
+        // Reflector IDs refer to the native owner independently of the realm
+        // supplying the JS prototype.
         let native_owner = if foreign_host
             && (identity == BridgeWrapperIdentity::NewObject || handle.node_handle().is_some())
         {
@@ -158,6 +196,18 @@ impl NativeDomBridge {
             self.identity
                 .node_ownership(scope, host_ptr, node)
                 .bind(scope, wrapper);
+        }
+        if let BridgeHandle::Node(node) = handle
+            && unsafe { &*host_ptr }
+                .dom_host()
+                .node(node)
+                .is_some_and(moli_dom::native::Node::is_document)
+        {
+            self.identity.remember_document_creation_realm(
+                scope,
+                unsafe { &*host_ptr }.dom_host().dom(),
+                node,
+            );
         }
         if let Some(owner) = native_owner {
             let owner = v8::Local::new(scope, owner);

@@ -1,5 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
+use moli_dom::native::DomSubtreeTransfer;
+
 use super::{BridgeIdentityStore, PageScriptHost, ReflectorId};
 use crate::{document_runtime::DomHandle, util};
 
@@ -121,31 +123,26 @@ impl NodeOwnership {
         location.anchor = v8::Weak::new(scope, anchor);
         let handle = location.handle;
         drop(location);
-        if let Some(host) = util::context_host_ptr_from_context_slot(owner) {
-            unsafe { &*host }
-                .custom_element_registry_references_version
-                .set(None);
-            if unsafe { &*host }
-                .custom_element_registry_references_enabled
-                .get()
-            {
-                let document = unsafe { &*host }
+        if let Some(host_ptr) = util::context_host_ptr_from_context_slot(owner) {
+            let host = unsafe { &*host_ptr };
+            host.bridge
+                .identity
+                .trace_node_creation_references(scope, host, handle, anchor);
+            host.custom_element_registry_references_version.set(None);
+            if host.custom_element_registry_references_enabled.get() {
+                let document = host
                     .dom_host()
                     .owner_document_handle(handle)
                     .filter(|document| *document != handle)
                     .and_then(|document| {
-                        unsafe { &*host }
-                            .bridge
-                            .identity
-                            .node_ownership
-                            .get(&document)
-                            .cloned()
+                        host.bridge.identity.node_ownership.get(&document).cloned()
                     });
                 if let Some(document) = document.and_then(|document| document.anchor(scope)) {
                     util::set_private_value(scope, anchor, DOCUMENT_SLOT, document.into());
                 }
-                let values =
-                    super::registry_references::registry_values_for_subtree(scope, host, handle);
+                let values = super::registry_references::registry_values_for_subtree(
+                    scope, host_ptr, handle,
+                );
                 if !values.is_empty() {
                     let values = v8::Array::new_with_elements(scope, &values);
                     util::set_private_value(scope, anchor, REGISTRIES_SLOT, values.into());
@@ -176,6 +173,7 @@ impl NodeOwnership {
         // a V8-traced edge to the new owner before replacing the weak location.
         let mut location = self.location.borrow_mut();
         if let Some(anchor) = location.anchor.to_local(scope) {
+            super::node_creation::set_realm_references(scope, anchor, None);
             // The new native tree determines registry and Document edges.
             // Do not retain the previous Document through a transferred view.
             if util::get_private_object(scope, anchor, DOCUMENT_SLOT).is_some()
@@ -207,8 +205,9 @@ impl BridgeIdentityStore {
         source: &mut Self,
         source_host: *mut PageScriptHost,
         owner: v8::Local<'_, v8::Context>,
-        handles: &std::collections::HashMap<DomHandle, DomHandle>,
+        transfer: &DomSubtreeTransfer,
     ) {
+        let handles = transfer.handles();
         // Capture existing canonical objects before retargeting. Their internal
         // reflector ID still belongs to the original host; its shared location
         // resolves to the new owner. No public getter or setter participates.
@@ -275,6 +274,14 @@ impl BridgeIdentityStore {
             captured.push((world, wrappers, collections));
         }
         for (&old, &new) in handles {
+            self.transfer_node_creation_realm(
+                scope,
+                source,
+                unsafe { &*source_host }.dom_host().dom(),
+                old,
+                new,
+                transfer.source_document(old),
+            );
             let ownership = source.node_ownership(scope, source_host, old);
             ownership.retarget(scope, owner, new);
             assert!(
@@ -328,6 +335,11 @@ impl BridgeIdentityStore {
         self.node_owner_realm = Some(v8::Weak::new(scope, owner));
         let ownership = Rc::new(NodeOwnership::new(scope, owner, handle));
         self.node_ownership.insert(handle, ownership.clone());
+        if self.node_creation_realms.is_some()
+            && let Some(anchor) = ownership.existing_anchor(scope)
+        {
+            self.trace_node_creation_references(scope, unsafe { &*host }, handle, anchor);
+        }
         if unsafe { &*host }
             .custom_element_registry_references_enabled
             .get()

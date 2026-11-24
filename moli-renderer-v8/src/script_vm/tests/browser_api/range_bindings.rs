@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn range_contextual_fragments_use_native_context_and_preserve_receiver_realm() {
+fn range_contextual_fragments_use_the_native_context_and_its_document_realm() {
     let mut vm = new_parsed_test_vm(
         "https://range-contextual-fragments.test/",
         "<!doctype html><iframe id=child></iframe>",
