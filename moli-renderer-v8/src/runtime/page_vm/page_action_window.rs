@@ -2,9 +2,9 @@ use std::{collections::HashMap, time::Instant};
 
 use anyhow::{Result, anyhow};
 use moli_action_window::{
-    ActionBarrier, ActionBatch, ActionSequence, ActionWindow, InputModifiers, PlannedAction, Point,
-    ScrollAction, WindowAction,
+    ActionBarrier, ActionBatch, ActionSequence, ActionWindow, PlannedAction, WindowAction,
 };
+use moli_input::{InputModifiers, Point, ScrollAction, ScrollDeltaMode};
 
 use crate::{
     page_task_queue::RendererPageReadyDescriptor,
@@ -101,7 +101,7 @@ impl PageVm {
                 position: Point::new(x, y),
                 delta_x,
                 delta_y,
-                delta_mode: moli_action_window::ScrollDeltaMode::Pixel,
+                delta_mode: ScrollDeltaMode::Pixel,
                 modifiers: InputModifiers::from_bits(modifiers),
             }),
             admitted_at,

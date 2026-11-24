@@ -228,3 +228,7 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "wheel_tests.rs"]
+mod tests;
