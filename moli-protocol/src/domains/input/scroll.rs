@@ -111,10 +111,9 @@ fn prepare(
             let mut driver = ProtocolWorkflowDriver::new(access);
             let mut first_admission = Some(first_admission);
             let result = async {
-                let _ = complete_wheel(
+                complete_wheel(
                     &mut driver,
                     anchor_validation.wait().await,
-                    page.target_id().map(str::to_owned),
                     context.context_mut(),
                 )
                 .await?;
@@ -126,7 +125,14 @@ fn prepare(
                         .take()
                         .unwrap_or_else(|| admission_queue.reserve());
                     admission.wait().await;
-                    let mut sequence = SyntheticWheelSequence::new(&command_gesture);
+                    let end = SyntheticWheel {
+                        gesture: command_gesture.next_sequence(),
+                        owner: owner.clone(),
+                        page: page.clone(),
+                        position: (x, y),
+                        delta: (0.0, 0.0),
+                        end: true,
+                    };
                     let mut started = Instant::now();
                     for segment in &segments {
                         let mut sent = (0.0, 0.0);
@@ -139,19 +145,12 @@ fn prepare(
                             tokio::time::sleep_until(started + next).await;
                             let elapsed = started.elapsed();
                             let position = segment.position_at(elapsed);
-                            if !sequence
-                                .dispatch_update(
-                                    &mut driver,
-                                    context.context_mut(),
-                                    &owner,
-                                    &page,
-                                    x,
-                                    y,
-                                    position.0 - sent.0,
-                                    position.1 - sent.1,
-                                )
-                                .await?
-                            {
+                            let update = SyntheticWheel {
+                                delta: (position.0 - sent.0, position.1 - sent.1),
+                                end: false,
+                                ..end.clone()
+                            };
+                            if !update.dispatch(&mut driver, context.context_mut()).await? {
                                 return Ok(());
                             }
                             sent = position;
@@ -161,28 +160,7 @@ fn prepare(
                         }
                         started += segment.duration;
                     }
-                    let end = SyntheticWheel {
-                        owner: owner.clone(),
-                        page: page.clone(),
-                        x,
-                        y,
-                        delta_x: 0.0,
-                        delta_y: 0.0,
-                        end: true,
-                        gesture: sequence.gesture.clone(),
-                    };
-                    if let Some(pending) = driver
-                        .with_state(move |state| state.prepare_synthetic_wheel(end))
-                        .map_err(input_workflow_error)??
-                    {
-                        let _ = complete_wheel(
-                            &mut driver,
-                            pending.wait().await,
-                            page.target_id().map(str::to_owned),
-                            context.context_mut(),
-                        )
-                        .await?;
-                    }
+                    end.dispatch(&mut driver, context.context_mut()).await?;
                 }
                 Ok(())
             }
@@ -196,61 +174,12 @@ fn prepare(
     ))
 }
 
-pub(super) struct SyntheticWheelSequence {
-    gesture: RendererSyntheticWheelGesture,
-}
-
-impl SyntheticWheelSequence {
-    pub(super) fn new(command: &RendererSyntheticWheelGesture) -> Self {
-        Self {
-            gesture: command.next_sequence(),
-        }
-    }
-
-    pub(super) async fn dispatch_update(
-        &mut self,
-        driver: &mut ProtocolWorkflowDriver,
-        context: &mut CommandDispatchContext,
-        owner: &CommandOwnerScope,
-        page: &TargetPageResidenceIdentity,
-        x: f64,
-        y: f64,
-        delta_x: f64,
-        delta_y: f64,
-    ) -> Result<bool, DevToolsError> {
-        let wheel = SyntheticWheel {
-            owner: owner.clone(),
-            page: page.clone(),
-            x,
-            y,
-            delta_x,
-            delta_y,
-            end: false,
-            gesture: self.gesture.clone(),
-        };
-        let pending = driver
-            .with_state(move |state| state.prepare_synthetic_wheel(wheel))
-            .map_err(input_workflow_error)??;
-        let Some(pending) = pending else {
-            return Ok(false);
-        };
-        let _ = complete_wheel(
-            driver,
-            pending.wait().await,
-            page.target_id().map(str::to_owned),
-            context,
-        )
-        .await?;
-        Ok(true)
-    }
-}
-
 async fn complete_wheel(
     driver: &mut ProtocolWorkflowDriver,
     completed: CompletedInputCommandDispatch,
-    target_id: Option<String>,
     gesture_context: &mut CommandDispatchContext,
-) -> Result<Option<RendererWheelDispatchOutcome>, DevToolsError> {
+) -> Result<(), DevToolsError> {
+    let target_id = completed.owner.target_id().map(str::to_owned);
     let (permit, response_flush) = driver
         .with_state(|state| state.begin_command_response_flush_permit())
         .map_err(input_workflow_error)?;
@@ -266,21 +195,35 @@ async fn complete_wheel(
         .map_err(input_workflow_error)?;
     gesture_context.extend_renderer_output_dependencies(dependencies);
     permit.finish();
-    completed.result.map(|_| completed.wheel)
+    completed.result.map(|_| ())
 }
 
+#[derive(Clone)]
 pub(crate) struct SyntheticWheel {
-    gesture: RendererSyntheticWheelGesture,
-    owner: CommandOwnerScope,
-    page: TargetPageResidenceIdentity,
-    x: f64,
-    y: f64,
-    delta_x: f64,
-    delta_y: f64,
-    end: bool,
+    pub(super) gesture: RendererSyntheticWheelGesture,
+    pub(super) owner: CommandOwnerScope,
+    pub(super) page: TargetPageResidenceIdentity,
+    pub(super) position: (f64, f64),
+    pub(super) delta: (f64, f64),
+    pub(super) end: bool,
 }
 
 impl SyntheticWheel {
+    pub(super) async fn dispatch(
+        self,
+        driver: &mut ProtocolWorkflowDriver,
+        context: &mut CommandDispatchContext,
+    ) -> Result<bool, DevToolsError> {
+        let Some(pending) = driver
+            .with_state(move |state| state.prepare_synthetic_wheel(self))
+            .map_err(input_workflow_error)??
+        else {
+            return Ok(false);
+        };
+        complete_wheel(driver, pending.wait().await, context).await?;
+        Ok(true)
+    }
+
     pub(crate) fn prepare(
         self,
         conn: &mut CdpConnection,
@@ -301,10 +244,10 @@ impl SyntheticWheel {
             PendingInputCommandKind::DispatchMouseEvent,
             |page| {
                 page.start_dispatch_synthetic_wheel(
-                    self.x,
-                    self.y,
-                    self.delta_x,
-                    self.delta_y,
+                    self.position.0,
+                    self.position.1,
+                    self.delta.0,
+                    self.delta.1,
                     self.end,
                     intercept_drags,
                     self.gesture,

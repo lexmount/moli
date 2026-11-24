@@ -653,7 +653,7 @@ mod indexed_db_task_body;
 #[cfg(feature = "devtools")]
 mod input_dispatch;
 #[cfg(feature = "devtools")]
-pub(crate) use input_dispatch::MouseDispatchCompletion;
+pub(crate) use input_dispatch::{MouseDispatchCompletion, WheelDispatchOptions};
 mod input_helpers;
 mod inspector;
 mod main_world;

@@ -2,9 +2,9 @@ use super::mouse_click::in_shadow_including_subtree;
 use super::*;
 use crate::dom::native::{DomHost, DomMutationEffects};
 use moli_layout::{FrozenLayoutTree, LayoutDisplay, LayoutListMarkerPosition};
-use std::sync::{
-    Arc, Weak,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    cell::Cell,
+    rc::{Rc, Weak},
 };
 
 #[derive(PartialEq, Eq)]
@@ -19,7 +19,7 @@ pub(super) struct WheelTargetWatch {
     owner: WindowDocumentOwner,
     source: DomHandle,
     box_path: Vec<ScrollBoxShape>,
-    alive: Weak<AtomicBool>,
+    alive: Weak<Cell<bool>>,
 }
 
 impl PageScriptHost {
@@ -28,24 +28,19 @@ impl PageScriptHost {
         document: DomHandle,
         owner: WindowDocumentTaskTarget,
         source: DomHandle,
-    ) -> Option<Arc<AtomicBool>> {
+    ) -> Option<Rc<Cell<bool>>> {
         let box_path = self
             .with_latest_layout_tree_for_document(document, |tree| scroll_box_path(tree, source))
             .flatten()?;
-        let alive = Arc::new(AtomicBool::new(true));
+        let alive = Rc::new(Cell::new(true));
         let mut watches = self.wheel_scroll_targets.borrow_mut();
-        watches.retain(|watch| {
-            watch
-                .alive
-                .upgrade()
-                .is_some_and(|alive| alive.load(Ordering::Relaxed))
-        });
+        watches.retain(|watch| watch.alive.upgrade().is_some_and(|alive| alive.get()));
         watches.push(WheelTargetWatch {
             document,
             owner: owner.owner(),
             source,
             box_path,
-            alive: Arc::downgrade(&alive),
+            alive: Rc::downgrade(&alive),
         });
         Some(alive)
     }
@@ -71,9 +66,9 @@ impl PageScriptHost {
                 None => document != watch.document && document != self.document_handle(),
             };
             if !survives {
-                alive.store(false, Ordering::Relaxed);
+                alive.set(false);
             }
-            survives && alive.load(Ordering::Relaxed)
+            survives && alive.get()
         });
     }
 
@@ -83,10 +78,10 @@ impl PageScriptHost {
                 return false;
             };
             if watch.owner == owner {
-                alive.store(false, Ordering::Relaxed);
+                alive.set(false);
                 return false;
             }
-            alive.load(Ordering::Relaxed)
+            alive.get()
         });
     }
 
@@ -99,7 +94,7 @@ impl PageScriptHost {
             let Some(alive) = watch.alive.upgrade() else {
                 return false;
             };
-            if !alive.load(Ordering::Relaxed) {
+            if !alive.get() {
                 return false;
             }
             // Mutation facts preserve actual removals even when the same node
@@ -107,7 +102,7 @@ impl PageScriptHost {
             for mutation in effects.style().child_list_mutations() {
                 for &root in mutation.removed_nodes() {
                     if in_shadow_including_subtree(dom, root, watch.source) {
-                        alive.store(false, Ordering::Relaxed);
+                        alive.set(false);
                         return false;
                     }
                 }

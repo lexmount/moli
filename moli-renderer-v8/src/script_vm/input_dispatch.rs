@@ -609,6 +609,29 @@ pub(crate) enum MouseDispatchCompletion {
     DeferToBatch,
 }
 
+pub(crate) struct WheelDispatchOptions {
+    pub(crate) button: i32,
+    /// An omitted value retains the currently pressed buttons.
+    pub(crate) buttons: Option<i32>,
+    pub(crate) click_count: i32,
+    pub(crate) pointer: RendererPointerEventProperties,
+    pub(crate) intercept_drags: bool,
+    pub(crate) completion: MouseDispatchCompletion,
+}
+
+impl Default for WheelDispatchOptions {
+    fn default() -> Self {
+        Self {
+            button: -1,
+            buttons: None,
+            click_count: 0,
+            pointer: RendererPointerEventProperties::default(),
+            intercept_drags: false,
+            completion: MouseDispatchCompletion::FinishTurn,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct PreparedMouseInputDispatch {
     button: i32,
@@ -1073,17 +1096,17 @@ impl ScriptVm {
     ) -> Result<RendererInputDispatchOutcome> {
         if event_name == "wheel" {
             return self.dispatch_direct_wheel(
-                x,
-                y,
-                button,
-                buttons,
-                click_count,
-                delta_x,
-                delta_y,
-                pointer,
+                (x, y),
+                (delta_x, delta_y),
                 modifiers,
-                intercept_drags,
-                completion,
+                WheelDispatchOptions {
+                    button,
+                    buttons,
+                    click_count,
+                    pointer,
+                    intercept_drags,
+                    completion,
+                },
             );
         }
         self.dispatch_mouse_input_to_target(
@@ -1098,7 +1121,6 @@ impl ScriptVm {
             pointer,
             modifiers,
             intercept_drags,
-            true,
             completion,
             None,
         )
@@ -1117,7 +1139,6 @@ impl ScriptVm {
         pointer: RendererPointerEventProperties,
         modifiers: u8,
         intercept_drags: bool,
-        wheel_cancelable: bool,
         completion: MouseDispatchCompletion,
         wheel: Option<(InputSurfaceHit, crate::wheel_input::PreparedWheel)>,
     ) -> Result<RendererInputDispatchOutcome> {
@@ -1126,6 +1147,7 @@ impl ScriptVm {
         } else {
             (self.mouse_input_surface_hit(x, y, event_name)?, None)
         };
+        let wheel_cancelable = prepared_wheel.as_ref().is_none_or(|wheel| wheel.cancelable);
         let wheel_scroll_target = prepared_wheel
             .as_ref()
             .and_then(|wheel| wheel.scroll_target.as_ref());
