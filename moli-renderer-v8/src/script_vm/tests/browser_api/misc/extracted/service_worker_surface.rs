@@ -1,5 +1,33 @@
 use super::*;
 
+#[test]
+fn service_worker_get_registration_returns_argument_rejections() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://service-worker-lookup.test/");
+    vm.eval(
+        r#"
+        globalThis.registrationLookup = "pending";
+        let promise;
+        try {
+            promise = navigator.serviceWorker.getRegistration(Symbol("client"));
+        } catch (error) {
+            registrationLookup = "throw:" + error.name;
+        }
+        if (promise) {
+            promise.then(
+                () => registrationLookup = "resolved",
+                error => registrationLookup = error.name
+            );
+        }
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("registrationLookup")
+            .unwrap(),
+        "TypeError"
+    );
+}
+
 mod redirect_modes;
 
 #[tokio::test]
