@@ -131,6 +131,7 @@ impl RendererDevToolsPageCommand {
             Self::DomDebuggerConfigureEventListenerBreakpoint { .. }
             | Self::DomDebuggerConfigureXhrBreakpoint { .. }
             | Self::DomDebuggerConfigureDomBreakpoint { .. }
+            | Self::ValidateSyntheticWheelAnchor { .. }
             | Self::ComputedStyleProperties { .. }
             | Self::ClientRectForBackendNodeId { .. }
             | Self::DocumentGeometryForNode { .. }

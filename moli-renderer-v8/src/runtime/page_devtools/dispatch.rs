@@ -76,6 +76,10 @@ impl PageVm {
                 .map(RendererDevToolsPageReply::InputDispatchOutcome)
                 .map(RendererPageReply::DevTools)
             }
+            RendererDevToolsPageCommand::ValidateSyntheticWheelAnchor { x, y, gesture } => self
+                .validate_synthetic_wheel_anchor(x, y, &gesture)
+                .map(RendererDevToolsPageReply::InputDispatchOutcome)
+                .map(RendererPageReply::DevTools),
             RendererDevToolsPageCommand::DispatchSyntheticWheel {
                 x, y, delta_x, delta_y, cancelable, intercept_drags, gesture,
             } => self

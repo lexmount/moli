@@ -553,3 +553,277 @@ async fn scroll_gesture_releases_document_work_before_its_response() {
             .await;
     }
 }
+
+async fn set_gesture_viewport(ctx: &mut TestContext, width: u32) {
+    ctx.process_async(json!({
+        "id":35010,"method":"Emulation.setDeviceMetricsOverride",
+        "params":{"width":width,"height":400,"deviceScaleFactor":1,"mobile":false}
+    }))
+    .await;
+    ctx.expect_result(35010, json!({}), None);
+}
+
+async fn clipped_repeat(cancel_first_round: bool) {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut ctx = fixture(&format!(
+                r#"
+            window.firstRoundDone=new Promise(resolve=>window.finishFirstRound=resolve);
+            window.restored=false;window.firstFinished=false;
+            document.addEventListener('wheel',e=>{{
+                if({cancel_first_round} || firstFinished)e.preventDefault();
+                events.push([e.cancelable,e.defaultPrevented,e.deltaY,restored]);
+                total+=e.deltaY;
+                if(!firstFinished && total>=299.999){{
+                    firstFinished=true;finishFirstRound();
+                }}
+            }},{{passive:false}});
+        "#
+            ))
+            .await;
+            set_gesture_viewport(&mut ctx, 600).await;
+            let raw = json!({"id":35000,"method":"Input.synthesizeScrollGesture",
+            "params":{"x":500,"y":40,"yDistance":-300,"speed":300,
+                      "repeatCount":1,"repeatDelayMs":100,"gestureSourceType":"mouse"}})
+            .to_string();
+            let CdpCommandTaskStep::Pending(pending) =
+                ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+            else {
+                panic!("gesture must run through the owned protocol workflow");
+            };
+            let running = tokio::task::spawn_local(pending.wait());
+            ctx.process_async(json!({"id":35011,"method":"Runtime.evaluate",
+            "params":{"expression":"firstRoundDone","awaitPromise":true}}))
+                .await;
+            let first_round = ctx
+                .wait_for_scheduler_message("first wheel round completion", |message| {
+                    message["id"] == 35011
+                })
+                .await;
+            assert!(first_round.get("error").is_none(), "{first_round}");
+            assert!(
+                first_round["result"].get("exceptionDetails").is_none(),
+                "{first_round}"
+            );
+            set_gesture_viewport(&mut ctx, 300).await;
+            assert!(evaluate_bool(&mut ctx, "scrollTo(0,0);true").await);
+            // This interval is the viewport-change input, not a readiness wait:
+            // cover the 100ms repeat delay and the next 200ms of wheel updates.
+            ctx.drive_owned_wait(tokio::time::sleep(std::time::Duration::from_millis(300)))
+                .await;
+            assert!(
+                !running.is_finished(),
+                "the repeat must still have input remaining"
+            );
+            assert!(evaluate_bool(&mut ctx, "window.restored=true;true").await);
+            set_gesture_viewport(&mut ctx, 600).await;
+            let completed = ctx.drive_owned_wait(running).await.unwrap();
+            let step = ctx.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(
+                    completed,
+                    &mut CommandDispatchContext::default(),
+                )
+            });
+            let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
+            assert!(
+                messages.contains(&json!({"id":35000,"result":{}})),
+                "{messages:?}"
+            );
+            let value = snapshot(&mut ctx).await;
+            let total = value["total"].as_f64().unwrap();
+            assert!(
+                (300.0..599.0).contains(&total),
+                "must observe both clipped and restored repeat updates: {value}"
+            );
+            let resumed = value["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e[3] == true)
+                .collect::<Vec<_>>();
+            if cancel_first_round {
+                assert!(total > 300.0 && !resumed.is_empty(), "{value}");
+            }
+            for event in resumed {
+                assert_eq!(
+                    event[0], cancel_first_round,
+                    "skipped Began must not change dispatch mode: {value}"
+                );
+                assert_eq!(event[1], cancel_first_round, "{value}");
+            }
+            if cancel_first_round {
+                assert_eq!(
+                    value["page"], 0,
+                    "canceled restored wheels must not scroll: {value}"
+                );
+            } else {
+                assert!(
+                    value["page"].as_f64().unwrap() > 0.0,
+                    "Changed without a Began retains the prior noncancelable mode: {value}"
+                );
+            }
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_clipped_repeat_keeps_canceled_wheels_cancelable() {
+    clipped_repeat(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_clipped_repeat_keeps_prior_nonblocking_mode() {
+    clipped_repeat(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_clipped_queued_command_keeps_page_dispatch_mode() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut ctx = fixture(
+                r#"
+            window.firstRoundDone=new Promise(resolve=>window.finishFirstRound=resolve);
+            window.firstFinished=false;window.restored=false;
+            document.addEventListener('wheel',e=>{
+                if(firstFinished)e.preventDefault();
+                events.push([e.cancelable,e.deltaY,restored]);total+=e.deltaY;
+                if(!firstFinished && total>=299.999){firstFinished=true;finishFirstRound();}
+            },{passive:false});
+        "#,
+            )
+            .await;
+            set_gesture_viewport(&mut ctx, 600).await;
+            let raw = |id| {
+                json!({"id":id,"method":"Input.synthesizeScrollGesture",
+            "params":{"x":500,"y":40,"yDistance":-300,"speed":300,"gestureSourceType":"mouse"}})
+                .to_string()
+            };
+            let CdpCommandTaskStep::Pending(first) =
+                ctx.with_fixture(|conn| conn.start_command_dispatch(&raw(35000)))
+            else {
+                panic!("pending first command")
+            };
+            let blocker = ctx.with_fixture(|conn| {
+                let owner = CommandOwnerScope::capture(conn, None);
+                conn.synthetic_scroll_admissions_for_owner(&owner)
+                    .unwrap()
+                    .reserve()
+            });
+            let CdpCommandTaskStep::Pending(second) =
+                ctx.with_fixture(|conn| conn.start_command_dispatch(&raw(35020)))
+            else {
+                panic!("pending second command")
+            };
+            let first = tokio::task::spawn_local(first.wait());
+            let second = tokio::task::spawn_local(second.wait());
+            ctx.process_async(json!({"id":35011,"method":"Runtime.evaluate",
+            "params":{"expression":"firstRoundDone","awaitPromise":true}}))
+                .await;
+            let response = ctx
+                .wait_for_scheduler_message("first command wheels", |m| m["id"] == 35011)
+                .await;
+            assert!(response.get("error").is_none(), "{response}");
+            let completed = ctx.drive_owned_wait(first).await.unwrap();
+            let step = ctx.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(
+                    completed,
+                    &mut CommandDispatchContext::default(),
+                )
+            });
+            let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
+            assert!(
+                messages.contains(&json!({"id":35000,"result":{}})),
+                "{messages:?}"
+            );
+            set_gesture_viewport(&mut ctx, 300).await;
+            assert!(evaluate_bool(&mut ctx, "scrollTo(0,0);scrollY===0").await);
+            drop(blocker);
+            // Dispatch the next command's Began while the widget is narrow.
+            ctx.drive_owned_wait(tokio::time::sleep(std::time::Duration::from_millis(200)))
+                .await;
+            assert!(!second.is_finished());
+            assert!(evaluate_bool(&mut ctx, "window.restored=true;true").await);
+            set_gesture_viewport(&mut ctx, 600).await;
+            let completed = ctx.drive_owned_wait(second).await.unwrap();
+            let step = ctx.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(
+                    completed,
+                    &mut CommandDispatchContext::default(),
+                )
+            });
+            let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
+            assert!(
+                messages.contains(&json!({"id":35020,"result":{}})),
+                "{messages:?}"
+            );
+            let value = snapshot(&mut ctx).await;
+            let total = value["total"].as_f64().unwrap();
+            assert!(total > 300.0 && total < 599.0, "{value}");
+            assert!(
+                value["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|e| e[2] == true)
+                    .all(|e| e[0] == false),
+                "{value}"
+            );
+            assert!(
+                value["page"].as_f64().unwrap() > 0.0,
+                "a dropped Began must retain the preceding command's nonblocking mode: {value}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_validates_anchor_before_waiting_in_page_queue() {
+    for initially_valid in [true, false] {
+        let mut ctx = fixture("document.addEventListener('wheel',e=>total+=e.deltaY);").await;
+        set_gesture_viewport(&mut ctx, if initially_valid { 600 } else { 300 }).await;
+        let blocker = ctx.with_fixture(|conn| {
+            let owner = CommandOwnerScope::capture(conn, None);
+            conn.synthetic_scroll_admissions_for_owner(&owner)
+                .unwrap()
+                .reserve()
+        });
+        let raw = json!({"id":35000,"method":"Input.synthesizeScrollGesture",
+            "params":{"x":500,"y":40,"yDistance":-10,"speed":300,"gestureSourceType":"mouse"}})
+        .to_string();
+        let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
+        let messages = if initially_valid {
+            // Validation is already enqueued ahead of this viewport change.
+            set_gesture_viewport(&mut ctx, 300).await;
+            drop(blocker);
+            ctx.complete_command_task_step_for_test(step).await.0
+        } else {
+            // Invalid input must finish while its predecessor still owns FIFO.
+            let messages = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                ctx.complete_command_task_step_for_test(step),
+            )
+            .await
+            .expect("initial validation must not wait for the scroll queue")
+            .0;
+            set_gesture_viewport(&mut ctx, 600).await;
+            drop(blocker);
+            messages
+        };
+        if initially_valid {
+            assert!(
+                messages.contains(&json!({"id":35000,"result":{}})),
+                "{messages:?}"
+            );
+        } else {
+            let error = messages
+                .iter()
+                .find(|m| m["id"] == 35000)
+                .expect("gesture reply");
+            assert_eq!(
+                error["error"]["message"], "Position out of bounds",
+                "{messages:?}"
+            );
+        }
+        assert!(evaluate_bool(&mut ctx, "total===0 && scrollY===0").await);
+    }
+}

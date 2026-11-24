@@ -1850,7 +1850,7 @@ impl CdpConnection {
     pub(crate) fn synthetic_scroll_admissions_for_owner(
         &self,
         owner: &CommandOwnerScope,
-    ) -> Option<crate::conn::command_admission::CommandAdmissionQueue> {
+    ) -> Option<crate::conn::command_admission::SyntheticScrollAdmissionQueue> {
         let slot = self.runtime_session_owner_slot_for_owner(owner)?;
         Some(slot.page_slot().synthetic_scroll_admissions.clone())
     }
