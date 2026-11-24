@@ -1001,32 +1001,34 @@ pub(super) fn merge_pending_target_queries(
     existing: &mut Vec<PendingStyleInvalidationTargetQueries>,
     incoming: Vec<PendingStyleInvalidationTargetQueries>,
 ) {
-    let mut indices = pending_target_query_indices(existing);
-    for incoming_item in incoming {
-        merge_pending_target_query(existing, &mut indices, incoming_item);
+    PendingTargetQueryIndices::new(existing).merge_into(existing, incoming);
+}
+
+pub(super) struct PendingTargetQueryIndices(HashMap<StyleInvalidationSourceTarget, usize>);
+
+impl PendingTargetQueryIndices {
+    pub(super) fn new(target_queries: &[PendingStyleInvalidationTargetQueries]) -> Self {
+        Self(
+            target_queries
+                .iter()
+                .enumerate()
+                .map(|(index, target_query)| (target_query.target().clone(), index))
+                .collect(),
+        )
     }
-}
 
-fn pending_target_query_indices(
-    target_queries: &[PendingStyleInvalidationTargetQueries],
-) -> HashMap<StyleInvalidationSourceTarget, usize> {
-    target_queries
-        .iter()
-        .enumerate()
-        .map(|(index, target_query)| (target_query.target().clone(), index))
-        .collect()
-}
-
-fn merge_pending_target_query(
-    existing: &mut Vec<PendingStyleInvalidationTargetQueries>,
-    indices: &mut HashMap<StyleInvalidationSourceTarget, usize>,
-    incoming_item: PendingStyleInvalidationTargetQueries,
-) {
-    if let Some(&index) = indices.get(incoming_item.target()) {
-        let existing_item = &mut existing[index];
-        existing_item.merge_from(incoming_item);
-    } else {
-        indices.insert(incoming_item.target().clone(), existing.len());
-        existing.push(incoming_item);
+    pub(super) fn merge_into(
+        &mut self,
+        existing: &mut Vec<PendingStyleInvalidationTargetQueries>,
+        incoming: Vec<PendingStyleInvalidationTargetQueries>,
+    ) {
+        for item in incoming {
+            if let Some(&index) = self.0.get(item.target()) {
+                existing[index].merge_from(item);
+            } else {
+                self.0.insert(item.target().clone(), existing.len());
+                existing.push(item);
+            }
+        }
     }
 }
