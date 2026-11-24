@@ -334,12 +334,12 @@ impl PageScriptHost {
         source: Option<LocationNavigationSource>,
         about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) {
-        let default_initiator =
-            if browser_navigation_kind == BrowserNavigationRequestKind::Navigate {
-                self.navigation_initiator_for_owner(OwnerDispatchScope::Top)
-            } else {
-                None
-            };
+        let default_initiator = if browser_navigation_kind == BrowserNavigationRequestKind::Navigate
+        {
+            self.navigation_initiator_for_owner(OwnerDispatchScope::Top)
+        } else {
+            None
+        };
         self.cancel_planned_form_navigation_for_url(OwnerDispatchScope::Top, Some(&url));
         self.clear_pending_top_level_navigation();
         let handoff = self.top_level_navigation_handoff_tx.next_handoff();

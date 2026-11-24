@@ -7,6 +7,8 @@ mod sync;
 mod window;
 
 pub(in crate::native_bridge::context_host) use window::ChildWindowProxyRecords;
+#[cfg(feature = "molio")]
+pub(crate) use window::caller_can_access_window;
 pub(crate) use window::{
     cross_origin_lightweight_popup_id, install_child_window_proxy_access_check_handlers,
     install_synthetic_window_access_check_handlers, is_cross_origin_location_proxy,

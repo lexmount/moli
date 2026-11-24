@@ -628,7 +628,8 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
         _ => None,
     };
     let opener_child_handle = opener.and(source_child_handle);
-    if runtime.has_browser_owned_auxiliary_page_factory()
+    if runtime.auxiliary_page_navigation_owner()
+        == Some(crate::runtime::AuxiliaryNavigationOwner::Browser)
         && !matches!(named_target, Some(OwnerDispatchScope::LightweightPopup(_)))
     {
         let initiator = form_navigation_initiator(runtime, form, Some(target_name))?;
@@ -640,6 +641,8 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
                 source_child_handle,
                 target_name,
                 "about:blank",
+                #[cfg(feature = "molio")]
+                RendererPopupDisposition::Foreground,
                 &initiator.origin(),
                 creator.base_url,
                 creator.policy_container,
@@ -928,9 +931,16 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
     let Some(source) = unsafe { &*runtime_ptr }.owner_dispatch_scope_for_node(source_handle) else {
         return false;
     };
-    let Some(target) =
-        existing_hyperlink_target(scope, runtime_ptr, source, source_handle, target_name)
-    else {
+    let target = existing_hyperlink_target(scope, runtime_ptr, source, source_handle, target_name);
+    #[cfg(feature = "molio")]
+    let target = target.filter(|target| {
+        // The popup route publishes tab activation even when the reused Page
+        // cancels or intercepts its navigation.
+        !matches!(target, ExistingHyperlinkTarget::RelatedPage(_))
+            || unsafe { &*runtime_ptr }.auxiliary_page_navigation_owner()
+                != Some(crate::runtime::AuxiliaryNavigationOwner::Renderer)
+    });
+    let Some(target) = target else {
         return target_name.is_some_and(|name| {
             let source_element = crate::util::node_wrapper_from_handle(scope, source_handle);
             navigate_element_popup_target(

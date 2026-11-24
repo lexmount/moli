@@ -1087,14 +1087,12 @@ fn navigate_location_object_with_options<'s>(
     }
 
     let browser_owned_hyperlink = hyperlink && !exact_same_href;
-    let navigate_event = source_can_access_target.then(|| {
-        LocationNavigateEvent {
-            source_element: event_source_element,
-            user_initiated,
-            can_intercept: current_url.as_ref().is_some_and(|current| {
-                super::history_mutation::document_can_have_url_rewritten(current, &resolved)
-            }),
-        }
+    let navigate_event = source_can_access_target.then(|| LocationNavigateEvent {
+        source_element: event_source_element,
+        user_initiated,
+        can_intercept: current_url.as_ref().is_some_and(|current| {
+            super::history_mutation::document_can_have_url_rewritten(current, &resolved)
+        }),
     });
     navigate_top_level_cross_document_location(
         scope,

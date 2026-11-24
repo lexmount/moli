@@ -425,6 +425,7 @@ pub(super) fn navigation_reload_callback<'s>(
                 url,
                 Some(entry_seed),
                 moli_fetch::BrowserNavigationRequestKind::Reload,
+                None,
                 about_document_state,
             );
             rv.set(

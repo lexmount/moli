@@ -78,6 +78,8 @@ pub(crate) use collections::{
 };
 #[cfg(feature = "devtools")]
 pub(crate) use context_host::DetachedChildBrowsingContextDocumentSnapshot;
+#[cfg(feature = "molio")]
+pub(crate) use context_host::caller_can_access_window;
 pub(crate) use context_host::{
     DocumentExecutionContext, ImageDecodeRequestId, IsolatedWindowWorld,
     PrebootstrappedChildDefaultContext, RuntimeObservableContextToken, WindowEventAccess,

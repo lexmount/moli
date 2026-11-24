@@ -1563,7 +1563,10 @@ impl PageVm {
                 self.prepare_main_window_proxy_navigation(page_id)?,
             )
         };
-        Ok((commit, (!policy.sandbox.forces_opaque_origin).then_some(origin)))
+        Ok((
+            commit,
+            (!policy.sandbox.forces_opaque_origin).then_some(origin),
+        ))
     }
 
     fn prepare_replacement_document_commit(
