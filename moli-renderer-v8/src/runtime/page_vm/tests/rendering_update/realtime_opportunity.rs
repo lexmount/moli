@@ -506,6 +506,67 @@ attributeValue.dataset.width = '180px';
 }
 
 #[test]
+fn realtime_geometry_compares_styles_to_the_screen_publication() {
+    run_page_vm_large_stack_async_test("realtime-equivalent-style", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.vm_mut()
+            .eval(
+                r#"
+document.body.innerHTML = `
+  <style>
+    .sameA { width: 120px }
+    .sameB { width: 120px }
+    .grow { width: 200px }
+    .pseudo { width: 200px }
+    .pseudo::before { content: "x"; display: block; height: 24px }
+  </style>
+  <div id="probe" class="sameA">
+    <div style="display:contents"><div style="height:10px"></div></div>
+  </div>`;
+"#,
+            )
+            .unwrap();
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetWidth)").unwrap(),
+            "120"
+        );
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        assert_eq!(
+            page.vm_mut()
+                .eval("probe.className = 'sameB'; String(probe.offsetWidth)")
+                .unwrap(),
+            "120",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    r#"
+probe.className = 'grow';
+getComputedStyle(probe).color;
+String(probe.offsetWidth)
+"#
+                )
+                .unwrap(),
+            "200",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
+        assert_eq!(
+            page.vm_mut()
+                .eval("probe.className = 'pseudo'; String(probe.offsetHeight)")
+                .unwrap(),
+            "34",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
+    });
+}
+
+#[test]
 fn realtime_synchronous_geometry_keeps_the_opportunity_but_avoids_another_build() {
     run_page_vm_large_stack_async_test("realtime-opportunity-after-getter", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

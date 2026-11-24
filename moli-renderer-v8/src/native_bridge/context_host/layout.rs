@@ -19,7 +19,7 @@ use crate::{
         CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
     },
     document_runtime::DomHandle,
-    layout_renderer::{ContainerSizeFeedback, layout_viewport_for_surface},
+    layout_renderer::{LayoutPassFeedback, layout_viewport_for_surface},
     native_bridge::element::iframe_handle_viewport,
     script_vm::web_fonts::DocumentWebFontCompletion,
     style_engine::{StyleViewport, StyloStyleEnvironment},
@@ -458,7 +458,7 @@ impl PageScriptHost {
         document: DomHandle,
         request: LayoutPassRequest,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
-        self.build_layout_pass_for_document_in_environment(document, request, None)
+        self.build_layout_pass_for_document_in_environment(document, request, None, false)
             .map(|pass| pass.map(|(layout, _)| layout))
     }
 
@@ -467,7 +467,8 @@ impl PageScriptHost {
         document: DomHandle,
         request: LayoutPassRequest,
         environment_override: Option<StyloStyleEnvironment>,
-    ) -> Result<Option<(LayoutPassResult<DomHandle>, ContainerSizeFeedback<'_>)>, LayoutError> {
+        collect_screen_styles: bool,
+    ) -> Result<Option<(LayoutPassResult<DomHandle>, LayoutPassFeedback<'_>)>, LayoutError> {
         let Some(root) = self
             .dom_host()
             .dom()
@@ -493,6 +494,7 @@ impl PageScriptHost {
                         embedded_document_services,
                         request,
                         environment_override,
+                        collect_screen_styles,
                     )
                 },
             )?

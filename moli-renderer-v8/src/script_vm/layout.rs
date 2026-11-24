@@ -378,6 +378,7 @@ impl ScriptVm {
                     document,
                     request,
                     environment_override,
+                    publication.publishes_current_screen(),
                 )
                 .and_then(|pass| {
                     let Some((mut pass, feedback)) = pass else {
@@ -627,6 +628,7 @@ impl ScriptVm {
             &mut embedded_document_services,
             request,
             None,
+            false,
         )
         .map(|(pass, _)| pass)
     }

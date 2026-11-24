@@ -17,6 +17,7 @@ pub(super) struct NativeLayoutStyleResolver<'a, 'world, 'dom> {
     runtime: &'a PageScriptHost,
     pass: &'a mut StyleResolutionPass<'world, 'dom>,
     scripting_enabled: bool,
+    screen_styles: Option<&'a mut super::screen_styles::DocumentScreenStyles>,
     profile: Option<NativeLayoutStyleResolverProfile>,
 }
 
@@ -41,6 +42,7 @@ pub(super) fn with_layout_styles<R>(
     document: DomHandle,
     viewport: LayoutViewport,
     environment_override: Option<StyloStyleEnvironment>,
+    screen_styles: Option<&mut super::screen_styles::DocumentScreenStyles>,
     prepare: impl FnOnce(&mut NativeLayoutStyleResolver<'_, '_, '_>) -> R,
 ) -> R {
     let mut observation =
@@ -50,6 +52,7 @@ pub(super) fn with_layout_styles<R>(
             runtime,
             pass,
             scripting_enabled: runtime.document_scripting_enabled(document),
+            screen_styles,
             profile: moli_trace::cpu_profile_enabled()
                 .then(NativeLayoutStyleResolverProfile::default),
         };
@@ -137,6 +140,9 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
             }
             return Ok(None);
         };
+        if let Some(screen_styles) = &mut self.screen_styles {
+            screen_styles.insert(node, style.clone());
+        }
         let (computed, before, after) = style.into_element_computed_values();
         let eager_pseudo_count = u64::from(before.is_some()) + u64::from(after.is_some());
         if let Some(profile) = self.profile.as_mut() {
@@ -193,6 +199,9 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         &mut self,
         node: DomHandle,
     ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
+        if let Some(screen_styles) = &mut self.screen_styles {
+            screen_styles.remove(&node);
+        }
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let computed = self.pass.marker_for_generation(node);
         if let Some(profile) = self.profile.as_mut() {
@@ -221,6 +230,9 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         &mut self,
         node: DomHandle,
     ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
+        if let Some(screen_styles) = &mut self.screen_styles {
+            screen_styles.remove(&node);
+        }
         Ok(self.pass.pseudo_style(node, "placeholder").map(|computed| {
             ResolvedLayoutPseudoStyle::new(ResolvedLayoutStyle::from_stylo(computed))
         }))
@@ -353,7 +365,7 @@ mod tests {
         let owner = host.dom_host().element_handle_by_id("owner").unwrap();
         let viewport = host.layout_viewport_for_document(document);
         take_style_resolution_context_count_for_test();
-        with_layout_styles(&host, document, viewport, None, |resolver| {
+        with_layout_styles(&host, document, viewport, None, None, |resolver| {
             assert_eq!(take_style_resolution_context_count_for_test(), 0);
             let world = layout_world(resolver, root);
             let parent = parent_context(&world, owner);
@@ -401,8 +413,13 @@ mod tests {
             .document_element_handle_for_document(foreign_document)
             .unwrap();
         let foreign_viewport = host.layout_viewport_for_document(foreign_document);
-        let foreign_world =
-            with_layout_styles(&host, foreign_document, foreign_viewport, None, |foreign| {
+        let foreign_world = with_layout_styles(
+            &host,
+            foreign_document,
+            foreign_viewport,
+            None,
+            None,
+            |foreign| {
                 let world = layout_world(foreign, foreign_root);
                 let parent = parent_context(&world, foreign_root);
                 assert!(
@@ -411,12 +428,14 @@ mod tests {
                         .is_ok()
                 );
                 world
-            });
+            },
+        );
         let foreign_parent = parent_context(&foreign_world, foreign_root);
         with_layout_styles(
             &host,
             document,
             host.layout_viewport_for_document(document),
+            None,
             None,
             |resolver| {
                 let error = resolver
@@ -445,6 +464,7 @@ mod tests {
             &host,
             document,
             host.layout_viewport_for_document(document),
+            None,
             None,
             |resolver| {
                 let world = layout_world(resolver, root);
@@ -513,6 +533,7 @@ mod tests {
                 document,
                 host.layout_viewport_for_document(document),
                 None,
+                None,
                 |resolver| {
                     let world = layout_world(resolver, root);
                     let parent = parent_context(&world, owner);
@@ -553,7 +574,7 @@ mod tests {
         let input = host.dom_host().element_handle_by_id("input").unwrap();
 
         take_style_resolution_context_count_for_test();
-        let interrupted = with_layout_styles(&host, document, viewport, None, |resolver| {
+        let interrupted = with_layout_styles(&host, document, viewport, None, None, |resolver| {
             assert!(resolver.pass.element_styles(owner).is_some());
             Err::<(), _>("stop layout preparation")
         });
@@ -561,7 +582,7 @@ mod tests {
         assert_eq!(take_style_resolution_context_count_for_test(), 1);
 
         for contexts in [1, 0] {
-            with_layout_styles(&host, document, viewport, None, |resolver| {
+            with_layout_styles(&host, document, viewport, None, None, |resolver| {
                 for (target, expected) in [(shallow, "47px"), (deep, "31px"), (shallow, "47px")] {
                     let style = resolver.pass.element_styles(target).unwrap();
                     assert_eq!(style.property_value("font-size").as_deref(), Some(expected));

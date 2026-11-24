@@ -156,6 +156,34 @@ pub(crate) struct ComputedRenderedStyleFacts {
 }
 
 impl StyloComputedStyleSnapshot {
+    pub(crate) fn has_same_rendering_as(&self, current: &Self) -> bool {
+        fn eq(old: &ComputedValues, new: &ComputedValues) -> bool {
+            use style::{matching::StyleChange, servo::restyle_damage::ServoRestyleDamage};
+
+            old.effective_zoom == new.effective_zoom
+                && old.writing_mode == new.writing_mode
+                && matches!(
+                    ServoRestyleDamage::compute_style_difference::<moli_selector::StyloElement<'_>>(
+                        old, new,
+                    )
+                    .change,
+                    StyleChange::Unchanged
+                )
+        }
+
+        fn pseudo_eq(old: Option<&ComputedValues>, new: Option<&ComputedValues>) -> bool {
+            match (old, new) {
+                (Some(old), Some(new)) => eq(old, new),
+                (None, None) => true,
+                _ => false,
+            }
+        }
+
+        eq(&self.primary, &current.primary)
+            && pseudo_eq(self.before.as_deref(), current.before.as_deref())
+            && pseudo_eq(self.after.as_deref(), current.after.as_deref())
+    }
+
     fn from_primary(primary: ServoArc<ComputedValues>) -> Self {
         Self {
             primary,

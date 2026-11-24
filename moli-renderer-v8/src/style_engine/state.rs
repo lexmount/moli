@@ -3,6 +3,7 @@ use std::{
     collections::HashMap,
 };
 
+use indexmap::IndexSet;
 use moli_selector::StyloSourceInvalidationFallbackReason;
 use selectors::context::SelectorCaches;
 use style::{
@@ -79,12 +80,13 @@ pub(super) struct StyleDocumentGenerationSnapshot {
     pub(super) target_context_epoch: u64,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum ScreenStyleInvalidation {
+#[derive(Default)]
+pub(super) enum ScreenStyleInvalidation {
     #[default]
     Clean,
     Pending,
-    Affected,
+    Subtrees(IndexSet<DomHandle>),
+    Full,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -105,7 +107,7 @@ pub(super) struct StyleDocumentState {
     /// derived styles are cleared, including temporary capture environments.
     visual_input_generation: Cell<u64>,
     screen_cache_generations: Cell<Option<ScreenStyleCacheGenerations>>,
-    pub(super) screen_style_invalidation: Cell<ScreenStyleInvalidation>,
+    pub(super) screen_style_invalidation: RefCell<ScreenStyleInvalidation>,
     pub(super) lazy_invalidation_roots: LazyStyleInvalidationRoots,
     #[cfg(debug_assertions)]
     completed_style_observation: RefCell<Option<CompletedStyleObservation>>,
@@ -133,7 +135,7 @@ impl StyleDocumentState {
             target_context_epoch: Cell::new(0),
             visual_input_generation: Cell::new(0),
             screen_cache_generations: Cell::new(None),
-            screen_style_invalidation: Cell::new(ScreenStyleInvalidation::Clean),
+            screen_style_invalidation: RefCell::default(),
             lazy_invalidation_roots: LazyStyleInvalidationRoots::default(),
             #[cfg(debug_assertions)]
             completed_style_observation: RefCell::new(None),
@@ -169,29 +171,52 @@ impl StyleDocumentState {
     }
 
     pub(super) fn note_screen_style_attribute_change(&self) {
-        if self.screen_cache_generations.get().is_some()
-            && self.screen_style_invalidation.get() == ScreenStyleInvalidation::Clean
-        {
-            self.screen_style_invalidation
-                .set(ScreenStyleInvalidation::Pending);
+        if self.screen_cache_generations.get().is_some() {
+            let mut change = self.screen_style_invalidation.borrow_mut();
+            if matches!(*change, ScreenStyleInvalidation::Clean) {
+                *change = ScreenStyleInvalidation::Pending;
+            }
         }
     }
 
-    pub(super) fn note_affected_screen_styles(&self) {
-        if self.screen_style_invalidation.get() == ScreenStyleInvalidation::Pending {
-            self.screen_style_invalidation
-                .set(ScreenStyleInvalidation::Affected);
+    pub(super) fn note_full_screen_style_invalidation(&self) {
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        if !matches!(*change, ScreenStyleInvalidation::Clean) {
+            *change = ScreenStyleInvalidation::Full;
+        }
+    }
+
+    pub(super) fn note_affected_screen_styles(&self, roots: impl IntoIterator<Item = DomHandle>) {
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        match &mut *change {
+            ScreenStyleInvalidation::Pending => {
+                let roots: IndexSet<_> = roots.into_iter().collect();
+                if !roots.is_empty() {
+                    *change = ScreenStyleInvalidation::Subtrees(roots);
+                }
+            }
+            ScreenStyleInvalidation::Subtrees(affected) => affected.extend(roots),
+            ScreenStyleInvalidation::Clean | ScreenStyleInvalidation::Full => {}
+        }
+        if matches!(&*change, ScreenStyleInvalidation::Subtrees(roots)
+            if roots.len() > super::lazy_invalidation::MAX_RETAINED_INVALIDATION_ROOTS)
+        {
+            *change = ScreenStyleInvalidation::Full;
         }
     }
 
     pub(super) fn finish_screen_style_invalidation(&self) {
-        if self.screen_style_invalidation.get() == ScreenStyleInvalidation::Pending {
-            let result = if self.screen_style_dependencies_are_current() {
-                ScreenStyleInvalidation::Clean
-            } else {
-                ScreenStyleInvalidation::Affected
-            };
-            self.screen_style_invalidation.set(result);
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        if matches!(
+            *change,
+            ScreenStyleInvalidation::Clean | ScreenStyleInvalidation::Full
+        ) {
+            return;
+        }
+        if !self.screen_style_dependencies_are_current() {
+            *change = ScreenStyleInvalidation::Full;
+        } else if matches!(*change, ScreenStyleInvalidation::Pending) {
+            *change = ScreenStyleInvalidation::Clean;
         }
     }
 
@@ -214,8 +239,7 @@ impl StyleDocumentState {
     pub(super) fn publish_screen_styles(&self) {
         self.screen_cache_generations
             .set(Some(self.style_cache_generations()));
-        self.screen_style_invalidation
-            .set(ScreenStyleInvalidation::Clean);
+        *self.screen_style_invalidation.borrow_mut() = ScreenStyleInvalidation::Clean;
     }
 
     #[cfg(test)]
