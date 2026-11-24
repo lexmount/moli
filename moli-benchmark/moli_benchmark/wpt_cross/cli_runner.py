@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import multiprocessing
-import os
 import subprocess
 import sys
 import time
@@ -30,9 +29,8 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
-from ..config import clear_proxy_env
 from ..versions import sha256_file
-from .engine import EngineDriver, build_driver
+from .engine import EngineDriver, build_driver, fixture_browser_environment
 from .runner import CaseResult, EngineRunResult, classify_payload
 from .runner import FINAL_PAYLOAD_SOURCES
 from .server import WptFixtureServer
@@ -392,7 +390,7 @@ def run_engine_on_cases_cli(
     )
     result.shutdown_info = {"mode": "cli", "cases_run": 0, "scheduler": "process-pool"}
 
-    env = clear_proxy_env(os.environ)
+    env = fixture_browser_environment()
     env.update(driver.extra_env)
     # Belt-and-braces NO_PROXY for the local fixture endpoints created by each
     # worker process.
