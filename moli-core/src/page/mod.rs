@@ -54,8 +54,8 @@ pub use moli_renderer_v8::RendererPageRequestPolicyUpdate;
 pub use viewport::ViewportFrames;
 #[cfg(feature = "molio")]
 pub use viewport_buffer::{
-    BufferedViewportFrames, ViewportBuffers, ViewportFrameRef, ViewportOutput, ViewportState,
-    ViewportUpdate,
+    BufferedViewportFrames, VIEWPORT_BAND_HEIGHT, ViewportBuffers, ViewportFrameRef,
+    ViewportOutput, ViewportState, ViewportUpdate,
 };
 
 #[cfg(all(test, debug_assertions))]

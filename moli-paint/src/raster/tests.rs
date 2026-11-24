@@ -965,3 +965,48 @@ fn html_text_shadow_uses_fill_ink_in_both_paint_orders() {
         }
     }
 }
+
+#[test]
+fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
+    let mut first = snapshot(96, 120, 2.0);
+    first.push_fragment(PaintFragment::solid_rect(
+        PaintRect::new(0.0, 0.0, 96.0, 120.0),
+        PaintColor::new(0.1, 0.3, 0.5, 1.0),
+    ));
+    let image = first.add_image(Arc::new(
+        moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 170]).unwrap(),
+    ));
+    first.push_fragment(PaintFragment::Image(PaintImage {
+        image,
+        destination: PaintRect::new(3.0, 30.0, 80.0, 30.0),
+        repeat_bounds: None,
+        sampling: PaintImageSampling::Linear,
+        transform: PaintTransform2D::IDENTITY,
+    }));
+    first.push_fragment(PaintFragment::solid_rect(
+        PaintRect::new(7.0, 45.0, 6.5, 40.0),
+        PaintColor::new(1.0, 1.0, 0.0, 0.3),
+    ));
+    let mut second = first.clone();
+    second.images[image.index()].image =
+        Arc::new(moli_image::RgbaImage::try_new(1, 1, vec![0, 255, 0, 180]).unwrap());
+    let layout = raster_buffer_layout(96.0, 120.0, 2.0).unwrap();
+    let rows = raster_damage_rows(&first, &second, layout);
+    assert_eq!(rows, 58..122);
+    let mut actual = vec![0; layout.byte_len];
+    raster_snapshot_into(&first, &mut actual, RasterPixelFormat::Bgra8).unwrap();
+    let mut expected = vec![0; layout.byte_len];
+    raster_snapshot_into(&second, &mut expected, RasterPixelFormat::Bgra8).unwrap();
+    assert!(
+        actual != expected,
+        "the replacement image must change pixels"
+    );
+    raster_snapshot_rows_into(&second, &mut actual, RasterPixelFormat::Bgra8, rows).unwrap();
+    let first_difference = actual
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(expected.as_chunks::<4>().0)
+        .position(|(actual, expected)| actual != expected);
+    assert_eq!(first_difference, None, "first mismatched BGRA pixel");
+}
