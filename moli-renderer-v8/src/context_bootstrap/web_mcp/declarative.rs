@@ -129,13 +129,10 @@ pub(crate) fn note_mutation(
         if !invalidated_forms.contains(&form.handle) {
             continue;
         }
-        let protected = match &form.state {
-            FormInvocationState::Submitting => true,
-            FormInvocationState::Responding(response) => {
-                v8::Local::new(scope, response).state() == v8::PromiseState::Pending
-            }
-            _ => false,
-        };
+        let protected = matches!(
+            form.state,
+            FormInvocationState::Submitting | FormInvocationState::Responding
+        );
         if !protected {
             form.state = FormInvocationState::Invalidated;
         }
