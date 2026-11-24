@@ -42,6 +42,10 @@ impl PageScriptHost {
             "img"
         };
         let is_main_document = owner_document_handle == self.document_handle();
+        let delays_load = !element.is_html_element("img")
+            || !element
+                .attribute("loading")
+                .is_some_and(|loading| loading.eq_ignore_ascii_case("lazy"));
         if let Some(previous) = self.pending_image_load_event(image_handle) {
             let same_owner_document = previous.owner_document_handle() == owner_document_handle;
             let previous_owner_still_matches = same_owner_document
@@ -60,6 +64,24 @@ impl PageScriptHost {
                     }
                 };
             if previous_owner_still_matches {
+                let has_delay = match previous.owner() {
+                    PendingImageLoadEventOwner::Main(binding) => {
+                        binding.load_delay_token().is_some()
+                    }
+                    PendingImageLoadEventOwner::Child(binding) => {
+                        binding.load_delay_token().is_some()
+                    }
+                };
+                if delays_load
+                    && !has_delay
+                    && let Some(owner) =
+                        self.accept_image_load_delay(image_handle, owner_document_handle, true)
+                {
+                    self.pending_image_load_events
+                        .get_mut(&image_handle)
+                        .expect("current image sequence remains registered")
+                        .owner = owner;
+                }
                 return None;
             }
             let previous = self
@@ -68,27 +90,8 @@ impl PageScriptHost {
             let _ = self.settle_pending_image_load_event(previous, true);
         }
 
-        let owner = if is_main_document {
-            PendingImageLoadEventOwner::Main(
-                self.accept_current_main_image_load_delay(image_handle)?,
-            )
-        } else {
-            let child_handle =
-                self.child_browsing_context_host_for_document_handle(owner_document_handle)?;
-            let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
-            if snapshot.document_handle != owner_document_handle {
-                return None;
-            }
-            let owner = FrameDocumentTaskOwner::new(
-                snapshot.scheduler_lane_id,
-                snapshot.local_window_id,
-                snapshot.document_id,
-            );
-            PendingImageLoadEventOwner::Child(
-                self.frame_owner_store
-                    .accept_current_child_image_load_event(child_handle, owner, image_handle)?,
-            )
-        };
+        let owner =
+            self.accept_image_load_delay(image_handle, owner_document_handle, delays_load)?;
         let pending = PendingImageLoadEvent::new(
             self.next_image_load_event_id(),
             owner_document_handle,
@@ -120,6 +123,40 @@ impl PageScriptHost {
             ),
         }
         Some(pending)
+    }
+
+    fn accept_image_load_delay(
+        &mut self,
+        image_handle: DomHandle,
+        owner_document_handle: DomHandle,
+        delays_load: bool,
+    ) -> Option<PendingImageLoadEventOwner> {
+        Some(if owner_document_handle == self.document_handle() {
+            PendingImageLoadEventOwner::Main(
+                self.accept_current_main_image_load_delay(image_handle, delays_load)?,
+            )
+        } else {
+            let child_handle =
+                self.child_browsing_context_host_for_document_handle(owner_document_handle)?;
+            let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
+            if snapshot.document_handle != owner_document_handle {
+                return None;
+            }
+            let owner = FrameDocumentTaskOwner::new(
+                snapshot.scheduler_lane_id,
+                snapshot.local_window_id,
+                snapshot.document_id,
+            );
+            PendingImageLoadEventOwner::Child(
+                self.frame_owner_store
+                    .accept_current_child_image_load_event(
+                        child_handle,
+                        owner,
+                        image_handle,
+                        delays_load,
+                    )?,
+            )
+        })
     }
 
     pub(crate) fn pending_image_load_event_is_current(
