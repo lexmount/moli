@@ -222,7 +222,7 @@ pub(in crate::native_bridge) fn media_playback_rate_setter_function<'s>(
     };
     let _ = unsafe { &mut *runtime_ptr }.set_media_playback_rate(handle, number);
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -248,7 +248,7 @@ pub(in crate::native_bridge) fn media_current_time_getter_function<'s>(
         .map(Element::media_current_time)
         .unwrap_or(0.0);
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -274,7 +274,7 @@ pub(in crate::native_bridge) fn media_current_time_setter_function<'s>(
     };
     let number = number.max(0.0);
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -312,7 +312,7 @@ fn schedule_media_seek_completion(
         return;
     }
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -372,7 +372,7 @@ pub(crate) fn dispatch_media_seek_completion(
         return false;
     }
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -424,7 +424,7 @@ pub(in crate::native_bridge) fn media_duration_getter_function<'s>(
     };
     let duration = f64::NAN;
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -445,13 +445,13 @@ pub(in crate::native_bridge) fn media_ended_getter_function<'s>(
         return;
     };
     #[cfg(not(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     )))]
     let ended = false;
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]

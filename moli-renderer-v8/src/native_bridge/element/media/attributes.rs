@@ -223,7 +223,7 @@ fn queue_media_load(
         .node(handle)
         .and_then(crate::dom::native::Node::owner_document);
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -298,7 +298,7 @@ pub(crate) fn queue_media_load_if_source_or_loading_change(
     if attribute_name.eq_ignore_ascii_case("src") {
         let runtime = unsafe { &mut *runtime_ptr };
         #[cfg(all(
-            feature = "video",
+            feature = "media-ext",
             any(target_os = "linux", target_os = "macos"),
             target_pointer_width = "64"
         ))]
@@ -469,7 +469,7 @@ fn start_media_load(
         return;
     };
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -526,7 +526,7 @@ fn start_media_load(
         Ok(crate::network_host::MediaElementResourceFetchStart::Pending) => {}
         Ok(crate::network_host::MediaElementResourceFetchStart::PolicySkipped) => {
             #[cfg(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             ))]
@@ -648,7 +648,7 @@ pub(crate) fn dispatch_media_load_event_phase(
         }
         MediaLoadEventPhase::Error => {
             #[cfg(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             ))]
@@ -687,7 +687,7 @@ pub(crate) fn dispatch_media_load_event_phase(
     if phase == MediaLoadEventPhase::CanPlay {
         dispatch_media_autoplay_if_needed(scope, runtime_ptr, handle);
         #[cfg(all(
-            feature = "video",
+            feature = "media-ext",
             any(target_os = "linux", target_os = "macos"),
             target_pointer_width = "64"
         ))]
@@ -786,7 +786,7 @@ fn dispatch_media_autoplay_if_needed(
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]

@@ -61,7 +61,7 @@ pub(crate) fn start_media_element_resource_fetch(
     let (request_mode, credentials_mode) = media_cross_origin_request_modes(element);
 
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -86,7 +86,7 @@ pub(crate) fn start_media_element_resource_fetch(
             &result,
         );
         #[cfg(all(
-            feature = "video",
+            feature = "media-ext",
             any(target_os = "linux", target_os = "macos"),
             target_pointer_width = "64"
         ))]
@@ -152,7 +152,7 @@ pub(crate) fn media_response_status_is_successful(status: u16) -> bool {
 }
 
 #[cfg(all(
-    feature = "video",
+    feature = "media-ext",
     any(target_os = "linux", target_os = "macos"),
     target_pointer_width = "64"
 ))]

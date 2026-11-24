@@ -491,13 +491,13 @@ impl PageScriptHost {
             next_image_load_event_id: 1,
             pending_media_load_sequences: HashMap::new(),
             #[cfg(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             ))]
             video_playbacks: HashMap::new(),
             #[cfg(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             ))]

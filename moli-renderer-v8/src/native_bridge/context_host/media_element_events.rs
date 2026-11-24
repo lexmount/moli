@@ -28,13 +28,13 @@ pub(super) enum PendingMediaElementEventPayload {
         event_type: String,
     },
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
     VideoUpdate(super::video_playback::PendingVideoUpdate),
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -287,7 +287,7 @@ impl PageScriptHost {
                 )
             }
             #[cfg(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             ))]
@@ -295,7 +295,7 @@ impl PageScriptHost {
                 super::video_playback::apply_video_update(scope, host_ptr, update)
             }
             #[cfg(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             ))]
@@ -321,7 +321,7 @@ impl PageScriptHost {
     fn retire_media_element_event_payload(&mut self, payload: PendingMediaElementEventPayload) {
         match payload {
             #[cfg(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             ))]
@@ -329,7 +329,7 @@ impl PageScriptHost {
                 self.discard_video_update(update);
             }
             #[cfg(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             ))]

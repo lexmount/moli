@@ -12,7 +12,7 @@ path = "src/main.rs"
 default = ["jemalloc"]
 ace-protocol = ["moli-protocol-server/ace-protocol"]
 jemalloc = ["dep:tikv-jemalloc-sys", "dep:tikv-jemallocator"]
-video = ["moli-core/video"]
+media-ext = ["moli-core/media-ext"]
 
 [dependencies]
 anyhow = "1.0.100"

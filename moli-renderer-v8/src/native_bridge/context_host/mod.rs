@@ -124,19 +124,19 @@ mod main_document_lifecycle;
 mod media_element_events;
 mod media_loads;
 #[cfg(all(
-    feature = "video",
+    feature = "media-ext",
     any(target_os = "linux", target_os = "macos"),
     target_pointer_width = "64"
 ))]
 mod media_source_playback;
 #[cfg(all(
-    feature = "video",
+    feature = "media-ext",
     any(target_os = "linux", target_os = "macos"),
     target_pointer_width = "64"
 ))]
 mod video_playback;
 #[cfg(all(
-    feature = "video",
+    feature = "media-ext",
     any(target_os = "linux", target_os = "macos"),
     target_pointer_width = "64"
 ))]
@@ -1027,13 +1027,13 @@ pub(crate) struct PageScriptHost {
     next_image_load_event_id: u64,
     pending_media_load_sequences: HashMap<DomHandle, PendingMediaLoadSequence>,
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
     video_playbacks: HashMap<DomHandle, video_playback::VideoPlayback>,
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]

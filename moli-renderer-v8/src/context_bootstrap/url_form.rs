@@ -29,7 +29,7 @@ fn url_create_object_url_callback<'s>(
         return;
     };
     #[cfg(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     ))]
@@ -106,7 +106,7 @@ fn url_revoke_object_url_callback<'s>(
         && let Some(storage_key) = current_object_url_storage_key(scope)
     {
         #[cfg(all(
-            feature = "video",
+            feature = "media-ext",
             any(target_os = "linux", target_os = "macos"),
             target_pointer_width = "64"
         ))]

@@ -82,7 +82,7 @@ pub(crate) use media_cues::new_media_error_value;
 mod media_file_template;
 mod media_queries;
 #[cfg(all(
-    feature = "video",
+    feature = "media-ext",
     any(target_os = "linux", target_os = "macos"),
     target_pointer_width = "64"
 ))]

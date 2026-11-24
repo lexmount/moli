@@ -599,7 +599,7 @@ async fn run_video_load_turns(
     use std::time::Duration;
 
     let decoder_completion = usize::from(cfg!(all(
-        feature = "video",
+        feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     )));

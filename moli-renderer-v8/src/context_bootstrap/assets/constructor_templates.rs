@@ -811,13 +811,13 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         }
         ConstructorKind::MediaSource => {
             #[cfg(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             ))]
             use crate::context_bootstrap::media_source_playback::media_source_constructor_callback;
             #[cfg(not(all(
-                feature = "video",
+                feature = "media-ext",
                 any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             )))]
