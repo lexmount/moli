@@ -35,9 +35,9 @@ impl PageVm {
     }
 
     fn inspection_viewport(&self) -> moli_layout::LayoutViewport {
-        let surface = self.vm().viewport_surface().unwrap_or_default();
-        let (width, height) = surface.css_layout_size();
-        moli_layout::LayoutViewport::new(width, height, surface.device_pixel_ratio as f32)
+        crate::layout_renderer::layout_viewport_for_surface(
+            self.vm().viewport_surface().unwrap_or_default(),
+        )
     }
 }
 

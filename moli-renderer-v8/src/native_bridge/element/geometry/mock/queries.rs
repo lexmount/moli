@@ -244,6 +244,7 @@ fn mock_element_metrics(
         scroll_offset: offset,
         minimum_scroll_offset: LayoutPoint::ZERO,
         maximum_scroll_offset: LayoutPoint::ZERO,
+        scrollport_size: size,
         scrollport: quad,
         scrollable_overflow: quad,
         is_scroll_container: false,

@@ -57,6 +57,8 @@ pub struct LayoutElementMetrics<N> {
     pub scroll_offset: LayoutPoint,
     pub minimum_scroll_offset: LayoutPoint,
     pub maximum_scroll_offset: LayoutPoint,
+    /// Scrollport dimensions before transforms, in the scroll offsets' units.
+    pub scrollport_size: LayoutSize,
     pub scrollport: LayoutQuad,
     pub scrollable_overflow: LayoutQuad,
     pub is_scroll_container: bool,

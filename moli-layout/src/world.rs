@@ -372,6 +372,10 @@ impl ViewportScrollPolicy {
         }
     }
 
+    pub(crate) fn suppress_classic_scrollbars(&mut self) {
+        self.scrollbar_style.width = LayoutScrollbarWidth::None;
+    }
+
     pub(crate) fn prepare_scrollbar_layout(&mut self, scrollbars_hidden: bool) {
         let allowed = !scrollbars_hidden && self.allows_scrollbar_controls();
         self.revealed_scrollbar_x =

@@ -1051,7 +1051,7 @@ pub(super) fn window_scroll_to_callback<'s>(
     let current_x = scroll_x(scope, global);
     let current_y = scroll_y(scope, global);
     let (x, y) = coordinates.resolve(current_x, current_y, false);
-    scroll_window_to(scope, host_ptr, x, y);
+    scroll_window_to(scope, host_ptr, x.max(0.0), y.max(0.0));
     rv.set_undefined();
 }
 
@@ -1071,7 +1071,7 @@ pub(super) fn window_scroll_by_callback<'s>(
     let current_x = scroll_x(scope, global);
     let current_y = scroll_y(scope, global);
     let (x, y) = coordinates.resolve(current_x, current_y, true);
-    scroll_window_to(scope, host_ptr, x, y);
+    scroll_window_to(scope, host_ptr, x.max(0.0), y.max(0.0));
     rv.set_undefined();
 }
 
@@ -1081,8 +1081,6 @@ pub(crate) fn scroll_window_to(
     x: f64,
     y: f64,
 ) {
-    let x = x.max(0.0);
-    let y = y.max(0.0);
     let (document, scrolling_element) = {
         let runtime = unsafe { &*host_ptr };
         let document = runtime
@@ -1859,8 +1857,6 @@ fn set_scroll_position<'s>(
     x: f64,
     y: f64,
 ) -> bool {
-    let x = x.max(0.0);
-    let y = y.max(0.0);
     if scroll_x(scope, global) == x && scroll_y(scope, global) == y {
         return false;
     }

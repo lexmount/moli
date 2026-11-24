@@ -231,12 +231,13 @@ where
                     ))
             });
         let unzoom = CssomAbsoluteZoom::new(geometry.effective_zoom);
-        let client_size = if is_root {
+        let scrollport_size = LayoutSize::new(extent.scrollport.width, extent.scrollport.height);
+        let (client_size, scrollport_size) = if is_root {
             // CSSOM defines root client dimensions from the viewport and only
             // subtracts an actually-present viewport scrollbar. Stable empty
             // gutters still reduce root layout/scrollWidth, but not
             // documentElement.clientWidth/clientHeight.
-            LayoutSize::new(
+            let client_size = LayoutSize::new(
                 (self.viewport.css_width as f32
                     - extent
                         .vertical_scrollbar
@@ -247,12 +248,11 @@ where
                         .horizontal_scrollbar
                         .map_or(0.0, |scrollbar| scrollbar.frame.height))
                 .max(0.0),
-            )
+            );
+            (client_size, scrollport_size)
         } else {
-            unzoom.size(LayoutSize::new(
-                extent.scrollport.width,
-                extent.scrollport.height,
-            ))
+            let size = unzoom.size(scrollport_size);
+            (size, size)
         };
         Some(LayoutElementMetrics {
             offset_parent,
@@ -283,6 +283,7 @@ where
             scroll_offset: unzoom.point(extent.applied_offset),
             minimum_scroll_offset: unzoom.point(extent.minimum_offset),
             maximum_scroll_offset: unzoom.point(extent.maximum_offset),
+            scrollport_size,
             scrollport: if is_root {
                 LayoutTransform2D::IDENTITY.map_rect(extent.scrollport)
             } else {

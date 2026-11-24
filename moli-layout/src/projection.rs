@@ -572,33 +572,44 @@ where
             let is_root = id == self.world.root;
             let scrollbar_thickness = self.scrollbar_control_thickness(id);
             let vertical_scrollbar_on_left = self.places_vertical_scrollbar_on_left(id);
-            let local_scrollport = geometry.local_scrollport;
-            let scrollport = if is_root {
-                LayoutRect::new(
-                    geometry.vertical_leading_gutter,
-                    geometry.horizontal_leading_gutter,
-                    local_scrollport.width,
-                    local_scrollport.height,
-                )
-            } else {
-                local_scrollport
-            };
-            let scroll_size = overflow_projection.scroll_size(self.world, id);
+            let layout_scrollport = geometry.local_scrollport;
+            let mut scrollport = layout_scrollport;
+            let mut scroll_size = overflow_projection.scroll_size(self.world, id);
+            if is_root {
+                scrollport.x = geometry.vertical_leading_gutter;
+                scrollport.y = geometry.horizontal_leading_gutter;
+                // Overflow is measured in the CSS layout. The mobile frame
+                // can scroll over that layout even when its contents fit it.
+                if let Some((width, height)) = self.viewport.mobile_frame_size() {
+                    scrollport.width = width as f32;
+                    scrollport.height = height as f32;
+                    scroll_size.width = scroll_size.width.max(scrollport.width);
+                    scroll_size.height = scroll_size.height.max(scrollport.height);
+                }
+            }
             let horizontal_range = (scroll_size.width - scrollport.width).max(0.0);
             let vertical_range = (scroll_size.height - scrollport.height).max(0.0);
             let is_scroll_container = self.establishes_scroll_container(id);
             let requested = self.world.boxes[index].scroll_offset;
             let (minimum_offset, maximum_offset) = if is_scroll_container {
                 let reversed = self.world.boxes[index].style.reversed_scroll_axes();
+                // A reversed axis can still pan toward the far edge of the
+                // CSS viewport when the mobile frame is smaller.
+                let maximum = LayoutPoint::new(
+                    if reversed.x {
+                        (layout_scrollport.width - scrollport.width).max(0.0)
+                    } else {
+                        horizontal_range
+                    },
+                    if reversed.y {
+                        (layout_scrollport.height - scrollport.height).max(0.0)
+                    } else {
+                        vertical_range
+                    },
+                );
                 (
-                    LayoutPoint::new(
-                        if reversed.x { -horizontal_range } else { 0.0 },
-                        if reversed.y { -vertical_range } else { 0.0 },
-                    ),
-                    LayoutPoint::new(
-                        if reversed.x { 0.0 } else { horizontal_range },
-                        if reversed.y { 0.0 } else { vertical_range },
-                    ),
+                    LayoutPoint::new(maximum.x - horizontal_range, maximum.y - vertical_range),
+                    maximum,
                 )
             } else {
                 (LayoutPoint::ZERO, LayoutPoint::ZERO)
