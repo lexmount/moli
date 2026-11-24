@@ -11,6 +11,7 @@ pub(crate) use runtime_state::{
 };
 mod broadcast_channel;
 mod canvas;
+pub(crate) use canvas::CanvasPixels;
 mod chrome_runtime;
 mod constructors;
 mod crypto;

@@ -2,7 +2,8 @@ use cssparser::color::clamp_unit_f32;
 use moli_webapi::canvas_context_values::ImageSmoothingQuality;
 
 use super::backing_store::{
-    canvas_like_pixels_copy, canvas_owner_from_context, with_canvas_like_pixels_mut,
+    canvas_like_pixels, canvas_like_pixels_copy, canvas_owner_from_context,
+    with_canvas_like_pixels_mut,
 };
 use super::color::{CanvasColorStyle, canvas_srgb_components, serialize_canvas_color};
 use super::helpers::canvas_unrestricted_double_arg;
@@ -1752,17 +1753,22 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     };
     let image = same_origin_html_image(scope, args.this(), source);
     let owned_pixels;
+    let canvas_pixels;
     let (source_pixels, source_width, source_height, density) =
         if let Some((image, density)) = &image {
+            canvas_pixels = None;
             (image.rgba.as_slice(), image.width, image.height, *density)
-        } else {
-            let Some((pixels, width, height)) = html_image_pixels_copy(scope, source)
-                .or_else(|| canvas_like_pixels_copy(scope, source))
-            else {
-                return;
-            };
+        } else if let Some((pixels, width, height)) = html_image_pixels_copy(scope, source) {
+            canvas_pixels = None;
             owned_pixels = pixels;
             (owned_pixels.as_slice(), width, height, 1.0)
+        } else {
+            let Some(storage) = canvas_like_pixels(scope, source) else {
+                return;
+            };
+            let (width, height) = (storage.width, storage.height);
+            canvas_pixels = Some(storage);
+            (&[][..], width, height, 1.0)
         };
     if !density.is_finite() {
         return;
@@ -1793,6 +1799,11 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
         ScaleFilter::Nearest
     };
     let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
+        // No V8 code runs while the source and destination slices are live.
+        let canvas_source = canvas_pixels
+            .as_ref()
+            .map(|source| unsafe { source.draw_source(pixels) });
+        let source_pixels = canvas_source.as_deref().unwrap_or(source_pixels);
         blit_draw_image_filtered(
             pixels,
             width,

@@ -82,6 +82,7 @@ struct HtmlCanvasElementPrototypeAccessorsDeclaration {
 }
 
 mod backing_store;
+pub(crate) use backing_store::CanvasPixels;
 mod color;
 mod constructors;
 mod context2d;
