@@ -1,3 +1,5 @@
+#[path = "scripts/child_error_insertion.rs"]
+mod child_error_insertion;
 #[path = "scripts/child_readiness.rs"]
 mod child_readiness;
 #[path = "scripts/child_script_text.rs"]
