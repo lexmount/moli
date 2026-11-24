@@ -300,6 +300,7 @@ impl ConcurrentParseTimeRuntime {
         };
         let mut env = env.clone();
         env.apply_navigation_response_headers(&final_url, &response_headers);
+        runtime_hooks.apply_auxiliary_sandbox(&mut env);
 
         let mut body_source = RawDocumentBodySource::External(raw_body);
         if response_headers_indicate_xml_document(&response_headers) {

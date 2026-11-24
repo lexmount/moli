@@ -601,3 +601,143 @@ async fn abandoning_auxiliary_adoption_retires_only_the_reserved_page() {
     assert_eq!(runtime.renderer_page_count_for_testing(), 1);
     page.close_async().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn related_popup_network_document_keeps_the_creators_sandbox() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .browser_context_runtime()
+        .delegate_auxiliary_document_responses_to_browser();
+    let (tx, mut rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let source = url::Url::parse("https://source.test/creator").unwrap();
+    let (mut page, _, _, _, _) = runtime
+        .create_html_page_from_response(
+            source.clone(),
+            source,
+            None,
+            false,
+            0,
+            200,
+            vec![
+                ("content-type".to_owned(), b"text/html".to_vec()),
+                (
+                    "content-security-policy".to_owned(),
+                    b"sandbox allow-scripts allow-popups".to_vec(),
+                ),
+            ],
+            &loader,
+            crate::RendererWebStorageHandles::ephemeral(),
+            "<!doctype html><body>creator".to_owned(),
+            crate::RendererDocumentOptions::default(),
+        )
+        .await
+        .unwrap();
+    rx.drain();
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: "open('https://source.test/child', 'child'); true".to_owned(),
+        await_promise: false,
+    })
+    .await
+    .unwrap();
+    let publications = rx.drain();
+    let activations = popup_activations_for_page(&publications, &page);
+    assert_eq!(activations.len(), 1);
+    let pending = activations[0].pending_auxiliary_page().unwrap();
+    let crate::RendererPopupActivationParts {
+        session_storage_store: session_storage,
+        initial_empty_document_storage_key: storage_key,
+        ..
+    } = activations[0].clone().into_parts();
+    let storage = crate::RendererWebStorageHandles::new(
+        crate::new_shared_web_storage_store(),
+        session_storage.unwrap(),
+    );
+    let blank = url::Url::parse("about:blank").unwrap();
+    let (mut child, _, _, _, _) = runtime
+        .start_create_html_page_from_response(
+            pending.page_reservation(),
+            blank.clone(),
+            blank,
+            None,
+            false,
+            0,
+            200,
+            vec![("content-type".to_owned(), b"text/html".to_vec())],
+            &loader,
+            storage.clone(),
+            "<!doctype html><body>initial".to_owned(),
+            storage_key,
+            RendererTopLevelNavigationDispatch::DelegateToBrowser,
+            crate::RendererDocumentOptions::default(),
+        )
+        .unwrap()
+        .await_ready()
+        .await
+        .unwrap();
+
+    let reservation = child
+        .reserve_replacement_document_for_navigation()
+        .await
+        .unwrap();
+    let (completed, completion) = oneshot::channel();
+    let (body_tx, body) = ExternalRawDocumentBodyStream::channel(completion);
+    body_tx
+        .send(b"<!doctype html><body>replacement".to_vec())
+        .await
+        .unwrap();
+    drop(body_tx);
+    completed.send(Ok(())).unwrap();
+    let destination = url::Url::parse("https://source.test/child").unwrap();
+    let prepared = runtime
+        .prepare_streaming_raw_document_from_external_body(
+            reservation,
+            destination.clone(),
+            destination,
+            None,
+            false,
+            0,
+            Vec::new(),
+            200,
+            vec![("content-type".to_owned(), b"text/html".to_vec())],
+            &loader,
+            storage,
+            body,
+            false,
+            PageVmInitStage::Load,
+            RendererReplyBoundary::Stage,
+            RendererTopLevelNavigationDispatch::DelegateToBrowser,
+            RendererNavigationReplyPolicy::ReturnWithPendingNavigation,
+            None,
+            None,
+            crate::RendererDocumentOptions::default(),
+        )
+        .await
+        .unwrap();
+    let permit = prepared.issue_commit_permit();
+    let replacement = prepared.commit_page_replacement(permit).await.unwrap();
+    child.adopt_document_replacement(replacement).unwrap();
+    if let Some(continuation) = child.take_committed_document_post_response_continuation() {
+        continuation.release();
+    }
+    let (reply, _) = child
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"(() => {
+          let storage;
+          try { void localStorage; storage = 'accessible'; }
+          catch (error) { storage = error.name; }
+          return JSON.stringify([origin, storage]);
+        })()"#
+                .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!(r#"["null","SecurityError"]"#))
+    );
+    child.close_async().await.unwrap();
+    page.close_async().await.unwrap();
+}
