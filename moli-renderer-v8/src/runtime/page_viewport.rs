@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use moli_action_window::{InputModifiers, Point, ScrollAction};
+use moli_input::{InputModifiers, Point, ScrollAction};
 use moli_layout::{LayoutFlushReason, PaintCaptureRequest, PaintSnapshot, PaintViewport};
 use moli_page_types::ViewportSurface;
 use tokio::sync::{Notify, watch};
