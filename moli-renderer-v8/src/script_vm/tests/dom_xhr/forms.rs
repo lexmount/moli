@@ -6321,9 +6321,9 @@ fn native_form_keywords_resolve_from_owner_for_get_and_post() {
                             .map_or_else(
                                 || host.child_browsing_context_handle_by_index(0),
                                 |parent| {
-                                    host.child_browsing_context_child_frame_handle_by_index(
-                                        parent, 0,
-                                    )
+                                    host.child_browsing_context_child_frame_handles(parent)
+                                        .first()
+                                        .copied()
                                 },
                             )
                             .expect(&description);
