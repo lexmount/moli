@@ -154,7 +154,7 @@ fn pending_fetch_continuation<'s>(
     host: &crate::native_bridge::PageScriptHost,
 ) -> crate::types::PendingSubresourceContinuation {
     let dispatch_scope = crate::native_bridge::OwnerDispatchScope::Top;
-    crate::types::PendingSubresourceContinuation::Fetch(
+    crate::types::PendingSubresourceContinuation::Fetch(Box::new(
         crate::types::PendingWindowFetchContinuation::new(
             v8::Global::new(scope, resolver),
             crate::context_bootstrap::FetchResourceTiming::capture(
@@ -173,7 +173,7 @@ fn pending_fetch_continuation<'s>(
             )
             .expect("test Fetch should capture its CSP report context"),
         ),
-    )
+    ))
 }
 
 #[test]
