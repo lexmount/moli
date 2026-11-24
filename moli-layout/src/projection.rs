@@ -24,7 +24,12 @@ use paint_view::{BoxPaintMetadata, PaintMetadata};
 pub(crate) use scroll::ScrollProjection;
 use scroll::clamp_scroll_offset;
 
-use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    hash::Hash,
+    time::Instant,
+};
 
 use taffy::ResolveOrZero;
 
@@ -1015,23 +1020,28 @@ where
                 });
             // CSS clip applies to the entire subtree, including descendants
             // that skip an intermediate overflow clip.
-            for &legacy_clip in legacy_clips.iter() {
-                let legacy = &self.clip_chain[legacy_clip.index()];
+            if positioned_clip != ancestor_clip && !legacy_clips.is_empty() {
+                let mut retained = HashSet::new();
                 let mut ancestor = positioned_clip;
                 while let Some(id) = ancestor {
                     let clip = &self.clip_chain[id.index()];
-                    if clip.kind == legacy.kind {
-                        break;
+                    if let LayoutClipKind::CssRect(owner) = clip.kind {
+                        retained.insert(owner);
                     }
                     ancestor = clip.parent;
                 }
-                if ancestor.is_none() {
-                    positioned_clip = Some(self.push_clip(
-                        positioned_clip,
-                        legacy.kind,
-                        legacy.coordinate_space,
-                        legacy.rect,
-                    ));
+                for &legacy_clip in legacy_clips.iter() {
+                    let legacy = &self.clip_chain[legacy_clip.index()];
+                    if let LayoutClipKind::CssRect(owner) = legacy.kind
+                        && !retained.contains(&owner)
+                    {
+                        positioned_clip = Some(self.push_clip(
+                            positioned_clip,
+                            legacy.kind,
+                            legacy.coordinate_space,
+                            legacy.rect,
+                        ));
+                    }
                 }
             }
             positioned_clip
