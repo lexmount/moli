@@ -3,6 +3,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use parking_lot::Mutex;
+
 use crate::{
     network::ResourceInterceptionPause,
     runtime::RendererOwnerAction,
@@ -29,9 +31,11 @@ pub enum ResourceInterceptionEvent {
     Network(Box<ScriptNetworkOutputItem>),
 }
 
+type WorkerPublisher = dyn Fn(ResourceInterceptionEvent) -> bool + Send + Sync;
+
 pub(crate) struct WorkerInterceptionOutput {
     control: Option<ResourceInterceptionContext>,
-    publish: Arc<dyn Fn(ResourceInterceptionEvent) -> bool + Send + Sync>,
+    publish: Mutex<Option<Arc<WorkerPublisher>>>,
     closed: AtomicBool,
     closed_notify: tokio::sync::Notify,
 }
@@ -41,6 +45,16 @@ impl std::fmt::Debug for WorkerInterceptionOutput {
         f.debug_struct("WorkerInterceptionOutput")
             .field("closed", &self.closed.load(Ordering::Acquire))
             .finish_non_exhaustive()
+    }
+}
+
+impl WorkerInterceptionOutput {
+    fn publish(&self, event: ResourceInterceptionEvent) -> bool {
+        if self.closed.load(Ordering::Acquire) {
+            return false;
+        }
+        let publish = self.publish.lock().clone();
+        publish.is_some_and(|publish| publish(event))
     }
 }
 
@@ -54,7 +68,7 @@ impl ResourceInterceptionContext {
     ) -> Self {
         Self::Worker(Arc::new(WorkerInterceptionOutput {
             control,
-            publish: Arc::new(publish),
+            publish: Mutex::new(Some(Arc::new(publish))),
             closed: AtomicBool::new(false),
             closed_notify: tokio::sync::Notify::new(),
         }))
@@ -65,7 +79,7 @@ impl ResourceInterceptionContext {
             Self::Document { .. } => self.clone(),
             Self::Worker(output) => Self::Worker(Arc::new(WorkerInterceptionOutput {
                 control: output.control.clone(),
-                publish: output.publish.clone(),
+                publish: Mutex::new(output.publish.lock().clone()),
                 closed: AtomicBool::new(false),
                 closed_notify: tokio::sync::Notify::new(),
             })),
@@ -107,6 +121,10 @@ impl ResourceInterceptionContext {
         if let Self::Worker(output) = self {
             output.closed.store(true, Ordering::Release);
             output.closed_notify.notify_waiters();
+            // Keepalive IO outlives the Worker, but must release the publisher
+            // that owns its parent-message channel when the JS owner closes.
+            let publish = output.publish.lock().take();
+            drop(publish);
         }
     }
 
@@ -141,10 +159,7 @@ impl ResourceInterceptionContext {
                 if let Some(control) = &output.control {
                     return control.publish_request(info, pause);
                 }
-                if output.closed.load(Ordering::Acquire) {
-                    return false;
-                }
-                (output.publish)(ResourceInterceptionEvent::Request {
+                output.publish(ResourceInterceptionEvent::Request {
                     info: Box::new(info),
                     pause,
                 })
@@ -171,10 +186,7 @@ impl ResourceInterceptionContext {
                 if let Some(control) = &output.control {
                     return control.publish_continue(event, pause);
                 }
-                if output.closed.load(Ordering::Acquire) {
-                    return false;
-                }
-                (output.publish)(ResourceInterceptionEvent::Continue {
+                output.publish(ResourceInterceptionEvent::Continue {
                     event: Box::new(event),
                     pause,
                 })
@@ -196,8 +208,7 @@ impl ResourceInterceptionContext {
                 output,
             } => output.publish_network(*source_document, item),
             Self::Worker(output) => {
-                !output.closed.load(Ordering::Acquire)
-                    && (output.publish)(ResourceInterceptionEvent::Network(Box::new(item)))
+                output.publish(ResourceInterceptionEvent::Network(Box::new(item)))
             }
         }
     }

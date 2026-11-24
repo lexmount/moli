@@ -194,6 +194,7 @@ mod tests {
             crate::network::ResourceRequestClient::from_browser_resource_runtime(
                 browser_context_runtime.browser_resource_runtime(),
             ),
+            crate::network::RendererResourceTaskRunner::for_test(),
             SharedWorkerExecutionPolicy::new(
                 WorkerScriptKind::Classic,
                 Url::parse("https://example.test/page.html").unwrap(),
