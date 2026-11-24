@@ -4826,7 +4826,7 @@ impl PageVm {
                 },
             )
             .into_violations();
-        if enforced_violation.is_some() {
+        if !enforced_violation.is_empty() {
             return ScannedStylesheetAdmission::DeferredToParser(
                 ScannedStylesheetDeferral::ContentSecurityPolicy,
             );
@@ -4886,7 +4886,7 @@ impl PageVm {
                 crate::document_runtime::DocumentSubresourceCspKind::Image,
             )
             .into_violations();
-        if enforced_violation.is_some() {
+        if !enforced_violation.is_empty() {
             return ScannedImageAdmission::DeferredToParser(
                 ScannedImageDeferral::ContentSecurityPolicy,
             );

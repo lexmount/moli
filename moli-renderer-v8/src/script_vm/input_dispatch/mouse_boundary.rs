@@ -40,8 +40,7 @@ pub(super) fn dispatch_mouse_boundary_events(
     if previous == current {
         return;
     }
-    let (leaving, entering) =
-        hover_boundary_paths(unsafe { &*runtime_ptr }, previous, current);
+    let (leaving, entering) = hover_boundary_paths(unsafe { &*runtime_ptr }, previous, current);
     let mut dispatch = |name, target, related, coordinates| {
         let related = related_target_value(scope, related);
         if let Some(event) = construct_mouse_event_with_related_target_for_target(

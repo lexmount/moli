@@ -2270,8 +2270,8 @@ fn touch_contacts_keep_primary_identity_until_the_entire_stream_ends() {
     );
     assert!(vm.active_touch_points.is_empty());
     let host = vm._context_host.borrow();
-    assert!(!host.pointer_capture_is_active(9));
-    assert!(!host.pointer_capture_is_active(2));
+    assert!(host.active_pointer_capture_target(9).is_none());
+    assert!(host.active_pointer_capture_target(2).is_none());
 }
 
 #[test]

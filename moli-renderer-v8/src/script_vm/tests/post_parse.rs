@@ -464,9 +464,11 @@ async fn external_script_redirect_final_url_obeys_script_src_csp() {
     );
 }
 
-#[test]
-fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
-    let mut vm = new_storage_test_vm("https://app.test/page.html");
+#[tokio::test]
+async fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://app.test/page.html", &loader);
     vm.set_response_content_security_report_only_policies(&["script-src 'self'".to_owned()]);
     vm.set_response_content_security_policies(&["script-src 'self'".to_owned()]);
     vm.eval(
@@ -519,6 +521,7 @@ fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
             redirect_chain: vec![redirect(&original, &middle), redirect(&middle, &final_url)],
             from_cache: true,
             cache_state: moli_fetch::ResponseCacheState::Local,
+            preload_state: Default::default(),
             negotiated_http_version: None,
         },
         "export default 1;".to_owned(),
@@ -532,7 +535,7 @@ fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
     vm.dispatch_module_fetch_csp_violations(Some(&context));
     vm.dispatch_module_fetch_csp_violations(Some(&context));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         2
     );
     assert_eq!(
@@ -547,7 +550,7 @@ fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
     );
     vm.dispatch_module_fetch_csp_violations(Some(&context));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         0,
         "replaying a response must not report the same hop twice"
     );
@@ -595,6 +598,7 @@ fn module_csp_admission_reports_once_for_service_worker_response_alias() {
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: moli_fetch::ResponseCacheState::None,
+            preload_state: Default::default(),
             negotiated_http_version: None,
         },
         "export default 42;".to_owned(),

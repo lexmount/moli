@@ -4,6 +4,7 @@ use super::super::{
     child_frames::PendingChildFrameNavigation,
 };
 use crate::document_runtime::DomHandle;
+use moli_page_types::{NavigationHistoryMutation, cross_document_navigation_seed};
 use url::Url;
 
 impl PageScriptHost {
@@ -315,69 +316,6 @@ impl PageScriptHost {
                 entry.restore_navigation_entry_seed_from_committed();
             }
         }
-    }
-
-    pub(crate) fn queue_deferred_child_browsing_context_navigation_to_url(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-        resolved_url: &str,
-    ) -> bool {
-        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
-        if !self.child_browsing_contexts.contains_key(&handle) {
-            return false;
-        }
-        let Some(url) = Url::parse(resolved_url).ok() else {
-            return false;
-        };
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.apply_deferred_navigation_to_entry_seed(&url);
-        }
-        if self
-            .set_child_browsing_context_pending_navigation(
-                handle,
-                ChildBrowsingContextBootstrap::Url(url),
-                None,
-                false,
-            )
-            .is_none()
-        {
-            return false;
-        }
-        let queued = self.queue_child_browsing_context_navigation_commit(handle);
-        self.remember_child_navigation_download_policy(handle, download_policy, queued)
-    }
-
-    pub(crate) fn queue_deferred_child_browsing_context_navigation_request(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-        request: ChildBrowsingContextNavigationRequest,
-    ) -> bool {
-        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
-        if !self.child_browsing_contexts.contains_key(&handle) {
-            return false;
-        }
-        self.reject_replaced_service_worker_child_client_navigation(
-            handle,
-            "The navigation was canceled.".to_owned(),
-        );
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.apply_deferred_navigation_to_entry_seed(&request.url);
-        }
-        if self
-            .set_child_browsing_context_pending_navigation(
-                handle,
-                ChildBrowsingContextBootstrap::Request(request),
-                None,
-                false,
-            )
-            .is_none()
-        {
-            return false;
-        }
-        let queued = self.queue_child_browsing_context_navigation_commit(handle);
-        self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
     pub(crate) fn child_browsing_context_has_pending_cross_document_traversal(

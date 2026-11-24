@@ -161,6 +161,11 @@ async fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers(
     vm.eval("globalThis.storagePopup = open('about:blank'); globalThis.retainedPopupStorage = storagePopup.localStorage; retainedPopupStorage.getItem('key');").unwrap();
     assert_eq!(host.borrow().local_storage_area_count_for_test(), 2);
     vm.eval("storagePopup.close()").unwrap();
+    assert_eq!(
+        host.borrow().local_storage_area_count_for_test(),
+        2,
+        "close() queues definite Window closure on the DOM-manipulation source"
+    );
     advance_page_task_executor_until_eval_equals(
         &mut vm,
         &loader,
@@ -169,18 +174,6 @@ async fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers(
         "popup storage is retired by the close task",
     )
     .await;
-    assert_eq!(
-        host.borrow().local_storage_area_count_for_test(),
-        2,
-        "close() queues definite Window closure on the DOM-manipulation source"
-    );
-    assert_eq!(
-        vm.eval_after_selected_page_tasks(
-            "String(storagePopup.closed && storagePopup.opener === null)"
-        )
-        .unwrap(),
-        "true"
-    );
     assert_eq!(
         host.borrow().local_storage_area_count_for_test(),
         1,

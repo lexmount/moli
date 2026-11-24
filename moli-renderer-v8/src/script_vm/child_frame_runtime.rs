@@ -1,6 +1,6 @@
 use super::*;
-use moli_page_types::{NavigationHistoryMutation, SessionHistoryCommit};
 use crate::parser::ParserCustomElementRegistryAssociation;
+use moli_page_types::{NavigationHistoryMutation, SessionHistoryCommit};
 
 impl ScriptVm {
     pub(crate) fn resync_child_browsing_contexts(&mut self) {
@@ -984,6 +984,9 @@ impl ScriptVm {
                         .map_or(0, |entry| entry.index),
                     url,
                     position,
+                    moli_page_types::NavigationSourceDocument::from_initial_empty(
+                        self._context_host.borrow().main_document_is_initial_empty(),
+                    ),
                 )
             }));
         }

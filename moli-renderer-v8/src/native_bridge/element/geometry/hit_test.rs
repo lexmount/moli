@@ -74,7 +74,14 @@ pub(crate) fn observable_input_hit_test(
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(input_surface_hit_test(runtime, document, point, InputHitTestPolicy::INTERACTIVE, InputHitTestMode::Dom)?.target)
+    Ok(input_surface_hit_test(
+        runtime,
+        document,
+        point,
+        InputHitTestPolicy::INTERACTIVE,
+        InputHitTestMode::Dom,
+    )?
+    .target)
 }
 
 /// Hit tests within an already routed frame. The mouse press can keep that
@@ -148,7 +155,10 @@ pub(crate) fn input_surface_hit_test(
             },
         );
         let is_document = target.is_some_and(|target| {
-            runtime.dom_host().node(target).is_some_and(|node| node.is_document())
+            runtime
+                .dom_host()
+                .node(target)
+                .is_some_and(|node| node.is_document())
         });
         return Ok(InputSurfaceHit {
             target: target.filter(|_| !is_document),
@@ -181,7 +191,10 @@ pub(crate) fn observable_deep_hit_test(
     point: LayoutPoint,
     policy: InputHitTestPolicy,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(input_surface_hit_test(runtime, document, point, policy, InputHitTestMode::Dom)?.document_or_element())
+    Ok(
+        input_surface_hit_test(runtime, document, point, policy, InputHitTestMode::Dom)?
+            .document_or_element(),
+    )
 }
 
 fn input_surface_hit_test_in_tree(

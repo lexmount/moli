@@ -28,12 +28,12 @@ impl ScriptVm {
             })
     }
 
-    pub(super) fn prepare_main_document_event<'event>(
+    pub(super) fn prepare_main_document_event(
         &self,
         target: EventTargetHandle,
         original_target: EventTargetHandle,
-        event_type: &'event str,
-    ) -> Option<NativeEventDispatch<'event>> {
+        event_type: &str,
+    ) -> Option<NativeEventDispatch> {
         let event = self.document_runtime.prepare_native_event_dispatch(
             target,
             original_target,
@@ -47,7 +47,7 @@ impl ScriptVm {
         .then_some(event)
     }
 
-    fn dispatch_native_event_body(&mut self, event: NativeEventDispatch<'_>) -> Result<()> {
+    fn dispatch_native_event_body(&mut self, event: NativeEventDispatch) -> Result<()> {
         self.with_main_world_document_scope(|scope, host_ptr, document| {
             document
                 .dispatch_native_event_in_scope(scope, host_ptr, event)

@@ -22,6 +22,7 @@ pub(crate) use moli_webapi::events::subclasses::submit::{
 use moli_webapi::events::value;
 pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
+pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 mod time;
 mod wrappers;
 

@@ -123,7 +123,13 @@ impl ScriptVm {
                     .map_err(anyhow::Error::msg);
                 }
             }
-            dispatch_script_failure_error_body(scope, host_ptr, message, filename, error_value)
+            dispatch_script_failure_error_body(
+                scope,
+                host_ptr,
+                Some(message),
+                filename,
+                error_value,
+            )
         })
     }
 
@@ -140,22 +146,10 @@ impl ScriptVm {
             "child module exception reporting owner is no longer current"
         );
         self.with_frame_realm_scope(realm_id, |scope, host_ptr| {
-            if let Some(ScriptErrorValue::Retained(id)) = error_value {
-                let exception = super::native_module::retained_module_exception(scope, id)?;
-                let (message, source, line, column) =
-                    crate::exception_reporting::exception_message_details(scope, exception);
-                let filename = if source.is_empty() { filename } else { &source };
-                return dispatch_window_error_event_with_details(
-                    scope,
-                    host_ptr,
-                    &message,
-                    filename,
-                    line,
-                    column,
-                    Some(exception),
-                )
-                .map_err(anyhow::Error::msg);
-            }
+            let message = match error_value {
+                Some(ScriptErrorValue::Retained(_)) => None,
+                _ => Some(message),
+            };
             dispatch_script_failure_error_body(
                 scope,
                 host_ptr,
@@ -170,31 +164,39 @@ impl ScriptVm {
 fn dispatch_script_failure_error_body(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
-    message: &str,
+    message: Option<&str>,
     filename: Option<&str>,
     error_value: Option<ScriptErrorValue>,
 ) -> Result<()> {
     // Script-owned failures are reported inside the script or its rejection
     // job, after V8 has already unwound the original JavaScript frames.
     let _execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
-    let global = scope.get_current_context().global(scope);
-    let message_value = v8_string(scope, message)
-        .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;
-    let retained = matches!(error_value, Some(ScriptErrorValue::Retained(_)));
-    let error_value = match error_value {
-        Some(ScriptErrorValue::Retained(id)) => {
-            super::native_module::retained_module_exception(scope, id)?
-        }
-        Some(ScriptErrorValue::Constructor(kind)) => {
-            window_script_failure_error_value(scope, global, Some(kind), message_value)
-        }
-        None => window_script_failure_error_value(scope, global, None, message_value),
+    let (error_value, retained) = if let Some(ScriptErrorValue::Retained(id)) = error_value {
+        (
+            super::native_module::retained_module_exception(scope, id)?,
+            true,
+        )
+    } else {
+        let constructor = match error_value {
+            Some(ScriptErrorValue::Constructor(kind)) => Some(kind),
+            _ => None,
+        };
+        let global = scope.get_current_context().global(scope);
+        let message_value = v8_string(scope, message.unwrap_or_default())
+            .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;
+        (
+            window_script_failure_error_value(scope, global, constructor, message_value),
+            false,
+        )
     };
     // Retained exceptions carry V8 or loader-owned source information.
     // Read that metadata, not author-visible stack or location properties, and
     // do not replace a dependency's URL with the root script's fallback URL.
-    let location = retained.then(|| {
+    let (original_message, original_filename, line, column) = if retained {
         let exception_message = v8::Exception::create_message(scope, error_value);
+        let original_message = message
+            .is_none()
+            .then(|| exception_message.get(scope).to_rust_string_lossy(scope));
         let filename = exception_message
             .get_script_resource_name(scope)
             .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
@@ -212,8 +214,10 @@ fn dispatch_script_failure_error_body(
             .checked_add(1)
             .and_then(|column| u32::try_from(column).ok())
             .unwrap_or(0);
-        (filename, line, column)
-    });
+        (original_message, filename, line, column)
+    } else {
+        (None, None, 0, 0)
+    };
     // Location metadata belongs to the ErrorEvent. Never mutate
     // the original exception (or invoke an author's setter).
     if !retained
@@ -232,14 +236,13 @@ fn dispatch_script_failure_error_body(
     dispatch_window_error_event_with_details(
         scope,
         host_ptr,
-        message,
-        location
-            .as_ref()
-            .and_then(|(filename, _, _)| filename.as_deref())
+        message.or(original_message.as_deref()).unwrap_or_default(),
+        original_filename
+            .as_deref()
             .or(filename)
-            .unwrap_or(""),
-        location.as_ref().map_or(0, |(_, line, _)| *line),
-        location.as_ref().map_or(0, |(_, _, column)| *column),
+            .unwrap_or_default(),
+        line,
+        column,
         Some(error_value),
     )
     .map_err(anyhow::Error::msg)

@@ -4,12 +4,10 @@ use std::rc::Rc;
 use url::Url;
 
 use crate::content_security_policy::{
-    ContentSecurityPolicy,
+    ContentSecurityPolicy, ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
+    ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
+    ContentSecurityPolicyUrlViolation, ContentSecurityPolicyViolationEventFields,
     content_security_policy_non_url_violation_with_source,
-    ContentSecurityPolicyNonUrlKind,
-    ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
-    ContentSecurityPolicyResourceKind, ContentSecurityPolicyUrlViolation,
-    ContentSecurityPolicyViolationEventFields,
     content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints,

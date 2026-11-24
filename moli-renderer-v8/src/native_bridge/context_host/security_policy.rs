@@ -1277,8 +1277,7 @@ impl PageScriptHost {
         owner: OwnerDispatchScope,
         kind: ContentSecurityPolicyNonUrlKind,
         source: &str,
-    ) -> Option<DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>>>
-    {
+    ) -> Option<DocumentContentSecurityPolicyCheck> {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
         Some(
@@ -1303,8 +1302,7 @@ impl PageScriptHost {
         owner: OwnerDispatchScope,
         source: &str,
         request: ContentSecurityPolicyScriptElementRequest<'_>,
-    ) -> Option<DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>>>
-    {
+    ) -> Option<DocumentContentSecurityPolicyCheck> {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
         Some(
@@ -1479,7 +1477,7 @@ impl PageScriptHost {
             request_url,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
         )
-        .map(|check| check.into_violations().1.is_none())
+        .map(|check| check.into_violations().1.is_empty())
         .unwrap_or(true)
     }
 
@@ -1641,7 +1639,7 @@ impl PageScriptHost {
         include_call_location: bool,
     ) -> bool {
         let (mut report_only_violation, mut enforced_violation) = check.into_violations();
-        if report_only_violation.is_none() && enforced_violation.is_none() {
+        if report_only_violation.is_empty() && enforced_violation.is_empty() {
             return true;
         }
         if include_call_location
@@ -1657,7 +1655,7 @@ impl PageScriptHost {
                 violation.column_number = column_number;
             }
         }
-        let allowed = enforced_violation.is_none();
+        let allowed = enforced_violation.is_empty();
         for violation in report_only_violation.iter().chain(&enforced_violation) {
             self.queue_content_security_policy_violation_task(scope, owner, None, violation);
         }
@@ -1675,6 +1673,8 @@ impl PageScriptHost {
         )?
         .into_violations()
         .1
+        .into_iter()
+        .next()
     }
 
     pub(crate) fn allows_trusted_type_policy_name_by_csp<'s>(

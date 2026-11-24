@@ -6,28 +6,6 @@ use crate::{
     util::get_private_value,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WindowOperationReceiverCaptureError {
-    IllegalInvocation,
-    CrossOrigin,
-}
-
-impl WindowOperationReceiverCaptureError {
-    /// Ordinary operation functions report receiver errors in their own realm.
-    /// Cross-origin WindowProxy/Location access surfaces have a separate error path.
-    pub(crate) fn throw(self, scope: &mut v8::PinScope<'_, '_>) {
-        match self {
-            Self::IllegalInvocation => crate::util::throw_type_error(scope, "Illegal invocation"),
-            Self::CrossOrigin => crate::native_bridge::throw_dom_exception(
-                scope,
-                "SecurityError",
-                18,
-                "Blocked access to a cross-origin Window.",
-            ),
-        }
-    }
-}
-
 /// Window receiver frozen at the start of a WebIDL operation.
 ///
 /// Blink separates three phases in generated Window bindings:
@@ -51,27 +29,12 @@ impl WindowOperationReceiver {
         receiver: v8::Local<'s, v8::Object>,
         host: &PageScriptHost,
     ) -> Self {
-        Self::capture(scope, receiver, host, false).unwrap_or(Self {
+        let empty = Self {
             binding_at_capture: None,
-        })
-    }
-
-    pub(crate) fn capture_and_authorize<'s>(
-        scope: &mut v8::PinScope<'s, '_>,
-        receiver: v8::Local<'s, v8::Object>,
-        host: &PageScriptHost,
-    ) -> Result<Self, WindowOperationReceiverCaptureError> {
-        Self::capture(scope, receiver, host, true)
-    }
-
-    fn capture<'s>(
-        scope: &mut v8::PinScope<'s, '_>,
-        receiver: v8::Local<'s, v8::Object>,
-        host: &PageScriptHost,
-        check_access: bool,
-    ) -> Result<Self, WindowOperationReceiverCaptureError> {
-        let receiver = moli_webapi_declare::web_api_object_target(scope, receiver)
-            .ok_or(WindowOperationReceiverCaptureError::IllegalInvocation)?;
+        };
+        let Some(receiver) = moli_webapi_declare::web_api_object_target(scope, receiver) else {
+            return empty;
+        };
         let current_context = scope.get_current_context();
         if receiver.strict_equals(current_context.global(scope).into())
             && is_window_receiver(scope, receiver)
@@ -82,15 +45,9 @@ impl WindowOperationReceiver {
             // The context registry owns this exact native global, including
             // its retirement. Avoid private-slot reads on a detached proxy and
             // never resolve its old child marker to a replacement Window.
-            return Ok(Self {
-                binding_at_capture: None,
-            });
+            return empty;
         }
         let marked_scope = marked_window_dispatch_scope(scope, receiver);
-        if marked_scope.is_none() && !is_window_receiver(scope, receiver) {
-            return Err(WindowOperationReceiverCaptureError::IllegalInvocation);
-        }
-
         let relevant_context = receiver.get_creation_context(scope);
         let relevant_identity = relevant_context.and_then(|context| {
             host.window_execution_context_identity_for_v8_context(scope, context)
@@ -111,29 +68,16 @@ impl WindowOperationReceiver {
         // the brand check so required-argument conversion can happen first,
         // then fail the native operation as a rejected current-realm Promise.
         let Some(target_scope) = target_scope else {
-            return Ok(Self {
-                binding_at_capture: None,
-            });
+            return empty;
         };
         let Some(target_owner) = host.current_window_execution_context_owner(target_scope) else {
-            return Ok(Self {
-                binding_at_capture: None,
-            });
+            return empty;
         };
-        let Some(accessing_identity) =
-            host.current_runtime_window_execution_context_identity(scope)
-        else {
-            return Ok(Self {
-                binding_at_capture: None,
-            });
-        };
-        if check_access
-            && !host.window_execution_context_can_access_dispatch_scope(
-                accessing_identity,
-                target_scope,
-            )
+        if host
+            .current_runtime_window_execution_context_identity(scope)
+            .is_none()
         {
-            return Err(WindowOperationReceiverCaptureError::CrossOrigin);
+            return empty;
         }
 
         let binding_at_capture = match target_scope {
@@ -160,7 +104,7 @@ impl WindowOperationReceiver {
             }
         };
 
-        Ok(Self { binding_at_capture })
+        Self { binding_at_capture }
     }
 
     /// Returns only the exact receiver realm captured before argument

@@ -276,7 +276,16 @@ async fn worker_module_tree_failure_preserves_admitted_network_actions() {
             "import './a.mjs'; import './b.mjs';",
         )
         .await;
-    let held = server.request("/worker/held.mjs").await;
+    let (held, failed) = server
+        .request_pair("/worker/held.mjs", "/worker/b.mjs")
+        .await;
+    ModuleSourceServer::write(
+        failed,
+        "503 Service Unavailable",
+        "text/plain",
+        "retry later",
+    )
+    .await;
     handle.post_message(serialize_test_string("join"));
     assert_eq!(recv_post_json(&mut handle).await, r#""joined""#);
     ModuleSourceServer::write(

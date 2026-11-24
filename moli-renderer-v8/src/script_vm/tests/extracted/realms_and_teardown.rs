@@ -170,6 +170,7 @@ fn install_pending_response_for_teardown_test(
                 moli_fetch::ResponseHead {
                     final_url: document_url.join("data.json").unwrap(),
                     status: 200,
+                    status_text: None,
                     headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
                     request_cookie_report: None,
                     request_include_credentials: false,

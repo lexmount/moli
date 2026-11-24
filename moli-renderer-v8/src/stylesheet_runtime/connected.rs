@@ -2280,7 +2280,7 @@ impl DocumentRuntime {
             return false;
         };
         if !host.child_browsing_context_scripting_enabled(child)
-            || connected_modulepreload_has_non_matching_media(&self.dom_host, handle)
+            || self.connected_modulepreload_has_non_matching_media(handle)
         {
             return true;
         }
@@ -2542,7 +2542,10 @@ fn preload_link_media_matches(
         .unwrap_or_default();
     crate::style_engine::media_list::evaluate_media_query_list(
         media,
-        host.map(PageScriptHost::emulated_media),
+        host.map(|host| {
+            host.style_environment_for_document(document.unwrap_or_else(|| host.document_handle()))
+        })
+        .unwrap_or_default(),
         viewport,
     )
 }

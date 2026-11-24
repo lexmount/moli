@@ -298,7 +298,7 @@ impl ScriptVm {
                 .document_subresource_csp_check(url, DocumentSubresourceCspKind::Image)
                 .into_violations()
                 .1
-                .is_none()
+                .is_empty()
         });
         urls.into()
     }

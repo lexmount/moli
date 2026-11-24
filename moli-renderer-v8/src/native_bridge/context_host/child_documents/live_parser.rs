@@ -215,6 +215,7 @@ impl PageScriptHost {
             // resources discovered by the outer step before parking it too.
             let discovery_signals = parser.take_discovery_signals();
             self.queue_live_child_parser_discovery_signals(
+                scope,
                 child_handle,
                 document_handle,
                 discovery_signals,
@@ -581,6 +582,7 @@ impl PageScriptHost {
             parser.finish(&mut owner)
         };
         self.queue_live_child_parser_discovery_signals(
+            scope,
             child_handle,
             document_handle,
             finish_signals.discovery_signals,
@@ -624,6 +626,7 @@ impl PageScriptHost {
 
     fn queue_live_child_parser_discovery_signals(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         child_handle: DomHandle,
         document_handle: DomHandle,
         discovery_signals: crate::live_document_parser::LiveDocumentParserDiscoverySignals,
@@ -898,6 +901,7 @@ impl PageScriptHost {
                 return false;
             }
             self.queue_live_child_parser_discovery_signals(
+                scope,
                 child_handle,
                 document_handle,
                 insertion.take_discovery_signals(),

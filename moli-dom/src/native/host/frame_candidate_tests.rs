@@ -65,7 +65,7 @@ fn reconnecting_shadow_trees_restores_compacted_frame_candidates() {
         host.child_browsing_context_host_candidate_handles()
             .is_empty()
     );
-    assert!(frames(&host, outer).is_empty());
+    assert_eq!(frames(&host, outer), vec![frame]);
 
     assert!(host.append_child(body, outer));
     assert_eq!(
@@ -76,7 +76,7 @@ fn reconnecting_shadow_trees_restores_compacted_frame_candidates() {
     assert!(host.remove_child(body, outer));
     host.compact_child_browsing_context_host_candidates();
     assert!(frames(&host, body).is_empty());
-    assert!(frames(&host, shadow).is_empty());
+    assert_eq!(frames(&host, shadow), vec![frame]);
 
     assert!(host.append_child(body, outer));
     assert_eq!(
@@ -115,7 +115,7 @@ fn cloned_imported_and_adopted_shadow_frames_keep_candidate_membership() {
     assert!(host.append_child(secondary, cloned));
     host.compact_child_browsing_context_host_candidates();
     assert_eq!(frames(&host, body), vec![imported_frame]);
-    assert!(frames(&host, secondary).is_empty());
+    assert_eq!(frames(&host, secondary), vec![clone_frame]);
     assert_eq!(host.owner_document_handle(clone_frame), Some(secondary));
 
     assert!(host.append_child(body, cloned));
@@ -153,5 +153,5 @@ fn frame_candidates_exclude_inert_template_contents_and_foreign_elements() {
 
     assert_eq!(frames(&host, body), vec![live_frame]);
     assert!(frames(&host, template).is_empty());
-    assert!(frames(&host, contents).is_empty());
+    assert_eq!(frames(&host, contents), vec![inert_frame]);
 }

@@ -285,6 +285,7 @@ impl PageScriptHost {
             .frame_viewport(frame)
     }
 
+    #[cfg(debug_assertions)]
     pub(crate) fn style_viewport_generation(&self) -> u64 {
         self.style_viewport_generation.get()
     }
@@ -598,13 +599,15 @@ impl PageScriptHost {
                 frames.geometry,
             );
         } else {
-            self.document_layout_state.borrow_mut().publish_latest_layout(
-                document,
-                tree,
-                metrics,
-                #[cfg(feature = "devtools")]
-                frames.geometry,
-            );
+            self.document_layout_state
+                .borrow_mut()
+                .publish_latest_layout(
+                    document,
+                    tree,
+                    metrics,
+                    #[cfg(feature = "devtools")]
+                    frames.geometry,
+                );
         }
         for (target, size) in sampled_viewports {
             self.sample_realtime_frame_viewport(target, size);

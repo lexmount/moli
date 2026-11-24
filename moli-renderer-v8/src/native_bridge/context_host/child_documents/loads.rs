@@ -637,10 +637,7 @@ impl PageScriptHost {
                         true,
                     )
                 }
-                Ok(
-                    outcome @ (ChildDocumentLoadOutcome::Redirect(_)
-                    | ChildDocumentLoadOutcome::Download(_)),
-                ) => (Ok(outcome), false),
+                Ok(outcome @ ChildDocumentLoadOutcome::Redirect(_)) => (Ok(outcome), false),
                 Err(error) => (Err(error), true),
             }
         } else {

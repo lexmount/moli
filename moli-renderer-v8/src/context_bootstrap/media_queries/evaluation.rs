@@ -12,6 +12,7 @@ use crate::context_bootstrap::{
     MEDIA_QUERY_LIST_REGISTRY_SLOT,
 };
 use crate::context_bootstrap::{global_queue_array, push_object_to_global_registry};
+use crate::event_type::EventTypeKey;
 use crate::native_bridge::{
     PageScriptHost, WindowDocumentTaskTarget, WindowExecutionContextBinding,
 };

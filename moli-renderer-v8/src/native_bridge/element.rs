@@ -302,21 +302,19 @@ pub(crate) use details_dialog::{
     queue_details_toggle_event_for_attribute_change, queue_parser_details_toggle_event,
     queue_parser_details_toggle_events_in_subtree,
 };
-pub(crate) use event_handlers::compile_window_body_onmessageerror_attribute;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 use event_handlers::install_node_event_handler_template_bindings;
 pub(crate) use event_handlers::{
-    EventAttributeHandlerScope, GlobalEventHandlerOwner, ParserAddedEventHandlers, compile_event_attribute_handler_for_owner,
-    compile_node_content_attribute_for_dispatch, compile_window_body_event_attribute,
-    event_handler_content_attribute_name, event_handler_content_attribute_names, initialize_parser_inserted_body_window_event_handlers, initialize_parser_inserted_event_handlers,
-    invalidate_event_handler_content_attribute, is_body_window_event_handler_attribute,
-    is_global_event_handler_attribute, node_event_handler_getter_function,
-    node_event_handler_setter_function, node_event_handler_value_from_wrapper,
+    GlobalEventHandlerOwner, ParserAddedEventHandlers, body_or_frameset_reflects_window_event_type,
+    canonical_event_handler_event_type, compile_body_window_event_attribute,
+    compile_node_content_attribute_for_dispatch, compile_window_event_attribute_handler,
+    element_event_handler_content_attribute_applies, event_handler_content_attribute_name,
+    event_handler_content_attribute_names, initialize_parser_inserted_event_handlers,
+    legacy_lenient_this_event_handler, node_event_handler_getter_function,
+    node_event_handler_setter_function, resolve_window_event_handler_content_attribute,
 };
 use event_handlers::{
-    body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,
-    body_onload_setter_function, body_onmessageerror_getter_function,
-    body_onmessageerror_setter_function,
+    HtmlBodyWindowEventHandlersDeclaration, HtmlFrameSetWindowEventHandlersDeclaration,
 };
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use events::construct_keyboard_event;
@@ -333,8 +331,7 @@ pub(crate) use events::{TouchEventPoint, construct_touch_event_with_points};
 pub(crate) use events::{
     construct_activation_pointer_event, construct_drop_input_event,
     construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target,
-    construct_wheel_event_for_target,
+    construct_mouse_event_with_related_target_for_target, construct_wheel_event_for_target,
 };
 pub(crate) use events::{construct_clipboard_event, construct_focus_event};
 #[cfg(any(test, feature = "devtools"))]
@@ -343,6 +340,8 @@ pub(crate) use events::{construct_drag_event_with_related_target, construct_poin
 pub(crate) use focus::focus_live_element_for_inspector;
 pub(crate) use focus::is_disabled_form_control;
 use focus::is_focusable;
+#[cfg(feature = "devtools")]
+pub(crate) use focus::perform_mouse_focus_default_action;
 pub(crate) use focus::{
     apply_document_focus_fixup, contenteditable_editing_host, dispatch_system_focus_change,
     focus_element, focus_element_preserving_selection, focus_window_document,
@@ -352,8 +351,6 @@ pub(crate) use focus::{
     process_post_parse_autofocus, reset_document_navigation_focus, update_focus,
 };
 pub(super) use focus::{node_blur_callback, node_focus_callback};
-#[cfg(feature = "devtools")]
-pub(crate) use focus::perform_mouse_focus_default_action;
 #[cfg(feature = "devtools")]
 pub(crate) use forms::cache_input_files_from_selected_files;
 #[cfg(feature = "devtools")]
@@ -468,11 +465,7 @@ pub(crate) use forms::{
     text_control_value, text_control_value_dom_string,
 };
 pub(crate) use forms::{form_control_is_effectively_disabled, input_files_for_object};
-#[cfg(feature = "molio")]
 pub(crate) use forms::{
-    is_text_control_user_editable, replace_text_control_selection_after_beforeinput,
-};
-pub(in crate::native_bridge) use forms::{
     is_text_control_user_editable, replace_text_control_selection_with_input_event,
 };
 #[cfg(feature = "devtools")]
@@ -489,7 +482,6 @@ pub(super) use html_streaming::{
 };
 use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};
 
-use form_controls::SvgAElementRelListPrototypeDeclaration;
 pub use geometry::ClientRect;
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::observable_input_hit_test;
@@ -1755,12 +1747,12 @@ pub(crate) fn install_element_template_bindings<'s>(
         "HTMLOListElement" => install!(HtmlOListElementPrototypeDeclaration),
         "HTMLUListElement" => install!(HtmlUListElementPrototypeDeclaration),
         "HTMLBodyElement" => install!(
-            HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration,
+            HtmlBodyWindowEventHandlersDeclaration,
             HtmlBodyElementLegacyPrototypeDeclaration,
         ),
         "HTMLFrameSetElement" => {
             install!(
-                HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration,
+                HtmlFrameSetWindowEventHandlersDeclaration,
                 HtmlFrameSetElementLegacyPrototypeDeclaration,
             );
         }
@@ -2343,6 +2335,39 @@ fn aria_element_reference_attribute_setter_callback<'s>(
     }
     set_explicit_aria_element_references(scope, runtime_ptr, owner, &attribute, handles);
     rv.set_undefined();
+}
+
+pub(in crate::native_bridge::element) fn reflected_element_attribute_handle(
+    runtime: &PageScriptHost,
+    owner: DomHandle,
+    attribute: &str,
+) -> Option<DomHandle> {
+    let candidate = match runtime
+        .dom_host()
+        .explicit_element_references(owner, attribute)
+    {
+        Some(references) => references.into_iter().next()?,
+        None => {
+            let id = runtime.dom_host().get_attribute(owner, attribute)?;
+            aria_element_by_id_including_disconnected(runtime, owner, &id)?
+        }
+    };
+    if !aria_element_reference_is_in_valid_scope(runtime, owner, candidate) {
+        return None;
+    }
+    runtime
+        .dom_host()
+        .resolve_reference_target_chain(candidate)
+        .map(|_| candidate)
+}
+
+pub(in crate::native_bridge::element) fn resolved_reflected_element_attribute_handle(
+    runtime: &PageScriptHost,
+    owner: DomHandle,
+    attribute: &str,
+) -> Option<DomHandle> {
+    reflected_element_attribute_handle(runtime, owner, attribute)
+        .and_then(|candidate| runtime.dom_host().resolve_reference_target_chain(candidate))
 }
 
 #[cfg(feature = "devtools")]

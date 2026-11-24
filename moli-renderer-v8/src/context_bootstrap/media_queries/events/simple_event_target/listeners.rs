@@ -148,7 +148,7 @@ impl<'s> SimpleObjectEventListenerSnapshot<'s> {
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         registry: SimpleEventListenerRegistry<'s>,
-        event_type: &str,
+        event_type: &(impl EventTypeKey + ?Sized),
     ) -> Option<Self> {
         // Removing and re-adding the same callback creates a different entry.
         // The removed entry must stay inactive in an existing dispatch snapshot.
@@ -156,6 +156,27 @@ impl<'s> SimpleObjectEventListenerSnapshot<'s> {
             return None;
         }
         let listener = if self.handler_slot.is_some() {
+            let target = get_private_value(scope, self.entry, HANDLER_TARGET_SLOT)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+            if let Some(popup_id) = lightweight_popup_id_from_window(scope, target)
+                && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+            {
+                let value = unsafe { &mut *host_ptr }
+                    .lightweight_popup_event_handler_property_value(
+                        scope,
+                        popup_id,
+                        self.handler_slot.as_deref()?,
+                    )?;
+                // A failed lazy compilation returns null for this read even
+                // if its error handler has installed a replacement callback.
+                if !value.is_object()
+                    || !simple_object_event_listener_entry_registered(
+                        scope, registry, event_type, self.entry,
+                    )
+                {
+                    return None;
+                }
+            }
             // An active handler keeps its registration position, but its value
             // and callback contexts can change before dispatch reaches it.
             simple_object_event_listener_snapshot_entry(scope, self.entry.into())?
@@ -1095,6 +1116,9 @@ fn simple_object_event_handler_entry_object<'s>(
     relevant_identity: Option<WindowExecutionContextIdentity>,
 ) -> v8::Local<'s, v8::Object> {
     let marker = format!("event-handler:{handler_slot_name}");
+    let value = callback
+        .map(v8::Local::<v8::Value>::from)
+        .unwrap_or_else(|| v8::null(scope).into());
     let entry = SimpleObjectEventHandlerEntryDeclaration::new(
         v8_string(scope, &marker),
         v8_string(scope, handler_slot_name).expect("event handler slot"),

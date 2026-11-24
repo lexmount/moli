@@ -1,5 +1,7 @@
 use style::properties::{LonghandId, PropertyId};
 
+use super::style_object_computation_context;
+
 use crate::{
     css_style::{
         CssStyleDeclarationItemArgs, CssStyleDeclarationPropertyArgs,

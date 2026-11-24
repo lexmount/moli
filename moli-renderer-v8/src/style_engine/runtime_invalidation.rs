@@ -319,9 +319,8 @@ impl MoliStyleEngine {
                         {
                             names.push(LocalName::from(candidate));
                             if candidate.bytes().any(|byte| byte.is_ascii_uppercase()) {
-                                names.push(LocalName::from(
-                                    candidate.to_ascii_lowercase().as_str(),
-                                ));
+                                names
+                                    .push(LocalName::from(candidate.to_ascii_lowercase().as_str()));
                             }
                         }
                         let references_attribute = |data: &style::stylist::CascadeData| {

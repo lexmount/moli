@@ -20,7 +20,7 @@ use crate::{
             TextEditInputType, contenteditable_editing_host, dispatch_beforeinput,
             dispatch_public_event, is_text_control, is_text_control_user_editable,
             replace_contenteditable_selection_after_beforeinput,
-            replace_text_control_selection_after_beforeinput,
+            replace_text_control_selection_with_input_event,
             text_control_set_selection_range_internal, text_control_value,
         },
         node_owner_document_relevant_context,
@@ -401,7 +401,7 @@ impl ViewportEditing {
                     revision,
                     &range,
                     &text,
-                    TextEditInputType::InsertFromPaste,
+                    TextEditInputType::InsertFromViewportPaste,
                 );
                 if existing.is_some() {
                     composition_event(scope, host_ptr, target, "compositionend", "");
@@ -499,9 +499,7 @@ fn replace_range(
     if live.map.is_some() {
         replace_contenteditable_selection_after_beforeinput(scope, host, target, text, input_type)
     } else {
-        replace_text_control_selection_after_beforeinput(
-            scope, host, target, text, input_type, None,
-        )
+        replace_text_control_selection_with_input_event(scope, host, target, text, input_type, None)
     }
 }
 

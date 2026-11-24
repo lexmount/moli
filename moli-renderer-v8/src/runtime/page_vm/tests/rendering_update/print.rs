@@ -108,14 +108,13 @@ async fn native_pdf_embeds_a_loaded_font_under_its_print_declaration() {
             "../../../../../../moli-layout/tests/fixtures/moli-ahem.woff2"
         ));
         for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
-            let mut page = test_page_vm_with_loader_and_document_url(
+            let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
                 &loader,
-                Vec::new(),
                 Url::parse("https://cached-print-sources.test/")?,
             );
             page.layout_configuration.policy = policy;
             page.vm_mut().set_layout_policy(policy);
-            let loaded = page.vm_mut().eval(&format!(r#"
+            page.vm_mut().eval(&format!(r#"
                 document.head.innerHTML = '<style>' +
                     '@media screen {{ @font-face {{ font-family: ScreenOnly; src: url(data:font/woff2;base64,{data}) }} }}' +
                     '@media print {{ @font-face {{ font-family: PrintOnly; src: url(data:font/woff2;base64,{data}) }}' +
@@ -123,9 +122,10 @@ async fn native_pdf_embeds_a_loaded_font_under_its_print_declaration() {
                 document.body.innerHTML = '<p style="font-size:16px">Cached text</p>';
                 window.screenFonts = document.fonts;
                 window.screenFace = [...screenFonts].find(face => face.family === 'ScreenOnly');
-                screenFace.load();
-                JSON.stringify([screenFonts.size, screenFace.status]);
+                void screenFace.load();
             "#))?;
+            drain_page_work_until_no_pending_subresources(&mut page, "load the screen font before printing").await?;
+            let loaded = page.vm_mut().eval("JSON.stringify([screenFonts.size, screenFace.status])")?;
             assert_eq!(loaded, r#"[1,"loaded"]"#);
             let fonts = page.vm_mut().document_web_font_counts_for_test();
             let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;

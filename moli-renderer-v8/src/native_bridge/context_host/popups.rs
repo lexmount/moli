@@ -14,11 +14,10 @@ use crate::{
         construct_original_event, construct_original_page_transition_event,
         deep_clone_shared_web_storage_store,
         dispatch_simple_event_target_event_with_original_target,
-        finish_cross_document_navigation_for_window,
-        history_entry_seed_for_location_kind, initialize_simple_event_target,
-        install_navigation_bootstrap_entry_for_holder, install_simple_window_event_handlers,
-        install_storage_aliases_for_window, navigation_unload_event_active,
-        new_shared_web_storage_store, scoped_indexed_db_factory,
+        finish_cross_document_navigation_for_window, history_entry_seed_for_location_kind,
+        initialize_simple_event_target, install_navigation_bootstrap_entry_for_holder,
+        install_simple_window_event_handlers, install_storage_aliases_for_window,
+        navigation_unload_event_active, new_shared_web_storage_store, scoped_indexed_db_factory,
         sync_window_location_history_navigation_runtime_surface,
         sync_window_location_runtime_state, web_storage_area_key_for_storage_key,
     },
@@ -234,7 +233,7 @@ impl PendingLightweightPopupHistory {
         let mut seed = match self.entry_seed() {
             Some(seed) => seed.clone(),
             None => {
-                let Some(seed) = history_entry_seed_for_cross_document_location(
+                let Some(seed) = history_entry_seed_for_location_kind(
                     scope,
                     window,
                     final_url,
@@ -257,6 +256,12 @@ impl PendingLightweightPopupHistory {
         }
         install_navigation_bootstrap_entry_for_holder(scope, window, &seed);
     }
+}
+
+#[derive(Clone, Copy)]
+enum LightweightPopupParserStep {
+    Script(DomHandle),
+    WindowEventHandlers(DomHandle),
 }
 
 struct LightweightPopupClassicScriptContinuation {
@@ -2144,10 +2149,9 @@ impl PageScriptHost {
             return false;
         }
         let document_owner = navigation_task.document_owner();
-        let history =
-            history_entry_seed_for_location_kind(scope, window, &target_url, kind)
-                .map(PendingLightweightPopupHistory::Navigation)
-                .unwrap_or(PendingLightweightPopupHistory::Initial);
+        let history = history_entry_seed_for_location_kind(scope, window, &target_url, kind)
+            .map(PendingLightweightPopupHistory::Navigation)
+            .unwrap_or(PendingLightweightPopupHistory::Initial);
         if moli_url::is_about_blank(&target_url) {
             let inherited_origin = self.window_access_origin_for_dispatch_scope(creator_scope);
             let page_swap = history.page_swap_navigation(
@@ -4270,16 +4274,31 @@ impl PageScriptHost {
                 PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
             );
         };
-        if !scripting_enabled {
-            return LightweightPopupClassicScriptAdvance::Completed(
-                PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
-            );
-        }
         let Some(document) = self.lightweight_popup_document_record(task.popup_id()) else {
             return LightweightPopupClassicScriptAdvance::Completed(
                 PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
             );
         };
+        // Register body/frameset handlers when execution reaches the element,
+        // after head scripts and before scripts within its subtree. Keeping
+        // these steps in the continuation also preserves listener order across
+        // a parser-blocking external script load.
+        let mut parser_steps = Vec::new();
+        let mut stack = vec![document_handle];
+        while let Some(handle) = stack.pop() {
+            let Some(node) = self.dom_host().node(handle) else {
+                continue;
+            };
+            if node.is_script_element() && scripting_enabled {
+                parser_steps.push(LightweightPopupParserStep::Script(handle));
+            } else if node.is_html_element_named("body") || node.is_html_element_named("frameset") {
+                parser_steps.push(LightweightPopupParserStep::WindowEventHandlers(handle));
+            }
+            stack.extend(self.dom_host().child_handles_reversed(handle));
+            if let Some(shadow_root) = self.dom_host().shadow_root_handle(handle) {
+                stack.push(shadow_root);
+            }
+        }
         let continuation = LightweightPopupClassicScriptContinuation {
             task,
             document_handle,
@@ -4308,11 +4327,22 @@ impl PageScriptHost {
     ) -> LightweightPopupClassicScriptAdvance {
         let task = continuation.task;
         let popup_id = task.popup_id();
-        while let Some(&script) = continuation.scripts.get(continuation.next_script_index) {
-            continuation.next_script_index += 1;
+        while let Some(&step) = continuation.parser_steps.get(continuation.next_step_index) {
+            continuation.next_step_index += 1;
             if !self.lightweight_popup_committed_navigation_task_is_current(task) {
                 return LightweightPopupClassicScriptAdvance::Completed(body_activity);
             }
+            let script = match step {
+                LightweightPopupParserStep::Script(script) => script,
+                LightweightPopupParserStep::WindowEventHandlers(handle) => {
+                    crate::native_bridge::element::initialize_parser_inserted_event_handlers(
+                        scope,
+                        self as *mut PageScriptHost,
+                        handle,
+                    );
+                    continue;
+                }
+            };
             if continuation.stream_script.is_none()
                 && self
                     .dom_host()
@@ -6431,20 +6461,6 @@ fn set_lightweight_popup_persisted_script_global<'s>(
         return;
     }
     set_object_slot(scope, window, name, value);
-}
-
-fn clear_lightweight_popup_window_document_event_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) {
-    let registry = new_null_prototype_object(scope);
-    set_private_value(
-        scope,
-        window,
-        SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-        registry.into(),
-    );
-    clear_simple_window_event_handler_values(scope, window);
 }
 
 fn lightweight_popup_effective_navigation_kind(

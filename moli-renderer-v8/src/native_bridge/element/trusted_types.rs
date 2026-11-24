@@ -7,6 +7,7 @@ pub(in crate::native_bridge) enum TrustedAttributeSetter {
     SetAttributeNs,
     SetAttributeNode,
     AttrValue,
+    SvgAnimatedStringBaseVal,
 }
 
 impl TrustedAttributeSetter {
@@ -16,6 +17,7 @@ impl TrustedAttributeSetter {
             Self::SetAttributeNs => "setAttributeNS",
             Self::SetAttributeNode => "setAttributeNode",
             Self::AttrValue => "value",
+            Self::SvgAnimatedStringBaseVal => "baseVal",
         }
     }
 
@@ -27,6 +29,9 @@ impl TrustedAttributeSetter {
                 crate::webidl::Context::argument("Element setAttributeNode", 1)
             }
             Self::AttrValue => crate::webidl::Context::member("Attr", "value"),
+            Self::SvgAnimatedStringBaseVal => {
+                crate::webidl::Context::member("SVGAnimatedString", "baseVal")
+            }
         }
     }
 }
@@ -466,4 +471,3 @@ pub(crate) fn prepare_trusted_script_text(
         .set_script_text_internal_slot(handle, &source);
     Some(source)
 }
-

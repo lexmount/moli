@@ -10,9 +10,11 @@ mod current_input;
 #[cfg(feature = "devtools")]
 pub use context_host::RendererScreencastPaintSession;
 pub(crate) use context_host::{
-    ChildDocumentFetch, DecodedImageContent, DocumentDomainState, InputImageRequestId, LayoutPublicationRequest, NavigationImageDocumentCompletion, NavigationImageDocumentLoad, PageScriptHost, PageScriptHostTaskCapabilities,
-    PendingScrollObservableEffects, PostParseAutofocusAdmission, SelectionBoundarySnapshot, ServiceWorkerWindowOwner,
-    SharedResourceTimingBufferRegistry, WindowAccessOrigin, WindowOriginKey, caller_can_access_window,
+    ChildDocumentFetch, DecodedImageContent, DocumentDomainState, InputImageRequestId,
+    LayoutPublicationRequest, NavigationImageDocumentCompletion, NavigationImageDocumentLoad,
+    PageScriptHost, PageScriptHostTaskCapabilities, PendingScrollObservableEffects,
+    PostParseAutofocusAdmission, SelectionBoundarySnapshot, ServiceWorkerWindowOwner,
+    SharedResourceTimingBufferRegistry, WindowAccessOrigin, WindowOriginKey,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use context_host::{
@@ -100,7 +102,6 @@ pub(crate) use element::{
     compute_mock_intersection_client_rect, compute_mock_intersection_scrollport_client_rect,
 };
 pub(super) use helpers::*;
-pub(crate) use node::NativeNodeReference;
 pub(crate) use node::branded_node_handle;
 pub(crate) use node::{
     current_or_live_delegate_node_arg_handle, node_or_foreign_arg_handle_allow_detached,

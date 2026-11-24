@@ -160,7 +160,7 @@ fn viewport_root_input_in_iframes_preserves_document_boundaries_and_coordinates(
             let hit = vm
                 .observable_deep_hit_test_for_current_document(
                     moli_layout::LayoutPoint::new(x as f32, y as f32),
-                    false,
+                    crate::native_bridge::element::InputHitTestPolicy::INTERACTIVE,
                 )
                 .unwrap()
                 .expect("the child viewport still has a Document for inspection");

@@ -140,6 +140,10 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         SVG_GEOMETRY_RUNTIME_INSTALL_GROUPS,
     ),
     descriptor(
+        web_api_interfaces::SVGFilterElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
         web_api_interfaces::SVGDefsElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
@@ -412,6 +416,10 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
     ),
     descriptor(
         web_api_interfaces::SVGUseElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGViewElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
     specialized_descriptor(

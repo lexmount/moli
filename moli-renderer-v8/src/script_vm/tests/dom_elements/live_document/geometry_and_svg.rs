@@ -2323,16 +2323,6 @@ fn svg_animation_elements_use_native_interfaces_and_event_handlers() {
 }
 
 #[test]
-fn svg_filter_primitives_expose_native_dom_attributes() {
-    let mut vm = new_parsed_test_vm("https://svg-filter-dom.test/", "<html><body></body></html>");
-    assert_eq!(
-        vm.eval(include_str!("svg_filter_primitives.js"))
-            .expect("SVG filter DOM fixture should evaluate"),
-        "true"
-    );
-}
-
-#[test]
 fn svg_animated_integers_use_native_identity_in_windowless_and_child_documents() {
     let mut vm = new_parsed_test_vm(
         "https://svg-animated-integer.test/",

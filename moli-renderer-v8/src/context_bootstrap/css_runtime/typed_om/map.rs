@@ -421,7 +421,9 @@ fn map_property_names<'s>(
     style: v8::Local<'s, v8::Object>,
 ) -> Option<Vec<String>> {
     if !native_bridge::element::style_declaration_is_computed(scope, style) {
-        return Some(detached_css_style::css_declaration_property_names(scope, style));
+        return Some(detached_css_style::css_declaration_property_names(
+            scope, style,
+        ));
     }
     // Computed CSSStyleDeclaration and Typed OM enumerate one public property list.
     let mut names = native_bridge::element::style_property_names_from_object(scope, style)?;

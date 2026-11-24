@@ -35,11 +35,10 @@ use crate::dom::{
 use crate::native_bridge::element::{
     InputEventCoordinates, InputHitTestMode, InputHitTestPolicy, TextEditInputType,
     TextInputSource, TouchEventPoint, activate_handle_after_pointer_release,
-    activate_handle_after_touch_release, activate_handle_via_click_with_pointer,
-    activate_handle_via_keyboard, cache_input_files_from_selected_files,
-    construct_activation_pointer_event, construct_drag_event_with_related_target,
-    construct_keyboard_event, construct_mouse_event_for_target,
-    construct_mouse_event_with_detail_for_target,
+    activate_handle_after_touch_release, activate_handle_via_keyboard,
+    cache_input_files_from_selected_files, construct_activation_pointer_event,
+    construct_drag_event_with_related_target, construct_keyboard_event,
+    construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
     construct_mouse_event_with_related_target_for_target, construct_pointer_event,
     construct_simple_event, construct_touch_event_with_points, construct_wheel_event_for_target,
     contenteditable_editing_host, dispatch_public_event, input_surface_hit_test,
@@ -837,9 +836,8 @@ fn dispatch_mouse_pointer_boundaries(
         }
     };
     let previous = if restarting { None } else { previous };
-    let (leaving, entering) = mouse_boundary::hover_boundary_paths(
-        unsafe { &*runtime_ptr }, previous, Some(current),
-    );
+    let (leaving, entering) =
+        mouse_boundary::hover_boundary_paths(unsafe { &*runtime_ptr }, previous, Some(current));
     let coordinates = previous_coordinates.unwrap_or(data.coordinates);
     if let Some(previous) = previous {
         dispatch(scope, "pointerout", previous, Some(current), coordinates);
@@ -1053,6 +1051,37 @@ impl ScriptVm {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        button: i32,
+        buttons: Option<i32>,
+        click_count: i32,
+        delta_x: f64,
+        delta_y: f64,
+        pointer: RendererPointerEventProperties,
+        modifiers: u8,
+        intercept_drags: bool,
+    ) -> Result<RendererInputDispatchOutcome> {
+        self.dispatch_mouse_input(
+            x,
+            y,
+            event_name,
+            button,
+            buttons,
+            click_count,
+            delta_x,
+            delta_y,
+            pointer,
+            modifiers,
+            intercept_drags,
+            MouseDispatchCompletion::FinishTurn,
+        )
+    }
+
     pub(crate) fn dispatch_mouse_input(
         &mut self,
         x: f64,
@@ -1109,7 +1138,9 @@ impl ScriptVm {
             intercept_drags,
         );
         if is_release {
-            self._context_host.borrow_mut().clear_mouse_button_press(prepared.button);
+            self._context_host
+                .borrow_mut()
+                .clear_mouse_button_press(prepared.button);
         }
         if full_release {
             self.suppress_compat_mouse_events = false;
@@ -1588,33 +1619,31 @@ impl ScriptVm {
         if event_name == "mousemove" && buttons != 1 {
             self.pending_drag_gesture = None;
         }
-        let drag_start = if event_name == "mousemove"
-            && buttons == 1
-            && self.active_drag_session.is_none()
-        {
-            if !self._context_host.borrow().has_mouse_button_press(0) {
-                self.pending_drag_gesture = None;
-            }
-            let gesture = self.pending_drag_gesture.filter(|gesture| {
-                let point = gesture.root_to_frame.map_point(position.layout_point());
-                #[cfg(target_os = "macos")]
-                let threshold = 3.0;
-                #[cfg(not(target_os = "macos"))]
-                let threshold = 4.0;
-                (f64::from(point.x).floor() - gesture.x.floor()).abs() >= threshold
-                    || (f64::from(point.y).floor() - gesture.y.floor()).abs() >= threshold
-            });
-            if let Some(gesture) = gesture {
-                // The gesture is consumed even if dragstart is canceled. A
-                // held button cannot start another drag until a fresh press.
-                self.pending_drag_gesture = None;
-                Some(gesture)
+        let drag_start =
+            if event_name == "mousemove" && buttons == 1 && self.active_drag_session.is_none() {
+                if !self._context_host.borrow().has_mouse_button_press(0) {
+                    self.pending_drag_gesture = None;
+                }
+                let gesture = self.pending_drag_gesture.filter(|gesture| {
+                    let point = gesture.root_to_frame.map_point(position.layout_point());
+                    #[cfg(target_os = "macos")]
+                    let threshold = 3.0;
+                    #[cfg(not(target_os = "macos"))]
+                    let threshold = 4.0;
+                    (f64::from(point.x).floor() - gesture.x.floor()).abs() >= threshold
+                        || (f64::from(point.y).floor() - gesture.y.floor()).abs() >= threshold
+                });
+                if let Some(gesture) = gesture {
+                    // The gesture is consumed even if dragstart is canceled. A
+                    // held button cannot start another drag until a fresh press.
+                    self.pending_drag_gesture = None;
+                    Some(gesture)
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         if event_name == "mousedown" && button == 0 && buttons == 1 && click_count <= 1 {
             let runtime = self._context_host.borrow();
@@ -2079,9 +2108,9 @@ impl ScriptVm {
                         && let Some(event) = construct_activation_pointer_event(
                             scope,
                             runtime_ptr,
-                            handle,
+                            pointer_dispatch_handle,
                             "contextmenu",
-                            coordinates_for(handle),
+                            coordinates_for(pointer_dispatch_handle),
                             0,
                             button,
                             buttons,
@@ -2089,7 +2118,12 @@ impl ScriptVm {
                             Some(&pointer),
                         )
                     {
-                        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+                        let _ = dispatch_public_event(
+                            scope,
+                            runtime_ptr,
+                            pointer_dispatch_handle,
+                            event,
+                        );
                     }
                     if let Some(target) = unsafe { &mut *runtime_ptr }.take_mouse_click_target(
                         mouse_dispatch_handle.unwrap_or(pointer_dispatch_handle),
@@ -2699,7 +2733,8 @@ impl ScriptVm {
                         unsafe { &mut *runtime_ptr }
                             .notify_close_watcher_input_activation(event_target);
                     }
-                    if !dispatch_public_event(scope, runtime_ptr, event_target, event).allows_default()
+                    if !dispatch_public_event(scope, runtime_ptr, event_target, event)
+                        .allows_default()
                     {
                         tap = None;
                     }
@@ -3414,7 +3449,7 @@ impl ScriptVm {
     }
 }
 
-fn mouse_button_mask(button: i32) -> i32 {
+pub(super) fn mouse_button_mask(button: i32) -> i32 {
     match button {
         0 => 1,
         1 => 4,

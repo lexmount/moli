@@ -63,15 +63,15 @@ fn native_event_producers_bypass_author_constructors_dictionaries_and_indexed_se
             let active = [
                 TouchEventPoint {
                     identifier: 11,
-                    x: 11.0,
-                    y: 12.0,
+                    coordinates,
+                    page: (11.0, 12.0),
                     target,
                     is_target_touch: true,
                 },
                 TouchEventPoint {
                     identifier: 12,
-                    x: 21.0,
-                    y: 22.0,
+                    coordinates: element::InputEventCoordinates::from_root(21.0, 22.0),
+                    page: (21.0, 22.0),
                     target: peer,
                     is_target_touch: false,
                 },
@@ -93,8 +93,24 @@ fn native_event_producers_bypass_author_constructors_dictionaries_and_indexed_se
                     1,
                     0,
                 ),
-                element::construct_pointer_event(scope, "pointerdown", coordinates, 0, 1, &pointer, None, 0),
-                element::construct_drag_event_with_related_target(scope, "dragstart", coordinates, transfer.into(), None, 0),
+                element::construct_pointer_event(
+                    scope,
+                    "pointerdown",
+                    coordinates,
+                    0,
+                    1,
+                    &pointer,
+                    None,
+                    0,
+                ),
+                element::construct_drag_event_with_related_target(
+                    scope,
+                    "dragstart",
+                    coordinates,
+                    transfer.into(),
+                    None,
+                    0,
+                ),
                 element::construct_wheel_event(scope, "wheel", coordinates, 4.0, 5.0, 0, 1, 0),
                 element::construct_touch_event_with_points(
                     scope,
@@ -558,7 +574,7 @@ fn native_non_primary_releases_dispatch_pointer_activation_events_in_each_world(
                 twist: 31.0,
             };
             let buttons = if event_name == "mousedown" {
-                super::super::super::input_helpers::mouse_button_mask(button)
+                super::super::super::input_dispatch::mouse_button_mask(button)
             } else {
                 0
             };

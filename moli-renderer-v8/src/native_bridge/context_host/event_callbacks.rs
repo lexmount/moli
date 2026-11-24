@@ -4,11 +4,18 @@ use crate::event_type::EventTypeKey;
 use moli_webidl_callback::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterface};
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EventCallbackKind {
+    Listener,
+    Handler,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct EventCallbackId(u64);
 
 struct EventCallbackRecord {
     callback: WebIdlCallbackInterface,
+    kind: EventCallbackKind,
     resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
     registration_identity: Option<WindowExecutionContextIdentity>,
@@ -18,6 +25,7 @@ struct EventCallbackRecord {
 
 pub(crate) struct PreparedEventCallback {
     callback: PreparedWebIdlCallbackInterface,
+    kind: EventCallbackKind,
     resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
     relevant_host: *mut PageScriptHost,
@@ -295,12 +303,12 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
         event_type: &(impl EventTypeKey + ?Sized),
-        handler: Option<v8::Local<'s, v8::Function>>,
+        handler: Option<v8::Local<'s, v8::Object>>,
     ) {
         let resource_initiator =
             handler.map(|_| crate::resource_initiator::CallbackInitiator::capture(scope));
         let relevant_context = handler
-            .and_then(|handler| v8::Local::<v8::Object>::from(handler).get_creation_context(scope))
+            .and_then(|handler| handler.get_creation_context(scope))
             .unwrap_or_else(|| scope.get_current_context());
         let incumbent_context = scope
             .get_incumbent_context()
@@ -324,15 +332,19 @@ impl PageScriptHost {
         handler: Option<v8::Local<'s, v8::Function>>,
         target_context: v8::Local<'s, v8::Context>,
     ) {
-        self.set_registered_event_handler_property_with_contexts(
-            scope,
-            target,
-            event_type,
-            handler,
-            target_context,
-            target_context,
-            None,
-        );
+        let callback_id = handler.map(|handler| {
+            self.register_event_handler_callback(
+                scope,
+                handler.into(),
+                target_context,
+                target_context,
+            )
+        });
+        if let Some(previous) =
+            self.set_compiled_event_handler_property(target, event_type, callback_id)
+        {
+            self.release_event_callback(previous);
+        }
     }
 
     fn set_registered_event_handler_property_with_contexts<'s>(
@@ -340,13 +352,18 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
         event_type: &(impl EventTypeKey + ?Sized),
-        handler: Option<v8::Local<'s, v8::Function>>,
+        handler: Option<v8::Local<'s, v8::Object>>,
         relevant_context: v8::Local<'s, v8::Context>,
         incumbent_context: v8::Local<'s, v8::Context>,
         resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
     ) {
         let callback_id = handler.map(|handler| {
-            self.register_event_callback(scope, handler.into(), relevant_context, incumbent_context)
+            self.register_event_handler_callback(
+                scope,
+                handler,
+                relevant_context,
+                incumbent_context,
+            )
         });
         if let Some(id) = callback_id
             && let Some(record) = self.event_callbacks.records.get_mut(&id)
@@ -393,6 +410,27 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'_, '_>,
         callback: WebIdlCallbackInterface,
     ) -> EventCallbackId {
+        self.register_event_callback_with_kind(scope, callback, EventCallbackKind::Listener)
+    }
+
+    pub(crate) fn register_event_handler_callback<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Object>,
+        relevant_context: v8::Local<'s, v8::Context>,
+        incumbent_context: v8::Local<'s, v8::Context>,
+    ) -> EventCallbackId {
+        let callback =
+            WebIdlCallbackInterface::new(scope, callback, relevant_context, incumbent_context);
+        self.register_event_callback_with_kind(scope, callback, EventCallbackKind::Handler)
+    }
+
+    fn register_event_callback_with_kind(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        callback: WebIdlCallbackInterface,
+        kind: EventCallbackKind,
+    ) -> EventCallbackId {
         let relevant_context = callback.relevant_context(scope);
         // A stored non-callable handler has no invocation realm. Its value
         // remains on the target when the object's creation realm retires.
@@ -414,6 +452,7 @@ impl PageScriptHost {
             id,
             EventCallbackRecord {
                 callback,
+                kind,
                 resource_initiator: None,
                 relevant_identity,
                 registration_identity,
@@ -527,6 +566,7 @@ impl PageScriptHost {
         }
         Some(PreparedEventCallback {
             callback: record.callback.prepare(scope),
+            kind: record.kind,
             resource_initiator: record.resource_initiator.clone(),
             relevant_identity: record.relevant_identity,
             relevant_host,
