@@ -26,11 +26,26 @@ impl LayoutPolicy {
     }
 }
 
+/// Default timer cadence for realtime pages without a display clock.
+pub const DEFAULT_REALTIME_MAX_FPS: u32 = 60;
+
 /// Immutable browser layout configuration, sealed before its first Page.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LayoutConfiguration {
     pub policy: LayoutPolicy,
     pub scrollbars_hidden: bool,
+    /// Maximum timer cadence for realtime rendering. Zero removes the limit.
+    pub realtime_max_fps: u32,
+}
+
+impl Default for LayoutConfiguration {
+    fn default() -> Self {
+        Self {
+            policy: LayoutPolicy::default(),
+            scrollbars_hidden: false,
+            realtime_max_fps: DEFAULT_REALTIME_MAX_FPS,
+        }
+    }
 }
 
 impl LayoutConfiguration {

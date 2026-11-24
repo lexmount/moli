@@ -346,6 +346,16 @@ impl ScriptVm {
         self._context_host.borrow_mut().set_layout_policy(policy);
     }
 
+    pub(crate) fn set_layout_configuration(
+        &mut self,
+        configuration: moli_page_types::LayoutConfiguration,
+    ) {
+        self.set_layout_policy(configuration.policy);
+        self._context_host
+            .borrow()
+            .set_realtime_max_fps(configuration.realtime_max_fps);
+    }
+
     #[cfg(feature = "devtools")]
     pub(crate) fn layout_policy(&self) -> moli_page_types::LayoutPolicy {
         self._context_host.borrow().layout_policy()

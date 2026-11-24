@@ -54,7 +54,7 @@ pub use inspector_identity::{
     RendererCallIdOutOfRange, RendererDevToolsAgentToken, RendererDevToolsCommandId,
     RendererInspectorResponseDelivery,
 };
-pub use layout::{LayoutConfiguration, LayoutPolicy};
+pub use layout::{DEFAULT_REALTIME_MAX_FPS, LayoutConfiguration, LayoutPolicy};
 pub use navigator_overrides::{
     GeolocationPositionOverride, NavigatorEmulationSessions, NavigatorOverrides,
     NavigatorQueryOverrides,

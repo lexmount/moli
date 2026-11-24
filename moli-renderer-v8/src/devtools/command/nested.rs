@@ -98,7 +98,8 @@ impl RendererPageCommand {
             | Self::ReadViewportSelection(..)
             | Self::ApplyViewportEdit(..)
             | Self::DropViewportFiles { .. }
-            | Self::WakeViewportFrames => OwnerOnly,
+            | Self::WakeViewportFrames
+            | Self::ViewportDisplayTick { .. } => OwnerOnly,
 
             #[cfg(test)]
             Self::ObserveRealtimeOpportunityForTesting { .. } => OwnerOnly,

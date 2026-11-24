@@ -200,6 +200,22 @@ impl Page {
         .await
     }
 
+    /// Signals that the native window has reached another display frame.
+    pub async fn viewport_display_tick(
+        &mut self,
+        revision: u64,
+        time: std::time::Instant,
+    ) -> Result<()> {
+        self.dispatch_unit_page_command_async(
+            RendererPageCommand::ViewportDisplayTick {
+                viewport_revision: revision,
+                time,
+            },
+            "admit viewport display tick",
+        )
+        .await
+    }
+
     pub async fn wake_viewport_frames(&mut self) -> Result<()> {
         self.dispatch_unit_page_command_async(
             RendererPageCommand::WakeViewportFrames,

@@ -350,6 +350,11 @@ impl PageVm {
                 Ok(RendererPageReply::Unit)
             }
             #[cfg(feature = "molio")]
+            RendererPageCommand::ViewportDisplayTick { viewport_revision, time } => {
+                self.accept_viewport_display_tick(viewport_revision, time);
+                Ok(RendererPageReply::Unit)
+            }
+            #[cfg(feature = "molio")]
             RendererPageCommand::WakeViewportFrames => {
                 self.wake_viewport_frames();
                 Ok(RendererPageReply::Unit)
@@ -441,6 +446,7 @@ fn renderer_page_command_action_barrier(
         }
         #[cfg(feature = "molio")]
         RendererPageCommand::WakeViewportFrames
+        | RendererPageCommand::ViewportDisplayTick { .. }
         | RendererPageCommand::DispatchViewportWheel(_)
         | RendererPageCommand::SetViewportPointerPosition { .. } => None,
         _ => Some(moli_action_window::ActionBarrier::Explicit),

@@ -4426,7 +4426,7 @@ impl PageVm {
             vm_bootstrap.finish()?
         };
         vm.set_document_navigator_identity(&env.navigator_identity);
-        vm.set_layout_policy(env.layout_configuration.policy);
+        vm.set_layout_configuration(env.layout_configuration);
         vm.set_scrollbars_hidden(
             env.layout_configuration
                 .scrollbars_hidden_for(env.document_settings.scrollbars_hidden),

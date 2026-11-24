@@ -14,7 +14,7 @@ use moli_core::{
     page::{VIEWPORT_BAND_HEIGHT, ViewportFrameRef, ViewportOutput},
     protocol_types::{DocumentActivity, ViewportSurface},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::host::{KeyInput, TabCommand};
 use crate::text_input::MoliTextInputBridge;
@@ -30,6 +30,8 @@ pub struct MoliSurface {
     pub focus: FocusHandle,
     commands: Option<mpsc::UnboundedSender<TabCommand>>,
     output: Option<Arc<ViewportOutput>>,
+    display_ticks: Option<watch::Sender<(u64, std::time::Instant)>>,
+    display_tick_pending: bool,
     activity: Option<DocumentActivity>,
     bounds: Option<Bounds<Pixels>>,
     viewport: Option<ViewportSurface>,
@@ -191,6 +193,8 @@ impl MoliSurface {
             focus,
             commands: None,
             output: None,
+            display_ticks: None,
+            display_tick_pending: false,
             activity: None,
             bounds: None,
             viewport: None,
@@ -220,11 +224,27 @@ impl MoliSurface {
         self.send(TabCommand::Activity(DocumentActivity::new(false, false)));
         self.commands = connection.map(|tab| tab.commands.clone());
         self.output = connection.map(|tab| tab.viewport.clone());
+        self.display_ticks = connection.and_then(|tab| tab.display_ticks.clone());
+        self.request_display_tick(window, cx);
         self.activity = None;
         self.viewport = None;
         self.document = document;
         self.zoom = zoom;
         self.sync_activity(window);
+    }
+
+    fn request_display_tick(&mut self, window: &mut Window, cx: &Context<Self>) {
+        if self.display_ticks.is_none() || self.display_tick_pending {
+            return;
+        }
+        self.display_tick_pending = true;
+        cx.on_next_frame(window, |surface, window, cx| {
+            surface.display_tick_pending = false;
+            if let Some(clock) = surface.display_ticks.as_ref() {
+                clock.send_replace((surface.revision, std::time::Instant::now()));
+            }
+            surface.request_display_tick(window, cx);
+        });
     }
 
     pub fn set_zoom(&mut self, zoom: f64, cx: &mut Context<Self>) {

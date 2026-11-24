@@ -24,6 +24,7 @@ impl RendererOwnerHandle {
         self.configure_layout_configuration(moli_page_types::LayoutConfiguration {
             policy,
             scrollbars_hidden,
+            ..Default::default()
         })
     }
 

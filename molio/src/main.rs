@@ -21,10 +21,13 @@ fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let mut profile = None;
     let mut initial = None;
+    let mut max_fps = None;
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "-h" | "--help" => {
-                println!("Usage: molio [--profile-dir DIRECTORY] [URL]");
+                println!(
+                    "Usage: molio [--profile-dir DIRECTORY] [--max-fps HZ] [URL]\n\n--max-fps HZ   Set the maximum realtime frame rate (0 for unlimited).\n               Omit to follow the window display clock."
+                );
                 return Ok(());
             }
             "--profile-dir" => {
@@ -33,11 +36,21 @@ fn main() -> anyhow::Result<()> {
                         anyhow::anyhow!("missing --profile-dir value")
                     })?));
             }
+            "--max-fps" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("missing --max-fps value"))?;
+                max_fps = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| anyhow::anyhow!("--max-fps must be a nonnegative integer"))?,
+                );
+            }
             _ if initial.is_none() => initial = Some(argument),
             _ => anyhow::bail!("unexpected argument {argument}"),
         }
     }
-    let (host, host_events) = BrowserHost::start(profile)?;
+    let (host, host_events) = BrowserHost::start(profile, max_fps)?;
     let host = Rc::new(host);
     gpui_platform::application().run(move |cx: &mut App| {
         browser::bind_keys(cx);
