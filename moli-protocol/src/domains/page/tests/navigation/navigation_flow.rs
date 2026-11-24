@@ -5,7 +5,12 @@ async fn no_content_navigation_retains_document_and_reports_abort() {
     tokio::task::LocalSet::new()
         .run_until(async {
             for background in [false, true] {
-                for status in [204, 205] {
+                for (status, disposition) in [
+                    (204, None),
+                    (205, None),
+                    (204, Some("attachment; filename=empty.txt")),
+                    (205, Some("attachment; filename=empty.txt")),
+                ] {
                     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                     let address = listener.local_addr().unwrap();
                     let server = tokio::spawn(async move {
@@ -14,11 +19,16 @@ async fn no_content_navigation_retains_document_and_reports_abort() {
                             axum::Router::new().route(
                                 "/empty",
                                 axum::routing::get(move || async move {
-                                    (
-                                        axum::http::StatusCode::from_u16(status).unwrap(),
-                                        [("content-type", "text/plain")],
-                                        "",
-                                    )
+                                    use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+                                    let mut headers = HeaderMap::new();
+                                    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+                                    if let Some(disposition) = disposition {
+                                        headers.insert(
+                                            header::CONTENT_DISPOSITION,
+                                            HeaderValue::from_static(disposition),
+                                        );
+                                    }
+                                    (StatusCode::from_u16(status).unwrap(), headers, "")
                                 }),
                             ),
                         )
