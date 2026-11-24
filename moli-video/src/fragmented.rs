@@ -8,12 +8,14 @@ use std::ops::Bound::{Excluded, Unbounded};
 use super::h264::{Decoded, H264Decoder, VideoFrame};
 use super::mp4::{Mp4Input, VideoMetadata, as_seconds};
 
-const MAX_TRACK_BYTES: usize = 128 * 1024 * 1024;
+pub(super) const MAX_TRACK_BYTES: usize = 128 * 1024 * 1024;
 const MAX_TRACK_PACKETS: usize = 200_000;
 
+#[derive(Default)]
 pub struct FragmentAppend {
     pub metadata: Option<VideoMetadata>,
     pub ranges: Vec<(f64, f64)>,
+    pub audio_ranges: Option<Vec<(f64, f64)>>,
 }
 
 pub(super) enum ReadFragment {
@@ -58,11 +60,7 @@ impl FragmentedMp4 {
         }
         self.ended = false;
         self.input.extend_from_slice(&bytes);
-        while let Some((kind, len)) = box_header(&self.input)? {
-            if self.input.len() < len {
-                break;
-            }
-            let data = self.input.split_to(len).freeze();
+        while let Some((kind, data)) = next_mp4_box(&mut self.input)? {
             match &kind {
                 b"moov" => {
                     let init = Mp4Input::open(vec![data.clone()])?;
@@ -131,30 +129,16 @@ impl FragmentedMp4 {
             }
         }
         if start < end {
-            self.add_range(start.max(0.0), end);
+            add_range(&mut self.ranges, start.max(0.0), end, 0.000_002);
         }
         Ok(())
-    }
-
-    fn add_range(&mut self, mut start: f64, mut end: f64) {
-        if end <= start {
-            return;
-        }
-        let first = self
-            .ranges
-            .partition_point(|&(_, right)| right + 0.000_002 < start);
-        let len = self.ranges[first..].partition_point(|&(left, _)| left <= end + 0.000_002);
-        for &(left, right) in &self.ranges[first..first + len] {
-            start = start.min(left);
-            end = end.max(right);
-        }
-        self.ranges.splice(first..first + len, [(start, end)]);
     }
 
     fn snapshot(&self) -> FragmentAppend {
         FragmentAppend {
             metadata: self.metadata,
             ranges: self.ranges.clone(),
+            audio_ranges: None,
         }
     }
 
@@ -221,6 +205,31 @@ impl FragmentedMp4 {
     pub(super) fn end(&mut self) {
         self.ended = true;
     }
+}
+
+pub(super) fn add_range(
+    ranges: &mut Vec<(f64, f64)>,
+    mut start: f64,
+    mut end: f64,
+    tolerance: f64,
+) {
+    if end <= start {
+        return;
+    }
+    let first = ranges.partition_point(|&(_, right)| right + tolerance < start);
+    let len = ranges[first..].partition_point(|&(left, _)| left <= end + tolerance);
+    for &(left, right) in &ranges[first..first + len] {
+        start = start.min(left);
+        end = end.max(right);
+    }
+    ranges.splice(first..first + len, [(start, end)]);
+}
+
+pub(super) fn next_mp4_box(input: &mut BytesMut) -> Result<Option<([u8; 4], Bytes)>> {
+    let Some((kind, len)) = box_header(input)? else {
+        return Ok(None);
+    };
+    Ok((input.len() >= len).then(|| (kind, input.split_to(len).freeze())))
 }
 
 fn box_header(header: &[u8]) -> Result<Option<([u8; 4], usize)>> {

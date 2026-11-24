@@ -291,6 +291,107 @@ async fn media_source_appends_h264_and_paints_the_seeked_frame() {
     }));
 }
 
+#[cfg(all(
+    feature = "media-ext",
+    target_os = "macos",
+    target_pointer_width = "64"
+))]
+#[tokio::test]
+async fn media_source_buffers_h264_and_aac() {
+    use base64::Engine as _;
+    use std::time::Duration;
+
+    let encode = |bytes| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let audio = encode(
+        include_bytes!("../../../../../moli-video/tests/fixtures/aac-fragmented.mp4").as_slice(),
+    );
+    let video = encode(
+        include_bytes!("../../../../../moli-video/tests/fixtures/primary-colors-fragmented.mp4")
+            .as_slice(),
+    );
+    let muxed = encode(
+        include_bytes!(
+            "../../../../../moli-video/tests/fixtures/primary-colors-aac-fragmented.mp4"
+        )
+        .as_slice(),
+    );
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    for combined in [false, true] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://media-source-audio.test/",
+            &loader,
+        );
+        vm.eval(&format!(
+            "globalThis.mediaFixtures = {{combined: {combined}, audio: '{audio}', video: '{video}', muxed: '{muxed}'}}"
+        )).unwrap();
+        vm.eval(
+            r#"
+            globalThis.media = document.createElement('video');
+            globalThis.source = new MediaSource();
+            globalThis.result = null;
+            const types = {
+              audio: 'audio/mp4; codecs="mp4a.40.2"',
+              video: 'video/mp4; codecs="avc1.64000a"',
+              muxed: 'video/mp4; codecs="avc1.64000a, mp4a.40.2"'
+            };
+            const bytes = key => Uint8Array.from(atob(mediaFixtures[key]), c => c.charCodeAt(0));
+            const url = URL.createObjectURL(source);
+            source.onsourceopen = () => {
+              URL.revokeObjectURL(url);
+              if (!Object.values(types).every(type => MediaSource.isTypeSupported(type))) {
+                result = 'unsupported';
+                return;
+              }
+              const kinds = mediaFixtures.combined ? ['muxed'] : ['audio', 'video'];
+              const buffers = kinds.map(kind => source.addSourceBuffer(types[kind]));
+              let pending = buffers.length;
+              for (let i = 0; i < buffers.length; i++) {
+                const buffer = buffers[i];
+                buffer.onerror = () => result = 'append error';
+                buffer.onupdateend = () => {
+                  if (--pending === 0 && result === null) {
+                    result = buffers.every((buffer, i) =>
+                      source.sourceBuffers[i] === buffer
+                      && source.activeSourceBuffers[i] === buffer
+                      && buffer.buffered.length === 1
+                      && buffer.buffered.end(0) >= 2)
+                      && source.sourceBuffers.length === buffers.length;
+                    source.endOfStream();
+                  }
+                };
+                buffer.appendBuffer(bytes(kinds[i]));
+              }
+            };
+            media.muted = true;
+            (document.body || document.documentElement).appendChild(media);
+            media.src = url;
+            "#,
+        )
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while vm
+                .eval("result === null || (result === true && media.readyState < 4)")
+                .unwrap()
+                == "true"
+            {
+                if !vm
+                    .run_one_media_element_event_executor_turn(&loader)
+                    .await
+                    .unwrap()
+                {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+        })
+        .await
+        .expect("H.264 and AAC buffers should finish consuming the fixtures");
+        assert_eq!(vm.eval("String(result)").unwrap(), "true");
+        assert_eq!(vm.eval("media.videoWidth").unwrap(), "48");
+        assert_eq!(vm.eval("media.buffered.length").unwrap(), "1");
+        assert_eq!(vm.eval("source.readyState").unwrap(), "ended");
+    }
+}
+
 #[tokio::test]
 async fn media_invalid_base_url_fails_before_csp_check() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

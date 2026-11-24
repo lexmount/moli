@@ -94,17 +94,7 @@ pub(super) struct Mp4Input {
 
 impl Mp4Input {
     pub(super) fn open(parts: Vec<Bytes>) -> Result<Self> {
-        let mov = AVInputFormat::find(c"mov")
-            .ok_or_else(|| anyhow!("FFmpeg MP4 demuxer is unavailable"))?;
-        let io = open_memory(parts);
-        // Never let an externally supplied data reference open another input.
-        let mut options = Some(AVDictionary::new(c"enable_drefs", c"0", 0));
-        let format = AVFormatContextInput::builder()
-            .format(&mov)
-            .io_context(AVIOContextContainer::Custom(io))
-            .options(&mut options)
-            .probe_stream_info(false)
-            .open()?;
+        let format = open_mp4(parts)?;
         let (video_stream, stream) = format
             .streams()
             .iter()
@@ -151,14 +141,36 @@ impl Mp4Input {
     }
 
     pub(super) fn read_video_packet(&mut self) -> Result<Option<AVPacket>> {
-        while let Some(mut packet) = self.format.read_packet()? {
-            if packet.stream_index == self.video_stream as i32 {
-                packet.rescale_ts(self.time_base, MICROSECONDS);
-                return Ok(Some(packet));
-            }
-        }
-        Ok(None)
+        read_track_packet(&mut self.format, self.video_stream, self.time_base)
     }
+}
+
+pub(super) fn open_mp4(parts: Vec<Bytes>) -> Result<AVFormatContextInput> {
+    let mov =
+        AVInputFormat::find(c"mov").ok_or_else(|| anyhow!("FFmpeg MP4 demuxer is unavailable"))?;
+    let io = open_memory(parts);
+    // Never let an externally supplied data reference open another input.
+    let mut options = Some(AVDictionary::new(c"enable_drefs", c"0", 0));
+    Ok(AVFormatContextInput::builder()
+        .format(&mov)
+        .io_context(AVIOContextContainer::Custom(io))
+        .options(&mut options)
+        .probe_stream_info(false)
+        .open()?)
+}
+
+pub(super) fn read_track_packet(
+    format: &mut AVFormatContextInput,
+    stream: usize,
+    time_base: ffi::AVRational,
+) -> Result<Option<AVPacket>> {
+    while let Some(mut packet) = format.read_packet()? {
+        if packet.stream_index == stream as i32 {
+            packet.rescale_ts(time_base, MICROSECONDS);
+            return Ok(Some(packet));
+        }
+    }
+    Ok(None)
 }
 
 fn rescale(timestamp: i64, from: ffi::AVRational, to: ffi::AVRational) -> i64 {

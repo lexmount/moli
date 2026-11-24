@@ -3,7 +3,8 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow, ensure};
 use bytes::Bytes;
 use moli_storage_key::MoliStorageKey;
-use moli_video::{FragmentAppend, VideoWorker};
+use moli_video::{AudioPlayback, FragmentAppend, VideoWorker};
+use moli_web_mime::MediaSourceTracks;
 use parking_lot::Mutex;
 
 use super::media_element_events::PendingMediaElementEventPayload;
@@ -34,6 +35,7 @@ pub(super) enum MediaSourceEvent {
         media: DomHandle,
         sequence: MediaLoadSequenceId,
         buffer: v8::Global<v8::Object>,
+        tracks: MediaSourceTracks,
         result: SourceBufferResult,
     },
 }
@@ -151,6 +153,10 @@ impl PageScriptHost {
         video.fragment = Some(FragmentPlayback {
             source: source.clone(),
             ranges: Vec::new(),
+            video_ranges: Vec::new(),
+            audio_ranges: Vec::new(),
+            has_video: false,
+            audio: None,
             duration: None,
             waiting: true,
         });
@@ -206,11 +212,55 @@ impl PageScriptHost {
         }
     }
 
+    pub(crate) fn add_media_source_tracks(
+        &mut self,
+        media: DomHandle,
+        tracks: MediaSourceTracks,
+    ) -> bool {
+        let Some(video) = self.video_playbacks.get_mut(&media) else {
+            return false;
+        };
+        let (Some(fragment), Some(worker)) = (&mut video.fragment, &video.worker) else {
+            return false;
+        };
+        if (tracks.has_video() && fragment.has_video)
+            || (tracks.has_audio() && fragment.audio.is_some())
+        {
+            return false;
+        }
+        if tracks.has_audio() {
+            let audio = AudioPlayback::default();
+            if worker.enable_audio(audio.clone()).is_err() {
+                return false;
+            }
+            fragment.audio = Some(audio);
+        }
+        fragment.has_video |= tracks.has_video();
+        fragment.update_ranges(false);
+        true
+    }
+
+    pub(crate) fn media_source_buffered(
+        &self,
+        media: DomHandle,
+        tracks: MediaSourceTracks,
+    ) -> Vec<(f64, f64)> {
+        self.current_video(media)
+            .and_then(|video| video.fragment.as_ref())
+            .map(|fragment| match tracks {
+                MediaSourceTracks::Video => fragment.video_ranges.clone(),
+                MediaSourceTracks::Audio => fragment.audio_ranges.clone(),
+                MediaSourceTracks::VideoAndAudio => fragment.ranges.clone(),
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn append_media_source_buffer<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         media: DomHandle,
         buffer: v8::Local<'s, v8::Object>,
+        tracks: MediaSourceTracks,
         bytes: Bytes,
         offset: f64,
     ) -> bool {
@@ -226,6 +276,7 @@ impl PageScriptHost {
             media,
             sequence,
             buffer: v8::Global::new(scope, buffer),
+            tracks,
             result: result.clone(),
         };
         let Some((target, id)) = self.prepare_media_element_event(
@@ -253,7 +304,7 @@ impl PageScriptHost {
             .get(&media)
             .and_then(|video| video.worker.as_ref())
             .expect("active decoder");
-        if worker.append(bytes, offset, complete).is_err() {
+        if worker.append(tracks, bytes, offset, complete).is_err() {
             self.media_element_events.remove(id);
             return false;
         }
@@ -269,7 +320,8 @@ impl PageScriptHost {
         video.worker.as_ref()?.end().ok()?;
         let fragment = video.fragment.as_mut()?;
         fragment.waiting = false;
-        let duration = fragment.ranges.last().map(|(_, end)| *end).unwrap_or(0.0);
+        let duration = fragment.end_time();
+        fragment.update_ranges(true);
         fragment.duration = Some(duration);
         let source = fragment.source.clone();
         let sequence = video.sequence;
@@ -315,6 +367,7 @@ pub(super) fn apply_media_source_event(
             media,
             sequence,
             buffer,
+            tracks,
             result,
         } => {
             let Some(video) = host
@@ -332,12 +385,18 @@ pub(super) fn apply_media_source_event(
             };
             let success = match result {
                 Ok(info) => {
-                    fragment.ranges = info.ranges;
+                    if tracks.has_video() {
+                        fragment.video_ranges = info.ranges;
+                    }
+                    if let Some(audio_ranges) = info.audio_ranges {
+                        fragment.audio_ranges = audio_ranges;
+                    }
                     if fragment.duration.is_none()
                         && let Some(metadata) = info.metadata
                     {
                         fragment.duration = Some(metadata.duration.unwrap_or(f64::INFINITY));
                     }
+                    fragment.update_ranges(false);
                     fragment.waiting = fragment.ranges.is_empty();
                     true
                 }

@@ -1,12 +1,14 @@
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
+use moli_web_mime::MediaSourceTracks;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 
+use crate::audio::FragmentedAudio;
 use crate::fragmented::{FragmentedMp4, ReadFragment};
-use crate::{FragmentAppend, Mp4Decoder, VideoFrame, VideoMetadata};
+use crate::{AudioPlayback, FragmentAppend, Mp4Decoder, VideoFrame, VideoMetadata};
 
 static NEXT_DECODER_ID: AtomicU64 = AtomicU64::new(1);
 static DECODER_THREADS: OnceLock<Vec<Sender<Command>>> = OnceLock::new();
@@ -31,7 +33,8 @@ type AppendCompletion = Box<dyn FnOnce(Result<FragmentAppend>) + Send>;
 enum Command {
     Open(u64, Bytes, Completion),
     OpenFragmented(u64),
-    Append(u64, Bytes, f64, AppendCompletion),
+    EnableAudio(u64, AudioPlayback),
+    Append(u64, MediaSourceTracks, Bytes, f64, AppendCompletion),
     End(u64),
     Decode(u64, DecodeRequest, Completion),
     Close(u64),
@@ -61,11 +64,22 @@ impl VideoWorker {
 
     pub fn append(
         &self,
+        tracks: MediaSourceTracks,
         bytes: Bytes,
         offset: f64,
         complete: impl FnOnce(Result<FragmentAppend>) + Send + 'static,
     ) -> Result<()> {
-        self.send(Command::Append(self.id, bytes, offset, Box::new(complete)))
+        self.send(Command::Append(
+            self.id,
+            tracks,
+            bytes,
+            offset,
+            Box::new(complete),
+        ))
+    }
+
+    pub fn enable_audio(&self, playback: AudioPlayback) -> Result<()> {
+        self.send(Command::EnableAudio(self.id, playback))
     }
 
     pub fn end(&self) -> Result<()> {
@@ -140,6 +154,7 @@ impl Input {
 
 struct WorkerDecoder {
     decoder: Input,
+    audio: Option<Box<FragmentedAudio>>,
     reported_open: bool,
     following: Option<VideoFrame>,
 }
@@ -154,6 +169,7 @@ impl WorkerDecoder {
         Ok((
             Self {
                 decoder: Input::File(decoder),
+                audio: None,
                 following: None,
                 reported_open: true,
             },
@@ -167,6 +183,7 @@ impl WorkerDecoder {
     fn fragmented() -> Self {
         Self {
             decoder: Input::Fragments(Box::default()),
+            audio: None,
             following: None,
             reported_open: false,
         }
@@ -225,6 +242,30 @@ impl WorkerDecoder {
             Input::File(_) => None,
         }
     }
+
+    fn append(
+        &mut self,
+        tracks: MediaSourceTracks,
+        bytes: Bytes,
+        offset: f64,
+    ) -> Result<FragmentAppend> {
+        let mut result = if tracks.has_video() {
+            self.fragments()
+                .ok_or_else(|| anyhow!("fragmented video decoder was closed"))?
+                .append(bytes.clone(), offset)?
+        } else {
+            FragmentAppend::default()
+        };
+        if tracks.has_audio() {
+            result.audio_ranges = Some(
+                self.audio
+                    .as_mut()
+                    .ok_or_else(|| anyhow!("fragmented AAC decoder was closed"))?
+                    .append(bytes, offset)?,
+            );
+        }
+        Ok(result)
+    }
 }
 
 fn run_worker(receiver: Receiver<Command>) {
@@ -240,12 +281,16 @@ fn run_worker(receiver: Receiver<Command>) {
             Command::OpenFragmented(id) => {
                 decoders.insert(id, WorkerDecoder::fragmented());
             }
-            Command::Append(id, bytes, offset, complete) => {
+            Command::EnableAudio(id, playback) => {
+                if let Some(decoder) = decoders.get_mut(&id) {
+                    decoder.audio = Some(Box::new(FragmentedAudio::new(playback)));
+                }
+            }
+            Command::Append(id, tracks, bytes, offset, complete) => {
                 let result = decoders
                     .get_mut(&id)
-                    .and_then(WorkerDecoder::fragments)
-                    .ok_or_else(|| anyhow!("fragmented video decoder was closed"))
-                    .and_then(|decoder| decoder.append(bytes, offset));
+                    .ok_or_else(|| anyhow!("fragmented media decoder was closed"))
+                    .and_then(|decoder| decoder.append(tracks, bytes, offset));
                 complete(result);
             }
             Command::End(id) => {
