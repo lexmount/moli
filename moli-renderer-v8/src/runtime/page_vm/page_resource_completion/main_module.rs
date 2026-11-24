@@ -45,6 +45,25 @@ impl AuthorizedCurrentMainRuntimeModuleGraphFetchCompletion {
     }
 }
 
+/// Proof that a retired script's network terminal still belongs to an in-flight
+/// module-map request in the same root Page/ScriptState. It authorizes cache
+/// settlement only, without restoring the script element or its Document tasks.
+pub(crate) struct AuthorizedLiveMainModuleGraphFetchCompletion {
+    load_id: u64,
+    result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
+}
+
+impl AuthorizedLiveMainModuleGraphFetchCompletion {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        u64,
+        std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
+    ) {
+        (self.load_id, self.result)
+    }
+}
+
 /// Proof that the Page lane executor matched one dynamic-import network
 /// terminal against its complete `{root Document, import owner, load id}`
 /// target.
@@ -95,6 +114,20 @@ impl PageVm {
                 completion.network_attribution().request_url(),
                 completion.network_result(),
             );
+            if owner.root_document() == self.document_lifecycle.identity().document
+                && self
+                    .vm()
+                    .document_runtime
+                    .has_inflight_native_module_script_fetch(completion.target().load_id())
+            {
+                self.vm_mut()
+                    .apply_live_main_module_graph_fetch_completion(
+                        AuthorizedLiveMainModuleGraphFetchCompletion {
+                            load_id: completion.target().load_id(),
+                            result: completion.into_result(),
+                        },
+                    )?;
+            }
             return Ok(PageResourceCompletionTurnAction::discarded_stale(
                 source,
                 owner,
@@ -132,6 +165,20 @@ impl PageVm {
                 completion.network_attribution().request_url(),
                 completion.network_result(),
             );
+            if owner.root_document() == self.document_lifecycle.identity().document
+                && self
+                    .vm()
+                    .document_runtime
+                    .has_inflight_native_module_script_fetch(completion.target().load_id())
+            {
+                self.vm_mut()
+                    .apply_live_main_module_graph_fetch_completion(
+                        AuthorizedLiveMainModuleGraphFetchCompletion {
+                            load_id: completion.target().load_id(),
+                            result: completion.into_result(),
+                        },
+                    )?;
+            }
             return Ok(PageResourceCompletionTurnAction::discarded_stale(
                 source,
                 owner,
