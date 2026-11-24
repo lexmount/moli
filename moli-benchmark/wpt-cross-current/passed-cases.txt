@@ -9136,6 +9136,7 @@ inert/inert-does-not-match-disabled-selector.html
 inert/inert-in-shadow-dom.html
 inert/inert-inlines-around-selection-range-in-contenteditable.html
 inert/inert-node-is-unselectable.html
+inert/inert-on-non-html.html
 inert/inert-on-slots.html
 inert/inert-with-modal-dialog-001.html
 inert/inert-with-modal-dialog-002.html

@@ -2168,7 +2168,6 @@ html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-incumbent.html
 inert/inert-and-find-flat-tree.html
 inert/inert-and-find.html
-inert/inert-on-non-html.html
 inert/inert-with-modal-dialog-003.html
 infrastructure/expected-fail/failing-test.html
 infrastructure/expected-fail/uncaught-exception-following-subtest.html
