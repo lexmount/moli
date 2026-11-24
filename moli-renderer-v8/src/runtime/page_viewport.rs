@@ -178,6 +178,16 @@ pub(super) struct ViewportFrameState {
 }
 
 impl ViewportFrameState {
+    fn pressed_pointer_for(
+        &self,
+        document: RendererDocumentLifecycleIdentity,
+    ) -> Option<RendererViewportPointerInput> {
+        self.pressed_pointer.filter(|pointer| {
+            pointer.document == document
+                && pointer.viewport_revision == self.subscription.viewport_revision
+        })
+    }
+
     pub(super) fn discard_document(&mut self) {
         self.painted = None;
         self.editing = Default::default();
@@ -249,9 +259,10 @@ impl PageVm {
     }
 
     fn viewport_pressed_buttons(&self) -> i32 {
+        let document = self.document_lifecycle.identity();
         self.viewport_frames
             .as_ref()
-            .and_then(|state| state.pressed_pointer)
+            .and_then(|state| state.pressed_pointer_for(document))
             .map_or(0, |pointer| pointer.buttons)
     }
 
@@ -296,11 +307,13 @@ impl PageVm {
     }
 
     fn cancel_active_viewport_pointer(&mut self) -> anyhow::Result<()> {
-        if let Some(input) = self
-            .viewport_frames
-            .as_mut()
-            .and_then(|state| state.pressed_pointer.take())
-        {
+        let document = self.document_lifecycle.identity();
+        let pressed = self.viewport_frames.as_mut().and_then(|state| {
+            let pressed = state.pressed_pointer_for(document);
+            state.pressed_pointer = None;
+            pressed
+        });
+        if let Some(input) = pressed {
             self.vm_mut()
                 .cancel_viewport_mouse(input.position, input.modifiers)?;
             self.wake_viewport_frames();
