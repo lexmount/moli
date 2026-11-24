@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 
 use super::ScriptVm;
 use crate::page_task_queue::{
@@ -6,12 +6,27 @@ use crate::page_task_queue::{
     RendererPageRenderingUpdateTaskKind,
 };
 use crate::runtime::AuthorizedCurrentPageRenderingUpdate;
+use crate::v8_execution_watchdog::V8ExecutionWatchdog;
 
 mod realtime;
 mod realtime_environment;
 mod realtime_resize;
 
 impl ScriptVm {
+    pub(crate) fn environment_checkpoint(scope: &mut v8::PinScope<'_, '_>) -> Result<()> {
+        if !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
+            && !scope.is_execution_terminating()
+        {
+            Self::perform_microtask_checkpoints(scope, None)?;
+        }
+        ensure!(
+            !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
+                && !scope.is_execution_terminating(),
+            "environment event dispatch was terminated"
+        );
+        Ok(())
+    }
+
     pub(crate) fn current_realtime_rendering_opportunity(
         &self,
         root_document: crate::runtime::RendererDocumentToken,
@@ -90,7 +105,7 @@ impl ScriptVm {
                     task.task_id(),
                     owner.target(),
                     task.kind(),
-                )
+                )?
                 .ok_or_else(|| anyhow!("authorized rendering update lost its exact payload"))
         })
     }

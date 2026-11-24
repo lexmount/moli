@@ -291,7 +291,7 @@ fn simple_object_event_target_register_resolved_listener<'s>(
             options.capture,
         );
     }
-    crate::context_bootstrap::media_queries::realtime_media_query_listeners_changed(
+    crate::context_bootstrap::media_queries::media_query_listeners_changed(
         scope,
         target,
         &event_type,
@@ -734,7 +734,7 @@ fn simple_object_event_remove_listener_from_registry<'s>(
             remove_simple_object_event_type_order(scope, registry, event_type);
         }
     }
-    crate::context_bootstrap::media_queries::realtime_media_query_listeners_changed(
+    crate::context_bootstrap::media_queries::media_query_listeners_changed(
         scope, target, event_type,
     );
 }

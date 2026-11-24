@@ -191,17 +191,23 @@ impl RealtimeFrameState {
 }
 
 impl PageScriptHost {
-    pub(super) fn rebind_realtime_document_after_open(
-        &self,
+    pub(super) fn rebind_rendering_document_after_open(
+        &mut self,
         retired: FrameDocumentTaskOwner,
         current: FrameDocumentTaskOwner,
     ) {
-        let Some(state) = &self.realtime_layout_state else {
-            return;
-        };
         debug_assert_eq!(retired.local_window_id, current.local_window_id);
         let retired = WindowDocumentOwner::Frame(retired);
         let current = WindowDocumentOwner::Frame(current);
+        let pending_media = self.media_queries.borrow_mut().rebind(retired, current);
+        let Some(state) = &self.realtime_layout_state else {
+            // The old exact-owner environment task cannot carry sampling work
+            // into its successor. Re-admit it through the existing driver.
+            if pending_media {
+                self.queue_environment_change();
+            }
+            return;
+        };
         state.environment.borrow_mut().rebind(retired, current);
         self.rebind_realtime_font_readiness(retired, current);
         self.rebind_realtime_rendering_events(retired, current);
@@ -378,7 +384,7 @@ impl PageScriptHost {
         let callbacks_pending = self.has_runnable_realtime_animation_frames();
         let resize_pending =
             crate::observer_runtime::has_pending_realtime_resize_observers(self, None);
-        let environment_pending = state.environment.borrow().has_pending();
+        let environment_pending = self.has_realtime_environment_notifications();
         let events_pending = self.has_realtime_rendering_events();
         let mut frame = state.frame.borrow_mut();
         if !self.document_activity().visible {
@@ -647,6 +653,7 @@ impl PageScriptHost {
             }
         }
         self.prune_realtime_animation_frames();
+        self.prune_media_queries();
         self.prune_realtime_environment();
         self.prune_realtime_rendering_events();
         crate::observer_runtime::prune_realtime_resize_observers(self);

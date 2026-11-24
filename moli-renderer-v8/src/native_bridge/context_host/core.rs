@@ -377,6 +377,7 @@ impl PageScriptHost {
             scrollbars_hidden: false,
             document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::default()),
             realtime_layout_state: None,
+            media_queries: RefCell::default(),
             layout_pass_active: Cell::new(false),
             completed_layout_pass_count: Cell::new(0),
             completed_layout_pass_time: Cell::new(std::time::Duration::ZERO),
@@ -786,7 +787,7 @@ impl PageScriptHost {
             transition.retired_owner(),
             transition.current_owner(),
         );
-        self.rebind_realtime_document_after_open(
+        self.rebind_rendering_document_after_open(
             transition.retired_owner(),
             transition.current_owner(),
         );

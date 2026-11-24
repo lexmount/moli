@@ -98,10 +98,8 @@ pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPE
     "__moliPerformanceObserverSupportedEntryTypes";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRIES_SLOT: &str = "__moliPerformanceEntries";
 pub(in crate::context_bootstrap) use moli_webapi::media_query_list::{
-    MEDIA_QUERY_LIST_MATCHES_SLOT, MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_ONCHANGE_SLOT,
+    MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_ONCHANGE_SLOT,
 };
-pub(in crate::context_bootstrap) const MEDIA_QUERY_LIST_REGISTRY_SLOT: &str =
-    "__moliMediaQueryLists";
 pub(in crate::context_bootstrap) use moli_webapi::streams::slots::{
     READABLE_STREAM_CONTROLLER_SLOT, READABLE_STREAM_HWM_SLOT, READABLE_STREAM_PENDING_READS_SLOT,
     STREAM_CONTROLLER_ALGORITHMS_SLOT, TRANSFORM_STREAM_READABLE_SLOT,

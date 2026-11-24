@@ -230,11 +230,11 @@ fn check_realtime_media_resubscription(during_resize: bool) {
             "[[\"listener\",true],[\"handler\",true]]"
         );
         let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
-        assert_eq!(host.borrow().realtime_media_query_count_for_test(), 2);
+        assert_eq!(host.borrow().media_query_count_for_test(), 2);
         page.vm_mut()
             .eval("query.removeEventListener('change', second);handler.onchange=null")
             .unwrap();
-        assert_eq!(host.borrow().realtime_media_query_count_for_test(), 0);
+        assert_eq!(host.borrow().media_query_count_for_test(), 0);
         assert!(
             page.next_rendering_opportunity_deadline_for_test()
                 .is_none()
@@ -288,7 +288,7 @@ fn realtime_environment_preserves_selected_media_events_across_listener_removal(
             "first,second:false"
         );
         let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
-        assert_eq!(host.borrow().realtime_media_query_count_for_test(), 1);
+        assert_eq!(host.borrow().media_query_count_for_test(), 1);
         // The first callback also queued a change for the next media phase.
         // Replacing the second handler must preserve that notification too.
         run_opportunity(&mut page, &loader).await.unwrap();
@@ -297,7 +297,7 @@ fn realtime_environment_preserves_selected_media_events_across_listener_removal(
             "first,second:false,second:false"
         );
         page.vm_mut().eval("second.onchange=null").unwrap();
-        assert_eq!(host.borrow().realtime_media_query_count_for_test(), 0);
+        assert_eq!(host.borrow().media_query_count_for_test(), 0);
         assert!(
             page.next_rendering_opportunity_deadline_for_test()
                 .is_none()

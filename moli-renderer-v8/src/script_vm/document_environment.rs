@@ -356,7 +356,7 @@ impl ScriptVm {
             .set_realtime_max_fps(configuration.realtime_max_fps);
     }
 
-    #[cfg(feature = "devtools")]
+    #[cfg(any(feature = "devtools", test))]
     pub(crate) fn layout_policy(&self) -> moli_page_types::LayoutPolicy {
         self._context_host.borrow().layout_policy()
     }
