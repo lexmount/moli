@@ -1,4 +1,4 @@
-use std::{ops::Range, sync::Arc};
+use std::{ops::Range, rc::Rc, sync::Arc};
 
 use gpui::{
     App, BgraImage, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase,
@@ -11,7 +11,7 @@ use moli_core::{
     RendererDocumentLifecycleIdentity, RendererViewportCursorKind, RendererViewportEditAction,
     RendererViewportEditor, RendererViewportPointerInput, RendererViewportWheelInput,
     RendererViewportWheelPhase,
-    page::{ViewportFrameRef, ViewportOutput},
+    page::{VIEWPORT_BAND_HEIGHT, ViewportFrameRef, ViewportOutput},
     protocol_types::{DocumentActivity, ViewportSurface},
 };
 use tokio::sync::{mpsc, oneshot};
@@ -37,12 +37,116 @@ pub struct MoliSurface {
     zoom: f64,
     buttons: i32,
     pointer_over: bool,
-    image: Option<BgraImage>,
+    image: Option<ViewportImage>,
     document: Option<RendererDocumentLifecycleIdentity>,
     presented: Option<(RendererDocumentLifecycleIdentity, u64)>,
     wheel_route: Option<WheelRoute>,
     text_input: MoliTextInputBridge,
     _subscriptions: Vec<Subscription>,
+}
+
+struct ViewportBandImage {
+    start: u32,
+    end: u32,
+    version: u64,
+    texture: Rc<BgraImage>,
+}
+
+struct ViewportImage {
+    width: u32,
+    height: u32,
+    banded: bool,
+    bands: Vec<ViewportBandImage>,
+}
+
+impl ViewportImage {
+    fn new(
+        frame: &ViewportFrameRef<'_>,
+        bounds: Bounds<Pixels>,
+        window: &Window,
+        previous: Option<&Self>,
+    ) -> anyhow::Result<Self> {
+        let scale = window.scale_factor();
+        let width = frame.layout.width;
+        let height = frame.layout.height;
+        // Sample each atlas tile at device-pixel centers. Fractional resampling
+        // at a band boundary requires the whole-frame image to avoid seams.
+        let banded = frame.band_versions.len() == height.div_ceil(VIEWPORT_BAND_HEIGHT) as usize
+            && frame.band_versions.len() > 1
+            && f32::from(bounds.size.width) * scale == width as f32
+            && f32::from(bounds.size.height) * scale == height as f32
+            && (f32::from(bounds.origin.x) * scale).fract() == 0.0
+            && (f32::from(bounds.origin.y) * scale).fract() == 0.0;
+        let previous = previous.filter(|image| {
+            image.width == width && image.height == height && image.banded == banded
+        });
+        let band_height = if banded { VIEWPORT_BAND_HEIGHT } else { height };
+        let mut bands = Vec::new();
+        for index in 0..height.div_ceil(band_height) {
+            let start = index * band_height;
+            let end = (start + band_height).min(height);
+            let version = if banded {
+                frame.band_versions[index as usize]
+            } else {
+                frame.sequence
+            };
+            let cached = previous
+                .and_then(|image| image.bands.get(index as usize))
+                .filter(|band| band.version == version);
+            let texture = if let Some(cached) = cached {
+                cached.texture.clone()
+            } else {
+                Rc::new(BgraImage::new(size(width.into(), (end - start).into()))?)
+            };
+            bands.push(ViewportBandImage {
+                start,
+                end,
+                version,
+                texture,
+            });
+        }
+        Ok(Self {
+            width,
+            height,
+            banded,
+            bands,
+        })
+    }
+
+    fn paint(
+        &self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        pixels: Option<&[u8]>,
+    ) -> anyhow::Result<bool> {
+        let row_bytes = self.width as usize * 4;
+        for band in &self.bands {
+            let top = bounds.size.height * (band.start as f32 / self.height as f32);
+            let bottom = bounds.size.height * (band.end as f32 / self.height as f32);
+            let band_bounds = Bounds {
+                origin: point(bounds.origin.x, bounds.origin.y + top),
+                size: size(bounds.size.width, bottom - top),
+            };
+            let bytes = pixels.map(|pixels| {
+                &pixels[band.start as usize * row_bytes..band.end as usize * row_bytes]
+            });
+            if !window.paint_bgra_image(band_bounds, &band.texture, bytes)? {
+                return Ok(false);
+            }
+        }
+        Ok(!self.bands.is_empty())
+    }
+
+    fn release_replaced(&self, kept: Option<&Self>, window: &mut Window) {
+        for (index, band) in self.bands.iter().enumerate() {
+            if kept
+                .and_then(|image| image.bands.get(index))
+                .is_none_or(|next| !Rc::ptr_eq(&band.texture, &next.texture))
+            {
+                window.drop_bgra_image(&band.texture);
+            }
+        }
+    }
 }
 
 impl MoliSurface {
@@ -119,7 +223,7 @@ impl MoliSurface {
         let Some(image) = self.image.take() else {
             return;
         };
-        window.drop_bgra_image(&image);
+        image.release_replaced(None, window);
     }
 
     fn is_current_frame(&self, frame: &ViewportFrameRef<'_>) -> bool {
@@ -145,7 +249,7 @@ impl MoliSurface {
             return Ok(());
         }
         if let Some(image) = self.image.as_ref() {
-            window.paint_bgra_image(bounds, image, None)?;
+            image.paint(bounds, window, None)?;
         }
         Ok(())
     }
@@ -161,7 +265,7 @@ impl MoliSurface {
         }
         if !self.is_new_frame(&frame) {
             if let Some(image) = self.image.as_ref() {
-                return window.paint_bgra_image(bounds, image, frame.pixels);
+                return image.paint(bounds, window, frame.pixels);
             }
             return Ok(false);
         }
@@ -171,12 +275,19 @@ impl MoliSurface {
             self.presented = Some((frame.document, frame.sequence));
             return Ok(false);
         };
-        let image = BgraImage::new(size(frame.layout.width.into(), frame.layout.height.into()))?;
-        if !window.paint_bgra_image(bounds, &image, Some(pixels))? {
-            return Ok(false);
+        let previous = self.image.as_ref().filter(|_| {
+            self.presented
+                .is_some_and(|(document, _)| document == frame.document)
+        });
+        let image = ViewportImage::new(&frame, bounds, window, previous)?;
+        let result = image.paint(bounds, window, Some(pixels));
+        if !matches!(result, Ok(true)) {
+            image.release_replaced(previous, window);
+            return result;
         }
-        self.drop_image(window);
-        self.image = Some(image);
+        if let Some(old) = self.image.replace(image) {
+            old.release_replaced(self.image.as_ref(), window);
+        }
         self.presented = Some((frame.document, frame.sequence));
         Ok(true)
     }
