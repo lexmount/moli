@@ -219,6 +219,7 @@ enum ImageSubresourceTerminal<'a> {
     Response {
         response: &'a crate::protocol_types::NavigationResponse,
         encoded: &'a moli_parkable_image::ParkableImage,
+        readable: bool,
     },
     Failure,
 }
@@ -230,7 +231,9 @@ impl ImageSubresourceTerminal<'_> {
         initiator_type: &'static str,
     ) -> crate::context_bootstrap::ResourcePerformanceEntry {
         match self {
-            Self::Response { response, encoded } => {
+            Self::Response {
+                response, encoded, ..
+            } => {
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_response_with_body_size(
                     request_url.as_str(),
                     initiator_type,
@@ -265,9 +268,16 @@ fn apply_image_subresource_terminal(
         .filter(|pending| pending.id() == sequence)
         .map(|pending| pending.resource_timing_initiator_type());
     let (accepted, followup) = match &terminal {
-        ImageSubresourceTerminal::Response { response, encoded } => {
+        ImageSubresourceTerminal::Response {
+            response,
+            encoded,
+            readable,
+        } => {
             let descriptor =
-                crate::network_host::image_response_descriptor_from_parkable(response, encoded);
+                crate::network_host::image_response_descriptor_from_parkable(response, encoded)
+                    .map(|descriptor| {
+                        descriptor.with_canvas_readback(request_url, response, *readable)
+                    });
             let completion = context_host
                 .borrow_mut()
                 .complete_pending_image_load_network_response_if_matches(

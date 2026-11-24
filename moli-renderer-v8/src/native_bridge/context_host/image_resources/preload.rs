@@ -293,9 +293,14 @@ impl SharedScannedImagePreloadLoad {
                     .ok()
                     .zip(encoded.as_ref())
                     .and_then(|(response, encoded)| {
+                        let request_url = url::Url::parse(self.request_key().url()).ok()?;
                         crate::network_host::image_response_descriptor_from_parkable(
                             response, encoded,
                         )
+                        .map(|descriptor| {
+                            // Scanned preloads use the network directly.
+                            descriptor.with_canvas_readback(&request_url, response, true)
+                        })
                     })
             })
             .flatten();
