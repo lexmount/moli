@@ -16,7 +16,7 @@ use super::super::geometry::compute_mock_client_rect;
 use super::super::{construct_simple_event, dispatch_public_event, resolve_url_like_attribute};
 use super::lazy::{
     image_load_is_deferred, image_uses_lazy_loading, is_lazy_loading_attribute,
-    revealed_lazy_image_handles,
+    lazy_image_is_revealed, revealed_lazy_image_handles,
 };
 
 #[derive(Clone, Copy)]
@@ -163,8 +163,18 @@ fn queue_image_load_event(
                     .lazy_image_updates
                     .insert(handle, (document, LazyImageUpdate::Deferred));
             } else {
-                // Decide whether to suspend after the current script finishes
-                // changing the source and loading attributes.
+                // The callback resolves the pending entry through its creation
+                // realm. Bind it to the image's owner even for borrowed setters.
+                let dispatch_scope = target.dispatch_scope();
+                let Some((_, context)) = runtime
+                    .current_window_execution_context_owner(dispatch_scope)
+                    .and_then(|owner| {
+                        runtime.window_execution_context(scope, owner, dispatch_scope)
+                    })
+                else {
+                    return;
+                };
+                let scope = &mut v8::ContextScope::new(scope, context);
                 let id = runtime.next_image_load_event_id();
                 if let Some(data) =
                     v8::BigInt::new_from_words(scope, false, &[handle.index() as u64, id.get()])
@@ -475,15 +485,16 @@ fn apply_lazy_image_update<'s>(
     }
     runtime.lazy_image_updates.remove(&handle);
     if runtime.dom_host().owner_document_handle(handle) == Some(document) {
-        queue_image_load_event(
-            scope,
-            runtime_ptr,
-            handle,
+        // Scrolling can reveal the image while its update is still queued.
+        // Check the final attributes and live scroll offsets against the sample.
+        let trigger = if lazy_image_is_revealed(runtime, document, handle) {
+            ImageLoadQueueTrigger::LazyReveal
+        } else {
             ImageLoadQueueTrigger::LazyUpdateMicrotask {
                 after_document_adoption,
-            },
-            request_initiator_type,
-        );
+            }
+        };
+        queue_image_load_event(scope, runtime_ptr, handle, trigger, request_initiator_type);
     }
 }
 

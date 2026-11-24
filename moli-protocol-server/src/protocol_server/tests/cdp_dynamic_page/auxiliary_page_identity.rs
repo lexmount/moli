@@ -140,6 +140,68 @@ async fn auxiliary_page_borrowed_close_uses_the_window_receiver() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn borrowed_set_attribute_updates_lazy_image_in_popup_document() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new()
+            .route(
+                "/image.svg",
+                get(|| async {
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "image/svg+xml")],
+                        r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>"#,
+                    )
+                }),
+            )
+            .fallback(get(|| async { axum::response::Html("<!doctype html>") })),
+        "popup-lazy-image",
+    );
+    let (addr, server) = spawn_test_protocol_server_with_image_fetch_enabled(true).await;
+    let (mut browser, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("http://{fixture_addr}/"))
+        .await;
+    let (_, mut popup) = open_auxiliary(addr, &mut opener, "").await;
+    navigate_dynamic_page_and_wait_for_load(&mut popup, 3, &format!("http://{fixture_addr}/popup"))
+        .await;
+
+    let messages = timeout(
+        Duration::from_secs(5),
+        send_cdp_command(
+            &mut opener,
+            4,
+            "Runtime.evaluate",
+            None,
+            json!({"awaitPromise": true, "returnByValue": true, "expression": r#"(async () => {
+                const image = p.document.createElement('img');
+                image.loading = 'lazy';
+                p.document.body.append(image);
+                const loaded = new Promise(resolve => {
+                    image.onload = () => resolve([image.complete, image.naturalWidth]);
+                    image.onerror = () => resolve(['error']);
+                });
+                Element.prototype.setAttribute.call(image, 'src', '/image.svg');
+                await Promise.resolve();
+                image.loading = 'eager';
+                return await loaded;
+            })()"#}),
+        ),
+    )
+    .await
+    .expect("borrowed src setter should start the popup image request");
+    let response = response_by_id(&messages, 4);
+    assert_eq!(
+        response["result"]["result"]["value"],
+        json!([true, 4]),
+        "{response}"
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auxiliary_initial_location_survives_invalid_history_traversal() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|| async {
