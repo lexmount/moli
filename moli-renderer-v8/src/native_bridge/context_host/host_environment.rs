@@ -2747,6 +2747,13 @@ impl PageScriptHost {
         self.inline_style_declarations.insert(handle, state);
     }
 
+    pub(crate) fn take_element_inline_style_declaration_state(
+        &mut self,
+        handle: DomHandle,
+    ) -> Option<crate::css_style::CssInlineStyleDeclarationState> {
+        self.inline_style_declarations.remove(&handle)
+    }
+
     pub(crate) fn clear_element_inline_style_declaration_state(&mut self, handle: DomHandle) {
         self.inline_style_declarations.remove(&handle);
         self.clear_element_inline_style_resolution_text(handle);

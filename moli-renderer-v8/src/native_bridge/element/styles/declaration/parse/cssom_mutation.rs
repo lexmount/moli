@@ -3,9 +3,8 @@ use super::inline_state::{
     inline_css_text_pdb_storage_state, inline_state_block_entries_for_property_mutation,
     inline_state_has_replaceable_side_entries_for_property,
     inline_state_has_unpreservable_side_entries_for_property,
-    inline_style_declaration_state_for_handle, inline_style_declaration_state_from_css_text,
-    refresh_inline_state_entries_after_pdb_mutation, style_entry_is_preservable_for_pdb_property,
-    style_entry_is_replaceable_by_pdb_property,
+    inline_style_declaration_state_from_css_text, refresh_inline_state_entries_after_pdb_mutation,
+    style_entry_is_preservable_for_pdb_property, style_entry_is_replaceable_by_pdb_property,
 };
 use super::pdb_compat::{
     ParsedPdbStyleProperty, apply_preparsed_pdb_property, css_value_uses_unresolved_cssom_storage,
@@ -116,11 +115,21 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
     }
     let runtime = unsafe { &*runtime_ptr };
     let existing_inline_base_url = runtime.existing_element_inline_style_base_url(handle);
-    let mut state = inline_style_declaration_state_for_handle(
-        runtime,
-        handle,
-        existing_inline_base_url.as_ref(),
-    );
+    let blocked = runtime.element_inline_style_csp_state(handle)
+        == crate::style_engine::InlineStyleCspState::BlockedAttribute;
+    let cached = runtime
+        .element_inline_style_declaration_state(handle)
+        .filter(|_| !blocked);
+    let initial = cached.is_none().then(|| {
+        if blocked {
+            CssInlineStyleDeclarationState::default()
+        } else {
+            inline_style_declaration_state_from_css_text(
+                &style_string(runtime, handle),
+                existing_inline_base_url.as_ref(),
+            )
+        }
+    });
     let update_inline_style_base = name == "background-image" && !value.is_empty();
     let inline_base_url = if update_inline_style_base {
         Some(runtime.element_inline_style_base_url(handle))
@@ -128,6 +137,55 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         existing_inline_base_url
     };
     let affected_names = style_property_mutation_affected_names_with_pdb(name)?;
+    let current = cached
+        .or(initial.as_ref())
+        .expect("inline style declaration state");
+    if current.entries.is_empty() && current.side_entries.is_empty() && name != "all" {
+        let parsed = (!value.is_empty()
+            && !css_value_uses_unresolved_cssom_storage(value)
+            && !cssom_style_property_uses_preferred_pdb_supplemental_entries(
+                name, value, priority,
+            ))
+        .then(|| moli_css_parse::ParsedCssomProperty::parse(name, value, priority))
+        .flatten();
+        if value.is_empty() || parsed.is_some() {
+            if value.is_empty()
+                && !affected_names
+                    .iter()
+                    .any(|property| current.block.property_is_declared(property))
+            {
+                return Some(false);
+            }
+            // Parsing is complete. Move the block out until publication so no
+            // borrow of the declaration store spans an author callback.
+            let mut state = initial.unwrap_or_else(|| {
+                unsafe { &mut *runtime_ptr }
+                    .take_element_inline_style_declaration_state(handle)
+                    .expect("cached inline style declaration state")
+            });
+            if let Some(parsed) = parsed {
+                parsed.apply(&mut state.block);
+                for property in style_property_mutation_cleanup_names_with_pdb(name) {
+                    state.block.remove_property(&property);
+                }
+            } else {
+                for property in &affected_names {
+                    state.block.remove_property(property);
+                }
+            }
+            return Some(commit_inline_property_state(
+                scope,
+                runtime_ptr,
+                handle,
+                state,
+                inline_base_url.as_ref(),
+                update_inline_style_base,
+            ));
+        }
+    }
+    let mut state = initial
+        .or_else(|| cached.cloned())
+        .expect("compatibility inline style declaration state");
     if inline_state_has_unpreservable_side_entries_for_property(&state, name, &affected_names) {
         return None;
     }
@@ -231,8 +289,26 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         new_entries,
         new_side_entries,
     );
+    Some(commit_inline_property_state(
+        scope,
+        runtime_ptr,
+        handle,
+        state,
+        inline_base_url.as_ref(),
+        update_inline_style_base,
+    ))
+}
+
+fn commit_inline_property_state(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    state: CssInlineStyleDeclarationState,
+    base_url: Option<&url::Url>,
+    update_base_url: bool,
+) -> bool {
     let (css_text, override_text) = state.css_text_and_style_resolution_override();
-    let attribute_changed = style_string(runtime, handle) != css_text;
+    let attribute_changed = style_string(unsafe { &*runtime_ptr }, handle) != css_text;
     commit_inline_style_declaration(
         scope,
         runtime_ptr,
@@ -240,11 +316,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         state,
         attribute_changed.then_some(css_text.as_str()),
         override_text,
-        inline_base_url
-            .as_ref()
-            .filter(|_| attribute_changed || update_inline_style_base),
+        base_url.filter(|_| attribute_changed || update_base_url),
     );
-    Some(attribute_changed)
+    attribute_changed
 }
 
 pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_pdb_storage(
