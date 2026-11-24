@@ -946,3 +946,31 @@ events, settled})"#,
         }
     }
 }
+
+#[test]
+fn intercepted_navigation_does_not_dispatch_legacy_fragment_events() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+    vm.eval(
+        r##"
+        globalThis.legacyEvents = [];
+        for (const type of ["popstate", "hashchange"]) {
+          addEventListener(type, () => legacyEvents.push(type));
+        }
+        navigation.addEventListener("navigate", event => event.intercept(), {once: true});
+        navigation.navigate("#intercepted");
+        "##,
+    )
+    .expect("intercepted navigation should run");
+    assert_eq!(
+        vm.eval("[location.hash, legacyEvents.join(',')].join('|')")
+            .unwrap(),
+        "#intercepted|"
+    );
+    vm.eval("navigation.navigate('#fragment')")
+        .expect("regular fragment navigation should run");
+    assert_eq!(
+        vm.eval("location.hash === '#fragment' && legacyEvents.includes('popstate')")
+            .unwrap(),
+        "true"
+    );
+}
