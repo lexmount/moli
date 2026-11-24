@@ -1,9 +1,6 @@
-use std::io::Cursor;
+use libjpeg_turbo_rs::{DecodeLimits, Decoder, FrameHeader, PixelFormat, Subsampling};
 
-use crate::{
-    MAX_DECODED_RGBA_BYTES, MAX_ENCODED_IMAGE_BYTES, RgbaImage, RgbaImageError,
-    bounded::BoundedBytes,
-};
+use crate::{MAX_DECODED_RGBA_BYTES, MAX_ENCODED_IMAGE_BYTES, RgbaImage, RgbaImageError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncodedJpeg {
@@ -25,15 +22,13 @@ pub enum JpegEncodeError {
     #[error("JPEG output contains {actual} bytes, exceeding the {max}-byte encoded image budget")]
     EncodedBufferBudgetExceeded { actual: usize, max: usize },
     #[error("JPEG encoding failed: {0}")]
-    Encoding(#[from] jpeg_encoder::EncodingError),
+    Encoding(#[from] libjpeg_turbo_rs::JpegError),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum JpegDecodeError {
     #[error("JPEG decoding failed: {0}")]
-    Decoding(#[from] jpeg_decoder::Error),
-    #[error("JPEG decoder returned no image metadata")]
-    MissingImageInfo,
+    Decoding(#[from] libjpeg_turbo_rs::JpegError),
     #[error("JPEG decoder produced unsupported pixel format {format}")]
     UnsupportedPixelFormat { format: &'static str },
     #[error(transparent)]
@@ -52,21 +47,25 @@ pub fn encode_jpeg(image: &RgbaImage, quality: u8) -> Result<EncodedJpeg, JpegEn
         height: image.height,
         max_dimension: u32::from(u16::MAX),
     })?;
-    let mut bytes = BoundedBytes::new(MAX_ENCODED_IMAGE_BYTES);
-    let result = jpeg_encoder::Encoder::new(&mut bytes, quality).encode(
+    let sampling = if quality < 90 {
+        Subsampling::S420
+    } else {
+        Subsampling::S444
+    };
+    let bytes = libjpeg_turbo_rs::compress(
         &image.rgba,
-        width,
-        height,
-        jpeg_encoder::ColorType::Rgba,
-    );
-    if bytes.limit_exceeded() {
+        usize::from(width),
+        usize::from(height),
+        PixelFormat::Rgba,
+        quality,
+        sampling,
+    )?;
+    if bytes.len() > MAX_ENCODED_IMAGE_BYTES {
         return Err(JpegEncodeError::EncodedBufferBudgetExceeded {
-            actual: bytes.rejected_len().unwrap_or(usize::MAX),
+            actual: bytes.len(),
             max: MAX_ENCODED_IMAGE_BYTES,
         });
     }
-    result?;
-    let bytes = bytes.into_inner();
     Ok(EncodedJpeg {
         width: image.width,
         height: image.height,
@@ -75,37 +74,37 @@ pub fn encode_jpeg(image: &RgbaImage, quality: u8) -> Result<EncodedJpeg, JpegEn
 }
 
 pub fn decode_jpeg(bytes: &[u8]) -> Result<RgbaImage, JpegDecodeError> {
-    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
-    decoder.set_max_decoding_buffer_size(MAX_DECODED_RGBA_BYTES);
-    let decoded = decoder.decode()?;
-    let info = decoder.info().ok_or(JpegDecodeError::MissingImageInfo)?;
-    let rgba = match info.pixel_format {
-        jpeg_decoder::PixelFormat::L8 => decoded
-            .into_iter()
-            .flat_map(|value| [value, value, value, 255])
-            .collect(),
-        jpeg_decoder::PixelFormat::RGB24 => decoded
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
-            .collect(),
-        jpeg_decoder::PixelFormat::L16 => {
-            return Err(JpegDecodeError::UnsupportedPixelFormat { format: "L16" });
-        }
-        jpeg_decoder::PixelFormat::CMYK32 => {
-            return Err(JpegDecodeError::UnsupportedPixelFormat { format: "CMYK32" });
-        }
-    };
-    RgbaImage::try_new(u32::from(info.width), u32::from(info.height), rgba).map_err(Into::into)
+    let mut decoder = Decoder::new_with_limits(bytes, jpeg_decode_limits())?;
+    let header = decoder.header();
+    let (width, height) = checked_jpeg_dimensions(header)?;
+    if header.precision > 8 {
+        return Err(JpegDecodeError::UnsupportedPixelFormat { format: "L16" });
+    }
+    if header.components.len() == 4 {
+        return Err(JpegDecodeError::UnsupportedPixelFormat { format: "CMYK32" });
+    }
+    decoder.set_output_format(PixelFormat::Rgba);
+    let decoded = decoder.decode_image()?;
+    RgbaImage::try_new(width, height, decoded.into_vec()).map_err(Into::into)
 }
 
 pub(crate) fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), JpegDecodeError> {
-    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
-    decoder.set_max_decoding_buffer_size(MAX_DECODED_RGBA_BYTES);
-    decoder.read_info()?;
-    let info = decoder.info().ok_or(JpegDecodeError::MissingImageInfo)?;
-    let dimensions = (u32::from(info.width), u32::from(info.height));
+    // Stop at the first scan header, including for progressive JPEGs.
+    let decoder = Decoder::new_header_only(bytes, jpeg_decode_limits())?;
+    checked_jpeg_dimensions(decoder.header())
+}
+
+fn jpeg_decode_limits() -> DecodeLimits {
+    DecodeLimits {
+        max_width: usize::from(u16::MAX),
+        max_height: usize::from(u16::MAX),
+        max_pixels: (MAX_DECODED_RGBA_BYTES / 4) as u64,
+        ..DecodeLimits::default()
+    }
+}
+
+fn checked_jpeg_dimensions(header: &FrameHeader) -> Result<(u32, u32), JpegDecodeError> {
+    let dimensions = (u32::from(header.width), u32::from(header.height));
     crate::rgba::checked_rgba_len(dimensions.0, dimensions.1)?;
     Ok(dimensions)
 }
@@ -134,6 +133,80 @@ mod tests {
         let decoded = decode_jpeg(&encoded.bytes).unwrap();
         assert_eq!((decoded.width, decoded.height), (3, 2));
         assert_eq!(decoded.rgba.len(), 3 * 2 * 4);
+    }
+
+    #[test]
+    fn jpeg_preserves_chroma_sampling_and_discards_alpha() {
+        let opaque = sample();
+        let mut transparent = opaque.clone();
+        for pixel in transparent.rgba.as_chunks_mut::<4>().0 {
+            pixel[3] = 0;
+        }
+        for (quality, sampling) in [(89, Subsampling::S420), (90, Subsampling::S444)] {
+            let encoded = encode_jpeg(&opaque, quality).unwrap();
+            assert_eq!(
+                libjpeg_turbo_rs::probe(&encoded.bytes).unwrap().subsampling,
+                sampling
+            );
+            assert_eq!(encode_jpeg(&transparent, quality).unwrap(), encoded);
+        }
+    }
+
+    #[test]
+    fn probe_progressive_jpeg_needs_no_scan_data() {
+        let bytes = libjpeg_turbo_rs::compress_progressive(
+            &[128; 8 * 8],
+            8,
+            8,
+            PixelFormat::Grayscale,
+            75,
+            Subsampling::S444,
+        )
+        .unwrap();
+        let scan = bytes
+            .windows(2)
+            .position(|marker| marker == [0xff, 0xda])
+            .unwrap();
+        let scan_len = u16::from_be_bytes([bytes[scan + 2], bytes[scan + 3]]);
+        let headers = &bytes[..scan + 2 + usize::from(scan_len)];
+        assert_eq!(jpeg_dimensions(headers).unwrap(), (8, 8));
+        let image = decode_jpeg(&bytes).unwrap();
+        assert_eq!(image.rgba, [128, 128, 128, 255].repeat(8 * 8));
+    }
+
+    #[test]
+    fn decode_lossless_grayscale_preserves_samples() {
+        let samples = [5, 32, 97, 129, 202, 255];
+        let bytes =
+            libjpeg_turbo_rs::compress_lossless(&samples, 3, 2, PixelFormat::Grayscale).unwrap();
+        let image = decode_jpeg(&bytes).unwrap();
+        assert_eq!((image.width, image.height), (3, 2));
+        for (pixel, value) in image.rgba.as_chunks::<4>().0.iter().zip(samples) {
+            assert_eq!(*pixel, [value, value, value, 255]);
+        }
+    }
+
+    #[test]
+    fn jpeg_dimensions_reject_an_rgba_buffer_above_the_budget() {
+        let mut bytes = encode_jpeg(&sample(), 75).unwrap().bytes;
+        let frame = bytes
+            .windows(2)
+            .position(|marker| marker == [0xff, 0xc0])
+            .unwrap();
+        let dimension = 8192_u16.to_be_bytes();
+        bytes[frame + 5..frame + 7].copy_from_slice(&dimension);
+        bytes[frame + 7..frame + 9].copy_from_slice(&dimension);
+        for result in [
+            jpeg_dimensions(&bytes).map(|_| ()),
+            decode_jpeg(&bytes).map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(JpegDecodeError::InvalidOutput(
+                    RgbaImageError::BufferBudgetExceeded { .. }
+                ))
+            ));
+        }
     }
 
     #[test]

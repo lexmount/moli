@@ -4246,21 +4246,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jpeg-decoder"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
-dependencies = [
- "rayon",
-]
-
-[[package]]
-name = "jpeg-encoder"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b454d911ac55068f53495488d8ccd0646eaa540c033a28ee15b07838afafb01f"
-
-[[package]]
 name = "js-sys"
 version = "0.3.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4378,6 +4363,15 @@ checksum = "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2"
 dependencies = [
  "arbitrary",
  "cc",
+]
+
+[[package]]
+name = "libjpeg-turbo-rs"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "083fece5e695fd3678ab4ec206f6beb23cc511c1f65e797812dc88f5502591fa"
+dependencies = [
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5266,8 +5260,7 @@ name = "moli-image"
 version = "0.1.0"
 dependencies = [
  "image",
- "jpeg-decoder",
- "jpeg-encoder",
+ "libjpeg-turbo-rs",
  "png",
  "thiserror 2.0.18",
  "usvg",
