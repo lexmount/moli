@@ -58,6 +58,16 @@
         else if(mode==='group-disabled') {state.second.selected=true;state.group.disabled=true;}
         state.expected=[];return state;
       });
+      run('selection/fieldset-inside-select',form=>{
+        const state=select(form);
+        const fieldset=doc.createElement('fieldset');
+        fieldset.disabled=true;
+        state.control.append(fieldset);
+        fieldset.append(state.first);
+        state.first.selected=true;
+        state.expected=[['choice','second'],['choice','first']];
+        return state;
+      });
       for(const owner of ['input','fieldset','option','optgroup']) run('foreign-disabled/'+owner,form=>{
         if(owner==='input') {
           const state=input(form);state.control.setAttributeNS('urn:foreign','disabled','');return state;

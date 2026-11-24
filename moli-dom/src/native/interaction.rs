@@ -194,7 +194,7 @@ impl NativeDom {
         None
     }
 
-    pub(super) fn option_is_disabled(&self, node_id: NativeNodeId) -> bool {
+    pub fn option_is_disabled(&self, node_id: NativeNodeId) -> bool {
         if self
             .node(node_id)
             .and_then(Node::as_element)

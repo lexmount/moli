@@ -178,7 +178,7 @@ fn append_form_data_entries_for_control(
     } else if element.is_html_select() {
         if !name.is_empty() {
             for option in runtime.dom_host().select_selected_option_elements(handle) {
-                if !form_control_is_effectively_disabled(runtime, option)
+                if !runtime.dom_host().dom().option_is_disabled(option)
                     && let Some(option_element) =
                         runtime.dom_host().node(option).and_then(Node::as_element)
                 {
