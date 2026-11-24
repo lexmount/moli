@@ -219,32 +219,17 @@ fn image_loading_getter_function<'s>(
     rv.set(value.into());
 }
 
-fn set_html_loading_for_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    value: v8::Local<'s, v8::Value>,
-    owner: &'static str,
-) -> Option<(*mut PageScriptHost, DomHandle, String)> {
-    let value = property_dom_string_value(scope, value, owner, "loading")?;
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, receiver)
-    else {
-        return None;
-    };
-    set_reflected_attribute(scope, runtime_ptr, handle, "loading", &value);
-    Some((runtime_ptr, handle, value))
-}
-
 fn image_loading_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some((runtime_ptr, handle, value)) =
-        set_html_loading_for_receiver(scope, args.this(), args.get(0), "HTMLImageElement")
-        && !value.trim().eq_ignore_ascii_case("lazy")
+    if let Some(value) =
+        property_dom_string_value(scope, args.get(0), "HTMLImageElement", "loading")
+        && let Ok((runtime_ptr, handle)) =
+            node_runtime_and_handle_from_object_or_detached(scope, args.this())
     {
-        queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
+        set_reflected_attribute(scope, runtime_ptr, handle, "loading", &value);
     }
     rv.set_undefined();
 }

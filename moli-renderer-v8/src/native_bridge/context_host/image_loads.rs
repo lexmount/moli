@@ -30,6 +30,7 @@ impl PageScriptHost {
         image_handle: DomHandle,
         target: WindowDocumentTaskTarget,
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+        delays_load: bool,
     ) -> Option<PendingImageLoadEvent> {
         let node = self.dom_host().node(image_handle)?;
         let element = node
@@ -42,10 +43,6 @@ impl PageScriptHost {
             "img"
         };
         let is_main_document = owner_document_handle == self.document_handle();
-        let delays_load = !element.is_html_element("img")
-            || !element
-                .attribute("loading")
-                .is_some_and(|loading| loading.eq_ignore_ascii_case("lazy"));
         if let Some(previous) = self.pending_image_load_event(image_handle) {
             let same_owner_document = previous.owner_document_handle() == owner_document_handle;
             let previous_owner_still_matches = same_owner_document
@@ -64,24 +61,6 @@ impl PageScriptHost {
                     }
                 };
             if previous_owner_still_matches {
-                let has_delay = match previous.owner() {
-                    PendingImageLoadEventOwner::Main(binding) => {
-                        binding.load_delay_token().is_some()
-                    }
-                    PendingImageLoadEventOwner::Child(binding) => {
-                        binding.load_delay_token().is_some()
-                    }
-                };
-                if delays_load
-                    && !has_delay
-                    && let Some(owner) =
-                        self.accept_image_load_delay(image_handle, owner_document_handle, true)
-                {
-                    self.pending_image_load_events
-                        .get_mut(&image_handle)
-                        .expect("current image sequence remains registered")
-                        .owner = owner;
-                }
                 return None;
             }
             let previous = self
