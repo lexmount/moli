@@ -157,19 +157,71 @@ async fn mobile_device_metrics_use_the_document_viewport_meta() {
 async fn mobile_viewport_separates_layout_size_from_the_page_scale() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
-    for (width, height, content, expected) in [
-        (400, 600, "width=320", json!([320, 480, 320, 480, 1.25])),
+    evaluate(
+        &mut ctx,
+        r#"
+        document.body.style.margin = '0';
+        document.body.innerHTML = '<div id="probe" style="width:100vw;height:100vh"></div>';
+        undefined
+        "#,
+    )
+    .await;
+    for (width, height, content, frame_size, visual_viewport, css_size) in [
+        (
+            400,
+            600,
+            "width=320",
+            [320, 480],
+            json!([320, 480, 1.25]),
+            [320, 480],
+        ),
+        (
+            400,
+            600,
+            "width=320, minimum-scale=2",
+            [200, 300],
+            json!([200, 300, 2]),
+            [320, 480],
+        ),
         (
             375,
             667,
             "width=980, minimum-scale=1",
-            json!([375, 667, 375, 667, 1]),
+            [375, 667],
+            json!([375, 667, 1]),
+            [980, 1743],
+        ),
+        (
+            375,
+            667,
+            "minimum-scale=1",
+            [375, 667],
+            json!([375, 667, 1]),
+            [980, 1743],
         ),
         (
             375,
             667,
             "width=980, initial-scale=2",
-            json!([981, 1744, 187.5, 333.5, 2]),
+            [981, 1744],
+            json!([187.5, 333.5, 2]),
+            [980, 1743],
+        ),
+        (
+            375,
+            667,
+            "width=980, initial-scale=2, minimum-scale=1",
+            [375, 667],
+            json!([187.5, 333.5, 2]),
+            [980, 1743],
+        ),
+        (
+            375,
+            667,
+            "width=980, maximum-scale=0.25",
+            [1500, 2668],
+            json!([1500, 2668, 0.25]),
+            [1500, 2668],
         ),
     ] {
         set_metrics(
@@ -184,11 +236,38 @@ async fn mobile_viewport_separates_layout_size_from_the_page_scale() {
             ),
         )
         .await;
+        ctx.capture_fixture_layout(Some("SID-1")).await;
         assert_eq!(
-            evaluate(&mut ctx, "[innerWidth, innerHeight, visualViewport.width, visualViewport.height, visualViewport.scale]").await,
-            expected,
+            evaluate(
+                &mut ctx,
+                r#"(() => {
+                    const {width, height} = document.getElementById('probe').getBoundingClientRect();
+                    return [
+                        [innerWidth, innerHeight],
+                        [visualViewport.width, visualViewport.height, visualViewport.scale],
+                        [matchMedia('(min-width: 600px)').matches, matchMedia('(min-height: 1000px)').matches],
+                        [width, height],
+                        [document.documentElement.clientWidth, document.documentElement.clientHeight]
+                    ];
+                })()"#,
+            )
+            .await,
+            json!([
+                frame_size,
+                visual_viewport,
+                [css_size[0] >= 600, css_size[1] >= 1000],
+                css_size,
+                css_size,
+            ]),
             "{content}",
         );
+        ctx.process_async(json!({
+            "id": 88403, "sessionId": "SID-1", "method": "Page.getLayoutMetrics"
+        }))
+        .await;
+        let result = ctx.take_response_by_id(88403)["result"].clone();
+        assert_eq!(result["cssLayoutViewport"]["clientWidth"], frame_size[0]);
+        assert_eq!(result["cssLayoutViewport"]["clientHeight"], frame_size[1]);
     }
 }
 

@@ -1530,6 +1530,10 @@ mod tests {
     fn parser_classifies_stylesheet_media_using_the_resolved_mobile_viewport() {
         for (meta, expected_blocking) in [
             ("", true),
+            (
+                "<meta name=viewport content='width=980, minimum-scale=1'>",
+                true,
+            ),
             ("<meta name=viewport content=width=device-width>", false),
         ] {
             let document = HtmlParser::SCRIPTING_ENABLED.parse(
@@ -1545,6 +1549,7 @@ mod tests {
                     width: 375,
                     height: 667,
                     device_size: (375, 667),
+                    css_layout_size: None,
                     scale: 1.0,
                     native_device_pixel_ratio: 1.0,
                     viewport: None,

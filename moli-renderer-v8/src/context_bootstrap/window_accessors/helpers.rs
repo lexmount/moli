@@ -131,18 +131,6 @@ pub(super) fn window_receiver<'s>(
     None
 }
 
-pub(crate) fn current_window_style_viewport(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::PageScriptHost,
-) -> crate::style_engine::StyleViewport {
-    let global = scope.get_current_context().global(scope);
-    window_child_context_handle(scope, global)
-        .and_then(|frame_handle| {
-            crate::native_bridge::element::iframe_handle_viewport(host, frame_handle)
-        })
-        .unwrap_or_else(|| host.style_viewport())
-}
-
 pub(in crate::context_bootstrap) fn window_has_discarded_child_browsing_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,

@@ -247,20 +247,11 @@ impl PageScriptHost {
     }
 
     pub(crate) fn layout_viewport_for_document(&self, document: DomHandle) -> LayoutViewport {
-        let surface = self.viewport_surface();
-        let device_pixel_ratio = surface
-            .map(|surface| surface.device_pixel_ratio as f32)
-            .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.device_pixel_ratio as f32);
+        let surface = self.viewport_surface().unwrap_or_default();
+        let device_pixel_ratio = surface.device_pixel_ratio as f32;
         if document == self.document_handle() {
-            return LayoutViewport::new(
-                surface
-                    .map(|surface| surface.inner_width)
-                    .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_width as u32),
-                surface
-                    .map(|surface| surface.inner_height)
-                    .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_height as u32),
-                device_pixel_ratio,
-            );
+            let (width, height) = surface.css_layout_size();
+            return LayoutViewport::new(width, height, device_pixel_ratio);
         }
 
         let child_viewport = self
