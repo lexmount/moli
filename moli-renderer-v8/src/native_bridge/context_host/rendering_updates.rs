@@ -124,14 +124,14 @@ impl PageScriptHost {
     pub(crate) fn queue_environment_change(&mut self) {
         if self.layout_policy().is_realtime() {
             // Screen commits sample and queue Realtime notifications. They
-            // must not also enter the legacy immediate rendering-update FIFO.
+            // must not also enter the immediate rendering-update FIFO.
             return;
         }
-        self.queue_legacy_environment_change(false);
+        self.queue_environment_task(false);
     }
 
     pub(crate) fn queue_non_layout_environment_change(&mut self) {
-        self.queue_legacy_environment_change(self.layout_policy().is_realtime());
+        self.queue_environment_task(self.layout_policy().is_realtime());
     }
 
     pub(crate) fn queue_viewport_change(
@@ -168,24 +168,25 @@ impl PageScriptHost {
         )
     }
 
-    fn queue_legacy_environment_change(&mut self, exclude_layout_events: bool) {
+    fn queue_environment_task(&mut self, exclude_layout_events: bool) {
         let scopes = std::iter::once(OwnerDispatchScope::Top).chain(
             self.child_browsing_context_handles_in_document_order()
                 .into_iter()
                 .map(OwnerDispatchScope::Child),
         );
         for dispatch_scope in scopes {
-            if self
-                .current_registered_window_execution_context_identity(dispatch_scope)
-                .is_none()
-            {
-                continue;
-            }
             let Some(target) =
                 self.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
             else {
                 continue;
             };
+            if self
+                .current_registered_window_execution_context_identity(dispatch_scope)
+                .is_none()
+                && (exclude_layout_events || !self.has_media_queries_for_target(target))
+            {
+                continue;
+            }
             if self
                 .rendering_updates
                 .find_slot_index(
@@ -195,6 +196,9 @@ impl PageScriptHost {
                 )
                 .is_some()
             {
+                if !exclude_layout_events {
+                    self.defer_media_query_samples(target);
+                }
                 continue;
             }
             let change = PendingEnvironmentChange {
@@ -217,11 +221,14 @@ impl PageScriptHost {
             } else {
                 PendingRenderingUpdatePayload::EnvironmentChange(change)
             };
-            self.queue_rendering_update(
+            if self.queue_rendering_update(
                 target,
                 RendererPageRenderingUpdateTaskKind::EnvironmentChange,
                 payload,
-            );
+            ) && !exclude_layout_events
+            {
+                self.defer_media_query_samples(target);
+            }
         }
     }
 
@@ -307,12 +314,11 @@ impl PageScriptHost {
         task_id: RendererPageRenderingUpdateTaskId,
         target: WindowDocumentTaskTarget,
         kind: RendererPageRenderingUpdateTaskKind,
-    ) -> Option<bool> {
-        let payload = self
-            .rendering_updates
-            .remove_exact(task_id, target, kind)?
-            .into_payload();
-        Some(match payload {
+    ) -> anyhow::Result<Option<bool>> {
+        let Some(payload) = self.rendering_updates.remove_exact(task_id, target, kind) else {
+            return Ok(None);
+        };
+        Ok(Some(match payload.into_payload() {
             PendingRenderingUpdatePayload::DocumentScrollEvents => {
                 self.dispatch_authorized_document_scroll_events(scope, host_ptr, target)
             }
@@ -323,12 +329,12 @@ impl PageScriptHost {
                 self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
             }
             PendingRenderingUpdatePayload::EnvironmentChange(change) => {
-                self.dispatch_authorized_environment_change(scope, host_ptr, target, change, true)
+                self.dispatch_authorized_environment_change(scope, host_ptr, target, change, true)?
             }
             PendingRenderingUpdatePayload::NonLayoutEnvironmentChange(change) => {
-                self.dispatch_authorized_environment_change(scope, host_ptr, target, change, false)
+                self.dispatch_authorized_environment_change(scope, host_ptr, target, change, false)?
             }
-        })
+        }))
     }
 
     pub(crate) fn discard_pending_rendering_update_task(
@@ -390,10 +396,10 @@ impl PageScriptHost {
         target: WindowDocumentTaskTarget,
         change: PendingEnvironmentChange,
         include_layout_events: bool,
-    ) -> bool {
+    ) -> anyhow::Result<bool> {
         let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
         else {
-            return false;
+            return Ok(false);
         };
         let context_scope = &mut v8::ContextScope::new(scope, resolved.context);
         let previous_scope = target.dispatch_scope().enter(context_scope);
@@ -402,12 +408,12 @@ impl PageScriptHost {
         let current_activity = self.document_activity();
         // Resize precedes media reporting. Every listener can replace its
         // Document, so abandon the remaining events as soon as the owner retires.
-        let dispatched = (|| {
+        let dispatched = (|| -> anyhow::Result<bool> {
             let mut dispatched = false;
             let window_target = match target.dispatch_scope() {
                 OwnerDispatchScope::Child(handle) => {
                     let Some(child_target) = self.current_child_window_event_target(handle) else {
-                        return false;
+                        return Ok(false);
                     };
                     EventTargetHandle::ChildWindow(child_target)
                 }
@@ -449,7 +455,7 @@ impl PageScriptHost {
                     target.owner(),
                     target.dispatch_scope(),
                 ) {
-                    return dispatched;
+                    return Ok(dispatched);
                 }
                 dispatched |= crate::context_bootstrap::dispatch_window_visual_viewport_resize(
                     context_scope,
@@ -461,18 +467,26 @@ impl PageScriptHost {
                 target.owner(),
                 target.dispatch_scope(),
             ) {
-                return dispatched;
+                return Ok(dispatched);
             }
             if include_layout_events {
-                dispatched |= crate::context_bootstrap::dispatch_media_query_list_change_events(
+                self.sample_media_queries(Some(target));
+                dispatched |= crate::context_bootstrap::dispatch_media_query_events(
                     context_scope,
-                );
+                    host_ptr,
+                    || {
+                        unsafe { &*host_ptr }
+                            .current_window_document_task_target_for_dispatch_scope(
+                                target.dispatch_scope(),
+                            )
+                    },
+                )?;
             }
             if !self.window_document_owner_is_current_for_dispatch_scope(
                 target.owner(),
                 target.dispatch_scope(),
             ) {
-                return dispatched;
+                return Ok(dispatched);
             }
 
             if change.previous_orientation
@@ -489,7 +503,7 @@ impl PageScriptHost {
                     target.owner(),
                     target.dispatch_scope(),
                 ) {
-                    return dispatched;
+                    return Ok(dispatched);
                 }
             }
             // Losing focus precedes hiding; showing precedes gaining focus.
@@ -519,7 +533,7 @@ impl PageScriptHost {
                     target.owner(),
                     target.dispatch_scope(),
                 ) {
-                    return dispatched;
+                    return Ok(dispatched);
                 }
                 self.set_document_activity(activity);
                 let (event_target, event) = if event_type == "visibilitychange" {
@@ -566,7 +580,7 @@ impl PageScriptHost {
                 }
             }
 
-            dispatched
+            Ok(dispatched)
         })();
         // A listener can retire its Document midway through the transition.
         // The browser's requested final activity still belongs to the Page.

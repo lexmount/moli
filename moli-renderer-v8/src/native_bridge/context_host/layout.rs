@@ -853,6 +853,7 @@ impl PageScriptHost {
             state.reset();
         }
         self.prune_realtime_animation_frames();
+        self.prune_media_queries();
         self.prune_realtime_environment();
         self.prune_realtime_rendering_events();
         if self.layout_policy().is_realtime() {

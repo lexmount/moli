@@ -123,6 +123,7 @@ mod live_ranges;
 mod main_document_lifecycle;
 mod media_element_events;
 mod media_loads;
+mod media_queries;
 #[cfg(all(
     feature = "media-ext",
     any(target_os = "linux", target_os = "macos"),
@@ -905,6 +906,7 @@ pub(crate) struct PageScriptHost {
     layout_policy: moli_page_types::LayoutPolicy,
     scrollbars_hidden: bool,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,
+    media_queries: RefCell<media_queries::MediaQueryState>,
     realtime_layout_state: Option<Box<realtime_layout::RealtimeLayoutState>>,
     layout_pass_active: Cell<bool>,
     completed_layout_pass_count: Cell<u64>,
