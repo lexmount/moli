@@ -10,6 +10,8 @@ use moli_page_types::{LayoutPolicy, ViewportSurface};
 use std::sync::Arc;
 use std::time::Instant;
 
+#[cfg(feature = "devtools")]
+use super::RendererDevToolsPageReply;
 use super::{PageVm, RendererDocumentLifecycleIdentity};
 
 mod vision;
@@ -256,10 +258,10 @@ impl PageVm {
         }
         let paint_capture = request
             .paint_capture_request(self.document_settings.viewport_surface.unwrap_or_default())?;
-        self.capture_image(
-            request.format,
-            request.quality,
-            request.optimize_for_speed,
+        if self.layout_configuration.policy == LayoutPolicy::Mock {
+            return Ok(RendererCaptureScreenshotReply::LayoutDisabled);
+        }
+        let capture = self.prepare_image_capture(
             paint_capture,
             match request.purpose {
                 RendererScreenshotPurpose::Screenshot => moli_layout::LayoutFlushReason::Screenshot,
@@ -275,18 +277,33 @@ impl PageVm {
             },
             #[cfg(feature = "devtools")]
             None,
-        )
-        .map(RendererImageCaptureOutcome::into_screenshot_reply)
+        )?;
+        match capture {
+            Some(capture) => Ok(RendererCaptureScreenshotReply::Captured(capture.encode(
+                request.format,
+                request.quality,
+                request.optimize_for_speed,
+            )?)),
+            None => Ok(RendererCaptureScreenshotReply::NoDocument),
+        }
     }
 
-    /// Polls one screencast subscription. Only this request accepts a known
-    /// visual state and only this reply can report `Unchanged`.
+    /// The owner produces an immutable snapshot. Realtime capture can then
+    /// rasterize and encode it without holding the page execution lane.
     #[cfg(feature = "devtools")]
+    pub(super) fn dispatch_screencast_frame(
+        &mut self,
+        request: RendererCaptureScreencastFrameRequest,
+    ) -> anyhow::Result<RendererDevToolsPageReply> {
+        self.prepare_screencast_frame(request, || {})
+    }
+
+    #[cfg(all(feature = "devtools", test))]
     pub(super) fn capture_screencast_frame(
         &mut self,
         request: RendererCaptureScreencastFrameRequest,
     ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
-        self.capture_screencast_frame_with_before_layout(request, || {})
+        self.capture_screencast_frame_with_before_layout_hook(request, || {})
     }
 
     #[cfg(feature = "devtools")]
@@ -296,21 +313,27 @@ impl PageVm {
         request: RendererCaptureScreencastFrameRequest,
         before_layout: impl FnOnce(),
     ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
-        self.capture_screencast_frame_with_before_layout(request, before_layout)
+        match self.prepare_screencast_frame(request, before_layout)? {
+            RendererDevToolsPageReply::CaptureScreencastFrame(reply) => Ok(reply),
+            RendererDevToolsPageReply::ScreencastFrameRasterJob(job) => job.finish(),
+            _ => unreachable!("screencast preparation only produces a screencast reply"),
+        }
     }
 
     #[cfg(feature = "devtools")]
-    fn capture_screencast_frame_with_before_layout(
+    fn prepare_screencast_frame(
         &mut self,
         request: RendererCaptureScreencastFrameRequest,
         before_layout: impl FnOnce(),
-    ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
+    ) -> anyhow::Result<RendererDevToolsPageReply> {
+        use RendererCaptureScreencastFrameReply::{LayoutDisabled, NoDocument, Unchanged};
+        use RendererDevToolsPageReply::CaptureScreencastFrame;
         let debugger_paused = self.vm().is_debugger_paused();
         if !debugger_paused {
             self.flush_page_action_window(moli_action_window::ActionBarrier::Screencast)?;
         }
         if self.layout_configuration.policy == LayoutPolicy::Mock {
-            return Ok(RendererCaptureScreencastFrameReply::LayoutDisabled);
+            return Ok(CaptureScreencastFrame(LayoutDisabled));
         }
         let surface = self.document_settings.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
@@ -333,7 +356,7 @@ impl PageVm {
                 && known.state == visual_state_before.state
                 && known.overlay_generation == visual_state_before.overlay_generation
         }) {
-            return Ok(RendererCaptureScreencastFrameReply::Unchanged);
+            return Ok(CaptureScreencastFrame(Unchanged));
         }
         before_layout();
         let paint_capture = PaintCaptureRequest {
@@ -354,23 +377,15 @@ impl PageVm {
                     .as_ref()
                     .is_some_and(|known| known.post_layout_work_deferred)
         });
-        let image = match self.capture_image(
-            request.format,
-            request.quality,
-            request.optimize_for_speed,
+        let Some(capture) = self.prepare_image_capture(
             paint_capture,
             moli_layout::LayoutFlushReason::Screencast,
             LayoutPublicationRequest::Screen,
             None,
             paint_session,
-        )? {
-            RendererImageCaptureOutcome::Captured(image) => image,
-            RendererImageCaptureOutcome::LayoutDisabled => {
-                return Ok(RendererCaptureScreencastFrameReply::LayoutDisabled);
-            }
-            RendererImageCaptureOutcome::NoDocument => {
-                return Ok(RendererCaptureScreencastFrameReply::NoDocument);
-            }
+        )?
+        else {
+            return Ok(CaptureScreencastFrame(NoDocument));
         };
         let visual_state_after = self
             .vm()
@@ -383,31 +398,33 @@ impl PageVm {
         let mut visual_state =
             visual_state_for_rendered_frame(visual_state_before, visual_state_after);
         visual_state.post_layout_work_deferred = debugger_paused;
-        Ok(RendererCaptureScreencastFrameReply::Captured(
-            RendererCapturedScreencastFrame {
-                viewport_size: surface.visible_size(),
-                image,
-                visual_state,
-            },
-        ))
+        let job = RendererScreencastFrameRasterJob {
+            capture,
+            viewport_size: surface.visible_size(),
+            visual_state,
+            format: request.format,
+            quality: request.quality,
+            optimize_for_speed: request.optimize_for_speed,
+        };
+        if self.layout_configuration.policy == LayoutPolicy::Realtime {
+            Ok(RendererDevToolsPageReply::ScreencastFrameRasterJob(
+                Box::new(job),
+            ))
+        } else {
+            job.finish().map(CaptureScreencastFrame)
+        }
     }
 
-    fn capture_image(
+    fn prepare_image_capture(
         &mut self,
-        format: RendererScreenshotFormat,
-        quality: u8,
-        optimize_for_speed: bool,
         mut paint_capture: PaintCaptureRequest,
         reason: moli_layout::LayoutFlushReason,
         publication: LayoutPublicationRequest,
         environment_override: Option<StyloStyleEnvironment>,
         #[cfg(feature = "devtools")] paint_session: Option<&super::RendererScreencastPaintSession>,
-    ) -> anyhow::Result<RendererImageCaptureOutcome> {
+    ) -> anyhow::Result<Option<PreparedImageCapture>> {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(Instant::now);
-        if self.layout_configuration.policy == LayoutPolicy::Mock {
-            return Ok(RendererImageCaptureOutcome::LayoutDisabled);
-        }
         use moli_page_types::VisionDeficiency;
         let deficiency = if reason == moli_layout::LayoutFlushReason::Print {
             VisionDeficiency::None
@@ -446,7 +463,7 @@ impl PageVm {
             )?,
         };
         let Some(snapshot) = snapshot else {
-            return Ok(RendererImageCaptureOutcome::NoDocument);
+            return Ok(None);
         };
         let layout_us = layout_started
             .map(|started| started.elapsed().as_micros())
@@ -479,6 +496,41 @@ impl PageVm {
             );
         }
 
+        Ok(Some(PreparedImageCapture {
+            snapshot,
+            deficiency,
+            reason,
+            total_started,
+            layout_us,
+        }))
+    }
+}
+
+/// Owned pixels work. The snapshot contains no live layout or JavaScript state.
+struct PreparedImageCapture {
+    snapshot: moli_layout::PaintSnapshot,
+    deficiency: moli_page_types::VisionDeficiency,
+    reason: moli_layout::LayoutFlushReason,
+    total_started: Option<Instant>,
+    layout_us: u128,
+}
+
+impl PreparedImageCapture {
+    fn encode(
+        self,
+        format: RendererScreenshotFormat,
+        quality: u8,
+        optimize_for_speed: bool,
+    ) -> anyhow::Result<RendererCapturedScreenshot> {
+        let Self {
+            snapshot,
+            deficiency,
+            reason,
+            total_started,
+            layout_us,
+        } = self;
+        use moli_page_types::VisionDeficiency;
+        let profile_enabled = total_started.is_some();
         let raster_started = profile_enabled.then(Instant::now);
         let raster_scale = snapshot
             .surface
@@ -546,30 +598,39 @@ impl PageVm {
                 total_us = started.elapsed().as_micros(),
             );
         }
-        Ok(RendererImageCaptureOutcome::Captured(
-            RendererCapturedScreenshot {
-                mime_type: mime_type.to_owned(),
-                width,
-                height,
-                bytes: bytes.into(),
-            },
-        ))
+        Ok(RendererCapturedScreenshot {
+            mime_type: mime_type.to_owned(),
+            width,
+            height,
+            bytes: bytes.into(),
+        })
     }
 }
 
-enum RendererImageCaptureOutcome {
-    Captured(RendererCapturedScreenshot),
-    LayoutDisabled,
-    NoDocument,
+/// Pixel encoding work for a single pending Realtime screencast capture.
+#[cfg(feature = "devtools")]
+pub struct RendererScreencastFrameRasterJob {
+    capture: PreparedImageCapture,
+    viewport_size: (u32, u32),
+    visual_state: RendererVisualStateToken,
+    format: RendererScreenshotFormat,
+    quality: u8,
+    optimize_for_speed: bool,
 }
 
-impl RendererImageCaptureOutcome {
-    fn into_screenshot_reply(self) -> RendererCaptureScreenshotReply {
-        match self {
-            Self::Captured(image) => RendererCaptureScreenshotReply::Captured(image),
-            Self::LayoutDisabled => RendererCaptureScreenshotReply::LayoutDisabled,
-            Self::NoDocument => RendererCaptureScreenshotReply::NoDocument,
-        }
+#[cfg(feature = "devtools")]
+impl RendererScreencastFrameRasterJob {
+    pub(super) fn finish(self) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
+        let image = self
+            .capture
+            .encode(self.format, self.quality, self.optimize_for_speed)?;
+        Ok(RendererCaptureScreencastFrameReply::Captured(
+            RendererCapturedScreencastFrame {
+                viewport_size: self.viewport_size,
+                visual_state: self.visual_state,
+                image,
+            },
+        ))
     }
 }
 

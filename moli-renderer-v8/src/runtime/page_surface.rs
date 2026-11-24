@@ -1801,6 +1801,22 @@ impl RendererCommandTurnOutput {
         &self.completion
     }
 
+    #[cfg(feature = "devtools")]
+    pub(super) async fn finish_screencast_raster(mut self) -> Result<Self> {
+        if let RendererPageReply::DevTools(RendererDevToolsPageReply::ScreencastFrameRasterJob(
+            job,
+        )) = self.completion.reply
+        {
+            // The outstanding capture and its ACK continue to fence later
+            // frames. Only the owned snapshot crosses onto the worker.
+            let reply = tokio::task::spawn_blocking(move || job.finish()).await??;
+            self.completion.reply = RendererPageReply::DevTools(
+                RendererDevToolsPageReply::CaptureScreencastFrame(reply),
+            );
+        }
+        Ok(self)
+    }
+
     /// Exact concrete Page-stream position that must cross protocol ingress
     /// before the matching protocol response is exposed.
     ///

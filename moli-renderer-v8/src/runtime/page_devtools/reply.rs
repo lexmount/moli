@@ -50,6 +50,8 @@ pub enum RendererDevToolsPageReply {
     ScrollIntoViewResult(RendererScrollIntoViewResult),
     OptionalBool(Option<bool>),
     CaptureScreencastFrame(RendererCaptureScreencastFrameReply),
+    #[doc(hidden)]
+    ScreencastFrameRasterJob(Box<super::super::page_screenshot::RendererScreencastFrameRasterJob>),
 }
 
 impl RendererDevToolsPageReply {
