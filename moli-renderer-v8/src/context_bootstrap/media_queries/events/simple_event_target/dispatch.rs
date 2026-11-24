@@ -3,7 +3,7 @@ pub(crate) use propagation::dispatch_simple_event_target_event_with_ancestors;
 
 use super::*;
 use crate::context_bootstrap::shared_event_targets::{ResolvedEventTarget, resolve_event_target};
-use crate::event_type::EventTypeKey;
+use crate::event_type::{EventTypeKey, trusted_legacy_event_type, with_legacy_event_type};
 use crate::{
     callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker},
     context_bootstrap::events::{
@@ -235,6 +235,22 @@ fn invoke_simple_event_listeners<'s>(
     // Snapshot each invocation. Filter capture before preparing a once
     // listener, so another phase cannot consume it prematurely.
     let listeners = simple_object_event_listeners_snapshot_in_registry(scope, registry, event_type);
+    if listeners.is_empty()
+        && let Some(legacy) = trusted_legacy_event_type(scope, event, event_type)
+    {
+        return with_legacy_event_type(scope, event, legacy, |scope| {
+            invoke_simple_event_listeners(
+                scope,
+                target,
+                registry,
+                legacy,
+                event,
+                capture,
+                callback_errors,
+                handler_override,
+            )
+        });
+    }
     for listener in &listeners {
         if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
             break;

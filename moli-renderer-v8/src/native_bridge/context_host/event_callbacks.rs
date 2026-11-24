@@ -322,6 +322,9 @@ impl PageScriptHost {
             incumbent_context,
             resource_initiator,
         );
+        if handler.is_some() {
+            self.queue_animation_start_scan(scope, target, event_type);
+        }
     }
 
     pub(crate) fn set_registered_content_attribute_event_handler_property<'s>(

@@ -164,6 +164,8 @@ async fn css_animation_interfaces_native_start_events_share_the_get_animations_o
       globalThis.item=document.createElement('div');document.body.appendChild(item);item.style.animation='first 100s,second 100s';
       globalThis.animations=item.getAnimations();globalThis.events=[];
       item.addEventListener('animationstart',event=>events.push(event));
+      globalThis.legacyStarts=[];
+      window.onwebkitanimationstart=event=>legacyStarts.push([event,event.type]);
       globalThis.animationEventCtor=AnimationEvent;globalThis.nativeGetterReads=0;
       Object.defineProperty(globalThis,'AnimationEvent',{configurable:true,get(){nativeGetterReads++;throw Error('public constructor');}});
       Object.defineProperty(Object.prototype,'animation',{configurable:true,get(){nativeGetterReads++;throw Error('prototype');}});
@@ -174,12 +176,19 @@ async fn css_animation_interfaces_native_start_events_share_the_get_animations_o
             .await
             .unwrap()
     );
+    vm.run_one_rendering_update_executor_turn(&loader)
+        .await
+        .unwrap();
     assert_eq!(vm.eval(r#"
 (() => {
   delete Object.prototype.animation;Object.defineProperty(globalThis,'AnimationEvent',{configurable:true,writable:true,value:animationEventCtor});
   const facts=events.map((event,index)=>({instance:event instanceof AnimationEvent,trusted:event.isTrusted,bubbles:event.bubbles,cancelable:event.cancelable,composed:event.composed,identity:event.animation===animations[index],name:event.animationName,expectedName:animations[index]?.animationName,pseudoElement:event.pseudoElement}));
   const passed=events.length===2 && events.every((event,index)=>event instanceof AnimationEvent && event.isTrusted && event.bubbles && !event.cancelable && !event.composed && event.animation===animations[index] && event.animationName===animations[index].animationName && event.pseudoElement==='') && nativeGetterReads===0;
   if(!passed)throw Error(JSON.stringify({length:events.length,facts,nativeGetterReads}));
+  if (legacyStarts.length !== events.length || legacyStarts.some(([event, type], index) =>
+      event !== events[index] || type !== 'webkitAnimationStart' || event.type !== 'animationstart')) {
+    throw Error('Expected one start per animation and its original type after dispatch');
+  }
   return true;
 })()
 "#).unwrap(), "true");

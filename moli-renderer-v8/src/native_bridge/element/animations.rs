@@ -5,14 +5,6 @@ use super::css_animation_start_applies;
 use super::events::dispatch_public_event;
 use super::styles::StyleObservation;
 
-pub(crate) fn queue_animation_start_for_listener_target(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    target: EventTargetHandle,
-) {
-    let _ = unsafe { &mut *runtime_ptr }.queue_animation_start_scan(scope, target);
-}
-
 fn active_animation_handles(
     runtime: &PageScriptHost,
     document_handle: DomHandle,

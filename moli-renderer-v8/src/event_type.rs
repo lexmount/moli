@@ -141,3 +141,35 @@ impl EventTypeKey for String {
         util::v8_string(scope, self)
     }
 }
+
+pub(crate) fn trusted_legacy_event_type<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    event_type: &(impl EventTypeKey + ?Sized),
+) -> Option<&'static str> {
+    let legacy = match event_type.as_str()? {
+        "animationend" => "webkitAnimationEnd",
+        "animationiteration" => "webkitAnimationIteration",
+        "animationstart" => "webkitAnimationStart",
+        "transitionend" => "webkitTransitionEnd",
+        _ => return None,
+    };
+    moli_webapi::events::state::event_trusted(scope, event).then_some(legacy)
+}
+
+pub(crate) fn with_legacy_event_type<'s, T>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    legacy: &'static str,
+    invoke: impl FnOnce(&mut v8::PinScope<'s, '_>) -> T,
+) -> T {
+    use moli_webapi::events::state::{define_event_property, event_attribute};
+
+    let original = event_attribute(scope, event, "type");
+    define_event_property(scope, event, "type", util::v8str(scope, legacy).into());
+    let result = invoke(scope);
+    if let Some(original) = original {
+        define_event_property(scope, event, "type", original);
+    }
+    result
+}

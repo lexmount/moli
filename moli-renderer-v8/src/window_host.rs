@@ -26,8 +26,7 @@ use super::{
             STYLE_DECLARATION_VIEWPORT_WIDTH_SLOT, computed_style_target_context,
             dispatched_click_activation_target, finish_legacy_activation_for_dispatched_click,
             observable_event_offset, perform_click_default_action_for_dispatched_event,
-            prepare_legacy_activation_for_dispatched_click,
-            queue_animation_start_for_listener_target, queue_scroll_observable_effects,
+            prepare_legacy_activation_for_dispatched_click, queue_scroll_observable_effects,
         },
         enter_active_child_window_scope, enter_top_level_lightweight_popup_scope,
         node_runtime_and_handle_from_object, throw_dom_exception,
@@ -303,11 +302,7 @@ fn register_dom_event_target_listener<'s>(
             capture,
         );
     }
-    if !matches!(target, EventTargetHandle::ChildWindow(_))
-        && call.event_type.is_type("animationstart")
-    {
-        queue_animation_start_for_listener_target(scope, host_ptr, target);
-    }
+    host.queue_animation_start_scan(scope, target, &call.event_type);
 }
 
 fn default_passive_value(

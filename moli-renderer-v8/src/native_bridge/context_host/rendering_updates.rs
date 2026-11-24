@@ -48,6 +48,31 @@ pub(super) type RenderingUpdateState = ExactWindowDocumentTaskLedger<
     PendingRenderingUpdatePayload,
 >;
 
+pub(super) fn coalesce_animation_start_scan<I: Copy + Eq, P: PartialEq>(
+    updates: &mut ExactWindowDocumentTaskLedger<I, RendererPageRenderingUpdateTaskKind, P>,
+    target: WindowDocumentTaskTarget,
+    event_target: EventTargetHandle,
+    window_scan: P,
+) -> bool {
+    let kind = RendererPageRenderingUpdateTaskKind::AnimationStartScan;
+    let scans_document = event_target == EventTargetHandle::Window;
+    let Some(index) = updates.find_slot_index(target, kind, |pending| {
+        scans_document || pending == &window_scan
+    }) else {
+        return false;
+    };
+    if scans_document {
+        // Keep the earliest queued opportunity. Its document scan covers every
+        // queued element scan owned by this exact document.
+        *updates.payload_at_mut(index) = window_scan;
+        let keep_id = updates.at(index).task_id();
+        updates.retain(|pending| {
+            pending.target() != target || pending.kind() != kind || pending.task_id() == keep_id
+        });
+    }
+    true
+}
+
 impl PageScriptHost {
     /// Request an initial opportunity from a completed Document lifecycle, not
     /// from Window registration. Native rendering work never acquires a timer.
@@ -173,7 +198,14 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         event_target: EventTargetHandle,
+        event_type: &(impl crate::event_type::EventTypeKey + ?Sized),
     ) -> bool {
+        if !matches!(
+            event_type.as_str(),
+            Some("animationstart" | "webkitAnimationStart")
+        ) {
+            return false;
+        }
         let target = match event_target {
             EventTargetHandle::Window => self.current_window_document_task_target(scope),
             EventTargetHandle::Node(handle) => {
@@ -336,6 +368,16 @@ impl PageScriptHost {
             )
         {
             return self.queue_realtime_rendering_update(target, kind, payload);
+        }
+        if let PendingRenderingUpdatePayload::AnimationStartScan(event_target) = payload
+            && coalesce_animation_start_scan(
+                &mut self.rendering_updates,
+                target,
+                event_target,
+                PendingRenderingUpdatePayload::AnimationStartScan(EventTargetHandle::Window),
+            )
+        {
+            return true;
         }
         if self
             .rendering_updates

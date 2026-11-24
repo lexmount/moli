@@ -2,6 +2,7 @@ use super::super::window_accessors::window_child_context_handle;
 use super::*;
 use crate::{
     document_runtime::EventTargetHandle,
+    native_bridge::element::canonical_event_handler_event_type,
     util::{context_host_ptr_from_global_bridge, context_host_ptr_from_window_object},
     webidl,
 };
@@ -53,7 +54,9 @@ fn window_event_handler_value<'s>(
         None => crate::native_bridge::element::resolve_window_event_handler_content_attribute(
             scope,
             host_ptr,
-            property_name.strip_prefix("on").unwrap_or(property_name),
+            canonical_event_handler_event_type(
+                property_name.strip_prefix("on").unwrap_or(property_name),
+            ),
         ),
     }
 }
@@ -92,7 +95,9 @@ fn set_window_event_handler_value<'s>(
         None => host.set_registered_event_handler_property(
             scope,
             EventTargetHandle::Window,
-            property_name.strip_prefix("on").unwrap_or(property_name),
+            canonical_event_handler_event_type(
+                property_name.strip_prefix("on").unwrap_or(property_name),
+            ),
             handler,
         ),
     }

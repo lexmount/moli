@@ -1,5 +1,5 @@
 use super::PageScriptHost;
-use crate::event_type::EventTypeKey;
+use crate::event_type::{EventTypeKey, trusted_legacy_event_type, with_legacy_event_type};
 use crate::{
     context_bootstrap::{
         EventHandlerType, apply_event_handler_return_value, error_event_handler_arguments,
@@ -523,6 +523,20 @@ impl PageScriptHost {
         if at_target && !capture_only {
             return DispatchStatus::Continue;
         }
+        if let Some(legacy) = trusted_legacy_event_type(scope, event, event_type)
+            && !self.child_window_event_has_observers(target, event_type)
+        {
+            return with_legacy_event_type(scope, event, legacy, |scope| {
+                self.call_child_window_event_path_listeners(
+                    scope,
+                    target,
+                    legacy,
+                    event,
+                    capture_only,
+                    at_target,
+                )
+            });
+        }
         let registration_kind =
             (!at_target && capture_only).then_some(ChildWindowEventRegistrationKind::EventListener);
         let capture = (!at_target).then_some(capture_only);
@@ -919,6 +933,7 @@ impl PageScriptHost {
 fn child_window_event_type_from_handler_name(name: &str) -> Option<&str> {
     name.strip_prefix("on")
         .filter(|event_type| !event_type.is_empty())
+        .map(crate::native_bridge::element::canonical_event_handler_event_type)
 }
 
 fn child_window_event_callback_arguments<'s>(

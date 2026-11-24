@@ -6,7 +6,7 @@ use crate::{
         simple_object_event_set_handler, window_event_handler_properties,
     },
     host::UncompiledEventHandler,
-    native_bridge::OwnerDispatchScope,
+    native_bridge::{OwnerDispatchScope, element::canonical_event_handler_event_type},
     util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
 };
 use std::collections::HashMap;
@@ -209,7 +209,9 @@ fn set_lightweight_popup_event_handler_value<'s>(
     simple_object_event_set_handler(
         scope,
         window,
-        property_name.strip_prefix("on").expect("Window handler"),
+        canonical_event_handler_event_type(
+            property_name.strip_prefix("on").expect("Window handler"),
+        ),
         property_name,
         value,
     );

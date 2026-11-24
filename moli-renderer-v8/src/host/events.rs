@@ -1,5 +1,7 @@
 use super::*;
-use crate::event_type::{EventType, EventTypeKey};
+use crate::event_type::{
+    EventType, EventTypeKey, trusted_legacy_event_type, with_legacy_event_type,
+};
 use crate::{
     context_bootstrap::{
         CHILD_BROWSING_CONTEXT_HANDLE_SLOT, EventHandlerType,
@@ -1364,6 +1366,24 @@ impl HostEventTargetRegistry {
                 event_type,
                 content_attribute_owner,
             );
+        }
+
+        // DOM checks for a matching type before filtering by capture phase.
+        if let Some(legacy) = trusted_legacy_event_type(scope, event, event_type)
+            && !self.has_listener(target, event_type)
+        {
+            return with_legacy_event_type(scope, event, legacy, |scope| {
+                self.call_listeners_filtered(
+                    scope,
+                    host_ptr,
+                    target,
+                    invocation_target_in_shadow_tree,
+                    legacy,
+                    event,
+                    filter,
+                    at_target,
+                )
+            });
         }
 
         let mut snapshot = self

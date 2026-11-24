@@ -175,9 +175,7 @@ pub(crate) use self::base_prototypes::{
 };
 use self::shadow_template::*;
 
-pub(crate) use animations::{
-    dispatch_animation_start_scan, queue_animation_start_for_listener_target,
-};
+pub(crate) use animations::dispatch_animation_start_scan;
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::scroll_node_into_view_if_needed;
 pub(crate) use geometry::{
