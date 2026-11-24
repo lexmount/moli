@@ -2,6 +2,12 @@ use std::sync::Arc;
 
 use super::*;
 
+struct AttributeBeforeMutation {
+    local_name: String,
+    namespace: Option<String>,
+    prior_value: Option<Arc<str>>,
+}
+
 impl DomHost {
     /// Data attributes can affect CSS without changing native box inputs.
     pub fn attribute_affects_native_layout(name: &str) -> bool {
@@ -20,6 +26,36 @@ impl DomHost {
             MutationScope::QueryState,
             affects_native_layout.then_some(handle),
         );
+    }
+
+    fn qualified_attribute_before_mutation(
+        &self,
+        handle: DomHandle,
+        name: &str,
+    ) -> Option<AttributeBeforeMutation> {
+        let normalized_name = self.dom.normalized_attribute_name(handle, name)?;
+        let attribute = self
+            .node(handle)
+            .and_then(Node::as_element)
+            .and_then(|element| {
+                element
+                    .attributes()
+                    .iter()
+                    .find(|attribute| attribute.name_matches(&normalized_name))
+            });
+        Some(match attribute {
+            Some(attribute) => AttributeBeforeMutation {
+                local_name: attribute.local_name().to_owned(),
+                namespace: (!attribute.namespace().is_empty())
+                    .then(|| attribute.namespace().to_owned()),
+                prior_value: Some(Arc::from(attribute.value())),
+            },
+            None => AttributeBeforeMutation {
+                local_name: normalized_name,
+                namespace: None,
+                prior_value: None,
+            },
+        })
     }
 
     pub fn explicit_element_references(
@@ -107,25 +143,13 @@ impl DomHost {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
         let records_enabled = self.mutation_records_enabled();
-        let Some(normalized_name) = self.dom.normalized_attribute_name(handle, name) else {
+        let Some(AttributeBeforeMutation {
+            local_name,
+            namespace,
+            prior_value,
+        }) = self.qualified_attribute_before_mutation(handle, name)
+        else {
             return DomAttributeMutationOutcome::new(DomMutationEffects::default(), None);
-        };
-        let attribute = self
-            .node(handle)
-            .and_then(Node::as_element)
-            .and_then(|element| {
-                element
-                    .attributes()
-                    .iter()
-                    .find(|attribute| attribute.name_matches(&normalized_name))
-            });
-        let (local_name, namespace, prior_value) = match attribute {
-            Some(attribute) => (
-                attribute.local_name().to_owned(),
-                (!attribute.namespace().is_empty()).then(|| attribute.namespace().to_owned()),
-                Some(Arc::from(attribute.value())),
-            ),
-            None => (normalized_name, None, None),
         };
         let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
             self.node(handle)
@@ -397,7 +421,15 @@ impl DomHost {
         name: &str,
     ) -> DomAttributeMutationOutcome {
         let records_enabled = self.mutation_records_enabled();
-        let prior_value = self.get_attribute(handle, name).map(Arc::from);
+        let Some(AttributeBeforeMutation {
+            local_name,
+            namespace,
+            prior_value,
+        }) = self.qualified_attribute_before_mutation(handle, name)
+        else {
+            return DomAttributeMutationOutcome::default();
+        };
+        let namespace = namespace.as_deref();
         if prior_value.is_some() && name.eq_ignore_ascii_case("form") {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
@@ -439,16 +471,21 @@ impl DomHost {
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
                 self.record_named_index_candidate(handle);
             }
-            self.record_attribute_mutation(handle, None, name);
+            self.record_attribute_mutation(handle, namespace, &local_name);
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
                 self.update_target_after_indicated_part_mutation(handle);
             }
             let mut effects = self.node_update_effects(handle);
-            self.mark_stylesheet_owner_attribute_change(&mut effects, handle, None, name);
+            self.mark_stylesheet_owner_attribute_change(
+                &mut effects,
+                handle,
+                namespace,
+                &local_name,
+            );
             effects.mark_attribute_change(
                 handle,
-                name,
-                None,
+                &local_name,
+                namespace,
                 prior_value.clone(),
                 None,
                 records_enabled,
@@ -610,6 +647,40 @@ mod tests {
         let mutation = &effects.style().attribute_mutations()[0];
         assert_eq!(mutation.local_name(), "CONTENT");
         assert_eq!(mutation.namespace(), None);
+    }
+
+    #[test]
+    fn removing_an_svg_reference_by_qualified_name_invalidates_layout() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(
+            url::Url::parse("https://example.test/").unwrap(),
+        ));
+        let document = host.document_handle();
+        let reference = host
+            .create_element_ns(Some("http://www.w3.org/2000/svg"), "use")
+            .unwrap();
+        assert!(host.append_child(document, reference));
+        let xlink = Some("http://www.w3.org/1999/xlink");
+        host.set_attribute_ns(reference, xlink, Some("data-link"), "href", "#shape");
+        host.set_mutation_observer_records_enabled(true);
+        let version = host.document_layout_version(document);
+
+        let removal = host.remove_attribute_mutation_outcome(reference, "data-link:href");
+
+        assert_eq!(removal.old_value(), Some("#shape"));
+        assert_eq!(host.get_attribute_ns(reference, xlink, "href"), None);
+        assert_eq!(host.document_layout_version(document), version + 1);
+        let [mutation] = removal.effects().style().attribute_mutations() else {
+            panic!("expected one attribute mutation");
+        };
+        assert_eq!(mutation.local_name(), "href");
+        assert_eq!(mutation.namespace(), xlink);
+        let [record] = removal.effects().observer_records().records() else {
+            panic!("expected one observer record");
+        };
+        let DomMutationRecordKind::Attributes(record) = record.kind() else {
+            panic!("expected an attribute record");
+        };
+        assert_eq!(record, mutation);
     }
 
     #[test]

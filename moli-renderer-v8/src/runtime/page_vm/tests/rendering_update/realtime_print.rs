@@ -190,6 +190,51 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
 }
 
 #[test]
+fn realtime_geometry_applies_attribute_changes_after_transient_print() {
+    run_page_vm_large_stack_async_test("realtime-print-attr", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime-print").unwrap(),
+        );
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut()
+            .eval(
+                r#"
+document.head.innerHTML = `<style>
+  html, body { margin: 0; background: white }
+  #probe { width: attr(data-width type(<length>), 120px); height: 20px; background: red }
+  @media print { #probe { width: 60px } }
+</style>`;
+document.body.innerHTML = '<div id="probe"></div>';
+"#,
+            )
+            .unwrap();
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetWidth)").unwrap(),
+            "120"
+        );
+
+        let RendererCaptureScreenshotReply::Captured(print) =
+            page.capture_screenshot(print_request()).unwrap()
+        else {
+            panic!("print capture");
+        };
+        let image = moli_image::decode_png(&print.bytes).unwrap();
+        assert_eq!(&image.rgba[59 * 4..60 * 4], [255, 0, 0, 255]);
+        assert_eq!(&image.rgba[60 * 4..61 * 4], [255, 255, 255, 255]);
+
+        assert_eq!(
+            page.vm_mut()
+                .eval("probe.dataset.width = '200px'; String(probe.offsetWidth)")
+                .unwrap(),
+            "200"
+        );
+    });
+}
+
+#[test]
 fn realtime_print_success_and_failure_preserve_pending_animation_work() {
     run_page_vm_large_stack_async_test("realtime-print-pending", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
