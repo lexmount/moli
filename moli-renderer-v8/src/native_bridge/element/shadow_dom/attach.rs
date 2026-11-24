@@ -7,6 +7,7 @@ use super::super::super::{
     document::{self, validate_registry_association_for_document},
     node::node_runtime_and_handle_from_args,
     set_wrapped_handle_or_null_for_receiver, throw_dom_exception,
+    wrapped_handle_value_for_receiver,
 };
 
 struct ShadowRootRegistry(custom_elements::CustomElementRegistryAssociation);
@@ -110,6 +111,7 @@ pub(in crate::native_bridge) fn element_attach_shadow_callback<'s>(
         );
         return;
     }
+    let existing_root = runtime.dom_host().shadow_root_handle(handle);
     let Some(root_handle) = runtime
         .dom_host_mut()
         .attach_shadow_root_with_init(handle, shadow_init)
@@ -131,11 +133,23 @@ pub(in crate::native_bridge) fn element_attach_shadow_callback<'s>(
     let root_registry_association = registry_association
         .unwrap_or_else(|| runtime.effective_custom_element_registry_association(document_handle));
     runtime.set_custom_element_registry_association(root_handle, root_registry_association);
+    let receiver = if existing_root == Some(root_handle) {
+        args.this()
+    } else {
+        let Some(document) =
+            wrapped_handle_value_for_receiver(scope, runtime_ptr, args.this(), document_handle)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        else {
+            rv.set_null();
+            return;
+        };
+        document
+    };
     set_wrapped_handle_or_null_for_receiver(
         scope,
         &mut rv,
         runtime_ptr,
-        args.this(),
+        receiver,
         Some(root_handle),
     );
 }

@@ -39,6 +39,9 @@ fn build_detached_shadow_root_object_with_init<'s>(
     } else {
         None
     };
+    let owner_document = detached_owner_document_object(scope, host)?;
+    let context = owner_document.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     build_detached_shadow_root_object_for_native_handle(scope, host, &mode, root_handle)
 }
 
