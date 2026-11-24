@@ -867,3 +867,73 @@ fn dom_key(keystroke: &Keystroke) -> (String, String) {
     };
     (standard.to_owned(), standard.to_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use gpui::{ScrollDelta, TestAppContext, VisualTestContext};
+    use moli_core::{
+        PageId,
+        page::{RendererDocumentToken, RendererFrameToken, RendererLifecycleEpoch},
+    };
+
+    use super::*;
+
+    #[test]
+    fn pixel_wheel_uses_platform_phases_only_after_started() -> anyhow::Result<()> {
+        use RendererViewportWheelPhase as Phase;
+
+        let mut app = TestAppContext::single();
+        let handle = app.open_window(size(px(160.), px(120.)), MoliSurface::new);
+        let mut cx = VisualTestContext::from_window(handle.into(), &app);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let (commands, mut received) = mpsc::unbounded_channel();
+        let page_id = PageId::new_for_testing(1);
+        let document = RendererDocumentLifecycleIdentity {
+            frame: RendererFrameToken { page_id },
+            document: RendererDocumentToken::new_for_testing(page_id, 1),
+            epoch: RendererLifecycleEpoch(0),
+        };
+        handle.update(&mut cx, |surface, _, _| -> anyhow::Result<()> {
+            surface.commands = Some(commands);
+            surface.document = Some(document);
+            surface.presented = Some((document, 1));
+            surface.viewport = Some(ViewportSurface {
+                inner_width: 160,
+                inner_height: 120,
+                ..Default::default()
+            });
+            surface.image = Some(BgraImage::new(size(1_u32.into(), 1_u32.into()))?);
+            Ok(())
+        })??;
+
+        for (touch_phase, x, phase) in [
+            (TouchPhase::Moved, 16., Phase::Unspecified),
+            (TouchPhase::Started, 16., Phase::Started),
+            (TouchPhase::Moved, 16., Phase::Moved),
+            (TouchPhase::Ended, 200., Phase::Ended),
+            (TouchPhase::Moved, 16., Phase::Unspecified),
+        ] {
+            cx.simulate_event(ScrollWheelEvent {
+                position: point(px(x), px(16.)),
+                delta: ScrollDelta::Pixels(point(px(0.), px(-12.))),
+                modifiers: Modifiers::default(),
+                touch_phase,
+            });
+            let input = std::iter::from_fn(|| received.try_recv().ok())
+                .find_map(|command| match command {
+                    TabCommand::Wheel(input) => Some(input),
+                    _ => None,
+                })
+                .expect("the viewport must forward the wheel sample");
+            assert_eq!(input.phase, phase);
+            assert!(input.precise);
+            assert_eq!(input.document, document);
+            if phase == Phase::Ended {
+                assert_eq!(input.delta, (0., 0.), "End reached outside the hitbox");
+            } else {
+                assert_eq!(input.delta, (0., 12.));
+            }
+        }
+        Ok(())
+    }
+}

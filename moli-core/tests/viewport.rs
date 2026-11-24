@@ -478,6 +478,55 @@ async fn queued_viewport_wheel_preserves_input_order_and_document_scope() -> Res
 }
 
 #[tokio::test]
+async fn viewport_wheel_zero_began_waits_for_a_scroll_direction() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let html = r#"<!doctype html><body style="height:1200px;margin:0">
+        <div id="inner" style="width:100px;height:100px;overflow:auto">
+            <div style="height:300px">Inner scroller</div>
+        </div>
+        <script>
+            window.deltas = [];
+            inner.addEventListener('wheel', event => deltas.push(event.deltaY));
+        </script>"#;
+    let mut page = browser.fetch(&html_url(html)).await?;
+    let mut frames = page
+        .subscribe_viewport_frames(
+            ViewportSurface {
+                inner_width: 160,
+                inner_height: 120,
+                ..Default::default()
+            },
+            1,
+        )
+        .await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+    let began = RendererViewportWheelInput {
+        document,
+        viewport_revision: 1,
+        position: (16., 16.),
+        buttons: 0,
+        delta: (0., 0.),
+        modifiers: 0,
+        phase: RendererViewportWheelPhase::Started,
+        precise: true,
+    };
+    page.enqueue_viewport_wheel(began)?;
+    page.enqueue_viewport_wheel(RendererViewportWheelInput {
+        phase: RendererViewportWheelPhase::Moved,
+        delta: (0., 40.),
+        ..began
+    })?;
+    let result = page
+        .evaluate_runtime_expression_async("JSON.stringify([inner.scrollTop,scrollY,deltas])")
+        .await?;
+    assert_eq!(result["value"], "[40,0,[0,40]]");
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_pointer_requires_a_current_rendered_document() -> Result<()> {
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;

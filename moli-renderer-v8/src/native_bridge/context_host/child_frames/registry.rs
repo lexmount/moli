@@ -105,6 +105,7 @@ impl PageScriptHost {
         retired_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         document_handle: DomHandle,
     ) {
+        #[cfg(feature = "devtools")]
         self.retire_wheel_scroll_targets(crate::native_bridge::WindowDocumentOwner::Frame(
             retired_owner,
         ));

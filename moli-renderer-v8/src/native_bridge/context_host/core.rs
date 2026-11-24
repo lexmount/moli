@@ -96,6 +96,7 @@ impl PageScriptHost {
             url,
         )?;
         self.initial_empty_main_document = false;
+        #[cfg(feature = "devtools")]
         self.retire_wheel_scroll_targets(WindowDocumentOwner::Frame(transition.retired_owner()));
         self.rebind_runtime_binding_document_owner(
             transition.retired_owner(),
@@ -767,6 +768,7 @@ impl PageScriptHost {
                 tracing::debug!("dropped rebound meta refresh because its Page source closed");
             }
         }
+        #[cfg(feature = "devtools")]
         self.retire_wheel_scroll_targets(WindowDocumentOwner::Frame(transition.retired_owner()));
         let runtime_binding_transition = self.rebind_runtime_binding_document_owner(
             transition.retired_owner(),

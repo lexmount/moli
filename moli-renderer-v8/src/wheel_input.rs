@@ -39,11 +39,11 @@ pub(crate) struct WheelInput {
     pub source: WheelSource,
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct WheelTargets {
-    pub wheel: Option<(DomHandle, WindowDocumentTaskTarget)>,
+#[derive(Clone, Debug)]
+pub(crate) struct WheelEventTarget {
+    pub node: DomHandle,
+    pub owner: WindowDocumentTaskTarget,
     pub ancestors: Vec<DomHandle>,
-    pub scroll_target: Option<WheelScrollTarget>,
 }
 
 #[derive(Debug)]
@@ -60,13 +60,15 @@ pub(crate) struct WheelInputController {
     nonblocking: bool,
     document: Option<WindowDocumentTaskTarget>,
     inferred: Option<InferredPhase>,
-    targets: Option<WheelTargets>,
+    event_target: Option<WheelEventTarget>,
+    scroll_target: Option<WheelScrollTarget>,
     generation: u64,
     event_serial: u64,
 }
 
 pub(crate) struct PreparedWheel {
-    pub targets: WheelTargets,
+    pub event_target: Option<WheelEventTarget>,
+    pub scroll_target: Option<WheelScrollTarget>,
     pub cancelable: bool,
     phase: WheelPhase,
     nonzero: bool,
@@ -87,7 +89,8 @@ impl WheelInputController {
 
     /// End releases the transaction, but does not fabricate a wheel ACK.
     pub(crate) fn end_transaction(&mut self) {
-        self.targets = None;
+        self.event_target = None;
+        self.scroll_target = None;
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -111,26 +114,28 @@ impl WheelInputController {
             self.document = Some(document);
         }
         self.expire(input.timestamp);
-        let phase = if input.source == WheelSource::Platform {
-            if input.phase == WheelPhase::Unspecified {
-                self.infer_phase(input)
-            } else {
-                if input.phase == WheelPhase::Began {
-                    self.end_platform_sequence();
-                }
-                input.phase
-            }
-        } else {
-            input.phase
+        let phase = match (input.source, input.phase) {
+            (WheelSource::Platform, WheelPhase::Unspecified) => self.infer_phase(input),
+            (_, phase) => phase,
         };
         if phase == WheelPhase::Began {
-            // This is a real queue entry, not a producer's attempted sample.
             self.nonblocking = false;
-            self.end_transaction();
+            if input.source == WheelSource::Platform {
+                if input.phase == WheelPhase::Unspecified {
+                    self.end_transaction();
+                } else {
+                    self.end_platform_sequence();
+                }
+            } else {
+                // Raw Began hits a fresh DOM target. Its default action still
+                // belongs to the active scroll until the paired End arrives.
+                self.event_target = None;
+            }
         }
         self.event_serial = self.event_serial.wrapping_add(1);
         PreparedWheel {
-            targets: self.targets.clone().unwrap_or_default(),
+            event_target: self.event_target.clone(),
+            scroll_target: self.scroll_target.clone(),
             cancelable: !self.nonblocking,
             phase,
             nonzero: input.delta != (0.0, 0.0),
@@ -141,7 +146,7 @@ impl WheelInputController {
 
     pub(crate) fn acknowledge(
         &mut self,
-        mut prepared: PreparedWheel,
+        prepared: PreparedWheel,
         outcome: Option<RendererWheelDispatchOutcome>,
         document: Option<WindowDocumentTaskTarget>,
     ) {
@@ -160,17 +165,19 @@ impl WheelInputController {
             // Document retirement clears targets, independently of Page ACK mode.
             return;
         }
-        if canceled {
-            prepared.targets.wheel = None;
-            prepared.targets.ancestors.clear();
-        } else if prepared.nonzero
-            && let Some(inferred) = &mut self.inferred
-        {
-            inferred
-                .first_scroll_consumed
-                .get_or_insert(outcome == RendererWheelDispatchOutcome::Scrolled);
+        self.event_target = if canceled {
+            None
+        } else {
+            prepared.event_target
+        };
+        if !canceled && prepared.nonzero {
+            self.scroll_target = prepared.scroll_target;
+            if let Some(inferred) = &mut self.inferred {
+                inferred
+                    .first_scroll_consumed
+                    .get_or_insert(outcome == RendererWheelDispatchOutcome::Scrolled);
+            }
         }
-        self.targets = Some(prepared.targets);
     }
 
     fn infer_phase(&mut self, input: WheelInput) -> WheelPhase {
@@ -181,12 +188,17 @@ impl WheelInputController {
             distance >= LATCHING_SLOP
                 || input.modifiers != initial.modifiers
                 || (initial.first_scroll_consumed == Some(false)
+                    && initial.delta != (0.0, 0.0)
+                    && input.delta != (0.0, 0.0)
                     && (!consistent(initial.delta.0, input.delta.0)
                         || !consistent(initial.delta.1, input.delta.1)))
         }) {
             self.end_platform_sequence();
         }
         if let Some(inferred) = &mut self.inferred {
+            if inferred.delta == (0.0, 0.0) {
+                inferred.delta = input.delta;
+            }
             inferred.deadline = input.timestamp + TRANSACTION_TIMEOUT;
             WheelPhase::Changed
         } else {

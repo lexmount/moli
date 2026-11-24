@@ -73,9 +73,6 @@ impl PageVm {
             "Position out of bounds"
         );
         gesture.validate_anchor(true);
-        if let Some(owner) = self.vm().wheel_document_owner() {
-            let _ = gesture.accepts_document(owner);
-        }
         Ok(RendererInputDispatchOutcome::default())
     }
 
@@ -93,39 +90,13 @@ impl PageVm {
         let Some(owner) = self.vm().wheel_document_owner() else {
             return Ok(RendererInputDispatchOutcome::default());
         };
-        if !gesture.accepts_document(owner) {
-            return Ok(RendererInputDispatchOutcome::default());
-        }
         // Aura filters producer samples (including End) before platform
-        // phase inference. Native terminal phases bypass this producer filter.
-        if end && !self.wheel_position_in_bounds(x, y) {
-            return Ok(RendererInputDispatchOutcome::default());
-        }
-        if end {
-            return self.vm_mut().dispatch_wheel_input(
-                WheelInput {
-                    position: (x, y),
-                    delta: (0., 0.),
-                    modifiers: 0,
-                    timestamp: std::time::Instant::now(),
-                    phase: WheelPhase::Ended,
-                    source: WheelSource::Platform,
-                },
-                -1,
-                None,
-                0,
-                RendererPointerEventProperties::default(),
-                intercept_drags,
-                MouseDispatchCompletion::FinishTurn,
-            );
-        }
-        // Root widget coordinates are independent of capture scale.
+        // phase inference. A clipped sample does not bind the round.
         let in_bounds = self.wheel_position_in_bounds(x, y);
-        anyhow::ensure!(gesture.validate_anchor(in_bounds), "Position out of bounds");
-        if !in_bounds {
-            // An invalid initial anchor is an error. An already-started
-            // sequence can temporarily leave the resized widget: drop this
-            // update while the protocol continues its elapsed-time progress.
+        if !end {
+            anyhow::ensure!(gesture.validate_anchor(in_bounds), "Position out of bounds");
+        }
+        if !in_bounds || !gesture.accepts_document(owner, !end) {
             return Ok(RendererInputDispatchOutcome::default());
         }
         self.vm_mut().dispatch_wheel_input(
@@ -134,7 +105,11 @@ impl PageVm {
                 delta: (delta_x, delta_y),
                 modifiers: 0,
                 timestamp: std::time::Instant::now(),
-                phase: WheelPhase::Unspecified,
+                phase: if end {
+                    WheelPhase::Ended
+                } else {
+                    WheelPhase::Unspecified
+                },
                 source: WheelSource::Platform,
             },
             -1,

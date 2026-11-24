@@ -145,6 +145,7 @@ mod messages;
 mod module_owner_tasks;
 #[cfg(feature = "devtools")]
 mod mouse_click;
+#[cfg(feature = "devtools")]
 mod wheel_targets;
 #[cfg(feature = "devtools")]
 pub(crate) use mouse_click::MouseReleaseFollowUp;
