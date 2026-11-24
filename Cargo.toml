@@ -28,6 +28,7 @@ members = [
     "moli-encoding-detector",
     "moli-core",
     "moli-import-map",
+    "moli-input",
     "moli-inspector-json",
     "moli-image",
     "moli-indexeddb",

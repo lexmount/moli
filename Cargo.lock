@@ -4829,6 +4829,9 @@ dependencies = [
 [[package]]
 name = "moli-action-window"
 version = "0.1.0"
+dependencies = [
+ "moli-input",
+]
 
 [[package]]
 name = "moli-bounded-buffer"
@@ -5300,6 +5303,10 @@ dependencies = [
  "strum 0.28.0",
  "unicode-id-start",
 ]
+
+[[package]]
+name = "moli-input"
+version = "0.1.0"
 
 [[package]]
 name = "moli-inspector-json"
