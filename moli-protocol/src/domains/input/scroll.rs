@@ -98,6 +98,7 @@ fn prepare(
             let mut driver = ProtocolWorkflowDriver::new(access);
             let mut first_admission = Some(first_admission);
             let result = async {
+                let command_gesture = RendererSyntheticWheelGesture::default();
                 for repeat in 0..=repeat_count {
                     if repeat != 0 {
                         tokio::time::sleep(repeat_delay).await;
@@ -106,7 +107,7 @@ fn prepare(
                         .take()
                         .unwrap_or_else(|| admission_queue.reserve());
                     admission.wait().await;
-                    let gesture = RendererSyntheticWheelGesture::default();
+                    let gesture = command_gesture.next_sequence();
                     let mut first = true;
                     let mut cancelable = true;
                     let mut started = Instant::now();

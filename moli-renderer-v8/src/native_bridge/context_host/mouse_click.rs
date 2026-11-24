@@ -1,5 +1,17 @@
 use super::*;
 use crate::dom::native::{DomHost, DomMutationEffects};
+use std::{
+    cell::RefCell,
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+struct SyntheticScrollTargetWatch {
+    source: DomHandle,
+    alive: Weak<AtomicBool>,
+}
 
 #[derive(Clone, Copy)]
 struct MousePress {
@@ -13,6 +25,7 @@ pub(super) struct MouseInputState {
     element_under_mouse: Option<DomHandle>,
     #[cfg(feature = "molio")]
     compat_press_owners: [Option<WindowDocumentTaskTarget>; 5],
+    synthetic_scroll_targets: RefCell<Vec<SyntheticScrollTargetWatch>>,
 }
 
 pub(crate) enum MouseReleaseFollowUp {
@@ -24,6 +37,51 @@ pub(crate) enum MouseReleaseFollowUp {
 }
 
 impl PageScriptHost {
+    pub(crate) fn watch_synthetic_scroll_target(&self, source: DomHandle) -> Arc<AtomicBool> {
+        let alive = Arc::new(AtomicBool::new(true));
+        let mut watches = self.mouse_input.synthetic_scroll_targets.borrow_mut();
+        watches.retain(|watch| {
+            watch
+                .alive
+                .upgrade()
+                .is_some_and(|alive| alive.load(Ordering::Relaxed))
+        });
+        watches.push(SyntheticScrollTargetWatch {
+            source,
+            alive: Arc::downgrade(&alive),
+        });
+        alive
+    }
+
+    pub(crate) fn note_synthetic_scroll_target_removals(
+        &mut self,
+        dom: &DomHost,
+        effects: &DomMutationEffects,
+    ) {
+        self.mouse_input
+            .synthetic_scroll_targets
+            .get_mut()
+            .retain(|watch| {
+                let Some(alive) = watch.alive.upgrade() else {
+                    return false;
+                };
+                if !alive.load(Ordering::Relaxed) {
+                    return false;
+                }
+                // Mutation facts preserve actual removals even when the same node
+                // is reinserted before the next wheel, with no observer installed.
+                for mutation in effects.style().child_list_mutations() {
+                    for &root in mutation.removed_nodes() {
+                        if in_shadow_including_subtree(dom, root, watch.source) {
+                            alive.store(false, Ordering::Relaxed);
+                            return false;
+                        }
+                    }
+                }
+                true
+            });
+    }
+
     pub(crate) fn mouse_press_handle(&self) -> Option<DomHandle> {
         self.mouse_input.press.map(|press| press.handle)
     }
@@ -41,7 +99,12 @@ impl PageScriptHost {
     }
 
     pub(crate) fn clear_mouse_input_state(&mut self) {
-        self.mouse_input = MouseInputState::default();
+        // A drag can reset mouse state while a wheel gesture remains active.
+        // Its removal watches belong to the gesture's independent lifetime.
+        self.mouse_input = MouseInputState {
+            synthetic_scroll_targets: std::mem::take(&mut self.mouse_input.synthetic_scroll_targets),
+            ..MouseInputState::default()
+        };
     }
 
     #[cfg(feature = "molio")]

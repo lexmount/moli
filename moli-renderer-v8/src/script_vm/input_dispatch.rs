@@ -1156,7 +1156,7 @@ impl ScriptVm {
             modifiers,
             intercept_drags,
             wheel_cancelable,
-            wheel_scroll_target,
+            wheel_scroll_target.as_ref(),
         );
         if let Some(gesture) = gesture {
             let mut targets = gesture.targets.lock();
@@ -1467,7 +1467,7 @@ impl ScriptVm {
         modifiers: u8,
         intercept_drags: bool,
         wheel_cancelable: bool,
-        wheel_scroll_target: Option<WheelScrollTarget>,
+        wheel_scroll_target: Option<&WheelScrollTarget>,
     ) -> Result<RendererInputDispatchOutcome> {
         let PreparedMouseInputDispatch {
             button, buttons, ..
