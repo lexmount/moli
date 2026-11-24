@@ -31,6 +31,7 @@ mod devtools;
 #[cfg(feature = "devtools")]
 use devtools::*;
 mod javascript_idle_admission;
+mod javascript_navigation_dispatch;
 mod open_streaming;
 mod redirect_chain;
 
