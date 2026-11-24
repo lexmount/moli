@@ -25,6 +25,20 @@ pub(super) fn bump_registration_last_update_check_time_locked(
 }
 
 impl ServiceWorkerRuntimeService {
+    pub(crate) fn bind_storage_bucket_store(
+        &self,
+        store: crate::context_bootstrap::SharedStorageBucketStore,
+    ) {
+        let mut state = self.inner.state.lock();
+        *self.inner.storage_bucket_store.lock() = Some(store.clone());
+        for version in state.versions.values_mut() {
+            version
+                .launch_config
+                .storage_bucket_store
+                .get_or_insert_with(|| store.clone());
+        }
+    }
+
     pub(super) fn restore_stored_registration_for_queued_job_locked(
         &self,
         state: &mut ServiceWorkerRuntimeState,
@@ -121,8 +135,11 @@ impl ServiceWorkerRuntimeService {
         &self,
         state: &mut ServiceWorkerRuntimeState,
         stored: ServiceWorkerStoredRegistration,
-        launch_config: ServiceWorkerVersionLaunchConfig,
+        mut launch_config: ServiceWorkerVersionLaunchConfig,
     ) -> Option<ServiceWorkerRegistrationId> {
+        if launch_config.storage_bucket_store.is_none() {
+            launch_config.storage_bucket_store = self.inner.storage_bucket_store.lock().clone();
+        }
         let registration_key = ServiceWorkerRegistrationKey {
             scope_url: stored.scope_url.clone(),
             storage_key: stored.storage_key.clone(),
