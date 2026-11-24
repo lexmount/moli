@@ -681,6 +681,128 @@ async fn viewport_wheel_preserves_the_accepted_buttons_and_iframe_drag_route() -
 }
 
 #[tokio::test]
+async fn viewport_pressed_buttons_expire_when_document_open_restarts_the_epoch() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser
+        .fetch(&html_url(
+            "<!doctype html><body style='margin:0'><div style='width:100px;height:80px'></div>",
+        ))
+        .await?;
+    let mut frames = page
+        .subscribe_viewport_frames(
+            ViewportSurface {
+                inner_width: 320,
+                inner_height: 180,
+                ..ViewportSurface::default()
+            },
+            1,
+        )
+        .await?;
+    let first = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+    let press = RendererViewportPointerInput {
+        document: first.document,
+        viewport_revision: first.viewport_revision,
+        position: (16., 16.),
+        event: "mousedown",
+        button: 0,
+        buttons: 1,
+        click_count: 1,
+        modifiers: 0,
+    };
+    assert!(page.dispatch_viewport_pointer(press).await?.is_some());
+
+    page.evaluate_runtime_expression_async(
+        "document.open(); document.write('<!doctype html><body style=margin:0>'); document.close();",
+    )
+    .await?;
+    let loaded = page
+        .evaluate_runtime_expression_with_await_async(
+            r#"
+            new Promise(resolve => {
+                window.parentMouseUps = 0;
+                addEventListener('mouseup', () => parentMouseUps++);
+                const child = document.createElement('iframe');
+                child.id = 'child';
+                child.style.cssText = 'position:absolute;left:0;top:0;width:120px;height:100px;border:0';
+                child.srcdoc = `<body style='margin:0'>
+                    <div style='width:100px;height:80px'></div>
+                    <script>
+                        window.inputEvents = [];
+                        addEventListener('wheel', event => {
+                            inputEvents.push('wheel:' + event.buttons);
+                            event.preventDefault();
+                        }, {passive: false});
+                        for (const type of ['mousedown', 'mousemove', 'mouseup']) {
+                            addEventListener(type, () => inputEvents.push(type));
+                        }
+                    </script>`;
+                child.addEventListener('load', () => resolve(true), {once: true});
+                document.body.append(child);
+            })
+            "#,
+            true,
+        )
+        .await?;
+    assert_eq!(loaded["value"], true);
+
+    let replacement = frame(&mut frames, |frame| {
+        frame.document != first.document && frame.snapshot.is_some()
+    })
+    .await?;
+    assert_eq!(replacement.document.frame, first.document.frame);
+    assert_eq!(replacement.document.document, first.document.document);
+    assert_ne!(replacement.document.epoch, first.document.epoch);
+    assert_eq!(replacement.viewport_revision, first.viewport_revision);
+    page.cancel_viewport_pointer(first.document, first.viewport_revision)
+        .await?;
+    page.enqueue_viewport_wheel(RendererViewportWheelInput {
+        document: replacement.document,
+        viewport_revision: replacement.viewport_revision,
+        position: press.position,
+        delta: (0., 12.),
+        buttons: 1,
+        modifiers: 0,
+        phase: RendererViewportWheelPhase::Moved,
+        precise: true,
+    })?;
+
+    let press = RendererViewportPointerInput {
+        document: replacement.document,
+        ..press
+    };
+    assert!(page.dispatch_viewport_pointer(press).await?.is_some());
+    let outside = (220., 41.);
+    assert!(
+        page.dispatch_viewport_pointer(RendererViewportPointerInput {
+            position: outside,
+            event: "mousemove",
+            button: -1,
+            ..press
+        })
+        .await?
+        .is_some()
+    );
+    assert!(
+        page.dispatch_viewport_pointer(RendererViewportPointerInput {
+            position: outside,
+            event: "mouseup",
+            buttons: 0,
+            ..press
+        })
+        .await?
+        .is_some()
+    );
+    let events = page
+        .evaluate_runtime_expression_async(
+            "child.contentWindow.inputEvents.join(',') + '|' + parentMouseUps",
+        )
+        .await?;
+    assert_eq!(events["value"], "wheel:0,mousedown,mousemove,mouseup|0");
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_resize_cancels_a_pressed_pointer_and_releases_capture() -> Result<()> {
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
