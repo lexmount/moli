@@ -10,6 +10,5 @@ pub(crate) use sheet::{
     style_sheet_for_element, style_sheet_getter_function, sync_cached_style_sheet_media_from_owner,
 };
 pub(in crate::native_bridge) use style_element::{
-    style_blocking_getter_function, style_blocking_setter_function, style_disabled_getter_function,
-    style_disabled_setter_function,
+    style_disabled_getter_function, style_disabled_setter_function,
 };
