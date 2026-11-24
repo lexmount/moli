@@ -155,6 +155,7 @@ impl PageScriptHost {
         creator_child_handle: Option<DomHandle>,
         target_name: &str,
         href: &str,
+        #[cfg(feature = "molio")] disposition: crate::runtime::RendererPopupDisposition,
         initiator_origin: &moli_url::WebOrigin,
         creator_base_url: Url,
         mut policy: DocumentPolicyContainer,
@@ -274,6 +275,17 @@ impl PageScriptHost {
             crate::runtime::RendererBrowsingContextName::default()
         };
         name.set(trackable_lightweight_popup_window_name(target_name).unwrap_or_default());
+        #[cfg(feature = "molio")]
+        let document_activity = match (
+            self.browser_context_runtime.auxiliary_navigation_owner(),
+            disposition,
+        ) {
+            (
+                Some(AuxiliaryNavigationOwner::Renderer),
+                crate::runtime::RendererPopupDisposition::Background,
+            ) => moli_page_types::DocumentActivity::new(false, false),
+            _ => moli_page_types::DocumentActivity::default(),
+        };
         let env = crate::runtime::PageVmEnvConfig {
             window_identity: crate::runtime::RendererPageWindowIdentity::new(
                 name.clone(),
@@ -297,6 +309,8 @@ impl PageScriptHost {
             document_default_language: None,
             document_last_modified: None,
             document_settings: moli_page_types::DocumentSettings {
+                #[cfg(feature = "molio")]
+                document_activity,
                 script_execution_disabled: !policy.sandbox.allows_scripts,
                 debugger_enabled: self.dom_debugger_state.debugger_pauses_enabled(),
                 navigator_overrides: self.navigator_overrides().clone(),
