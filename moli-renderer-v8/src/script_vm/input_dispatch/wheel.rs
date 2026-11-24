@@ -9,35 +9,23 @@ impl ScriptVm {
             .input_owner_for_document(self.document_runtime.document_handle())
     }
 
-    pub(crate) fn dispatch_direct_wheel(
+    pub(super) fn dispatch_direct_wheel(
         &mut self,
-        x: f64,
-        y: f64,
-        button: i32,
-        buttons: Option<i32>,
-        click_count: i32,
-        delta_x: f64,
-        delta_y: f64,
-        pointer: RendererPointerEventProperties,
+        position: (f64, f64),
+        delta: (f64, f64),
         modifiers: u8,
-        intercept_drags: bool,
-        completion: MouseDispatchCompletion,
+        options: WheelDispatchOptions,
     ) -> Result<RendererInputDispatchOutcome> {
         let result = self.dispatch_wheel_input(
             WheelInput {
-                position: (x, y),
-                delta: (delta_x, delta_y),
+                position,
+                delta,
                 modifiers,
                 timestamp: std::time::Instant::now(),
                 phase: WheelPhase::Began,
                 source: WheelSource::Direct,
             },
-            button,
-            buttons,
-            click_count,
-            pointer,
-            intercept_drags,
-            completion,
+            options,
         );
         // Raw CDP supplies End directly to the queue. It does not stop the
         // platform phase handler's timer for an interleaved synthetic stream.
@@ -48,12 +36,7 @@ impl ScriptVm {
     pub(crate) fn dispatch_wheel_input(
         &mut self,
         input: WheelInput,
-        button: i32,
-        buttons: Option<i32>,
-        click_count: i32,
-        pointer: RendererPointerEventProperties,
-        intercept_drags: bool,
-        completion: MouseDispatchCompletion,
+        options: WheelDispatchOptions,
     ) -> Result<RendererInputDispatchOutcome> {
         if matches!(input.phase, WheelPhase::Ended | WheelPhase::Cancelled) {
             if input.source == WheelSource::Platform {
@@ -92,19 +75,18 @@ impl ScriptVm {
             }
         };
         self.dispatch_mouse_input_to_target(
-            input.position.0,
-            input.position.1,
+            x,
+            y,
             "wheel",
-            button,
-            buttons,
-            click_count,
+            options.button,
+            options.buttons,
+            options.click_count,
             input.delta.0,
             input.delta.1,
-            pointer,
+            options.pointer,
             input.modifiers,
-            intercept_drags,
-            prepared.cancelable,
-            completion,
+            options.intercept_drags,
+            options.completion,
             Some((hit, prepared)),
         )
     }
@@ -120,7 +102,6 @@ impl ScriptVm {
             std::iter::successors(Some(target), |node| {
                 runtime.dom_host().flat_tree_parent(*node)
             })
-            .collect::<Vec<_>>()
         };
         if let Some(target) = event_target.as_ref().filter(|target| {
             runtime
@@ -128,7 +109,7 @@ impl ScriptVm {
                 .is_some_and(|document| {
                     runtime.dom_host().is_connected(target.node)
                         && runtime.dom_host().owner_document_handle(target.node) == Some(document)
-                        && ancestors(target.node) == target.ancestors
+                        && ancestors(target.node).eq(target.ancestors.iter().copied())
                 })
         }) {
             return Ok(Some(target.node));
@@ -150,7 +131,7 @@ impl ScriptVm {
         *event_target = Some(WheelEventTarget {
             node,
             owner,
-            ancestors: ancestors(node),
+            ancestors: ancestors(node).collect(),
         });
         Ok(Some(node))
     }

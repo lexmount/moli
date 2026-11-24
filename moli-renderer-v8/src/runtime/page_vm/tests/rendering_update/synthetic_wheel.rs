@@ -316,15 +316,7 @@ fn synthetic_wheel_actual_phase_expires_without_an_ack_for_filtered_updates() {
             // the renderer before any protocol workflow can consume its reply.
             let _ = page
                 .vm_mut()
-                .dispatch_wheel_input(
-                    input,
-                    -1,
-                    None,
-                    0,
-                    Default::default(),
-                    false,
-                    crate::script_vm::MouseDispatchCompletion::FinishTurn,
-                )
+                .dispatch_wheel_input(input, Default::default())
                 .unwrap();
             if ms == 0 {
                 let command = RendererSyntheticWheelGesture::default();
@@ -380,15 +372,7 @@ fn synthetic_wheel_platform_end_without_coordinates_preserves_queue_mode() {
                 source: WheelSource::Platform,
             };
             page.vm_mut()
-                .dispatch_wheel_input(
-                    input,
-                    -1,
-                    None,
-                    0,
-                    Default::default(),
-                    false,
-                    crate::script_vm::MouseDispatchCompletion::FinishTurn,
-                )
+                .dispatch_wheel_input(input, Default::default())
                 .unwrap();
         }
         assert_eq!(

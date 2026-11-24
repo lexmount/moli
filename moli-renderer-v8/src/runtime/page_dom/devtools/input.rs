@@ -1,6 +1,6 @@
 use super::super::*;
 use super::child_frame_nodes::child_frame_document_contains_live_handle;
-use crate::script_vm::MouseDispatchCompletion;
+use crate::script_vm::{MouseDispatchCompletion, WheelDispatchOptions};
 
 impl PageVm {
     pub(in crate::runtime) fn bind_wheel_input_controller(
@@ -112,12 +112,10 @@ impl PageVm {
                 },
                 source: WheelSource::Platform,
             },
-            -1,
-            None,
-            0,
-            RendererPointerEventProperties::default(),
-            intercept_drags,
-            MouseDispatchCompletion::FinishTurn,
+            WheelDispatchOptions {
+                intercept_drags,
+                ..Default::default()
+            },
         )
     }
 

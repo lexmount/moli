@@ -386,6 +386,7 @@ impl PageVm {
         &mut self,
         input: RendererViewportWheelInput,
     ) -> anyhow::Result<()> {
+        use crate::script_vm::WheelDispatchOptions;
         use crate::wheel_input::{WheelInput, WheelPhase, WheelSource};
         if input.document != self.document_lifecycle.identity() {
             return Ok(());
@@ -423,12 +424,10 @@ impl PageVm {
                         },
                         source: WheelSource::Platform,
                     },
-                    -1,
-                    Some(buttons),
-                    0,
-                    super::RendererPointerEventProperties::default(),
-                    false,
-                    crate::script_vm::MouseDispatchCompletion::FinishTurn,
+                    WheelDispatchOptions {
+                        buttons: Some(buttons),
+                        ..Default::default()
+                    },
                 );
                 if result.is_ok() {
                     self.update_viewport_pointer_position(Some(input.position));

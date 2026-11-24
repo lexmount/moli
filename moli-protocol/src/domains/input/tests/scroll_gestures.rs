@@ -162,7 +162,6 @@ async fn scroll_gesture_repeat_resets_target_and_cancellation_mode() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn scroll_gesture_repeat_starts_cancelable_after_skipping_an_outside_update() {
-    use super::super::scroll::SyntheticWheelSequence;
     use crate::conn::{CommandOwnerScope, ProtocolWorkflowDriver};
     use moli_core::page::RendererSyntheticWheelGesture;
 
@@ -181,8 +180,18 @@ async fn scroll_gesture_repeat_starts_cancelable_after_skipping_an_outside_updat
         (owner, page)
     });
     let command = RendererSyntheticWheelGesture::default();
-    let mut first = SyntheticWheelSequence::new(&command);
-    let mut repeat = SyntheticWheelSequence::new(&command);
+    let first = SyntheticWheel {
+        gesture: command.next_sequence(),
+        owner,
+        page,
+        position: (120.0, 20.0),
+        delta: (0.0, 25.0),
+        end: false,
+    };
+    let repeat = SyntheticWheel {
+        gesture: command.next_sequence(),
+        ..first.clone()
+    };
     let mut driver = ProtocolWorkflowDriver::new(ctx.handle());
     let mut context = CommandDispatchContext::default();
 
@@ -195,35 +204,25 @@ async fn scroll_gesture_repeat_starts_cancelable_after_skipping_an_outside_updat
         }))
         .await;
         ctx.expect_result(id, json!({}), None);
-        let sequence = if id == 35001 { &mut first } else { &mut repeat };
+        let sequence = if id == 35001 { &first } else { &repeat };
+        let update = SyntheticWheel {
+            delta: (0.0, delta),
+            ..sequence.clone()
+        };
         assert!(
-            ctx.drive_owned_wait(sequence.dispatch_update(
-                &mut driver,
-                &mut context,
-                &owner,
-                &page,
-                120.0,
-                20.0,
-                0.0,
-                delta,
-            ))
-            .await
-            .unwrap(),
+            ctx.drive_owned_wait(update.dispatch(&mut driver, &mut context))
+                .await
+                .unwrap(),
         );
     }
+    let update = SyntheticWheel {
+        delta: (0.0, 100.0),
+        ..repeat
+    };
     assert!(
-        ctx.drive_owned_wait(repeat.dispatch_update(
-            &mut driver,
-            &mut context,
-            &owner,
-            &page,
-            120.0,
-            20.0,
-            0.0,
-            100.0,
-        ))
-        .await
-        .unwrap(),
+        ctx.drive_owned_wait(update.dispatch(&mut driver, &mut context))
+            .await
+            .unwrap(),
     );
 
     let value = snapshot(&mut ctx).await;

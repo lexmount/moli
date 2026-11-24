@@ -1,10 +1,7 @@
 use super::super::provider::{read_element_metrics, read_scroll_into_view_geometry};
 use super::*;
 use crate::native_bridge::WindowDocumentTaskTarget;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::{cell::Cell, rc::Rc};
 
 pub(crate) fn perform_scrollbar_scroll_default_action(
     scope: &mut v8::PinScope<'_, '_>,
@@ -189,7 +186,7 @@ struct LatchedScrollBox {
     source: DomHandle,
     document: DomHandle,
     owner: WindowDocumentTaskTarget,
-    alive: Arc<AtomicBool>,
+    alive: Rc<Cell<bool>>,
 }
 
 impl WheelScrollTarget {
@@ -257,7 +254,7 @@ pub(crate) fn perform_latched_wheel_scroll_default_action(
     let Some(target) = &target.0 else {
         return Ok(false);
     };
-    if !target.alive.load(Ordering::Relaxed) {
+    if !target.alive.get() {
         return Ok(false);
     }
     let source = target.source;
@@ -266,15 +263,15 @@ pub(crate) fn perform_latched_wheel_scroll_default_action(
         || !runtime.dom_host().is_connected(source)
         || runtime.dom_host().owner_document_handle(source) != Some(target.document)
     {
-        target.alive.store(false, Ordering::Relaxed);
+        target.alive.set(false);
         return Ok(false);
     }
     let Some(metrics) = read_element_metrics(runtime, source)? else {
-        target.alive.store(false, Ordering::Relaxed);
+        target.alive.set(false);
         return Ok(false);
     };
     // Reading the metrics can publish layout and retire this scroll box.
-    if !target.alive.load(Ordering::Relaxed) {
+    if !target.alive.get() {
         return Ok(false);
     }
     let is_viewport = runtime
@@ -283,7 +280,7 @@ pub(crate) fn perform_latched_wheel_scroll_default_action(
         .document_element_handle_for_document(target.document)
         == Some(source);
     if !is_viewport && !metrics.is_scroll_container {
-        target.alive.store(false, Ordering::Relaxed);
+        target.alive.set(false);
         return Ok(false);
     }
     perform_wheel_scroll_chain_default_action(
