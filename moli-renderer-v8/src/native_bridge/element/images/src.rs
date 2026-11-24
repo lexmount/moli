@@ -13,12 +13,16 @@ use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::geometry::compute_mock_client_rect;
 use super::super::{construct_simple_event, dispatch_public_event, resolve_url_like_attribute};
-use super::lazy::{image_load_is_deferred, revealed_lazy_image_handles};
+use super::lazy::{
+    image_load_is_deferred, image_uses_lazy_loading, is_lazy_loading_attribute,
+    revealed_lazy_image_handles,
+};
 
 #[derive(Clone, Copy)]
 enum ImageLoadQueueTrigger {
     SourceOrInsertion,
     LazyReveal,
+    ResumeLazy,
     DocumentAdoption,
 }
 
@@ -101,20 +105,6 @@ pub(crate) fn queue_revealed_lazy_image_load(
     );
 }
 
-pub(crate) fn queue_image_load_event_for_loading_change(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    handle: DomHandle,
-) {
-    queue_image_load_event(
-        scope,
-        runtime_ptr,
-        handle,
-        ImageLoadQueueTrigger::SourceOrInsertion,
-        SubresourceRequestInitiatorType::Script,
-    );
-}
-
 fn queue_image_load_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -154,9 +144,19 @@ fn queue_image_load_event(
         return;
     };
     let pending_before_registration = runtime.pending_image_load_event(handle);
-    let Some(pending) =
-        runtime.register_pending_image_load_event(handle, target, request_initiator_type)
-    else {
+    // A loading attribute change resumes the original lazy request with its
+    // original load-event behavior, even if viewport admission has not run.
+    let delays_load = !matches!(trigger, ImageLoadQueueTrigger::ResumeLazy)
+        && !runtime
+            .dom_host()
+            .node(handle)
+            .is_some_and(|node| image_uses_lazy_loading(runtime, node));
+    let Some(pending) = runtime.register_pending_image_load_event(
+        handle,
+        target,
+        request_initiator_type,
+        delays_load,
+    ) else {
         if let Some(pending) = runtime
             .pending_image_load_event(handle)
             .or(pending_before_registration)
@@ -454,8 +454,11 @@ pub(crate) fn image_selected_request_key(
 }
 
 #[derive(Default)]
-pub(crate) struct ImageAttributeMutationPlan {
-    targets: Vec<DomHandle>,
+pub(crate) enum ImageAttributeMutationPlan {
+    #[default]
+    None,
+    Reload(Vec<DomHandle>),
+    ResumeLazy(DomHandle),
 }
 
 pub(crate) fn plan_image_attribute_mutation(
@@ -464,9 +467,18 @@ pub(crate) fn plan_image_attribute_mutation(
     name: &str,
     next_value: Option<&str>,
 ) -> ImageAttributeMutationPlan {
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
+    let Some(node) = runtime.dom_host().node(handle) else {
         return ImageAttributeMutationPlan::default();
     };
+    let Some(element) = node.as_element() else {
+        return ImageAttributeMutationPlan::default();
+    };
+    if name.eq_ignore_ascii_case("loading")
+        && !is_lazy_loading_attribute(next_value)
+        && image_uses_lazy_loading(runtime, node)
+    {
+        return ImageAttributeMutationPlan::ResumeLazy(handle);
+    }
     if element.is_html_element("img") {
         let reloads_image = name.eq_ignore_ascii_case("src")
             || name.eq_ignore_ascii_case("srcset")
@@ -475,9 +487,9 @@ pub(crate) fn plan_image_attribute_mutation(
                 && ImageRequestCorsMode::from_cross_origin_attribute(
                     element.attribute("crossorigin"),
                 ) != ImageRequestCorsMode::from_cross_origin_attribute(next_value));
-        return ImageAttributeMutationPlan {
-            targets: reloads_image.then_some(handle).into_iter().collect(),
-        };
+        return ImageAttributeMutationPlan::Reload(
+            reloads_image.then_some(handle).into_iter().collect(),
+        );
     }
     if element.is_svg_element("image") {
         let reloads_image = name.eq_ignore_ascii_case("href")
@@ -485,9 +497,9 @@ pub(crate) fn plan_image_attribute_mutation(
                 && ImageRequestCorsMode::from_cross_origin_attribute(
                     element.attribute("crossorigin"),
                 ) != ImageRequestCorsMode::from_cross_origin_attribute(next_value));
-        return ImageAttributeMutationPlan {
-            targets: reloads_image.then_some(handle).into_iter().collect(),
-        };
+        return ImageAttributeMutationPlan::Reload(
+            reloads_image.then_some(handle).into_iter().collect(),
+        );
     }
     if !element.is_html_element("source")
         || (!name.eq_ignore_ascii_case("srcset")
@@ -504,13 +516,13 @@ pub(crate) fn plan_image_attribute_mutation(
     else {
         return ImageAttributeMutationPlan::default();
     };
-    ImageAttributeMutationPlan {
-        targets: runtime
+    ImageAttributeMutationPlan::Reload(
+        runtime
             .dom_host()
             .child_handles(picture)
             .filter(|child| runtime.dom_host().is_html_element_named(*child, "img"))
             .collect(),
-    }
+    )
 }
 
 pub(crate) fn apply_image_attribute_mutation_plan(
@@ -518,13 +530,27 @@ pub(crate) fn apply_image_attribute_mutation_plan(
     runtime_ptr: *mut PageScriptHost,
     plan: ImageAttributeMutationPlan,
 ) {
+    let targets = match plan {
+        ImageAttributeMutationPlan::None => return,
+        ImageAttributeMutationPlan::Reload(targets) => targets,
+        ImageAttributeMutationPlan::ResumeLazy(handle) => {
+            queue_image_load_event(
+                scope,
+                runtime_ptr,
+                handle,
+                ImageLoadQueueTrigger::ResumeLazy,
+                SubresourceRequestInitiatorType::Script,
+            );
+            return;
+        }
+    };
     {
         let runtime = unsafe { &mut *runtime_ptr };
-        for &target in &plan.targets {
+        for &target in &targets {
             reset_image_load_dispatch(runtime, target);
         }
     }
-    for target in plan.targets {
+    for target in targets {
         queue_image_load_event_if_needed_with_initiator(
             scope,
             runtime_ptr,

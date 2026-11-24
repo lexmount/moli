@@ -12,6 +12,9 @@ use tokio::time::Duration;
 #[path = "fetch_behaviors/preload_lifecycle.rs"]
 mod preload_lifecycle;
 
+#[path = "fetch_behaviors/image_load_delays.rs"]
+mod image_load_delays;
+
 #[path = "fetch_behaviors/preload_as.rs"]
 mod preload_as;
 

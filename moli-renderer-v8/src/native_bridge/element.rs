@@ -586,9 +586,9 @@ pub(crate) use images::{
     apply_authorized_image_load_event_in_context, apply_image_attribute_mutation_plan,
     image_intrinsic_dimensions, image_selected_request_key, image_selected_source,
     plan_image_attribute_mutation, queue_image_load_event_after_document_adoption,
-    queue_image_load_event_for_loading_change, queue_image_load_event_if_needed,
-    queue_image_load_event_if_needed_with_initiator, queue_image_load_network_terminal_followup,
-    queue_revealed_lazy_image_load, queue_revealed_lazy_image_loads, reset_image_load_dispatch,
+    queue_image_load_event_if_needed, queue_image_load_event_if_needed_with_initiator,
+    queue_image_load_network_terminal_followup, queue_revealed_lazy_image_load,
+    queue_revealed_lazy_image_loads, reset_image_load_dispatch,
     revealed_lazy_image_load_candidates,
 };
 pub(in crate::native_bridge) use images::{
@@ -760,9 +760,6 @@ pub(in crate::native_bridge) fn set_live_element_attribute_appending_to_current_
     }
     if did_set {
         apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
-        if name.eq_ignore_ascii_case("loading") {
-            queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
-        }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
     }
@@ -816,9 +813,6 @@ pub(in crate::native_bridge) fn set_live_element_attribute_ns_appending_to_curre
     }
     if did_set && namespace.is_none() {
         apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
-        if local_name.eq_ignore_ascii_case("loading") {
-            queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
-        }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, local_name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, local_name);
     }
@@ -864,9 +858,6 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_appending_to_curre
     }
     if did_remove {
         apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
-        if name.eq_ignore_ascii_case("loading") {
-            queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
-        }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
     }
@@ -937,9 +928,6 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_ns_appending_to_cu
     }
     if did_remove && namespace.is_none() {
         apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
-        if local_name.eq_ignore_ascii_case("loading") {
-            queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
-        }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, local_name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, local_name);
     }
