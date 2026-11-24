@@ -87,18 +87,37 @@ fn prepare(
     let admission_queue = conn
         .synthetic_scroll_admissions_for_owner(&owner)
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
+    let x = params.x;
+    let y = params.y;
+    let command_gesture = RendererSyntheticWheelGesture::default();
+    // Snapshot the actual widget bounds before waiting for another gesture.
+    // This renderer query never dispatches a wheel or chooses its targets.
+    let Some(anchor_validation) = start_page_input_command(
+        conn,
+        None,
+        &owner,
+        PendingInputCommandKind::DispatchMouseEvent,
+        |page| page.start_validate_synthetic_wheel_anchor(x, y, command_gesture.clone()),
+    )?
+    else {
+        return Ok(None);
+    };
     // Reserve the first turn during synchronous command admission. Repeats
     // reserve a new turn after their delay so other sessions can make progress.
     let first_admission = admission_queue.reserve();
-    let x = params.x;
-    let y = params.y;
     let access = conn.protocol_state_access();
     Ok(Some(
         crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
             let mut driver = ProtocolWorkflowDriver::new(access);
             let mut first_admission = Some(first_admission);
             let result = async {
-                let command_gesture = RendererSyntheticWheelGesture::default();
+                let _ = complete_wheel(
+                    &mut driver,
+                    anchor_validation.wait().await,
+                    page.target_id().map(str::to_owned),
+                    context.context_mut(),
+                )
+                .await?;
                 for repeat in 0..=repeat_count {
                     if repeat != 0 {
                         tokio::time::sleep(repeat_delay).await;
@@ -158,11 +177,11 @@ fn prepare(
 pub(super) struct SyntheticWheelSequence {
     gesture: RendererSyntheticWheelGesture,
     began: Option<WheelSequenceBegin>,
+    first_update: bool,
 }
 
 struct WheelSequenceBegin {
     direction: Option<WheelDirection>,
-    canceled: bool,
     first_scroll_consumed: Option<bool>,
 }
 
@@ -191,6 +210,7 @@ impl SyntheticWheelSequence {
         Self {
             gesture: command.next_sequence(),
             began: None,
+            first_update: true,
         }
     }
 
@@ -215,6 +235,7 @@ impl SyntheticWheelSequence {
                     .zip(direction)
                     .is_some_and(|(initial, next)| initial != next)
         });
+        let phase_began = self.first_update || restart;
         let gesture = if restart {
             self.gesture.restart_phase()
         } else {
@@ -227,7 +248,7 @@ impl SyntheticWheelSequence {
             y,
             delta_x,
             delta_y,
-            cancelable: restart || self.began.as_ref().is_none_or(|began| began.canceled),
+            phase_began,
             gesture: gesture.clone(),
         };
         let pending = driver
@@ -243,17 +264,26 @@ impl SyntheticWheelSequence {
             context,
         )
         .await?;
-        // A skipped update never enters the wheel phase or changes its
-        // cancelability. A canceled wheel has no default scroll update.
+        // Generated time phases advance even when bounds filtering drops Began.
+        // Only a real Began ACK can select a new Page dispatch mode.
+        self.first_update = false;
         if let Some(outcome) = outcome {
             if restart {
                 self.gesture = gesture;
                 self.began = None;
             }
             let canceled = outcome == RendererWheelDispatchOutcome::Canceled;
+            if phase_began {
+                let owner = owner.clone();
+                let page = page.clone();
+                driver
+                    .with_state(move |state| {
+                        state.acknowledge_synthetic_wheel_began(&owner, &page, canceled)
+                    })
+                    .map_err(input_workflow_error)?;
+            }
             let began = self.began.get_or_insert(WheelSequenceBegin {
                 direction,
-                canceled,
                 first_scroll_consumed: None,
             });
             if let Some(direction) = direction {
@@ -301,7 +331,7 @@ pub(crate) struct SyntheticWheel {
     y: f64,
     delta_x: f64,
     delta_y: f64,
-    cancelable: bool,
+    phase_began: bool,
 }
 
 impl SyntheticWheel {
@@ -317,6 +347,10 @@ impl SyntheticWheel {
         {
             return Ok(None);
         }
+        let Some(admission_queue) = conn.synthetic_scroll_admissions_for_owner(&self.owner) else {
+            return Ok(None);
+        };
+        let cancelable = self.phase_began || admission_queue.cancelable();
         let intercept_drags = drag::intercept_drags_enabled(conn, &self.owner);
         start_page_input_command(
             conn,
@@ -329,7 +363,7 @@ impl SyntheticWheel {
                     self.y,
                     self.delta_x,
                     self.delta_y,
-                    self.cancelable,
+                    cancelable,
                     intercept_drags,
                     self.gesture,
                 )

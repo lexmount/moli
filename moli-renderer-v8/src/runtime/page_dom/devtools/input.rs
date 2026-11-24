@@ -43,6 +43,30 @@ impl PageVm {
         Ok(outcome)
     }
 
+    fn synthetic_wheel_anchor_in_bounds(&self, x: f64, y: f64) -> bool {
+        let (width, height) = self
+            .vm()
+            .document_runtime
+            .viewport_surface()
+            .unwrap_or_default()
+            .visible_size();
+        x >= 0.0 && y >= 0.0 && x < f64::from(width) && y < f64::from(height)
+    }
+
+    pub(crate) fn validate_synthetic_wheel_anchor(
+        &self,
+        x: f64,
+        y: f64,
+        gesture: &crate::runtime::RendererSyntheticWheelGesture,
+    ) -> Result<RendererInputDispatchOutcome> {
+        anyhow::ensure!(
+            self.synthetic_wheel_anchor_in_bounds(x, y),
+            "Position out of bounds"
+        );
+        gesture.validate_anchor(true);
+        Ok(RendererInputDispatchOutcome::default())
+    }
+
     pub(crate) fn dispatch_synthetic_wheel(
         &mut self,
         x: f64,
@@ -53,15 +77,8 @@ impl PageVm {
         intercept_drags: bool,
         gesture: crate::runtime::RendererSyntheticWheelGesture,
     ) -> Result<RendererInputDispatchOutcome> {
-        let (width, height) = self
-            .vm()
-            .document_runtime
-            .viewport_surface()
-            .unwrap_or_default()
-            .visible_size();
-        // CDP inputs reach this path in root viewport coordinates. The
-        // presentation-only scales for capture do not transform input.
-        let in_bounds = x >= 0.0 && y >= 0.0 && x < f64::from(width) && y < f64::from(height);
+        // Root widget coordinates are independent of capture scale.
+        let in_bounds = self.synthetic_wheel_anchor_in_bounds(x, y);
         anyhow::ensure!(gesture.validate_anchor(in_bounds), "Position out of bounds");
         if !in_bounds {
             // An invalid initial anchor is an error. An already-started

@@ -102,6 +102,12 @@ pub trait PageInputExt {
         &mut self,
         completion: CompletedPageCommand,
     ) -> Result<RendererInputDispatchOutcome>;
+    fn start_validate_synthetic_wheel_anchor(
+        &self,
+        x: f64,
+        y: f64,
+        gesture: crate::page::RendererSyntheticWheelGesture,
+    ) -> Result<PendingPageCommand>;
     fn start_dispatch_synthetic_wheel(
         &self,
         x: f64,
@@ -315,6 +321,17 @@ impl PageInputExt for Page {
     ) -> Result<RendererInputDispatchOutcome> {
         let reply = self.finish_page_command(completion);
         decode_input_dispatch_outcome_reply(reply, "mouse event page command")
+    }
+
+    fn start_validate_synthetic_wheel_anchor(
+        &self,
+        x: f64,
+        y: f64,
+        gesture: crate::page::RendererSyntheticWheelGesture,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::ValidateSyntheticWheelAnchor { x, y, gesture },
+        ))
     }
 
     fn start_dispatch_synthetic_wheel(
