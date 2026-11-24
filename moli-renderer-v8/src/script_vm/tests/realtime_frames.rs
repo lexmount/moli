@@ -265,21 +265,29 @@ fn legacy_hidden_frame_cssom_keeps_its_existing_empty_declaration() {
 
 #[test]
 fn realtime_required_frame_depth_fails_instead_of_publishing_missing_geometry() {
-    let mut vm = frame_fixture(LayoutPolicy::Realtime, 320, 100);
-    vm.eval(
-        "let parent=child;\
-         for(let i=0;i<33;i++){\
-           const nested=parent.document.createElement('iframe');\
-           nested.style.cssText='width:320px;height:100px;border:0';\
-           parent.document.body.append(nested);parent=nested.contentWindow;\
-           parent.document.open();parent.document.write('<!doctype html><body><div id=deep style=width:100px></div>');parent.document.close();\
-         }\
-         globalThis.deep=parent.document.getElementById('deep')",
-    ).unwrap();
-    let before = vm.layout_pass_observability_for_test().1;
-    let error = vm.eval("deep.offsetWidth").unwrap_err();
-    assert!(error.to_string().contains("required Document"), "{error}");
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    vm.eval("frame.style.display='none'").unwrap();
-    assert_eq!(vm.eval("String(deep.offsetWidth)").unwrap(), "0");
+    // Exercise the depth limit with the render runtime's 8 MiB stack budget.
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            let mut vm = frame_fixture(LayoutPolicy::Realtime, 320, 100);
+            vm.eval(
+                "let parent=child;\
+                 for(let i=0;i<33;i++){\
+                   const nested=parent.document.createElement('iframe');\
+                   nested.style.cssText='width:320px;height:100px;border:0';\
+                   parent.document.body.append(nested);parent=nested.contentWindow;\
+                   parent.document.open();parent.document.write('<!doctype html><body><div id=deep style=width:100px></div>');parent.document.close();\
+                 }\
+                 globalThis.deep=parent.document.getElementById('deep')",
+            ).unwrap();
+            let before = vm.layout_pass_observability_for_test().1;
+            let error = vm.eval("deep.offsetWidth").unwrap_err();
+            assert!(error.to_string().contains("required Document"), "{error}");
+            assert_eq!(vm.layout_pass_observability_for_test().1, before);
+            vm.eval("frame.style.display='none'").unwrap();
+            assert_eq!(vm.eval("String(deep.offsetWidth)").unwrap(), "0");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
