@@ -7,7 +7,10 @@ use super::backing_store::{
 use super::color::{CanvasColorStyle, canvas_srgb_components, serialize_canvas_color};
 use super::helpers::canvas_unrestricted_double_arg;
 use super::path2d::path_2d_object;
-use super::state::{canvas_color, canvas_path_state, set_canvas_color};
+use super::state::{
+    canvas_color, canvas_path_state, canvas_text_baseline, set_canvas_color,
+    set_canvas_text_baseline,
+};
 use super::*;
 use crate::context_bootstrap::image_data::{
     build_image_data_object, build_image_data_object_with_bytes, image_data_bytes_from_object,
@@ -19,9 +22,10 @@ use crate::web_api_interfaces;
 use crate::webidl;
 use crate::webidl::dom_string_property_value as canvas_context_dom_string_value;
 use moli_canvas::{
-    DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered, blit_image_data, byte_len,
-    composite_rgba8_over, data_image_rgba8_pixels, draw_text, extract_image_data,
-    measure_text_width, normalize_rect as canvas_normalize_rect, paint_rect,
+    DEFAULT_FONT, DrawImageBlit, ScaleFilter, TextBaseline, blit_draw_image_filtered,
+    blit_image_data, byte_len, composite_rgba8_over, data_image_rgba8_pixels,
+    draw_text_with_baseline, extract_image_data, measure_text_vertical_bounds, measure_text_width,
+    normalize_rect as canvas_normalize_rect, paint_rect,
 };
 use moli_layout::{
     PaintBrush, PaintColor, PaintFillRule, PaintFragment, PaintLineCap, PaintLineJoin, PaintShape,
@@ -1697,10 +1701,42 @@ fn draw_canvas_context_text<'s>(
 ) {
     let font = context_string_slot(scope, context, CANVAS_CONTEXT_FONT_SLOT)
         .unwrap_or_else(|| DEFAULT_FONT.to_owned());
+    let baseline = canvas_text_baseline(scope, context);
     let color = canvas_srgb_components(canvas_color(scope, context, style)).map(clamp_unit_f32);
     let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        draw_text(pixels, width, height, text, x, y, &font, color);
+        draw_text_with_baseline(pixels, width, height, text, x, y, &font, baseline, color);
     });
+}
+
+pub(crate) fn canvas_context_text_baseline_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "textBaseline getter") {
+        return;
+    }
+    let baseline = canvas_text_baseline(scope, args.this());
+    rv.set(v8::String::new(scope, baseline.as_str()).unwrap().into());
+}
+
+pub(crate) fn canvas_context_text_baseline_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "textBaseline setter") {
+        return;
+    }
+    if let Some(value) = canvas_context_dom_string_value(
+        scope,
+        args.get(0),
+        "CanvasRenderingContext2D",
+        "textBaseline",
+    ) && let Some(baseline) = TextBaseline::parse(&value)
+    {
+        set_canvas_text_baseline(scope, args.this(), baseline);
+    }
 }
 
 pub(crate) fn canvas_context_draw_image_callback<'s>(
@@ -1950,8 +1986,13 @@ pub(crate) fn canvas_context_measure_text_callback<'s>(
     };
     let font = context_string_slot(scope, args.this(), CANVAS_CONTEXT_FONT_SLOT)
         .unwrap_or_else(|| DEFAULT_FONT.to_owned());
+    let baseline = canvas_text_baseline(scope, args.this());
+    let (actual_bounding_box_ascent, actual_bounding_box_descent) =
+        measure_text_vertical_bounds(&parsed.text, &font, baseline);
     let declaration = CanvasTextMetricsDeclaration {
         width: measure_text_width(&parsed.text, &font),
+        actual_bounding_box_ascent,
+        actual_bounding_box_descent,
     };
     let relevant_context = canvas_context_relevant_context(scope, args.this())
         .unwrap_or_else(|| scope.get_current_context());
