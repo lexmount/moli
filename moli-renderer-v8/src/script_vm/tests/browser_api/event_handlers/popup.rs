@@ -147,3 +147,43 @@ async fn popup_content_handler_timers_retire_with_the_popup() {
     .await;
     assert_eq!(vm.eval("String(__popupContentTimerCalls)").unwrap(), "0");
 }
+
+#[test]
+fn popup_body_and_frameset_idl_handlers_share_their_window_handler_state() {
+    let mut vm = new_storage_test_vm("https://popup-body-window-handlers.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const popup = open();
+  try {
+    const names = ['onblur', 'onfocus', 'onresize', 'onscroll'];
+    const body = popup.document.body;
+    const detachedBody = popup.document.createElement('body');
+    const frameset = popup.document.createElement('frameset');
+    const aliases = [popup, body, detachedBody, frameset];
+    const failures = [];
+    for (const name of names) {
+      for (const writer of aliases) {
+        const handler = function() {};
+        writer[name] = handler;
+        if (!aliases.every(alias => alias[name] === handler)) failures.push(name + ':function');
+        const objectHandler = {};
+        writer[name] = objectHandler;
+        if (!aliases.every(alias => alias[name] === objectHandler)) failures.push(name + ':object');
+        for (const value of [null, undefined, false, 1, '', Symbol(), 1n]) {
+          writer[name] = handler;
+          writer[name] = value;
+          if (!aliases.every(alias => alias[name] === null)) failures.push(name + ':null');
+        }
+        if (window[name] !== null) failures.push(name + ':opener');
+      }
+    }
+    return JSON.stringify(failures);
+  } finally { popup.close(); }
+})()
+"#,
+        )
+        .expect("popup body and frameset IDL aliases should evaluate");
+    assert_eq!(result, "[]");
+}
