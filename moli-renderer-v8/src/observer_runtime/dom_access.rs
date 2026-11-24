@@ -20,7 +20,6 @@ use super::{
     invoke_intersection_deliveries, invoke_mutation_deliveries, node_is_intersection_root,
     node_is_intersection_target,
     schedule::{self, ObserverTask},
-    target_is_intersection_observable,
 };
 
 pub(crate) struct ObserverStoreAccessToken {
@@ -315,7 +314,7 @@ pub(super) fn observe_intersection_target(
         return true;
     }
     let should_check = options.as_ref().is_some_and(|options| {
-        access.read(|host| target_is_intersection_observable(host.dom_host(), target, options))
+        access.read(|host| super::intersection_has_rendering_document(host, target, options))
     });
     if should_check {
         request_task_with_access(&mut access, scope, ObserverTask::IntersectionCheck);
