@@ -28,20 +28,24 @@ use crate::{
 use moli_page_types::NavigationHistoryMutation;
 
 use super::super::super::PageScriptHost;
+use super::super::details_dialog::{
+    closed_details_child_participates, details_reveal_flat_tree_parent,
+};
 use super::super::forms::{
     FormAssociatedResetCallbackTiming, dispatch_form_reset_event, reset_form_default_action,
 };
 use super::super::url_attributes::parsed_hyperlink_url;
 use super::super::{
     ClickEventSource, InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
-    closed_details_ancestors_to_reveal, construct_click_event, construct_command_event,
-    construct_input_event, construct_simple_event, contenteditable_editing_host,
-    dispatch_beforeinput, dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
+    construct_click_event, construct_command_event, construct_input_event, construct_simple_event,
+    construct_simple_event_for_target, contenteditable_editing_host, dispatch_beforeinput,
+    dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
     element_has_attribute, form_associated_form_owner, is_disabled_form_control, is_focusable,
     is_valid_submit_button, label_activation_control_handle,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
-    resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
-    set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
+    remove_reflected_attribute, resolved_reflected_element_attribute_handle,
+    scroll_node_into_view_at_start, set_reflected_boolean_attribute, submit_form_with_submit_event,
+    update_focus,
 };
 use super::targets::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
@@ -1969,25 +1973,89 @@ pub(crate) fn scroll_to_document_fragment_target(
     let Some(target) = document_tree_fragment_target(unsafe { &*runtime_ptr }, &fragment) else {
         return Ok(false);
     };
-    reveal_details_ancestors_for_fragment_target(scope, runtime_ptr, target);
-    let _ = scroll_node_into_view_at_start(scope, runtime_ptr, target)?;
+    let document = unsafe { &*runtime_ptr }.dom_host().document_handle();
+    reveal_fragment_ancestors(scope, runtime_ptr, target);
+    let dom = unsafe { &*runtime_ptr }.dom_host();
+    if dom.is_connected(target) && dom.owner_document_handle(target) == Some(document) {
+        let _ = scroll_node_into_view_at_start(scope, runtime_ptr, target)?;
+    }
     Ok(true)
 }
 
-fn reveal_details_ancestors_for_fragment_target(
+enum FragmentAncestorRevealKind {
+    HiddenUntilFound,
+    ClosedDetails,
+}
+
+fn is_hidden_until_found(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    runtime
+        .dom_host()
+        .element(handle)
+        .and_then(|element| element.attribute_ns("", "hidden"))
+        .is_some_and(|value| value.eq_ignore_ascii_case("until-found"))
+}
+
+fn fragment_ancestors_to_reveal(
+    runtime: &PageScriptHost,
+    target: DomHandle,
+) -> Vec<(DomHandle, FragmentAncestorRevealKind)> {
+    let mut ancestors = Vec::new();
+    let mut branch = target;
+    while let Some(parent) = details_reveal_flat_tree_parent(runtime, branch) {
+        if is_hidden_until_found(runtime, branch) {
+            ancestors.push((branch, FragmentAncestorRevealKind::HiddenUntilFound));
+        }
+        if !closed_details_child_participates(runtime, parent, branch) {
+            ancestors.push((parent, FragmentAncestorRevealKind::ClosedDetails));
+        }
+        branch = parent;
+    }
+    ancestors
+}
+
+fn reveal_fragment_ancestors(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
 ) {
-    let ancestors = closed_details_ancestors_to_reveal(unsafe { &*runtime_ptr }, target);
-    for details in ancestors {
-        let runtime = unsafe { &*runtime_ptr };
-        if !runtime.dom_host().is_connected(details)
-            || element_has_attribute(runtime, details, "open")
-        {
+    // Event handlers can change the ancestry. Collect the steps first and
+    // recheck each element before modifying its attributes.
+    for (handle, kind) in fragment_ancestors_to_reveal(unsafe { &*runtime_ptr }, target) {
+        if !unsafe { &*runtime_ptr }.dom_host().is_connected(handle) {
             return;
         }
-        set_reflected_boolean_attribute(scope, runtime_ptr, details, "open", true);
+        match kind {
+            FragmentAncestorRevealKind::HiddenUntilFound => {
+                if !is_hidden_until_found(unsafe { &*runtime_ptr }, handle) {
+                    return;
+                }
+                let Some(event) = construct_simple_event_for_target(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    "beforematch",
+                    true,
+                    false,
+                    false,
+                ) else {
+                    return;
+                };
+                let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+                let runtime = unsafe { &*runtime_ptr };
+                if !runtime.dom_host().is_connected(handle)
+                    || !is_hidden_until_found(runtime, handle)
+                {
+                    return;
+                }
+                remove_reflected_attribute(scope, runtime_ptr, handle, "hidden");
+            }
+            FragmentAncestorRevealKind::ClosedDetails => {
+                if element_has_attribute(unsafe { &*runtime_ptr }, handle, "open") {
+                    return;
+                }
+                set_reflected_boolean_attribute(scope, runtime_ptr, handle, "open", true);
+            }
+        }
     }
 }
 

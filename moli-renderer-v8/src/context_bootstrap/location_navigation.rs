@@ -583,27 +583,6 @@ fn navigate_location_object_with_options<'s>(
         {
             return;
         }
-        // Hyperlink fragment activation runs after navigate accepts it.
-        // Intercepted navigation controls its own scroll timing.
-        if source_element.is_some()
-            && runtime_window_is_global(scope, owner)
-            && !navigate_outcome
-                .as_ref()
-                .is_some_and(|outcome| outcome.intercepted)
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-            && let Err(error) = crate::native_bridge::element::scroll_to_document_fragment_target(
-                scope, host_ptr, &resolved,
-            )
-        {
-            if let Some(message) = v8_string(
-                scope,
-                &format!("Layout failed while scrolling to fragment: {error}"),
-            ) {
-                let exception = v8::Exception::error(scope, message);
-                scope.throw_exception(exception);
-            }
-            return;
-        }
         if let Some(navigation) = navigation {
             cancel_pending_same_document_navigation_finishes(scope, navigation);
         }
@@ -664,6 +643,30 @@ fn navigate_location_object_with_options<'s>(
         } else {
             sync_local_document_front_from_window(scope, owner);
         }
+        let mut fallback_scroll_href = Some(resolved.as_str());
+        // The committed URL is already visible to beforematch listeners.
+        if source_element.is_some()
+            && runtime_window_is_global(scope, owner)
+            && !navigate_outcome
+                .as_ref()
+                .is_some_and(|outcome| outcome.intercepted)
+            && location_href_slot(scope, location).as_deref() == Some(resolved.as_str())
+            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        {
+            match crate::native_bridge::element::scroll_to_document_fragment_target(
+                scope, host_ptr, &resolved,
+            ) {
+                Ok(true) => fallback_scroll_href = None,
+                Ok(false) => {}
+                Err(error) => {
+                    fallback_scroll_href = None;
+                    tracing::warn!(%error, "failed to scroll to the committed fragment");
+                }
+            }
+            if location_href_slot(scope, location).as_deref() != Some(resolved.as_str()) {
+                return;
+            }
+        }
         if let Some(navigation) = navigation {
             if navigate_outcome
                 .as_ref()
@@ -684,7 +687,7 @@ fn navigate_location_object_with_options<'s>(
                     scope,
                     navigation,
                     navigate_outcome.as_ref().and_then(|outcome| outcome.signal),
-                    Some(resolved.as_str()),
+                    fallback_scroll_href,
                 );
             }
         }
