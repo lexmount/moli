@@ -35,10 +35,10 @@ pub(crate) use default_action::{
 };
 pub(crate) use default_action::{
     activate_handle_via_synthetic_click, dispatched_click_activation_target,
-    finish_legacy_activation_for_dispatched_click,
+    finish_legacy_activation_for_dispatched_click, is_hidden_until_found,
     perform_click_default_action_for_dispatched_event,
     prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
-    scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
+    reveal_target_ancestors, scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
 };
 pub(in crate::native_bridge) use targets::{
     FormNavigationTarget, choose_form_navigation_target, form_blocked_ancestor_targets,

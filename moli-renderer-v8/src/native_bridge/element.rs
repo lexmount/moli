@@ -99,7 +99,8 @@ mod query;
 mod reflection;
 mod rendered_state;
 pub(crate) use rendered_state::{
-    element_is_being_rendered, rendered_text_sources, svg_local_name_is_non_rendered_container,
+    ElementRenderedStyle, element_is_being_rendered, rendered_element_ignores_dom_children,
+    rendered_text_sources, svg_local_name_is_non_rendered_container,
 };
 mod script_execution;
 mod shadow_dom;
@@ -244,10 +245,10 @@ pub(crate) use activation::{
 };
 pub(crate) use activation::{
     activate_handle_via_synthetic_click, dispatched_click_activation_target,
-    finish_legacy_activation_for_dispatched_click,
+    finish_legacy_activation_for_dispatched_click, is_hidden_until_found,
     perform_click_default_action_for_dispatched_event,
     prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
-    scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
+    reveal_target_ancestors, scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
 };
 pub(crate) use activation::{document_copy_command_supported, run_document_copy_command};
 pub(super) use activation::{

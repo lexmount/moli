@@ -2022,7 +2022,7 @@ pub(crate) fn scroll_to_document_fragment_target(
     else {
         return Ok(false);
     };
-    reveal_fragment_ancestors(scope, runtime_ptr, target);
+    reveal_target_ancestors(scope, runtime_ptr, target);
     let dom = unsafe { &*runtime_ptr }.dom_host();
     if dom.is_connected(target) && dom.owner_document_handle(target) == Some(document) {
         let _ = scroll_node_into_view_at_start(scope, runtime_ptr, target)?;
@@ -2035,7 +2035,7 @@ enum FragmentAncestorRevealKind {
     ClosedDetails,
 }
 
-fn is_hidden_until_found(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+pub(crate) fn is_hidden_until_found(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .element(handle)
@@ -2061,7 +2061,7 @@ fn fragment_ancestors_to_reveal(
     ancestors
 }
 
-fn reveal_fragment_ancestors(
+pub(crate) fn reveal_target_ancestors(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     target: DomHandle,

@@ -25,7 +25,7 @@ pub(super) use collapse::{
     selection_collapse_callback, selection_collapse_to_end_callback,
     selection_collapse_to_start_callback, selection_extend_callback,
     selection_select_all_children_callback, selection_set_base_and_extent_callback,
-    selection_set_position_callback,
+    selection_set_position_callback, set_selection_boundaries,
 };
 pub(super) use edit::{selection_delete_from_document_callback, selection_modify_callback};
 pub(super) use ranges::{

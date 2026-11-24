@@ -200,14 +200,6 @@ pub(in crate::context_bootstrap) fn window_prompt_callback<'s>(
     rv.set(v8::null(scope).into());
 }
 
-pub(crate) fn window_const_false_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set(v8::Boolean::new(scope, false).into());
-}
-
 pub(crate) fn window_open_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

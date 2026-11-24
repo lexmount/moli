@@ -799,6 +799,71 @@ fn zhihu_probe_window_blur_and_find_match_browser_shape() {
     );
 }
 #[test]
+fn window_find_selects_rendered_text_with_native_boundaries() {
+    let mut vm = new_storage_test_vm("https://find.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const html = document.documentElement ?? document.appendChild(document.createElement("html"));
+              const body = document.body ?? html.appendChild(document.createElement("body"));
+              body.innerHTML = '<p><span id="first">🙂Ne</span><b>Ed</b><span id="firstEnd">Le </span>'
+                + '<span>needlessly </span><i inert>needle</i><span hidden>needle</span>'
+                + '<span id="last"> needle</span></p>'
+                + '<p>Left<span>   </span><span id="right">right</span></p>'
+                + '<section id="hidden" hidden="until-found"><span id="revealed">uncovered</span></section>'
+                + '<details id="details"><summary>Summary</summary><span id="folded">folded</span></details>';
+              const selection = getSelection();
+              const point = (node, offset) => [node.parentElement.id, offset];
+              const findAt = (...args) => find(...args)
+                ? [point(selection.anchorNode, selection.anchorOffset), point(selection.focusNode, selection.focusOffset)]
+                : false;
+              const text = "needle";
+              const matches = [
+                findAt(text, false, false, false, true),
+                findAt(text, false, false, false, true),
+                findAt(text, false, false, false, true),
+                findAt(text, false, false, true, true),
+                findAt(text, false, true, false, true),
+              ];
+              selection.collapse(body, body.childNodes.length);
+              matches.push(findAt(text, false, true, false, true));
+              selection.removeAllRanges();
+              matches.push(findAt(text, true, false, false, true));
+              selection.removeAllRanges();
+              const phrase = findAt("left right");
+              let beforematch = 0;
+              const hidden = document.getElementById("hidden");
+              hidden.addEventListener("beforematch", () => beforematch++);
+              const revealed = findAt("uncovered");
+              const opened = findAt("folded");
+              const frame = body.appendChild(document.createElement("iframe"));
+              const child = frame.contentWindow;
+              child.document.body.textContent = "child match";
+              const borrowed = find.call(child, "child match");
+              const childMatch = child.getSelection().toString();
+              const retired = find.call(child, { toString() {
+                frame.remove();
+                return "child match";
+              }});
+              return JSON.stringify({
+                matches, phrase, revealed, opened, beforematch,
+                hidden: hidden.hasAttribute("hidden"), detailsOpen: document.getElementById("details").open,
+                borrowed, childMatch, retired
+              });
+            })()
+            "#,
+        )
+        .expect("native Window.find probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"matches":[[["first",2],["firstEnd",2]],[["last",1],["last",7]],false,[["first",2],["firstEnd",2]],false,[["last",1],["last",7]],[["last",1],["last",7]]],"phrase":[["",0],["right",5]],"revealed":[["revealed",0],["revealed",9]],"opened":[["folded",0],["folded",6]],"beforematch":1,"hidden":false,"detailsOpen":true,"borrowed":true,"childMatch":"child match","retired":false}"#,
+    );
+}
+
+#[test]
 fn window_dialog_and_open_arguments_use_webidl_conversion() {
     let mut vm = new_storage_test_vm("https://example.com/");
 

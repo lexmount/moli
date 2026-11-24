@@ -114,7 +114,7 @@ struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_blur_callback)]
     blur: (),
 
-    #[webapi(method, length = 0, callback = window_const_false_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+    #[webapi(method, length = 0, callback = window_find_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     find: (),
 }
 

@@ -30,19 +30,19 @@ pub(super) enum ElementBoxState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct ElementRenderedStyle {
-    pub(super) display: ComputedDisplayKind,
+pub(crate) struct ElementRenderedStyle {
+    pub(crate) display: ComputedDisplayKind,
     effective_zoom: f32,
-    pub(super) visibility_visible: bool,
-    pub(super) hides_contents: bool,
+    pub(crate) visibility_visible: bool,
+    pub(crate) hides_contents: bool,
     pub(super) opacity_zero: bool,
     pub(super) text_transform: ComputedTextTransformKind,
-    pub(super) white_space_collapse: ComputedWhiteSpaceCollapseKind,
+    pub(crate) white_space_collapse: ComputedWhiteSpaceCollapseKind,
     pub(super) text_wrap_mode: ComputedTextWrapModeKind,
 }
 
 impl ElementRenderedStyle {
-    pub(super) fn read_in_scope(scope: &mut StyleObservation<'_>, handle: DomHandle) -> Self {
+    pub(crate) fn read_in_scope(scope: &mut StyleObservation<'_>, handle: DomHandle) -> Self {
         let style = scope.read(handle);
         let effective_zoom = style
             .computed_values()
@@ -217,7 +217,7 @@ pub(super) fn rendered_dom_ancestors(
     .filter_map(move |parent| runtime.dom_host().node(parent)?.as_element())
 }
 
-pub(super) fn rendered_element_ignores_dom_children(element: &Element) -> bool {
+pub(crate) fn rendered_element_ignores_dom_children(element: &Element) -> bool {
     element.is_html_element("input")
         || element.is_html_element("textarea")
         || element.is_html_element("iframe")

@@ -2,6 +2,7 @@ use super::*;
 
 use moli_webapi::base64;
 mod dialogs;
+mod find;
 mod navigator;
 mod obsolete;
 mod performance;
@@ -15,9 +16,10 @@ pub(super) use base64::{
 pub(super) use dialogs::entered_window_api_base_url;
 pub(super) use dialogs::{window_alert_callback, window_confirm_callback, window_prompt_callback};
 pub(crate) use dialogs::{
-    window_blur_callback, window_close_callback, window_const_false_callback,
-    window_focus_callback, window_noop_callback, window_open_callback, window_stop_callback,
+    window_blur_callback, window_close_callback, window_focus_callback, window_noop_callback,
+    window_open_callback, window_stop_callback,
 };
+pub(super) use find::window_find_callback;
 pub(crate) use navigator::{
     LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
     LegacyStorageQuotaCallbackTaskEffect,

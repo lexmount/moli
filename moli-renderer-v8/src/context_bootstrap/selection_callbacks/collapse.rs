@@ -467,57 +467,60 @@ pub(in crate::context_bootstrap) fn selection_set_base_and_extent_callback<'s>(
     let Some(document) = node_owner_document_or_self(scope, parsed.anchor_node) else {
         return;
     };
-    let Some(range) = new_range_for_document(scope, document) else {
-        return;
-    };
-    if nodes_share_dom_tree_root(scope, parsed.anchor_node, parsed.focus_node) {
-        let direction = match boundary_order(
-            scope,
-            parsed.anchor_node,
-            parsed.anchor_offset,
-            parsed.focus_node,
-            parsed.focus_offset,
-        ) {
-            std::cmp::Ordering::Less => "forward",
-            std::cmp::Ordering::Greater => "backward",
-            std::cmp::Ordering::Equal => "none",
-        };
+    set_selection_boundaries(
+        scope,
+        args.this(),
+        document,
+        (parsed.anchor_node, parsed.anchor_offset),
+        (parsed.focus_node, parsed.focus_offset),
+    );
+}
+
+pub(in crate::context_bootstrap) fn set_selection_boundaries<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    selection: v8::Local<'s, v8::Object>,
+    document: v8::Local<'s, v8::Object>,
+    anchor: (v8::Local<'s, v8::Object>, u32),
+    focus: (v8::Local<'s, v8::Object>, u32),
+) -> Option<()> {
+    let (anchor_node, anchor_offset) = anchor;
+    let (focus_node, focus_offset) = focus;
+    let range = new_range_for_document(scope, document)?;
+    if nodes_share_dom_tree_root(scope, anchor_node, focus_node) {
+        let direction =
+            match boundary_order(scope, anchor_node, anchor_offset, focus_node, focus_offset) {
+                std::cmp::Ordering::Less => "forward",
+                std::cmp::Ordering::Greater => "backward",
+                std::cmp::Ordering::Equal => "none",
+            };
         selection_store(
             scope,
-            args.this(),
+            selection,
             range,
-            parsed.anchor_node,
-            parsed.anchor_offset,
-            parsed.focus_node,
-            parsed.focus_offset,
+            anchor_node,
+            anchor_offset,
+            focus_node,
+            focus_offset,
             direction,
         );
     } else {
         let composed_order = selection_composed_boundary_order(
             scope,
-            parsed.anchor_node,
-            parsed.anchor_offset,
-            parsed.focus_node,
-            parsed.focus_offset,
+            anchor_node,
+            anchor_offset,
+            focus_node,
+            focus_offset,
         );
         let (composed_start_node, composed_start_offset, composed_end_node, composed_end_offset) =
             match composed_order {
-                Some(std::cmp::Ordering::Greater) => (
-                    parsed.focus_node,
-                    parsed.focus_offset,
-                    parsed.anchor_node,
-                    parsed.anchor_offset,
-                ),
-                _ => (
-                    parsed.anchor_node,
-                    parsed.anchor_offset,
-                    parsed.focus_node,
-                    parsed.focus_offset,
-                ),
+                Some(std::cmp::Ordering::Greater) => {
+                    (focus_node, focus_offset, anchor_node, anchor_offset)
+                }
+                _ => (anchor_node, anchor_offset, focus_node, focus_offset),
             };
         let (collapsed_node, collapsed_offset) = match composed_order {
-            Some(std::cmp::Ordering::Greater) => (parsed.anchor_node, parsed.anchor_offset),
-            _ => (parsed.focus_node, parsed.focus_offset),
+            Some(std::cmp::Ordering::Greater) => (anchor_node, anchor_offset),
+            _ => (focus_node, focus_offset),
         };
         let direction = match composed_order {
             Some(std::cmp::Ordering::Less) => "forward",
@@ -526,7 +529,7 @@ pub(in crate::context_bootstrap) fn selection_set_base_and_extent_callback<'s>(
         };
         selection_store_with_composed_boundaries(
             scope,
-            args.this(),
+            selection,
             range,
             collapsed_node,
             collapsed_offset,
@@ -544,4 +547,5 @@ pub(in crate::context_bootstrap) fn selection_set_base_and_extent_callback<'s>(
         );
     }
     selection_dispatch_change(scope);
+    Some(())
 }
