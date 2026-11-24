@@ -46,6 +46,7 @@ pub(crate) struct RendererStylesheetFetcher {
     frame_id: Option<String>,
     request_initiator_type: SubresourceRequestInitiatorType,
     quirks_mode: style::context::QuirksMode,
+    completion_producer: Option<crate::page_task_queue::RendererPageStylesheetTaskProducer>,
 }
 
 impl RendererStylesheetFetcher {
@@ -73,6 +74,14 @@ impl RendererStylesheetFetcher {
     ) -> Self {
         self.interception = context;
         self.frame_id = frame_id;
+        self
+    }
+
+    pub(crate) fn with_completion_producer(
+        mut self,
+        producer: crate::page_task_queue::RendererPageStylesheetTaskProducer,
+    ) -> Self {
+        self.completion_producer = Some(producer);
         self
     }
 
@@ -104,6 +113,7 @@ impl RendererStylesheetFetcher {
             frame_id: None,
             request_initiator_type: SubresourceRequestInitiatorType::Parser,
             quirks_mode: style::context::QuirksMode::NoQuirks,
+            completion_producer: None,
         }
     }
 
@@ -123,6 +133,7 @@ impl RendererStylesheetFetcher {
             frame_id: None,
             request_initiator_type: SubresourceRequestInitiatorType::Parser,
             quirks_mode: style::context::QuirksMode::NoQuirks,
+            completion_producer: None,
         }
     }
 
@@ -142,6 +153,16 @@ impl RendererStylesheetFetcher {
 }
 
 impl StylesheetFetcher for RendererStylesheetFetcher {
+    fn completion_publisher(
+        &self,
+    ) -> Option<moli_stylesheet_blocking::StylesheetCompletionPublisher> {
+        self.completion_producer.clone().map(|producer| {
+            std::sync::Arc::new(move |completion| {
+                let _ = producer.send_blocking_completion(completion);
+            }) as moli_stylesheet_blocking::StylesheetCompletionPublisher
+        })
+    }
+
     fn resource_cache_scope(&self) -> u64 {
         self.loader.identity().value()
     }
