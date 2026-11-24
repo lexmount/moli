@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::events::{queue_text_control_select_event, queue_text_control_selection_change_event};
 use super::value::{
     clamp_text_control_offset, is_text_control, normalize_textarea_api_value,
@@ -360,7 +362,7 @@ fn text_control_user_edit_replacement_units(
         return Vec::new();
     };
     let replacement_text = if element.is_html_input() {
-        normalize_single_line_text_insertion(replacement_text)
+        Cow::Owned(normalize_single_line_text_insertion(replacement_text))
     } else {
         normalize_textarea_api_value(replacement_text)
     };
