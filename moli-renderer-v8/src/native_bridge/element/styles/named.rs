@@ -1,10 +1,6 @@
 use super::declaration::{
-    StyleMode, cssom_style_property_affected_names_with_pdb,
-    expand_unresolved_box_shorthand_entries_for_mutation, is_style_intrinsic_name,
-    parse_style_property_entries_for_cssom_fallback_write, resolve_known_style_property_name,
-    resolve_style_property_name, set_inline_style_property_with_pdb_storage,
-    set_style_entries_if_changed_with_inline_base_url, shorthand_longhands, style_base_url,
-    style_entries_for_style_object, style_property_count_with_context,
+    StyleMode, is_style_intrinsic_name, resolve_known_style_property_name,
+    resolve_style_property_name, style_property_count_with_context,
     style_property_index_exists_with_context, style_property_name_at_with_context,
     style_runtime_and_handle_from_object,
 };
@@ -196,105 +192,17 @@ pub(crate) fn set_live_style_named_property_value<'s>(
         );
         return true;
     }
-    if set_inline_style_property_with_pdb_storage(
+    super::methods::set_live_inline_style_property(
         scope,
+        style,
         runtime_ptr,
         handle,
         &property,
         &value,
         false,
-    )
-    .is_some()
-    {
-        return true;
-    }
-    let (style_object_entries, current_base_url) = {
-        let runtime = unsafe { &*runtime_ptr };
-        (
-            style_entries_for_style_object(scope, style, runtime, handle),
-            style_base_url(runtime, handle),
-        )
-    };
-    let mut entries = style_object_entries.entries;
-    let update_inline_style_base = property == "background-image" && !value.is_empty();
-    if let Some(longhands) = shorthand_longhands(&property) {
-        if value.is_empty() {
-            if !entries.iter().any(|entry| {
-                entry.name == property || longhands.iter().any(|longhand| entry.name == *longhand)
-            }) {
-                return true;
-            }
-            entries.retain(|entry| {
-                entry.name != property && !longhands.iter().any(|longhand| entry.name == *longhand)
-            });
-        } else {
-            let Some(parsed_entries) = parse_style_property_entries_for_cssom_fallback_write(
-                &entries,
-                &property,
-                &value,
-                false,
-                Some(&current_base_url),
-            ) else {
-                return true;
-            };
-            expand_unresolved_box_shorthand_entries_for_mutation(
-                &mut entries,
-                &parsed_entries.affected_names,
-            );
-            retain_unaffected_style_entries(
-                &mut entries,
-                &property,
-                &parsed_entries.affected_names,
-            );
-            entries.extend(parsed_entries.entries);
-        }
-    } else if value.is_empty() {
-        let before_len = entries.len();
-        if let Some(affected_names) = cssom_style_property_affected_names_with_pdb(&property) {
-            retain_unaffected_style_entries(&mut entries, &property, &affected_names);
-        } else {
-            entries.retain(|entry| entry.name != property);
-        }
-        if entries.len() == before_len {
-            return true;
-        }
-    } else {
-        let Some(parsed_entries) = parse_style_property_entries_for_cssom_fallback_write(
-            &entries,
-            &property,
-            &value,
-            false,
-            Some(&current_base_url),
-        ) else {
-            return true;
-        };
-        expand_unresolved_box_shorthand_entries_for_mutation(
-            &mut entries,
-            &parsed_entries.affected_names,
-        );
-        retain_unaffected_style_entries(&mut entries, &property, &parsed_entries.affected_names);
-        entries.extend(parsed_entries.entries);
-    }
-    if update_inline_style_base {
-        unsafe { &mut *runtime_ptr }
-            .set_element_inline_style_base_url(handle, current_base_url.clone());
-    }
-    let inline_base_url = if update_inline_style_base {
-        Some(current_base_url)
-    } else {
-        style_object_entries.base_url
-    };
-    set_style_entries_if_changed_with_inline_base_url(
-        scope,
-        runtime_ptr,
-        handle,
-        &entries,
-        inline_base_url.as_ref(),
     );
     true
 }
-
-use super::methods::retain_unaffected_style_entries;
 
 fn css_style_index_property(raw_key: &str) -> Option<usize> {
     if raw_key.is_empty() || (raw_key.len() > 1 && raw_key.starts_with('0')) {

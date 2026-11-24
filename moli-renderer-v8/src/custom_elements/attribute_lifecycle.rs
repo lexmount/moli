@@ -6,6 +6,33 @@ use super::reactions::{
     with_custom_element_reaction_scope,
 };
 
+pub(crate) fn dispatch_unchanged_attribute_changed_callback(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    name: &str,
+) {
+    let host = unsafe { &*host_ptr };
+    let observed = host
+        .custom_elements_for_node_handle(handle)
+        .is_some_and(|store| {
+            store.is_upgraded_handle(handle)
+                && store.observes_attribute_for_handle(host_ptr, handle, name)
+        });
+    if observed {
+        let value = host.dom_host().get_attribute_ns(handle, None, name);
+        dispatch_attribute_changed_callback(
+            scope,
+            host_ptr,
+            handle,
+            name,
+            None,
+            value.as_deref(),
+            value.as_deref(),
+        );
+    }
+}
+
 pub(crate) fn enqueue_attribute_changed_callback(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
