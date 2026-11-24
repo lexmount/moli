@@ -1,6 +1,7 @@
-use super::headers::{headers_entries, headers_list};
+use super::headers::{headers_entries, headers_list, mark_headers_immutable};
 use super::response::{
-    ParsedResponseInit, install_response_body_methods, new_error_response, new_response_with_init,
+    ParsedResponseInit, build_error_response_object, install_response_body_methods,
+    new_response_with_init,
 };
 use super::*;
 use crate::context_bootstrap::readable_stream_disturbed;
@@ -512,11 +513,20 @@ fn response_static_error_callback<'s>(
     _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(response) = new_error_response(scope) else {
+    let Some(response) = build_error_response_object(scope) else {
         rv.set_undefined();
         return;
     };
     rv.set(response.into());
+}
+
+pub(crate) fn mark_response_headers_immutable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+) {
+    if let Some(headers) = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT) {
+        mark_headers_immutable(scope, headers);
+    }
 }
 
 pub(crate) fn response_static_redirect_callback<'s>(

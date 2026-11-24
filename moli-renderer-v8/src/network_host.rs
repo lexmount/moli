@@ -89,6 +89,7 @@ pub(crate) use self::event_source::{
     update_event_source_stream_state,
 };
 pub(crate) use self::fetch::validate_no_cors_http_redirect_mode;
+pub(crate) use self::fetch_surface::mark_response_headers_immutable;
 pub(crate) use self::fetch_surface::set_response_slot_string;
 pub(in crate::network_host) use self::fetch_surface::{
     REQUEST_BODY_SLOT, REQUEST_BODY_USED_SLOT, REQUEST_CACHE_SLOT, REQUEST_CREDENTIALS_SLOT,
@@ -153,16 +154,19 @@ pub(crate) use self::request_scope::{
 };
 #[cfg(test)]
 pub(crate) use self::response::materialize_response_object;
+#[cfg(test)]
+pub(crate) use self::response::materialize_response_object_head;
 pub(crate) use self::response::{
     FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
-    MaterializedResponseHead, build_fetch_response_object_for_request_mode,
+    MaterializedResponseHead, build_error_response_object,
+    build_fetch_response_object_for_request_mode,
     build_fetch_response_object_from_body_source_with_metadata,
     build_fetch_response_object_from_stream_with_metadata, build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_with_metadata,
     cors_preflight_request_headers, filter_cors_exposed_response_headers,
-    is_cors_policy_failure_message, materialize_response_object_body,
-    materialize_response_object_body_preserving_error,
-    materialize_response_object_body_with_chunk_callback, materialize_response_object_head,
+    is_cors_policy_failure_message, materialize_cache_response_object_head,
+    materialize_response_object_body, materialize_response_object_body_preserving_error,
+    materialize_response_object_body_with_chunk_callback,
     materialize_response_object_head_for_service_worker_respond_with,
     materialized_body_bytes_from_value, network_response_filter, response_constructor_callback,
     validate_cors_preflight_response, validate_cors_response_chain,
