@@ -738,6 +738,12 @@ async fn websocket_realtime_mobile_meta_resamples_existing_media_queries_and_res
             json!([375, 187.5, true, true]),
             json!(["visual"]),
         ),
+        (
+            16,
+            r#"document.querySelector('meta[name=viewport]').content='width=980, initial-scale=2, minimum-scale=1'"#,
+            json!([375, 187.5, false, false]),
+            json!(["matches:false"]),
+        ),
     ] {
         let changed = send_cdp_command(
             &mut socket, id, "Runtime.evaluate", Some(session),

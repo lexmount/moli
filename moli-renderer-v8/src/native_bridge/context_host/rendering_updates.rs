@@ -19,7 +19,7 @@ pub(super) enum PendingRenderingUpdatePayload {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct PendingEnvironmentChange {
-    pub(super) previous_viewport: crate::style_engine::StyleViewport,
+    pub(super) previous_window_size: (Option<f64>, Option<f64>),
     pub(super) previous_visual_viewport: Option<moli_page_types::MobileViewport>,
     pub(super) previous_activity: moli_page_types::DocumentActivity,
     pub(super) previous_orientation: moli_page_types::ScreenOrientation,
@@ -152,6 +152,22 @@ impl PageScriptHost {
         }
     }
 
+    fn environment_window_size(
+        &self,
+        dispatch_scope: OwnerDispatchScope,
+    ) -> (Option<f64>, Option<f64>) {
+        if let OwnerDispatchScope::Child(handle) = dispatch_scope
+            && let Some(viewport) = super::super::element::iframe_handle_viewport(self, handle)
+        {
+            return (viewport.width, viewport.height);
+        }
+        let surface = self.viewport_surface().unwrap_or_default();
+        (
+            Some(f64::from(surface.inner_width)),
+            Some(f64::from(surface.inner_height)),
+        )
+    }
+
     fn queue_legacy_environment_change(&mut self, exclude_layout_events: bool) {
         let scopes = std::iter::once(OwnerDispatchScope::Top).chain(
             self.child_browsing_context_handles_in_document_order()
@@ -181,15 +197,8 @@ impl PageScriptHost {
             {
                 continue;
             }
-            let previous_viewport = match dispatch_scope {
-                OwnerDispatchScope::Child(handle) => {
-                    super::super::element::iframe_handle_viewport(self, handle)
-                        .unwrap_or_else(|| self.style_viewport())
-                }
-                _ => self.style_viewport(),
-            };
             let change = PendingEnvironmentChange {
-                previous_viewport,
+                previous_window_size: self.environment_window_size(dispatch_scope),
                 previous_visual_viewport: matches!(dispatch_scope, OwnerDispatchScope::Top).then(
                     || {
                         self.viewport_surface()
@@ -389,8 +398,7 @@ impl PageScriptHost {
         let context_scope = &mut v8::ContextScope::new(scope, resolved.context);
         let previous_scope = target.dispatch_scope().enter(context_scope);
         let global = context_scope.get_current_context().global(context_scope);
-        let current_viewport =
-            crate::context_bootstrap::current_window_style_viewport(context_scope, self);
+        let current_window_size = self.environment_window_size(target.dispatch_scope());
         let current_activity = self.document_activity();
         // Resize precedes media reporting. Every listener can replace its
         // Document, so abandon the remaining events as soon as the owner retires.
@@ -406,8 +414,7 @@ impl PageScriptHost {
                 _ => EventTargetHandle::Window,
             };
 
-            let resized = change.previous_viewport.width != current_viewport.width
-                || change.previous_viewport.height != current_viewport.height;
+            let resized = change.previous_window_size != current_window_size;
             let visual_resized = change.previous_visual_viewport.map_or(resized, |previous| {
                 previous
                     != self

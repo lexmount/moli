@@ -86,15 +86,13 @@ impl StyleViewport {
     }
 
     pub(crate) fn from_viewport_surface(surface: crate::protocol_types::ViewportSurface) -> Self {
-        Self::new(
-            Some(f64::from(surface.inner_width)),
-            Some(f64::from(surface.inner_height)),
-        )
-        .with_screen_size(
-            Some(f64::from(surface.screen_width)),
-            Some(f64::from(surface.screen_height)),
-        )
-        .with_device_pixel_ratio(Some(surface.device_pixel_ratio))
+        let (width, height) = surface.css_layout_size();
+        Self::new(Some(f64::from(width)), Some(f64::from(height)))
+            .with_screen_size(
+                Some(f64::from(surface.screen_width)),
+                Some(f64::from(surface.screen_height)),
+            )
+            .with_device_pixel_ratio(Some(surface.device_pixel_ratio))
     }
 }
 

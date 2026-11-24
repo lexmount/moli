@@ -32,35 +32,41 @@ pub(super) fn resolve(mut surface: ViewportSurface, content: Option<&str>) -> Vi
         }
     }
     let maximum_scale = maximum_scale.max(minimum_scale);
-    let requested_width = width.unwrap_or(device_width.max(980.0));
-    let fit_scale = device_width / requested_width;
-    let mut page_scale = initial_scale
-        .unwrap_or(fit_scale)
-        .clamp(minimum_scale, maximum_scale);
-    if initial_scale.is_some() && width.is_none() {
-        let layout_width = (device_width / page_scale).floor().max(1.0);
-        page_scale = (device_width / layout_width).clamp(minimum_scale, maximum_scale);
-    }
-    let page_scale = page_scale as f32;
-    // An explicit width and initial scale can leave part of the layout outside
-    // the visual viewport. With automatic scale, the clamped fit sets the layout.
-    let layout_scale = if width.is_some() && initial_scale.is_some() {
-        page_scale.min(fit_scale as f32)
+    let initial_scale = initial_scale.map(|scale| scale.clamp(minimum_scale, maximum_scale));
+    let requested_width =
+        width.or_else(|| initial_scale.is_none().then_some(device_width.max(980.0)));
+    // Extend the CSS layout to contain the viewport at the specified zoom.
+    // A minimum scale can constrain the frame without shrinking the layout.
+    let minimum_layout_width = device_width / initial_scale.unwrap_or(maximum_scale);
+    let layout_width = requested_width.unwrap_or(0.0).max(minimum_layout_width);
+    let layout_height = layout_width * device_height / device_width;
+    let css_layout_size = (
+        layout_width.floor().max(1.0) as u32,
+        layout_height.floor().max(1.0) as u32,
+    );
+    emulation.css_layout_size = Some(css_layout_size);
+
+    let (frame_scale, page_scale) = if requested_width.is_none() {
+        // A scale-only viewport fits its rounded CSS width.
+        let scale =
+            (device_width / f64::from(css_layout_size.0)).clamp(minimum_scale, maximum_scale);
+        (scale, scale)
     } else {
-        page_scale
+        let frame_scale = (device_width / layout_width).clamp(minimum_scale, maximum_scale);
+        (frame_scale, initial_scale.unwrap_or(frame_scale))
     };
-    let css_size = |scale: f32| {
-        let inverse = scale.recip();
+    let scaled_device_size = |scale: f64| {
+        let inverse = (scale as f32).recip();
         (
             device_width as f32 * inverse,
             device_height as f32 * inverse,
         )
     };
-    let (layout_width, layout_height) = css_size(layout_scale);
-    let (visual_width, visual_height) = css_size(page_scale);
-    surface.inner_width = layout_width.ceil() as u32;
-    surface.inner_height = layout_height.ceil() as u32;
-    view.scale = f64::from(page_scale);
+    let (frame_width, frame_height) = scaled_device_size(frame_scale);
+    let (visual_width, visual_height) = scaled_device_size(page_scale);
+    surface.inner_width = frame_width.ceil() as u32;
+    surface.inner_height = frame_height.ceil() as u32;
+    view.scale = f64::from(page_scale as f32);
     view.width = f64::from(visual_width);
     view.height = f64::from(visual_height);
     surface

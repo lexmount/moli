@@ -3439,6 +3439,7 @@ pub struct EmulatedIdleOverride {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewportSurface {
+    /// Main frame dimensions exposed by Window geometry.
     pub inner_width: u32,
     pub inner_height: u32,
     pub outer_width: u32,
@@ -3462,6 +3463,8 @@ pub struct EmulatedView {
     pub height: u32,
     /// Emulated device dimensions before resolving the mobile page viewport.
     pub device_size: (u32, u32),
+    /// CSS layout dimensions resolved for the current mobile document.
+    pub css_layout_size: Option<(u32, u32)>,
     pub scale: f64,
     /// The compositor keeps its native DPR even when CSS reports an override.
     pub native_device_pixel_ratio: f64,
@@ -3487,6 +3490,12 @@ pub struct EmulatedViewport {
 }
 
 impl ViewportSurface {
+    pub fn css_layout_size(self) -> (u32, u32) {
+        self.emulated_view
+            .and_then(|view| view.css_layout_size)
+            .unwrap_or((self.inner_width, self.inner_height))
+    }
+
     pub fn mobile_viewport(self) -> Option<MobileViewport> {
         self.emulated_view.and_then(|view| view.mobile_viewport)
     }

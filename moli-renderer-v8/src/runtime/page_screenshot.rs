@@ -339,11 +339,8 @@ impl PageVm {
             return Ok(CaptureScreencastFrame(LayoutDisabled));
         }
         let surface = self.vm().viewport_surface().unwrap_or_default();
-        let viewport = PaintViewport::new(
-            surface.inner_width,
-            surface.inner_height,
-            surface.device_pixel_ratio as f32,
-        );
+        let (width, height) = surface.css_layout_size();
+        let viewport = PaintViewport::new(width, height, surface.device_pixel_ratio as f32);
         let visual_state_before = self
             .vm()
             .visual_state_token(
@@ -448,11 +445,8 @@ impl PageVm {
                 vision::BLURRED_VISION_SIGMA_CSS_PX * moli_image::GAUSSIAN_BLUR_OUTSET;
         }
         let surface = self.vm().viewport_surface().unwrap_or_default();
-        let viewport = PaintViewport::new(
-            surface.inner_width,
-            surface.inner_height,
-            surface.device_pixel_ratio as f32,
-        );
+        let (width, height) = surface.css_layout_size();
+        let viewport = PaintViewport::new(width, height, surface.device_pixel_ratio as f32);
         let layout_started = profile_enabled.then(Instant::now);
         #[cfg(feature = "devtools")]
         let reusable = match paint_session {
