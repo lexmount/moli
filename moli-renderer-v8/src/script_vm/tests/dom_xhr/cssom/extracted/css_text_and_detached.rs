@@ -11,6 +11,53 @@ fn cssom_preparsed_write_preserves_mutations_and_custom_element_observations() {
 }
 
 #[test]
+fn reentrant_custom_element_style_reactions_keep_the_latest_declarations() {
+    let mut vm = new_storage_html_test_vm("https://cssom-reentrant-style.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const destination = document.body.appendChild(document.createElement('section'));
+  class ReentrantStyle extends HTMLElement {
+    static observedAttributes = ['style'];
+    attributeChangedCallback(name, oldValue, newValue) {
+      if (!this.reenter) return;
+      const reenter = this.reenter;
+      this.reenter = null;
+      this.before = [oldValue, newValue, this.style.width, getComputedStyle(this).width];
+      reenter(this);
+    }
+  }
+  customElements.define('reentrant-style', ReentrantStyle);
+  const cases = [
+    ['property', el => el.style.height = '20px', 'width: 10px; height: 20px;', '10px', '20px'],
+    ['cssText', el => el.style.cssText = 'height: 30px', 'height: 30px;', 'auto', '30px'],
+    ['remove', el => el.removeAttribute('style'), null, 'auto', 'auto'],
+    ['move', el => { destination.append(el); el.style.height = '40px'; },
+      'width: 10px; height: 40px;', '10px', '40px'],
+  ];
+  for (const [label, reenter, expectedText, width, height] of cases) {
+    const el = document.body.appendChild(document.createElement('reentrant-style'));
+    el.reenter = reenter;
+    el.style.width = '10px';
+    const actual = [el.before, el.getAttribute('style'), el.style.cssText,
+      getComputedStyle(el).width, getComputedStyle(el).height];
+    const expected = [[null, 'width: 10px;', '10px', '10px'], expectedText, expectedText ?? '',
+      width, height];
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(`${label} produced ${JSON.stringify(actual)}`);
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("CSSOM state should be published before style attribute reactions"),
+        "ok"
+    );
+}
+
+#[test]
 fn detached_css_style_css_text_parses_serializes_and_tracks_order() {
     let mut vm = new_storage_test_vm("https://detached-style-css-text.test/");
 

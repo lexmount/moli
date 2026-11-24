@@ -1149,31 +1149,6 @@ pub(super) fn set_reflected_attribute(
     });
 }
 
-pub(super) fn set_reflected_style_attribute_with_inline_base_url(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut super::super::PageScriptHost,
-    handle: DomHandle,
-    value: &str,
-    inline_base_url: Option<&url::Url>,
-) {
-    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let runtime = unsafe { &mut *runtime_ptr };
-        let _ = runtime.set_style_attribute_from_cssom_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            handle,
-            value,
-        );
-        runtime.set_element_inline_style_csp_state(
-            handle,
-            crate::style_engine::InlineStyleCspState::Cssom,
-        );
-        if let Some(inline_base_url) = inline_base_url {
-            runtime.set_element_inline_style_base_url(handle, inline_base_url.clone());
-        }
-    });
-}
-
 pub(super) fn remove_reflected_attribute(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut super::super::PageScriptHost,
