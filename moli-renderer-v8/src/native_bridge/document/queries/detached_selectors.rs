@@ -12,6 +12,7 @@ use crate::native_bridge::document::{
     detached_live_delegate_object, detached_native_child_node_objects,
     detached_native_handle_for_runtime, detached_native_object_for_handle, detached_node_type,
     detached_owner_document_object, detached_parent_node_object,
+    read_detached_native_has_attribute,
 };
 use crate::native_bridge::node::throw_native_selector_error_for_selector;
 use crate::util::context_host_ptr_from_global_bridge;
@@ -118,6 +119,11 @@ impl<'scope, 'pin, 'host> DetachedStyloSelectorHost
 
     fn attribute_value(&mut self, node: Self::Node, name: &str) -> Option<String> {
         detached_element_attribute_value(self.scope, node, name)
+    }
+
+    fn has_attribute(&mut self, node: Self::Node, name: &str) -> bool {
+        read_detached_native_has_attribute(self.scope, node, name)
+            .unwrap_or_else(|| self.attribute_value(node, name).is_some())
     }
 
     fn local_name(&mut self, node: Self::Node) -> Option<String> {

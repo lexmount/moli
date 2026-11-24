@@ -212,28 +212,33 @@ impl Element {
         &self.attributes
     }
 
-    pub fn attribute(&self, name: &str) -> Option<&str> {
+    pub fn find_attribute(&self, name: &str) -> Option<&Attribute> {
         self.attributes
             .iter()
             .find(|attribute| attribute.name_matches(name))
-            .map(Attribute::value)
+    }
+
+    pub fn find_attribute_ns(&self, namespace: &str, local_name: &str) -> Option<&Attribute> {
+        self.attributes.iter().find(|attribute| {
+            attribute.namespace() == namespace && attribute.local_name() == local_name
+        })
+    }
+
+    pub fn attribute(&self, name: &str) -> Option<&str> {
+        self.find_attribute(name).map(Attribute::value)
     }
 
     pub fn attribute_ns(&self, namespace: &str, local_name: &str) -> Option<&str> {
-        self.attributes
-            .iter()
-            .find(|attribute| {
-                attribute.namespace() == namespace && attribute.local_name() == local_name
-            })
+        self.find_attribute_ns(namespace, local_name)
             .map(Attribute::value)
     }
 
     pub fn has_attribute(&self, name: &str) -> bool {
-        self.attribute(name).is_some()
+        self.find_attribute(name).is_some()
     }
 
     pub fn has_attribute_ns(&self, namespace: &str, local_name: &str) -> bool {
-        self.attribute_ns(namespace, local_name).is_some()
+        self.find_attribute_ns(namespace, local_name).is_some()
     }
 
     pub fn custom_element_state(&self) -> CustomElementState {
@@ -1283,7 +1288,7 @@ impl Element {
             if self.attributes[index].value() == value {
                 return false;
             }
-            self.attributes[index].value = value.into_boxed_str();
+            self.attributes[index].set_value(value);
             let attribute_local_name = self.attributes[index].local_name.clone();
             self.sync_control_state_from_attribute(
                 attribute_local_name.as_ref(),
@@ -1292,13 +1297,9 @@ impl Element {
             return true;
         }
 
-        let attribute_local_name = LocalName::from(local_name);
-        self.attributes.push(Attribute {
-            local_name: attribute_local_name.clone(),
-            namespace: Namespace::from(namespace),
-            prefix: prefix.map(Prefix::from),
-            value: value.into_boxed_str(),
-        });
+        let attribute = Attribute::new(local_name, namespace, prefix, value);
+        let attribute_local_name = attribute.local_name.clone();
+        self.attributes.push(attribute);
         self.sync_control_state_from_attribute(attribute_local_name.as_ref(), Some(&next_value));
         true
     }
@@ -1318,18 +1319,14 @@ impl Element {
             if self.attributes[index].value() == value {
                 return false;
             }
-            self.attributes[index].value = value.into_boxed_str();
+            self.attributes[index].set_value(value);
             self.sync_control_state_from_attribute(&local_name, Some(&next_value));
             return true;
         }
 
-        let attribute_local_name = LocalName::from(local_name);
-        self.attributes.push(Attribute {
-            local_name: attribute_local_name.clone(),
-            namespace: Namespace::from(namespace),
-            prefix: prefix.map(Prefix::from),
-            value: value.into_boxed_str(),
-        });
+        let attribute = Attribute::new(local_name, namespace, prefix, value);
+        let attribute_local_name = attribute.local_name.clone();
+        self.attributes.push(attribute);
         self.sync_control_state_from_attribute(attribute_local_name.as_ref(), Some(&next_value));
         true
     }

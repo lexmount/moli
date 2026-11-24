@@ -20,9 +20,7 @@ pub(super) fn element_attribute(
     handle: DomHandle,
     name: &str,
 ) -> Option<String> {
-    let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
-    let normalized_name = element.normalized_attribute_name(name);
-    element.attribute(&normalized_name).map(str::to_owned)
+    runtime.dom_host().get_attribute(handle, name)
 }
 
 pub(super) fn element_has_attribute(
@@ -30,11 +28,7 @@ pub(super) fn element_has_attribute(
     handle: DomHandle,
     name: &str,
 ) -> bool {
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        return false;
-    };
-    let normalized_name = element.normalized_attribute_name(name);
-    element.has_attribute(&normalized_name)
+    runtime.dom_host().dom().has_attribute(handle, name)
 }
 
 pub(super) fn element_attribute_names(runtime: &PageScriptHost, handle: DomHandle) -> Vec<String> {

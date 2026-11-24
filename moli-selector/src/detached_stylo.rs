@@ -41,6 +41,10 @@ pub trait DetachedStyloSelectorHost {
 
     fn attribute_value(&mut self, node: Self::Node, name: &str) -> Option<String>;
 
+    fn has_attribute(&mut self, node: Self::Node, name: &str) -> bool {
+        self.attribute_value(node, name).is_some()
+    }
+
     fn local_name(&mut self, node: Self::Node) -> Option<String>;
 
     fn namespace_uri(&mut self, _node: Self::Node) -> Option<String> {
@@ -461,9 +465,14 @@ where
             NamespaceConstraint::Specific(namespace) => (**namespace).is_empty(),
         };
         namespace_matches
-            && self
-                .attribute_value(local_name)
-                .is_some_and(|actual| operation.eval_str(&actual))
+            && match operation {
+                AttrSelectorOperation::Exists => self
+                    .tree
+                    .with_host(|host| host.has_attribute(self.node, local_name)),
+                AttrSelectorOperation::WithValue { .. } => self
+                    .attribute_value(local_name)
+                    .is_some_and(|actual| operation.eval_str(&actual)),
+            }
     }
 
     fn match_non_ts_pseudo_class(
