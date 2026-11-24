@@ -3174,3 +3174,17 @@ fn lightweight_blank_popup_documents_have_no_doctype() {
         .unwrap();
     assert_eq!(result, "true");
 }
+
+#[tokio::test]
+async fn sandbox_child_hyperlink_popup_inherits_sandbox() {
+    assert_sandbox_child_hyperlink_popup_origin("allow-scripts allow-popups", false).await;
+}
+
+#[tokio::test]
+async fn sandbox_child_hyperlink_popup_escapes_when_allowed() {
+    assert_sandbox_child_hyperlink_popup_origin(
+        "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+        true,
+    )
+    .await;
+}
