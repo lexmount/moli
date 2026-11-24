@@ -24,3 +24,4 @@ mod webidl_surface;
 mod window_surface;
 
 mod service_worker_register_realm;
+mod worker_isolation;
