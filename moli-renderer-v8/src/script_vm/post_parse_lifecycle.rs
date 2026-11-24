@@ -2253,6 +2253,36 @@ impl ScriptVm {
         &mut self,
         ready: crate::document_runtime::ReadyConnectedStyleLoad,
     ) -> bool {
+        if let Some(owner) = ready.document_owner()
+            && Some(owner)
+                != self
+                    ._context_host
+                    .borrow()
+                    .current_main_document_task_owner()
+        {
+            let realm = self
+                ._context_host
+                .borrow()
+                .connected_style_document_realm(owner);
+            let Some(realm) = realm else {
+                return false;
+            };
+            return self
+                .with_frame_realm_document_scope(realm, |scope, host_ptr, document_runtime| {
+                    if ready.load_event_binding().is_some_and(|binding| {
+                        !unsafe { &*host_ptr }.main_style_load_event_is_current(binding)
+                    }) {
+                        return Ok(false);
+                    }
+                    Ok(document_runtime.dispatch_pending_style_load(scope, host_ptr, ready))
+                })
+                .unwrap_or_else(|error| {
+                    self.record_runtime_warning(format_args!(
+                        "child style handler dispatch failed: {error}"
+                    ));
+                    false
+                });
+        }
         if self.current_main_world().is_none() {
             let host_ptr = (*self._context_host).as_ptr();
             if ready.load_event_binding().is_some_and(|binding| {

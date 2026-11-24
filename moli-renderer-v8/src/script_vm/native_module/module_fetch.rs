@@ -271,15 +271,17 @@ impl ScriptVm {
             return;
         };
         debug_assert_eq!(event_owner.element(), pending_event.client().owner());
+        // The main module map can serve a connected link in a child Document.
+        // The link event still belongs to the Document that admitted it.
         if !self
             ._context_host
             .borrow()
-            .main_document_task_owner_is_current(event_owner.owner())
+            .document_task_owner_is_current(event_owner.owner())
         {
             tracing::debug!(
                 owner = ?event_owner.owner(),
                 element = ?event_owner.element(),
-                "discarded modulepreload terminal for a retired main Document"
+                "discarded modulepreload terminal for a retired Document"
             );
             return;
         }

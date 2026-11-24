@@ -92,6 +92,7 @@ impl DocumentRuntime {
             let ConnectedLoadNetworkResult {
                 network_observed,
                 resource_timing_initiator_type,
+                document_owner,
                 stylesheet_fetch,
                 blocking_operation: _,
                 source_operation: _,
@@ -119,11 +120,14 @@ impl DocumentRuntime {
             } else {
                 !source_owners.is_empty()
             };
-            performance_entries.push(ResourcePerformanceEntry::from_network_result(
-                request_url.as_str(),
-                resource_timing_initiator_type,
-                start_unix_millis,
-                &result,
+            performance_entries.push((
+                document_owner,
+                ResourcePerformanceEntry::from_network_result(
+                    request_url.as_str(),
+                    resource_timing_initiator_type,
+                    start_unix_millis,
+                    &result,
+                ),
             ));
             if resource_type == SubresourceResourceType::Stylesheet && stylesheet_fetch.is_none() {
                 let validated_response = result
@@ -219,9 +223,23 @@ impl DocumentRuntime {
                     }
                 }
             }
-            if !network_observed {
+            if network_observed {
+                continue;
+            }
+            let frame_id =
+                document_owner.and_then(|owner| host.connected_style_network_frame_id(owner));
+            if document_owner.is_some_and(|owner| !host.document_task_owner_is_current(owner)) {
+                host.record_historical_get_subresource_network_result_with_initiator(
+                    frame_id,
+                    document_url,
+                    request_url,
+                    resource_type,
+                    SubresourceRequestInitiatorType::Parser,
+                    &result,
+                );
+            } else {
                 host.record_get_subresource_network_result_with_initiator(
-                    None,
+                    frame_id,
                     document_url,
                     request_url,
                     resource_type,
@@ -290,14 +308,18 @@ impl DocumentRuntime {
             host_ptr,
             css_subresources,
         );
-        if !performance_entries.is_empty() {
-            // A borrowed document.write method can enter from another realm.
-            // Resource Timing belongs to the Window that owns these fetches.
-            let context = unsafe { &*host_ptr }
-                .page_default_context(scope)
-                .unwrap_or_else(|| scope.get_current_context());
-            let scope = &mut v8::ContextScope::new(scope, context);
-            for entry in performance_entries {
+        // A borrowed document.write method can enter from another realm.
+        // Resource Timing belongs to the Window that owns each fetch.
+        for (owner, entry) in performance_entries {
+            let host = unsafe { &*host_ptr };
+            let context = match owner {
+                Some(owner) => host.connected_style_resource_timing_context(scope, owner),
+                None => host
+                    .page_default_context(scope)
+                    .or_else(|| Some(scope.get_current_context())),
+            };
+            if let Some(context) = context {
+                let scope = &mut v8::ContextScope::new(scope, context);
                 record_resource_performance_entry(scope, entry);
             }
         }
