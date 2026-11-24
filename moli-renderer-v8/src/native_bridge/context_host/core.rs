@@ -2123,9 +2123,15 @@ impl PageScriptHost {
     }
 
     pub(crate) fn current_image_request_url(&self, handle: DomHandle) -> Option<&str> {
-        self.current_image_requests
-            .get(&handle)
+        self.current_image_request(handle)
             .map(crate::types::ImageRequestKey::url)
+    }
+
+    pub(crate) fn current_image_request(
+        &self,
+        handle: DomHandle,
+    ) -> Option<&crate::types::ImageRequestKey> {
+        self.current_image_requests.get(&handle)
     }
 
     pub(crate) fn begin_form_data_construction(&mut self, form_handle: DomHandle) -> bool {

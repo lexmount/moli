@@ -10,8 +10,6 @@ use moli_layout::{FrozenLayoutTree, LayoutPosition, LayoutRect};
 
 use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::PageScriptHost};
 
-use super::src::image_selected_request_key;
-
 // Chromium's fast-network defaults are 1250 CSS px vertically. Its lazy-load
 // IntersectionObserver uses half that distance horizontally. Moli has
 // no effective-connection-type model, so the smallest Chromium default keeps
@@ -19,36 +17,17 @@ use super::src::image_selected_request_key;
 const LAZY_IMAGE_VERTICAL_MARGIN_PX: f32 = 1_250.0;
 const LAZY_IMAGE_HORIZONTAL_MARGIN_PX: f32 = LAZY_IMAGE_VERTICAL_MARGIN_PX / 2.0;
 
-pub(super) fn image_load_is_deferred(runtime: &PageScriptHost, handle: DomHandle) -> bool {
-    let Some(node) = runtime.dom_host().node(handle) else {
-        return false;
-    };
-    let Some(element) = node.as_element() else {
-        return false;
-    };
-    let is_lazy_image = element.is_html_element("img")
-        && element
-            .attribute("loading")
-            .is_some_and(|loading| loading.eq_ignore_ascii_case("lazy"));
-    if !is_lazy_image {
-        return false;
-    }
-    if !node.is_connected() {
-        return true;
-    }
-
-    // A pending exact request proves that this source was already admitted.
-    // Keep terminal error events deliverable as well as successful decodes;
-    // readiness alone cannot represent a failed admitted request.
-    if runtime.pending_image_load_event(handle).is_some() {
-        return false;
-    }
-    if image_selected_request_key(runtime, handle)
-        .is_some_and(|request_key| runtime.has_ready_image_request(handle, &request_key))
-    {
-        return false;
-    }
-    true
+pub(crate) fn image_uses_lazy_loading(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| {
+            element.is_html_element("img")
+                && element
+                    .attribute("loading")
+                    .is_some_and(|loading| loading.eq_ignore_ascii_case("lazy"))
+        })
 }
 
 pub(super) fn revealed_lazy_image_handles(
@@ -68,18 +47,21 @@ fn is_unadmitted_lazy_image(
     document: DomHandle,
     handle: DomHandle,
 ) -> bool {
-    runtime.dom_host().node(handle).is_some_and(|node| {
-        node.is_connected()
-            && runtime.dom_host().owner_document_handle(handle) == Some(document)
-            && node.as_element().is_some_and(|element| {
-                element.is_html_element("img")
-                    && element
-                        .attribute("loading")
-                        .is_some_and(|loading| loading.eq_ignore_ascii_case("lazy"))
-                    && !element.image_load_dispatched()
+    image_uses_lazy_loading(runtime, handle)
+        && runtime.dom_host().is_connected(handle)
+        && runtime.dom_host().owner_document_handle(handle) == Some(document)
+        && runtime
+            .dom_host()
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(|element| !element.image_load_dispatched())
+        && runtime
+            .pending_image_load_event(handle)
+            .is_none_or(|pending| {
+                pending.is_deferred()
+                    || pending.awaits_source_selection()
+                    || !runtime.pending_image_load_event_is_current(handle, &pending)
             })
-            && runtime.pending_image_load_event(handle).is_none()
-    })
 }
 
 fn image_is_near_live_viewport(

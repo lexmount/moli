@@ -110,7 +110,7 @@ impl PageScriptHost {
         if !self.input_image_request_is_current(element, id, target) {
             return false;
         }
-        let Some(load_delay) = self.accept_image_load_delay(element) else {
+        let Some(load_delay) = self.accept_image_load_delay(element, true) else {
             return false;
         };
         let state = self

@@ -848,7 +848,7 @@ fn stopping_a_document_invalidates_resource_delays_by_exact_identity() {
         .accept_current_main_style_load_event(owner, handle(2))
         .unwrap();
     let image = store
-        .accept_current_main_image_load_delay(owner, handle(3))
+        .accept_current_main_image_load_delay(owner, handle(3), true)
         .unwrap();
     let media = store
         .accept_current_main_media_load_delay(owner, handle(4))
@@ -1104,7 +1104,7 @@ fn main_image_request_delay_is_element_owned_and_replacement_safe() {
         snapshot.document_id,
     );
     let event = store
-        .accept_current_main_image_load_delay(owner, handle(8))
+        .accept_current_main_image_load_delay(owner, handle(8), true)
         .expect("main image request should bind");
     assert_eq!(event.owner(), owner);
     assert_eq!(event.element(), handle(8));
@@ -1131,7 +1131,7 @@ fn main_image_request_delay_is_element_owned_and_replacement_safe() {
     );
 
     let stale = store
-        .accept_current_main_image_load_delay(owner, handle(9))
+        .accept_current_main_image_load_delay(owner, handle(9), true)
         .expect("current document should accept another image event");
     let replacement = store
         .replace_main_document(
@@ -4939,7 +4939,7 @@ fn child_image_load_event_binding_delays_complete_and_retires_with_document() {
         .current_child_document_task_owner(child_handle)
         .expect("child document should expose an owner");
     let image = store
-        .accept_current_child_image_load_event(child_handle, owner, handle(368))
+        .accept_current_child_image_load_event(child_handle, owner, handle(368), true)
         .expect("image acceptance should bind the current document");
     assert_eq!(image.element(), handle(368));
     assert!(
@@ -4972,7 +4972,7 @@ fn child_image_load_event_binding_delays_complete_and_retires_with_document() {
         .expect("image terminal should unblock complete");
     assert!(store.apply_current_child_document_complete_transition(complete));
     let post_complete_image = store
-        .accept_current_child_image_load_event(child_handle, owner, handle(369))
+        .accept_current_child_image_load_event(child_handle, owner, handle(369), true)
         .expect("a post-complete image still needs an exact event owner");
     assert_eq!(
         post_complete_image.load_delay_token(),

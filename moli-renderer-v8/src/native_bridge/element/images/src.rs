@@ -20,7 +20,7 @@ use super::super::{
     canonical_referrer_policy_value, construct_simple_event, dispatch_public_event,
     resolve_url_like_attribute,
 };
-use super::lazy::{image_load_is_deferred, revealed_lazy_image_handles};
+use super::lazy::{image_uses_lazy_loading, revealed_lazy_image_handles};
 
 const IMAGE_UPDATE_HANDLE_INDEX: u32 = 0;
 const IMAGE_UPDATE_ID_INDEX: u32 = 1;
@@ -117,6 +117,9 @@ pub(crate) fn queue_image_load_event_for_loading_change(
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
+    if image_uses_lazy_loading(unsafe { &*runtime_ptr }, handle) {
+        return;
+    }
     queue_image_load_event(
         scope,
         runtime_ptr,
@@ -141,9 +144,28 @@ fn queue_image_load_event(
         let _ = runtime.cancel_pending_image_load_event(handle);
         return;
     }
-    let allow_deferred_lazy = matches!(trigger, ImageLoadQueueTrigger::LazyReveal);
-    if image_load_is_deferred(runtime, handle) && !allow_deferred_lazy {
-        return;
+    let pending_before_registration = runtime.pending_image_load_event(handle);
+    if let Some(pending) = pending_before_registration.as_ref()
+        && runtime.pending_image_load_event_is_current(handle, pending)
+    {
+        let resume = if pending.is_deferred() {
+            trigger == ImageLoadQueueTrigger::LazyReveal
+                || can_use_available_lazy_image(runtime, handle, pending.request_key())
+        } else {
+            trigger == ImageLoadQueueTrigger::LazyReveal
+                && pending.awaits_source_selection()
+                && image_uses_lazy_loading(runtime, handle)
+        };
+        if resume {
+            run_image_update(
+                scope,
+                runtime_ptr,
+                handle,
+                pending.id(),
+                ImageLoadQueueTrigger::LazyReveal,
+            );
+            return;
+        }
     }
     if image_selected_source(runtime, handle).is_none()
         && !connected_empty_src_without_srcset(runtime, handle)
@@ -165,7 +187,6 @@ fn queue_image_load_event(
         let _ = runtime.process_image_decode_requests_for_element(scope, handle);
         return;
     };
-    let pending_before_registration = runtime.pending_image_load_event(handle);
     let document_url = runtime
         .dom_host()
         .owner_document_handle(handle)
@@ -208,8 +229,9 @@ fn queue_image_load_event(
         run_image_update(scope, runtime_ptr, handle, pending.id(), trigger);
         return;
     }
-    if let Some(request_key) = synchronous_available_image_request(runtime, handle)
-        .filter(|key| !runtime.has_scanned_image_preload_for_pending_request(&pending, key))
+    if (!image_uses_lazy_loading(runtime, handle) || runtime.dom_host().is_connected(handle))
+        && let Some(request_key) = synchronous_available_image_request(runtime, handle)
+            .filter(|key| !runtime.has_scanned_image_preload_for_pending_request(&pending, key))
     {
         let request_allowed = url::Url::parse(request_key.url())
             .is_ok_and(|url| image_request_is_allowed(scope, runtime, handle, &url));
@@ -256,6 +278,15 @@ fn synchronous_available_image_request(
     runtime
         .has_ready_image_request(handle, &request)
         .then_some(request)
+}
+
+fn can_use_available_lazy_image(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+    request: Option<&ImageRequestKey>,
+) -> bool {
+    runtime.dom_host().is_connected(handle)
+        && request.is_some_and(|key| runtime.has_ready_image_request(handle, key))
 }
 
 fn image_request_is_allowed(
@@ -345,15 +376,33 @@ fn run_image_update(
         let _ = runtime.cancel_pending_image_load_event_if_matches(handle, sequence);
         return;
     }
-    if pending.request_key().is_some() {
+    let request_key = if pending.is_deferred() {
+        if trigger != ImageLoadQueueTrigger::LazyReveal {
+            return;
+        }
+        let Some(request_key) = runtime.resume_deferred_image_load(handle, sequence) else {
+            return;
+        };
+        request_key
+    } else if pending.request_key().is_some() {
         return;
-    }
-    if image_load_is_deferred(runtime, handle) && trigger != ImageLoadQueueTrigger::LazyReveal {
-        let _ = runtime.cancel_pending_image_load_event_if_matches(handle, sequence);
-        return;
-    }
+    } else {
+        let request_key = select_image_request_key(runtime, handle);
+        if image_uses_lazy_loading(runtime, handle) {
+            if trigger != ImageLoadQueueTrigger::LazyReveal
+                && !can_use_available_lazy_image(runtime, handle, request_key.as_ref())
+            {
+                runtime.defer_pending_image_load(handle, sequence, request_key);
+                let _ = runtime.process_image_decode_requests_for_element(scope, handle);
+                return;
+            }
+        } else {
+            runtime.ensure_pending_image_load_delay(handle, sequence);
+        }
+        request_key
+    };
 
-    let Some(request_key) = image_selected_request_key(runtime, handle) else {
+    let Some(request_key) = request_key else {
         if connected_empty_src_without_srcset(runtime, handle) {
             let followup = runtime
                 .complete_pending_image_load_local_resource_if_matches(handle, sequence, false);
@@ -636,6 +685,27 @@ pub(crate) fn image_selected_request_key(
     runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<ImageRequestKey> {
+    if let Some(pending) = runtime.pending_image_load_event(handle)
+        && runtime.pending_image_load_event_is_current(handle, &pending)
+        && (pending.is_deferred() || pending.request_key().is_some())
+    {
+        return pending.request_key().cloned();
+    }
+    if runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.is_html_element("img") && element.image_load_dispatched())
+    {
+        return runtime.current_image_request(handle).cloned();
+    }
+    select_image_request_key(runtime, handle)
+}
+
+fn select_image_request_key(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+) -> Option<ImageRequestKey> {
     let selected = image_selected_resource(runtime, handle)?;
     let navigation_destination = runtime
         .embedded_image_resource(handle)
@@ -817,7 +887,7 @@ pub(crate) fn apply_image_relevant_mutations(
                             && pending.terminal_source().is_none()
                             && pending.request_key().is_some()
                             && pending.request_key()
-                                == image_selected_request_key(runtime, target).as_ref()
+                                == select_image_request_key(runtime, target).as_ref()
                     });
             if !keeps_pending_request {
                 reset_image_load_dispatch(runtime, target);
@@ -836,7 +906,7 @@ pub(crate) fn apply_image_relevant_mutations(
 
 pub(crate) fn reset_image_load_dispatch(runtime: &mut PageScriptHost, handle: DomHandle) {
     let _ = runtime.cancel_pending_image_load_event(handle);
-    if image_selected_request_key(runtime, handle).is_none() {
+    if select_image_request_key(runtime, handle).is_none() {
         runtime.set_current_image_request(handle, None);
         let _ = runtime.retire_image_resource_for_element(handle);
     }
@@ -890,11 +960,7 @@ pub(crate) fn apply_authorized_image_load_event_in_context(
     if observed.target() != target || observed.terminal_followup() != Some(kind) {
         return None;
     }
-    if image_load_is_deferred(runtime, handle) {
-        debug_assert!(
-            !runtime.dom_host().is_connected(handle),
-            "a connected lazy image with an exact pending request was already admitted"
-        );
+    if image_uses_lazy_loading(runtime, handle) && !runtime.dom_host().is_connected(handle) {
         let pending =
             runtime.take_pending_image_load_event_task_for_exact_target(task_id, target, kind)?;
         let _ = runtime.process_pending_image_decode_requests(scope);

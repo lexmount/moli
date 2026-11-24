@@ -104,7 +104,8 @@ impl PageScriptHost {
             let _ = self.settle_pending_image_load_event(previous, true);
         }
 
-        let owner = self.accept_image_load_delay(image_handle)?;
+        let delays_load = !super::super::element::image_uses_lazy_loading(self, image_handle);
+        let owner = self.accept_image_load_delay(image_handle, delays_load)?;
         let pending = PendingImageLoadEvent::new(
             self.next_image_load_event_id(),
             owner_document_handle,
@@ -141,11 +142,12 @@ impl PageScriptHost {
     pub(super) fn accept_image_load_delay(
         &mut self,
         image_handle: DomHandle,
+        delays_load: bool,
     ) -> Option<PendingImageLoadEventOwner> {
         let owner_document_handle = self.dom_host().owner_document_handle(image_handle)?;
         Some(if owner_document_handle == self.document_handle() {
             PendingImageLoadEventOwner::Main(
-                self.accept_current_main_image_load_delay(image_handle)?,
+                self.accept_current_main_image_load_delay(image_handle, delays_load)?,
             )
         } else {
             let child_handle =
@@ -161,7 +163,12 @@ impl PageScriptHost {
             );
             PendingImageLoadEventOwner::Child(
                 self.frame_owner_store
-                    .accept_current_child_image_load_event(child_handle, owner, image_handle)?,
+                    .accept_current_child_image_load_event(
+                        child_handle,
+                        owner,
+                        image_handle,
+                        delays_load,
+                    )?,
             )
         })
     }
@@ -215,6 +222,64 @@ impl PageScriptHost {
             "selected image request identity"
         );
         true
+    }
+
+    pub(crate) fn defer_pending_image_load(
+        &mut self,
+        image_handle: DomHandle,
+        id: ImageLoadEventId,
+        request_key: Option<crate::types::ImageRequestKey>,
+    ) {
+        let Some(owner) = self.accept_image_load_delay(image_handle, false) else {
+            return;
+        };
+        let Some(pending) = self.pending_image_load_events.get_mut(&image_handle) else {
+            return;
+        };
+        if pending.id != id || pending.network_state != PendingImageLoadNetworkState::Unbound {
+            return;
+        }
+        pending.request_key = request_key;
+        pending.network_state = PendingImageLoadNetworkState::Deferred;
+        // A source set before loading="lazy" can still own the eager load delay.
+        let previous_owner = std::mem::replace(&mut pending.owner, owner);
+        self.settle_pending_image_load_owner(previous_owner, true);
+    }
+
+    pub(crate) fn ensure_pending_image_load_delay(
+        &mut self,
+        image_handle: DomHandle,
+        id: ImageLoadEventId,
+    ) {
+        let Some(pending) = self.pending_image_load_events.get(&image_handle) else {
+            return;
+        };
+        if pending.id() != id {
+            return;
+        }
+        let token = match pending.owner() {
+            PendingImageLoadEventOwner::Main(owner) => owner.load_delay_token(),
+            PendingImageLoadEventOwner::Child(owner) => owner.load_delay_token(),
+        };
+        if token.is_none()
+            && let Some(owner) = self.accept_image_load_delay(image_handle, true)
+            && let Some(pending) = self.pending_image_load_events.get_mut(&image_handle)
+        {
+            pending.owner = owner;
+        }
+    }
+
+    pub(crate) fn resume_deferred_image_load(
+        &mut self,
+        image_handle: DomHandle,
+        id: ImageLoadEventId,
+    ) -> Option<Option<crate::types::ImageRequestKey>> {
+        let pending = self.pending_image_load_events.get_mut(&image_handle)?;
+        if pending.id != id || !pending.is_deferred() {
+            return None;
+        }
+        pending.network_state = PendingImageLoadNetworkState::Unbound;
+        Some(pending.request_key.take())
     }
 
     pub(crate) fn bind_pending_image_load_network_request_if_matches(
@@ -551,6 +616,7 @@ pub(super) fn pending_image_load_terminal_followup(
         PendingImageLoadNetworkState::Ready(_) => RendererPageImageLoadEventKind::Load,
         PendingImageLoadNetworkState::Failed(_) => RendererPageImageLoadEventKind::Error,
         PendingImageLoadNetworkState::Unbound
+        | PendingImageLoadNetworkState::Deferred
         | PendingImageLoadNetworkState::Pending(_)
         | PendingImageLoadNetworkState::DecodeQueued(_) => return None,
     };

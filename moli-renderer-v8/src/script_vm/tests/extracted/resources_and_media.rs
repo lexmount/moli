@@ -706,23 +706,33 @@ async fn far_lazy_image_network_request_waits_for_sampled_scroll_reveal() {
         .document_runtime
         .get_element_by_id("far-lazy-network-image")
         .expect("far lazy image handle");
+    let deferred = vm
+        ._context_host
+        .borrow()
+        .pending_image_load_event(image)
+        .expect("setting src should select the lazy request");
+    assert!(deferred.is_deferred());
+    assert_eq!(
+        deferred.request_key().map(|key| key.url()),
+        Some(image_url.as_str())
+    );
     assert!(
-        vm._context_host
-            .borrow()
-            .pending_image_load_event(image)
-            .is_none(),
-        "setting src must not start a lazy request without sampled eligibility"
+        deferred.network_request_id().is_none(),
+        "setting src must not start a network request without sampled eligibility"
     );
 
     assert!(
         vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0,))
             .expect("lazy-image layout refresh should succeed")
     );
+    let pending = vm
+        ._context_host
+        .borrow()
+        .pending_image_load_event(image)
+        .expect("sampling far geometry should preserve the deferred request");
+    assert_eq!(pending.id(), deferred.id());
     assert!(
-        vm._context_host
-            .borrow()
-            .pending_image_load_event(image)
-            .is_none(),
+        pending.is_deferred() && pending.network_request_id().is_none(),
         "a fragment beyond the Chromium-aligned preload margin must remain unadmitted"
     );
     assert_eq!(
@@ -740,6 +750,7 @@ async fn far_lazy_image_network_request_waits_for_sampled_scroll_reveal() {
         .borrow()
         .pending_image_load_event(image)
         .expect("live scroll delta should admit the far lazy image");
+    assert_eq!(pending.id(), deferred.id());
     assert!(pending.network_request_id().is_some());
     assert_eq!(
         vm._context_host

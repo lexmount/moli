@@ -2276,6 +2276,87 @@ async fn image_update_microtask_freezes_request_after_observing_live_base_url() 
 }
 
 #[tokio::test]
+async fn lazy_image_resumption_keeps_each_source_update_after_base_changes() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://lazy-image-resume.test/page.html",
+        &loader,
+    );
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
+
+    vm.eval(
+        r#"
+        const root = document.documentElement || document.appendChild(document.createElement('html'));
+        const head = document.head || root.insertBefore(document.createElement('head'), root.firstChild);
+        const base = head.appendChild(document.createElement('base'));
+        const body = document.body || root.appendChild(document.createElement('body'));
+        const firstImage = new Image();
+        firstImage.src = 'first.gif';
+        firstImage.loading = 'lazy';
+        firstImage.style.display = 'none';
+        const secondImage = new Image();
+        secondImage.srcset = 'original.gif 1x';
+        secondImage.setAttribute('loading', 'LAZY');
+        secondImage.style.display = 'none';
+        body.append(firstImage, secondImage);
+        base.href = '/selected/';
+        "#,
+    )
+    .unwrap();
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+
+    vm.eval(
+        r#"
+        let replacedDecode = 'pending';
+        secondImage.decode().then(
+            () => { replacedDecode = 'resolved'; },
+            error => { replacedDecode = error.name; }
+        );
+        "#,
+    )
+    .unwrap();
+    assert_eq!(vm.eval("replacedDecode").unwrap(), "pending");
+
+    vm.eval("base.href = '/replacement/'; secondImage.srcset = 'changed.gif 1x';")
+        .unwrap();
+    assert_eq!(vm.eval("replacedDecode").unwrap(), "EncodingError");
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+
+    vm.eval("base.href = '/later/'; firstImage.loading = 'eager'; secondImage.removeAttribute('loading');")
+        .unwrap();
+    let mut requests = vm.take_pending_subresource_fetch_infos();
+    requests.sort_by(|left, right| left.url.path().cmp(right.url.path()));
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.url.path())
+            .collect::<Vec<_>>(),
+        ["/replacement/changed.gif", "/selected/first.gif"],
+    );
+    for request in requests {
+        vm.fulfill_pending_subresource_fetch(
+            request.internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, "resumed lazy image load").await;
+    }
+
+    assert_eq!(
+        vm.eval("[new URL(firstImage.currentSrc).pathname, new URL(secondImage.currentSrc).pathname].join('|')")
+            .unwrap(),
+        "/selected/first.gif|/replacement/changed.gif"
+    );
+}
+
+#[tokio::test]
 async fn removed_lazy_image_suppresses_in_flight_terminal_event() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     loader.set_image_fetch_enabled(true);

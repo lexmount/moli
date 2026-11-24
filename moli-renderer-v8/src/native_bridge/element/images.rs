@@ -3,6 +3,8 @@ mod decode;
 mod dimensions;
 mod geometry;
 mod lazy;
+
+pub(crate) use lazy::image_uses_lazy_loading;
 mod src;
 mod state;
 

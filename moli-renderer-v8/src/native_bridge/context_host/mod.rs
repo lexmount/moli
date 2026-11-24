@@ -804,6 +804,7 @@ pub(crate) struct PendingImageLoadEvent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PendingImageLoadNetworkState {
     Unbound,
+    Deferred,
     Pending(u64),
     DecodeQueued(PendingImageLoadTerminalSource),
     Ready(PendingImageLoadTerminalSource),
@@ -883,10 +884,19 @@ impl PendingImageLoadEvent {
         self.request_key.as_ref()
     }
 
+    pub(crate) fn is_deferred(&self) -> bool {
+        self.network_state == PendingImageLoadNetworkState::Deferred
+    }
+
+    pub(crate) fn awaits_source_selection(&self) -> bool {
+        self.network_state == PendingImageLoadNetworkState::Unbound && self.request_key.is_none()
+    }
+
     pub(crate) fn network_request_id(&self) -> Option<u64> {
         match self.network_state {
             PendingImageLoadNetworkState::Pending(internal_id) => Some(internal_id),
             PendingImageLoadNetworkState::Unbound
+            | PendingImageLoadNetworkState::Deferred
             | PendingImageLoadNetworkState::DecodeQueued(_)
             | PendingImageLoadNetworkState::Ready(_)
             | PendingImageLoadNetworkState::Failed(_) => None,
@@ -898,6 +908,7 @@ impl PendingImageLoadEvent {
             PendingImageLoadNetworkState::Ready(source)
             | PendingImageLoadNetworkState::Failed(source) => Some(source),
             PendingImageLoadNetworkState::Unbound
+            | PendingImageLoadNetworkState::Deferred
             | PendingImageLoadNetworkState::Pending(_)
             | PendingImageLoadNetworkState::DecodeQueued(_) => None,
         }
@@ -921,6 +932,7 @@ impl PendingImageLoadEvent {
                 Some(crate::page_task_queue::RendererPageImageLoadEventKind::Error)
             }
             PendingImageLoadNetworkState::Unbound
+            | PendingImageLoadNetworkState::Deferred
             | PendingImageLoadNetworkState::Pending(_)
             | PendingImageLoadNetworkState::DecodeQueued(_) => None,
         }

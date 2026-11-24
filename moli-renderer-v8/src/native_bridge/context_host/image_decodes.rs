@@ -96,16 +96,19 @@ impl PageScriptHost {
             let _ = self.settle_image_decode_request(scope, request, ImageDecodeCompletion::Reject);
             return true;
         }
-        if image_source_can_decode(self, request.element, request.request_key.url()) {
+        let pending_load = self
+            .pending_image_load_events
+            .get(&request.element)
+            .filter(|pending| self.pending_image_load_event_is_current(request.element, pending));
+        if !pending_load.is_some_and(|pending| pending.is_deferred())
+            && image_source_can_decode(self, request.element, request.request_key.url())
+        {
             let _ =
                 self.settle_image_decode_request(scope, request, ImageDecodeCompletion::Resolve);
             return true;
         }
-        let waits_for_current_load = match self.pending_image_load_events.get(&request.element) {
-            Some(pending)
-                if self.pending_image_load_event_is_current(request.element, pending)
-                    && !pending.is_failed() =>
-            {
+        let waits_for_current_load = match pending_load {
+            Some(pending) if !pending.is_failed() => {
                 match pending.request_key() {
                     Some(key) => key == &request.request_key,
                     // Source selection can still reuse an in-flight image.
