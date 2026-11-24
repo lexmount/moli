@@ -2911,6 +2911,15 @@ requestExecutor("{executor_uuid}", {start_on_js});
             delay_seconds = _pipe_trickle_delay_seconds(parsed.query)
             if delay_seconds > 0:
                 time.sleep(delay_seconds)
+            # Use wptserve's HTTP version for ordinary files and signal the
+            # fixture handler's default connection close.
+            if (
+                self.request_version == "HTTP/1.1"
+                and self.protocol_version == "HTTP/1.0"
+                and not _headers_include(response_headers, "Connection")
+            ):
+                self.protocol_version = "HTTP/1.1"
+                response_headers.append(("Connection", "close"))
             self._send_bytes(
                 mime,
                 body,
