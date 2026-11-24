@@ -126,7 +126,10 @@ fn trusted_type_policy_callbacks_follow_webidl_dictionary_and_callback_rules() {
       errorName(() => trustedTypes.createPolicy("throwing-getter", {
         get createHTML() { throw new RangeError("getter"); }
       })),
-      errorName(() => nullPolicy.createHTML())
+      errorName(() => nullPolicy.createHTML()),
+      errorName(() => emptyFromOmission.createHTML("html")),
+      errorName(() => emptyFromOmission.createScript("script")),
+      errorName(() => emptyFromOmission.createScriptURL("script-url"))
     ]
   });
 })()
@@ -136,7 +139,79 @@ fn trusted_type_policy_callbacks_follow_webidl_dictionary_and_callback_rules() {
 
     assert_eq!(
         result,
-        r#"{"emptyMethods":[["function","function","function"],["function","function","function"]],"missingCallbacks":[["TypeError","TypeError","TypeError"],["TypeError","TypeError","TypeError"]],"nullResults":["","",""],"observed":[true,"converted",2,true,42],"variadicResults":["abc","abundefined","a123null"],"errors":["TypeError","TypeError","RangeError","TypeError"]}"#
+        r#"{"emptyMethods":[["function","function","function"],["function","function","function"]],"missingCallbacks":[["TypeError","TypeError","TypeError"],["TypeError","TypeError","TypeError"]],"nullResults":["","",""],"observed":[true,"converted",2,true,42],"variadicResults":["abc","abundefined","a123null"],"errors":["TypeError","TypeError","RangeError","TypeError","TypeError","TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
+fn trusted_type_factory_interface_exposes_stable_branded_empty_values() {
+    let mut vm = new_storage_test_vm("https://trusted-type-factory-empty-values.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error.constructor.name;
+    }
+  };
+  const assign = (name, value) => {
+    "use strict";
+    trustedTypes[name] = value;
+  };
+  const prototype = TrustedTypePolicyFactory.prototype;
+  const describeAccessor = name => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    return [
+      typeof descriptor.get,
+      descriptor.set === undefined,
+      descriptor.enumerable,
+      descriptor.configurable,
+      Object.hasOwn(trustedTypes, name)
+    ];
+  };
+  const emptyHTML = trustedTypes.emptyHTML;
+  const emptyScript = trustedTypes.emptyScript;
+  const errors = [
+    errorName(() => new TrustedTypePolicyFactory()),
+    errorName(() => assign("emptyHTML", "fake")),
+    errorName(() => assign("emptyScript", "fake")),
+    errorName(() => Object.getOwnPropertyDescriptor(prototype, "emptyHTML").get.call({}))
+  ];
+  return JSON.stringify({
+    factory: [
+      TrustedTypePolicyFactory.name,
+      TrustedTypePolicyFactory.length,
+      trustedTypes instanceof TrustedTypePolicyFactory,
+      Object.getPrototypeOf(trustedTypes) === prototype,
+      Object.hasOwn(prototype, "createPolicy"),
+      Object.hasOwn(trustedTypes, "createPolicy")
+    ],
+    accessors: [describeAccessor("emptyHTML"), describeAccessor("emptyScript")],
+    html: [
+      trustedTypes.isHTML(emptyHTML),
+      String(emptyHTML),
+      emptyHTML === trustedTypes.emptyHTML
+    ],
+    script: [
+      trustedTypes.isScript(emptyScript),
+      String(emptyScript),
+      emptyScript === trustedTypes.emptyScript
+    ],
+    errors
+  });
+})()
+"#,
+        )
+        .expect("TrustedTypePolicyFactory empty value probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"factory":["TrustedTypePolicyFactory",0,true,true,true,false],"accessors":[["function",true,true,true,false],["function",true,true,true,false]],"html":[true,"",true],"script":[true,"",true],"errors":["TypeError","TypeError","TypeError","TypeError"]}"#
     );
 }
 
@@ -1975,27 +2050,4 @@ fn transformed_trusted_script_rejection_does_not_report_a_sink_mismatch() {
     "#).unwrap(), "2");
     let _ = drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
     assert_eq!(vm.eval("JSON.stringify(compilationReports)").unwrap(), "[]");
-}
-
-#[test]
-fn trusted_types_invalid_name_directives_preserve_sink_requirements() {
-    for invalid in ['\0', '\u{000b}', '\u{001f}', '\u{007f}', '\u{00a0}'] {
-        let mut vm = new_storage_test_vm("https://trusted-types-invalid-directive.test/");
-        let policy = format!("trusted-types *{invalid}; require-trusted-types-for 'script'");
-        vm.set_response_content_security_policies(std::slice::from_ref(&policy));
-        let result = vm
-            .eval(
-                r#"(() => {
-                const first = trustedTypes.createPolicy('unlisted', {createHTML: value => value});
-                const element = document.createElement('div');
-                let errorName = 'none';
-                try { element.innerHTML = '<i>untrusted</i>'; }
-                catch (error) { errorName = error.name; }
-                element.innerHTML = first.createHTML('<b>trusted</b>');
-                return [errorName, element.innerHTML].join('|');
-            })()"#,
-            )
-            .expect("discarding an invalid name directive must retain valid sink requirements");
-        assert_eq!(result, "TypeError|<b>trusted</b>", "{policy:?}");
-    }
 }

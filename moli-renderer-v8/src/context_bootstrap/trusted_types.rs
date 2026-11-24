@@ -20,19 +20,76 @@ pub(crate) use realm_state::trusted_types_lazy_state_materialized;
 const TRUSTED_TYPE_POLICY_PROTOTYPE_SLOT: &str = "__moliTrustedTypePolicyPrototype";
 const TRUSTED_TYPE_POLICY_CONSTRUCTOR_SLOT: &str = "__moliTrustedTypePolicyConstructor";
 const TRUSTED_TYPES_POLICY_NAME_SLOT: &str = "__moliTrustedTypesPolicyName";
+const TRUSTED_TYPE_POLICY_FACTORY_CONSTRUCTOR_SLOT: &str =
+    "__moliTrustedTypePolicyFactoryConstructor";
 const TRUSTED_TYPES_DEFAULT_POLICY_SLOT: &str = "__moliTrustedTypesDefaultPolicy";
+const TRUSTED_TYPES_EMPTY_HTML_SLOT: &str = "__moliTrustedTypesEmptyHTML";
+const TRUSTED_TYPES_EMPTY_SCRIPT_SLOT: &str = "__moliTrustedTypesEmptyScript";
+const TRUSTED_TYPES_EMPTY_VALUE_SLOTS: [&str; 2] = [
+    TRUSTED_TYPES_EMPTY_HTML_SLOT,
+    TRUSTED_TYPES_EMPTY_SCRIPT_SLOT,
+];
 
-#[derive(Default, WebApiObject)]
-#[webapi(prototype = "Object", interface = web_api_interfaces::TrustedTypePolicyFactory)]
-struct TrustedTypesFactoryDeclaration {
-    #[webapi(method, callback = trusted_types_create_policy_callback, length = 2)]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(
+    interface = web_api_interfaces::TrustedTypePolicyFactory,
+    constructor = "illegal",
+    constructor_length = 0,
+    readonly_prototype,
+    prototype_to_string_tag = "TrustedTypePolicyFactory"
+)]
+struct TrustedTypePolicyFactoryInterfaceDeclaration {
+    #[webapi(
+        method,
+        callback = trusted_types_create_policy_callback,
+        length = 2,
+        enumerable
+    )]
     create_policy: (),
-    #[webapi(method = "isHTML", callback = trusted_types_is_html_callback, length = 1)]
+    #[webapi(
+        method = "isHTML",
+        callback = trusted_types_is_html_callback,
+        length = 1,
+        enumerable
+    )]
     is_html: (),
-    #[webapi(method, callback = trusted_types_is_script_callback, length = 1)]
+    #[webapi(
+        method,
+        callback = trusted_types_is_script_callback,
+        length = 1,
+        enumerable
+    )]
     is_script: (),
-    #[webapi(method = "isScriptURL", callback = trusted_types_is_script_url_callback, length = 1)]
+    #[webapi(
+        method = "isScriptURL",
+        callback = trusted_types_is_script_url_callback,
+        length = 1,
+        enumerable
+    )]
     is_script_url: (),
+    #[webapi(
+        accessor_property = "emptyHTML",
+        getter = trusted_types_empty_value_getter_callback,
+        data = crate::util::callback_data_index_value(scope, 0),
+        enumerable
+    )]
+    empty_html: (),
+    #[webapi(
+        accessor_property = "emptyScript",
+        getter = trusted_types_empty_value_getter_callback,
+        data = crate::util::callback_data_index_value(scope, 1),
+        enumerable
+    )]
+    empty_script: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::TrustedTypePolicyFactory, require_prototype)]
+struct TrustedTypesFactoryObjectDeclaration<'scope> {
+    #[webapi(slot = TRUSTED_TYPES_EMPTY_HTML_SLOT)]
+    empty_html: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = TRUSTED_TYPES_EMPTY_SCRIPT_SLOT)]
+    empty_script: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -352,7 +409,8 @@ fn trusted_script_string_for_code_generation_sink(
             Some(original.to_owned())
         }
         DefaultTrustedTypePolicyOutcome::Value(_) => {
-            // TrustedScript was supplied; rejecting transformed source is a compilation error.
+            // The policy produced TrustedScript; rejecting a different source
+            // is a compilation error, not a Trusted Types sink mismatch.
             throw_eval_error(scope, transformed_value_error);
             None
         }
@@ -491,6 +549,26 @@ fn js_value_to_string<'s>(
     value
         .to_string(scope)
         .map(|value| value.to_rust_string_lossy(scope))
+}
+
+fn trusted_types_empty_value_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(slot) = crate::util::callback_data_item(
+        scope,
+        &args,
+        &TRUSTED_TYPES_EMPTY_VALUE_SLOTS,
+        "TrustedTypePolicyFactory empty values",
+    ) else {
+        return;
+    };
+    let Some(value) = get_private_value(scope, args.this(), slot) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(value);
 }
 
 fn trusted_types_create_policy_callback<'s>(
