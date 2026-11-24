@@ -104,12 +104,21 @@ async fn media_load_honors_media_src_csp() {
 
 #[tokio::test]
 async fn media_report_only_csp_reports_without_blocking_load() {
+    use base64::Engine as _;
+
+    let mp4 = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../../moli-video/tests/fixtures/primary-colors.mp4"
+    ));
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
         "https://media-csp-report-only.test/page.html",
         &loader,
     );
     vm.set_response_content_security_report_only_policies(&["media-src 'none'".to_owned()]);
+    vm.eval(&format!(
+        "globalThis.__reportOnlyMp4 = 'data:video/mp4;base64,{mp4}'"
+    ))
+    .expect("video fixture should install");
 
     vm.eval(
         r#"
@@ -121,7 +130,7 @@ async fn media_report_only_csp_reports_without_blocking_load() {
   const video = document.createElement('video');
   video.onloadeddata = () => __lmMediaReportOnlyEvents.push('loadeddata');
   video.onerror = () => __lmMediaReportOnlyEvents.push('error');
-  video.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
+  video.src = __reportOnlyMp4;
   (document.body || document.documentElement || document).appendChild(video);
   globalThis.__lmMediaReportOnlyVideo = video;
 })()
@@ -134,7 +143,26 @@ async fn media_report_only_csp_reports_without_blocking_load() {
         1
     );
 
-    for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
+        "report-only media loadstart turn",
+    )
+    .await;
+    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !vm
+            .run_one_media_element_event_executor_turn(&loader)
+            .await
+            .expect("video decoder completion should dispatch")
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("local MP4 should decode");
+
+    for phase in ["loadedmetadata", "loadeddata", "canplay"] {
         run_next_page_media_element_event_for_test(
             &mut vm,
             &loader,
@@ -154,6 +182,105 @@ async fn media_report_only_csp_reports_without_blocking_load() {
         .expect("media report-only CSP events should evaluate"),
         "csp:report:media-src|loadeddata|4|1"
     );
+}
+
+#[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+#[tokio::test]
+async fn media_source_appends_h264_and_paints_the_seeked_frame() {
+    use base64::Engine as _;
+    use moli_layout::{LayoutFlushReason, LayoutPassRequest, LayoutViewport, PaintFragment};
+    use std::time::Duration;
+
+    let mp4 = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../../moli-video/tests/fixtures/primary-colors-fragmented.mp4"
+    ));
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-source-video.test/",
+        &loader,
+    );
+    vm.eval(&format!("globalThis.fragmentedFile = '{mp4}'"))
+        .unwrap();
+    vm.eval(
+        r#"
+        globalThis.testVideo = document.createElement('video');
+        globalThis.testSource = new MediaSource();
+        globalThis.testUrl = URL.createObjectURL(testSource);
+        globalThis.sourceEvents = [];
+        testSource.onsourceopen = () => {
+          URL.revokeObjectURL(testUrl);
+          const bytes = Uint8Array.from(atob(fragmentedFile), byte => byte.charCodeAt(0));
+          const buffer = testSource.addSourceBuffer('video/mp4; codecs="avc1.64000a"');
+          sourceEvents.push(testSource.sourceBuffers[0] === buffer);
+          buffer.onupdatestart = () => sourceEvents.push(buffer.updating);
+          buffer.onupdateend = () => {
+            sourceEvents.push(buffer.buffered.length);
+            testSource.endOfStream();
+          };
+          buffer.appendBuffer(bytes);
+        };
+        testVideo.style.cssText = 'display:block;width:96px;height:64px';
+        (document.body || document.documentElement).appendChild(testVideo);
+        testVideo.src = testUrl;
+        "#,
+    )
+    .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while vm
+            .eval("testVideo.readyState === 4 && testSource.readyState === 'ended'")
+            .unwrap()
+            != "true"
+        {
+            if !vm
+                .run_one_media_element_event_executor_turn(&loader)
+                .await
+                .unwrap()
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }
+        assert_eq!(
+            vm.eval("JSON.stringify(sourceEvents)").unwrap(),
+            "[true,true,1]"
+        );
+        assert_eq!(vm.eval("testVideo.videoWidth").unwrap(), "48");
+        vm.eval("testVideo.currentTime = 1.6").unwrap();
+        while vm.eval("testVideo.seeking").unwrap() == "true" {
+            if !vm
+                .run_one_media_element_event_executor_turn(&loader)
+                .await
+                .unwrap()
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }
+    })
+    .await
+    .expect("fragmented video decoded and seeked");
+
+    let runtime = vm._context_host.borrow();
+    let pass = runtime
+        .build_layout_pass_for_document(
+            runtime.document_handle(),
+            LayoutPassRequest::with_paint(
+                LayoutViewport::new(120, 90, 1.0),
+                LayoutFlushReason::Test,
+            ),
+        )
+        .unwrap()
+        .unwrap();
+    let snapshot = pass.paint_snapshot().unwrap();
+    assert!(
+        snapshot
+            .fragments
+            .iter()
+            .any(|fragment| matches!(fragment, PaintFragment::Image(_)))
+    );
+    assert!(snapshot.images.iter().any(|image| {
+        let pixel = &image.image.rgba[..4];
+        pixel[0] < 12 && pixel[1] < 12 && pixel[2] > 240 && pixel[3] == 255
+    }));
 }
 
 #[tokio::test]

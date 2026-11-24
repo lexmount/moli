@@ -863,6 +863,7 @@ impl ScriptVm {
                             crate::network_host::media_response_status_is_successful(
                                 response_status,
                             ),
+                            Some(&mut observable_response),
                         ),
                         PendingSubresourceContinuation::TextTrack {
                             track_handle,
@@ -1018,6 +1019,7 @@ impl ScriptVm {
                             sequence,
                             pending.info.internal_id,
                             false,
+                            None,
                         ),
                         PendingSubresourceContinuation::TextTrack {
                             track_handle,

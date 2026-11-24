@@ -72,6 +72,7 @@ members = [
     "moli-v8-platform",
     "moli-v8-test-util",
     "moli-v8-util",
+    "moli-video",
     "moli-web-mime",
     "moli-web-storage",
     "moli-web-bot-auth",

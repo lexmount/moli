@@ -81,6 +81,8 @@ mod media_cues;
 pub(crate) use media_cues::new_media_error_value;
 mod media_file_template;
 mod media_queries;
+#[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+pub(crate) mod media_source_playback;
 use moli_webapi::media_source;
 mod message_ports;
 mod microtask_checkpoint;

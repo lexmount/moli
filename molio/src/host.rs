@@ -172,11 +172,14 @@ impl BrowserHost {
                 };
                 let tabs = LocalSet::new();
                 tabs.block_on(&runtime, async move {
+                    let mut resources =
+                        OptionalResourceFetchMask::IMAGE | OptionalResourceFetchMask::FONT;
+                    if cfg!(all(target_os = "linux", target_pointer_width = "64")) {
+                        resources |= OptionalResourceFetchMask::VIDEO;
+                    }
                     let mut config = BrowserConfig::default()
                         .with_layout_policy(LayoutPolicy::Realtime)
-                        .with_optional_resource_fetch_mask(
-                            OptionalResourceFetchMask::IMAGE | OptionalResourceFetchMask::FONT,
-                        );
+                        .with_optional_resource_fetch_mask(resources);
                     if let Some(max_fps) = max_fps {
                         config.set_realtime_max_fps(max_fps);
                     }
@@ -1264,6 +1267,47 @@ mod tests {
         .await??;
         assert_eq!(cursor.document, document);
         assert_eq!(cursor.kind, RendererViewportCursorKind::Text);
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[tokio::test]
+    async fn default_host_loads_h264_video_from_http() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let mut request = BufReader::new(socket);
+                let Ok((path, _)) = read_http_request(&mut request).await else {
+                    continue;
+                };
+                let (mime, body): (&str, &[u8]) = if path == "/clip.mp4" {
+                    (
+                        "video/mp4",
+                        include_bytes!("../../moli-video/tests/fixtures/primary-colors.mp4"),
+                    )
+                } else {
+                    (
+                        "text/html",
+                        br#"<video src="/clip.mp4" onloadeddata="document.title = String(this.videoWidth)"></video>"#,
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let mut socket = request.into_inner();
+                if socket.write_all(response.as_bytes()).await.is_ok() {
+                    let _ = socket.write_all(body).await;
+                }
+            }
+        });
+        let (host, _events) = BrowserHost::start(None, None)?;
+        let tab = host.open_tab()?;
+        navigate(&tab, &url)?;
+        let result = wait_for_navigation(&tab, &url, "48").await;
+        server.abort();
+        result?;
         Ok(())
     }
 

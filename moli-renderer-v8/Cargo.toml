@@ -7,6 +7,7 @@ edition = "2024"
 [features]
 default = ["devtools"]
 devtools = ["moli-command-types/devtools", "dep:moli-protocol-cdp"]
+video = ["dep:moli-video", "moli-video?/video"]
 # Desktop viewport streaming and native editing use the existing input dispatch.
 molio = ["devtools", "moli-layout/molio"]
 # Native ACE page tasks for embedders. Public browser builds leave this disabled.
@@ -18,6 +19,9 @@ test-support = []
 # (`window.webdriver` / `window.WebDriver`) used by imported WPT tests.
 # Keep disabled for normal browser builds so page scripts do not see this test surface.
 wpt-extensions = []
+
+[target.'cfg(all(target_os = "linux", target_pointer_width = "64"))'.dependencies]
+moli-video = { path = "../moli-video", optional = true }
 
 [dependencies]
 moli-command-types = { path = "../moli-types/moli-command-types", default-features = false }
