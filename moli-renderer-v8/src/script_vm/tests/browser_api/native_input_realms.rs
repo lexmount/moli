@@ -353,7 +353,6 @@ fn native_mouse_boundary_and_wheel_events_use_target_document_intrinsics() {
                             },
                             modifiers,
                             false,
-                            true,
                             MouseDispatchCompletion::FinishTurn,
                         )
                         .unwrap_or_else(|error| {
@@ -425,7 +424,6 @@ fn native_mouse_release_followups_use_target_document_intrinsics() {
                     crate::runtime::RendererPointerEventProperties::default(),
                     0,
                     false,
-                    true,
                     MouseDispatchCompletion::FinishTurn,
                 )
                 .unwrap();
@@ -494,7 +492,6 @@ fn mouse_button_events_report_click_count_in_detail() {
             crate::runtime::RendererPointerEventProperties::default(),
             0,
             false,
-            true,
             MouseDispatchCompletion::FinishTurn,
         )
         .unwrap();
@@ -517,7 +514,6 @@ fn mouse_button_events_report_click_count_in_detail() {
         crate::runtime::RendererPointerEventProperties::default(),
         0,
         false,
-        true,
         MouseDispatchCompletion::FinishTurn,
     )
     .unwrap();
@@ -537,7 +533,6 @@ fn mouse_button_events_report_click_count_in_detail() {
             crate::runtime::RendererPointerEventProperties::default(),
             0,
             false,
-            true,
             MouseDispatchCompletion::FinishTurn,
         )
         .unwrap();
@@ -561,7 +556,6 @@ fn mouse_button_events_report_click_count_in_detail() {
             crate::runtime::RendererPointerEventProperties::default(),
             0,
             false,
-            true,
             MouseDispatchCompletion::FinishTurn,
         )
         .unwrap();

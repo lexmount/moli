@@ -584,7 +584,7 @@ async fn clipped_repeat(cancel_first_round: bool) {
             set_gesture_viewport(&mut ctx, 600).await;
             let raw = json!({"id":35000,"method":"Input.synthesizeScrollGesture",
             "params":{"x":500,"y":40,"yDistance":-300,"speed":300,
-                      "repeatCount":1,"repeatDelayMs":100,"gestureSourceType":"mouse"}})
+                      "repeatCount":1,"repeatDelayMs":600,"gestureSourceType":"mouse"}})
             .to_string();
             let CdpCommandTaskStep::Pending(pending) =
                 ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
@@ -607,9 +607,10 @@ async fn clipped_repeat(cancel_first_round: bool) {
             );
             set_gesture_viewport(&mut ctx, 300).await;
             assert!(evaluate_bool(&mut ctx, "scrollTo(0,0);true").await);
-            // This interval is the viewport-change input, not a readiness wait:
-            // cover the 100ms repeat delay and the next 200ms of wheel updates.
-            ctx.drive_owned_wait(tokio::time::sleep(std::time::Duration::from_millis(300)))
+            // Define the viewport input schedule: the 600ms repeat delay
+            // exceeds Aura's 500ms transaction timeout even if the previous
+            // producer End was clipped. Then clip 200ms of the new round.
+            ctx.drive_owned_wait(tokio::time::sleep(std::time::Duration::from_millis(800)))
                 .await;
             assert!(
                 !running.is_finished(),
@@ -641,27 +642,18 @@ async fn clipped_repeat(cancel_first_round: bool) {
                 .iter()
                 .filter(|e| e[3] == true)
                 .collect::<Vec<_>>();
-            if cancel_first_round {
-                assert!(total > 300.0 && !resumed.is_empty(), "{value}");
-            }
+            assert!(total > 300.0 && !resumed.is_empty(), "{value}");
             for event in resumed {
                 assert_eq!(
-                    event[0], cancel_first_round,
-                    "skipped Began must not change dispatch mode: {value}"
+                    event[0], true,
+                    "the first actual platform wheel begins a transaction: {value}"
                 );
-                assert_eq!(event[1], cancel_first_round, "{value}");
+                assert_eq!(event[1], true, "{value}");
             }
-            if cancel_first_round {
-                assert_eq!(
-                    value["page"], 0,
-                    "canceled restored wheels must not scroll: {value}"
-                );
-            } else {
-                assert!(
-                    value["page"].as_f64().unwrap() > 0.0,
-                    "Changed without a Began retains the prior noncancelable mode: {value}"
-                );
-            }
+            assert_eq!(
+                value["page"], 0,
+                "restored canceled wheels must not scroll: {value}"
+            );
         })
         .await;
 }
@@ -672,12 +664,12 @@ async fn scroll_gesture_clipped_repeat_keeps_canceled_wheels_cancelable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn scroll_gesture_clipped_repeat_keeps_prior_nonblocking_mode() {
+async fn scroll_gesture_clipped_repeat_infers_began_after_prior_nonblocking_round() {
     clipped_repeat(false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn scroll_gesture_clipped_queued_command_keeps_page_dispatch_mode() {
+async fn scroll_gesture_clipped_queued_command_infers_began_after_previous_end() {
     tokio::task::LocalSet::new()
         .run_until(async {
             let mut ctx = fixture(
@@ -765,12 +757,12 @@ async fn scroll_gesture_clipped_queued_command_keeps_page_dispatch_mode() {
                     .unwrap()
                     .iter()
                     .filter(|e| e[2] == true)
-                    .all(|e| e[0] == false),
+                    .all(|e| e[0] == true),
                 "{value}"
             );
-            assert!(
-                value["page"].as_f64().unwrap() > 0.0,
-                "a dropped Began must retain the preceding command's nonblocking mode: {value}"
+            assert_eq!(
+                value["page"], 0,
+                "the prior command's End permits a fresh platform Began: {value}"
             );
         })
         .await;
@@ -826,4 +818,108 @@ async fn scroll_gesture_validates_anchor_before_waiting_in_page_queue() {
         }
         assert!(evaluate_bool(&mut ctx, "total===0 && scrollY===0").await);
     }
+}
+
+async fn raw_wheel_during_synthetic(cancel_raw: bool) {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut ctx = fixture(&format!(
+                r#"
+            window.block={};window.marked=false;window.atRaw=0;
+            window.firstWheel=new Promise(resolve=>window.notifyFirst=resolve);
+            document.addEventListener('wheel',e=>{{
+                if(e.deltaX===1){{block={cancel_raw};marked=true;atRaw=a.scrollTop;}}
+                if(block)e.preventDefault();
+                events.push([e.deltaX,e.deltaY,e.cancelable,e.defaultPrevented,marked]);
+                total+=e.deltaY;
+                if(!marked && e.deltaY>0)notifyFirst();
+            }},{{passive:false}});
+        "#,
+                !cancel_raw
+            ))
+            .await;
+            let raw = json!({"id":35000,"method":"Input.synthesizeScrollGesture",
+            "params":{"x":20,"y":20,"yDistance":-300,"speed":300,"gestureSourceType":"mouse"}})
+            .to_string();
+            let CdpCommandTaskStep::Pending(pending) =
+                ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+            else {
+                panic!("pending gesture")
+            };
+            let running = tokio::task::spawn_local(pending.wait());
+            ctx.process_async(json!({"id":35011,"method":"Runtime.evaluate",
+            "params":{"expression":"firstWheel","awaitPromise":true}}))
+                .await;
+            let response = ctx
+                .wait_for_scheduler_message("first actual synthetic wheel", |m| m["id"] == 35011)
+                .await;
+            assert!(response.get("error").is_none(), "{response}");
+            assert!(
+                response["result"].get("exceptionDetails").is_none(),
+                "{response}"
+            );
+            ctx.process_async(json!({"id":35012,"method":"Input.dispatchMouseEvent",
+            "params":{"type":"mouseWheel","x":20,"y":20,"deltaX":1,"deltaY":0}}))
+                .await;
+            ctx.expect_result(35012, json!({}), None);
+            let completed = ctx.drive_owned_wait(running).await.unwrap();
+            let step = ctx.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(
+                    completed,
+                    &mut CommandDispatchContext::default(),
+                )
+            });
+            let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
+            assert!(
+                messages.contains(&json!({"id":35000,"result":{}})),
+                "{messages:?}"
+            );
+            let value: Value = serde_json::from_str(
+                &evaluate_string(
+                    &mut ctx,
+                    "JSON.stringify({events,atRaw,a:a.scrollTop,total})",
+                )
+                .await,
+            )
+            .unwrap();
+            let events = value["events"].as_array().unwrap();
+            let raw = events
+                .iter()
+                .find(|e| e[0] == 1)
+                .expect("raw CDP wheel must reach the page");
+            assert_eq!(raw[2], true, "{value}");
+            assert_eq!(raw[3], cancel_raw, "{value}");
+            let after = events
+                .iter()
+                .filter(|e| e[4] == true && e[1].as_f64().unwrap() > 0.0)
+                .collect::<Vec<_>>();
+            assert!(after.len() > 1, "{value}");
+            for event in after {
+                assert_eq!(
+                    event[2], cancel_raw,
+                    "raw Began ACK must update the common queue: {value}"
+                );
+                assert_eq!(event[3], cancel_raw, "{value}");
+            }
+            if cancel_raw {
+                assert_eq!(value["a"], value["atRaw"], "{value}");
+            } else {
+                assert!(value["a"].as_f64().unwrap() > 100.0, "{value}");
+            }
+            assert!(
+                (value["total"].as_f64().unwrap() - 300.0).abs() < 0.001,
+                "{value}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_raw_canceled_began_restores_blocking_dispatch() {
+    raw_wheel_during_synthetic(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_raw_uncanceled_began_enables_nonblocking_dispatch() {
+    raw_wheel_during_synthetic(false).await;
 }

@@ -131,6 +131,8 @@ mod webidl_callback_execution;
 #[cfg(test)]
 mod webidl_callback_source_boundary_tests;
 use moli_webapi::webidl_iterator;
+#[cfg(feature = "devtools")]
+mod wheel_input;
 mod window_document_identity;
 mod window_host;
 mod window_webidl_callback;

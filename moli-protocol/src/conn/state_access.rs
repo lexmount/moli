@@ -105,23 +105,6 @@ impl ProtocolWorkflowState<'_> {
         wheel.prepare(self.connection)
     }
 
-    pub(crate) fn acknowledge_synthetic_wheel_began(
-        self,
-        owner: &crate::conn::CommandOwnerScope,
-        page: &crate::conn::TargetPageResidenceIdentity,
-        canceled: bool,
-    ) {
-        if self
-            .connection
-            .target_page_residence_identity_for_owner(owner)
-            .as_ref()
-            == Some(page)
-            && let Some(queue) = self.connection.synthetic_scroll_admissions_for_owner(owner)
-        {
-            queue.acknowledge_began(canceled);
-        }
-    }
-
     /// Fixture setup and assertions only. Test workflows use the same driver
     /// as production; this callback cannot return a state borrow or future.
     #[cfg(test)]

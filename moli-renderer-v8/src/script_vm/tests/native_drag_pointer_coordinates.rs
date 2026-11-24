@@ -76,7 +76,6 @@ fn start_coordinate_drag(vm: &mut StandaloneScriptVmHarness, scale: f64) -> serd
                 RendererPointerEventProperties::default(),
                 0,
                 true,
-                true,
                 MouseDispatchCompletion::FinishTurn,
             )
             .expect("dispatch native drag in root coordinates");
@@ -194,7 +193,6 @@ fn captured_iframe_drag_startup_maps_coordinates_after_the_pointer_leaves_the_fr
                     0.0,
                     RendererPointerEventProperties::default(),
                     0,
-                    true,
                     true,
                     MouseDispatchCompletion::FinishTurn,
                 )

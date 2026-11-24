@@ -81,9 +81,9 @@ impl PageVm {
                 .map(RendererDevToolsPageReply::InputDispatchOutcome)
                 .map(RendererPageReply::DevTools),
             RendererDevToolsPageCommand::DispatchSyntheticWheel {
-                x, y, delta_x, delta_y, cancelable, intercept_drags, gesture,
+                x, y, delta_x, delta_y, end, intercept_drags, gesture,
             } => self
-                .dispatch_synthetic_wheel(x, y, delta_x, delta_y, cancelable, intercept_drags, gesture)
+                .dispatch_synthetic_wheel(x, y, delta_x, delta_y, end, intercept_drags, gesture)
                 .map(RendererDevToolsPageReply::InputDispatchOutcome)
                 .map(RendererPageReply::DevTools),
             RendererDevToolsPageCommand::DispatchTouchEvent {

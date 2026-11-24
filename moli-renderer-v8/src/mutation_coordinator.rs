@@ -176,7 +176,7 @@ impl MutationCoordinator {
         #[cfg(feature = "devtools")]
         unsafe {
             let host = &mut *host_ptr;
-            host.note_synthetic_scroll_target_removals(dom_host, &effects);
+            host.note_wheel_scroll_target_removals(dom_host, &effects);
             host.note_mouse_input_target_removals(dom_host, &effects);
         }
         let cpu_profile_enabled = moli_trace::cpu_profile_enabled();

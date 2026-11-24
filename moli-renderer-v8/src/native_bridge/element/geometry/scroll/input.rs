@@ -178,7 +178,7 @@ fn perform_wheel_scroll_chain_default_action(
     Ok(changed)
 }
 
-/// The scroller selected for both axes of one synthetic wheel gesture.
+/// The scroller selected for both axes of one wheel transaction.
 /// Keep this selection at a boundary and after the scroller is removed.
 #[derive(Clone, Debug)]
 pub(crate) struct WheelScrollTarget(Option<LatchedScrollBox>);
@@ -197,7 +197,7 @@ impl WheelScrollTarget {
             Some(LatchedScrollBox {
                 source,
                 document,
-                alive: runtime.watch_synthetic_scroll_target(document, source)?,
+                alive: runtime.watch_wheel_scroll_target(document, source)?,
             })
         }))
     }

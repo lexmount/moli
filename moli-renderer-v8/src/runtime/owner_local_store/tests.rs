@@ -99,6 +99,8 @@ mod navigation_dispatch_tests {
             Default::default(),
         );
         LivePageEntry {
+            #[cfg(feature = "devtools")]
+            wheel_input: Default::default(),
             slot,
             top_level_navigation_dispatch:
                 RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,

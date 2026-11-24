@@ -58,7 +58,13 @@ impl PageVm {
     }
 
     pub(in crate::runtime) fn next_action_window_deadline(&self) -> Option<Instant> {
-        self.page_action_window.window.next_deadline()
+        [
+            self.page_action_window.window.next_deadline(),
+            self.vm().wheel_input.borrow().next_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     pub(in crate::runtime) fn due_page_action_window_ready_descriptor(
@@ -233,7 +239,6 @@ impl PageVm {
                 event.pointer,
                 scroll.modifiers.bits(),
                 false,
-                true,
                 MouseDispatchCompletion::DeferToBatch,
             );
             if let Err(error) = result
@@ -262,10 +267,12 @@ impl PageVm {
         &mut self,
         deadline: Instant,
     ) -> Result<()> {
-        if self.page_action_window.window.next_deadline() != Some(deadline) {
+        if self.next_action_window_deadline() != Some(deadline) {
             return Ok(());
         }
-        let Some(batch) = self.page_action_window.window.take_due(Instant::now()) else {
+        let now = Instant::now();
+        self.vm().wheel_input.borrow_mut().expire(now);
+        let Some(batch) = self.page_action_window.window.take_due(now) else {
             return Ok(());
         };
         self.apply_page_action_batch(batch)

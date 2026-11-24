@@ -1,8 +1,4 @@
-use std::{
-    cell::{Cell, RefCell},
-    collections::VecDeque,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use super::CommandWaitLifetimeOwner;
 
@@ -10,28 +6,6 @@ use super::CommandWaitLifetimeOwner;
 /// the queue and wakes its successor if it held the turn.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CommandAdmissionQueue(Rc<RefCell<VecDeque<Rc<Admission>>>>);
-
-/// One Page's wheel queue and its ACK-selected dispatch mode. A dropped Began
-/// preserves this mode across repeats and separately queued commands alike.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct SyntheticScrollAdmissionQueue {
-    queue: CommandAdmissionQueue,
-    nonblocking: Rc<Cell<bool>>,
-}
-
-impl SyntheticScrollAdmissionQueue {
-    pub(crate) fn reserve(&self) -> CommandAdmission {
-        self.queue.reserve()
-    }
-
-    pub(crate) fn cancelable(&self) -> bool {
-        !self.nonblocking.get()
-    }
-
-    pub(crate) fn acknowledge_began(&self, canceled: bool) {
-        self.nonblocking.set(!canceled);
-    }
-}
 
 #[derive(Debug)]
 struct Admission {
