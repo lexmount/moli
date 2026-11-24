@@ -5124,11 +5124,6 @@ pub enum RendererPageCommand {
     #[cfg(feature = "molio")]
     WakeViewportFrames,
     #[cfg(feature = "molio")]
-    ViewportDisplayTick {
-        viewport_revision: u64,
-        time: std::time::Instant,
-    },
-    #[cfg(feature = "molio")]
     DispatchViewportPointer(super::RendererViewportPointerInput),
     #[cfg(feature = "molio")]
     CancelViewportPointer {

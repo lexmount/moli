@@ -23,6 +23,76 @@ pub(super) async fn run_opportunity(
 
 #[cfg(feature = "molio")]
 #[test]
+fn realtime_viewport_requests_display_ticks_until_it_is_idle() {
+    use crate::runtime::RendererViewportSubscription;
+    use std::{sync::Arc, time::Instant};
+    use tokio::sync::{Notify, watch};
+
+    run_page_vm_large_stack_async_test("realtime-viewport-display-demand", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/viewport").unwrap(),
+        );
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        let (updates, _frames) = watch::channel(None);
+        let (display_tick_requests, mut requests) = watch::channel(None);
+        page.subscribe_viewport_frames(RendererViewportSubscription {
+            surface: Default::default(),
+            viewport_revision: 4,
+            initial_pointer_position: None,
+            updates,
+            cursor: watch::Sender::new(None),
+            display_tick_requests,
+            resource_wake: Arc::new(Notify::new()),
+        })
+        .unwrap();
+        assert_eq!(*requests.borrow_and_update(), Some(4));
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(*requests.borrow_and_update(), None);
+
+        let now = Instant::now();
+        page.accept_viewport_display_tick(4, now);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert!(!requests.has_changed().unwrap());
+
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        host.borrow().set_realtime_opportunity_clock_for_test(now);
+        for script in [
+            "requestAnimationFrame(() => {})",
+            "document.body.style.background = 'red'",
+        ] {
+            page.vm_mut().eval(script).unwrap();
+            assert_eq!(*requests.borrow_and_update(), Some(4));
+            let fallback = page.next_rendering_opportunity_deadline_for_test().unwrap();
+            assert!(fallback > now);
+            page.accept_viewport_display_tick(3, now);
+            assert_eq!(
+                page.next_rendering_opportunity_deadline_for_test(),
+                Some(fallback)
+            );
+            page.accept_viewport_display_tick(4, now);
+            assert_eq!(
+                page.next_rendering_opportunity_deadline_for_test(),
+                Some(now)
+            );
+            assert!(
+                !requests.has_changed().unwrap(),
+                "rescheduling keeps demand active"
+            );
+
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(*requests.borrow_and_update(), None);
+        }
+    });
+}
+
+#[cfg(feature = "molio")]
+#[test]
 fn realtime_history_push_state_leaves_frame_scheduler_idle() {
     run_page_vm_large_stack_async_test("realtime-history-state", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

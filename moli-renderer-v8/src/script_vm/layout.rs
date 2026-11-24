@@ -229,10 +229,20 @@ impl ScriptVm {
     }
 
     #[cfg(feature = "molio")]
-    pub(crate) fn accept_viewport_display_tick(&self, time: std::time::Instant) {
+    pub(crate) fn set_viewport_display_clock(
+        &self,
+        clock: Option<(u64, tokio::sync::watch::Sender<Option<u64>>)>,
+    ) {
         self._context_host
             .borrow()
-            .accept_viewport_display_tick(time);
+            .set_viewport_display_clock(clock);
+    }
+
+    #[cfg(feature = "molio")]
+    pub(crate) fn accept_viewport_display_tick(&self, time: std::time::Instant) -> bool {
+        self._context_host
+            .borrow()
+            .accept_viewport_display_tick(time)
     }
 
     #[cfg(feature = "molio")]

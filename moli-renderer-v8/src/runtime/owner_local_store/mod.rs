@@ -3001,6 +3001,25 @@ impl RendererOwnerLocalStore {
 
 impl RendererOwnerLocalStore {
     #[cfg(feature = "molio")]
+    pub(super) fn accept_viewport_display_tick(
+        &mut self,
+        token: RendererPageToken,
+        viewport_revision: u64,
+        time: std::time::Instant,
+    ) {
+        if let Some(page) = self
+            .page_hosts
+            .get(&token.local_host_id)
+            .and_then(|host| host.pages.get(&token.page_id))
+            .and_then(RendererOwnerLocalPageSlot::resident_entry)
+            .and_then(LivePageEntry::active_page_vm)
+            && page.accept_viewport_display_tick(viewport_revision, time)
+        {
+            self.reindex_page_task_for_token(token);
+        }
+    }
+
+    #[cfg(feature = "molio")]
     pub(super) fn subscribe_page_navigation(
         &mut self,
         token: RendererPageToken,

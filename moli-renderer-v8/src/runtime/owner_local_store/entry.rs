@@ -157,7 +157,7 @@ impl CommittedNavigationEntry {
         };
         #[cfg(feature = "molio")]
         {
-            self.viewport_frames = page_vm.viewport_frames.take();
+            self.viewport_frames = page_vm.take_viewport_frames();
             if let Some(frames) = self.viewport_frames.as_mut() {
                 frames.discard_document();
             }

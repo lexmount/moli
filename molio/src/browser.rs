@@ -293,10 +293,13 @@ impl BrowserWindow {
             while frames.changed().await.is_ok() {
                 let _ = frames.borrow_and_update();
                 if cx
-                    .update(|_, cx| {
+                    .update(|window, cx| {
                         view.update(cx, |browser, cx| {
                             if browser.active == id {
-                                browser.surface.update(cx, |_, cx| cx.notify());
+                                browser.surface.update(cx, |surface, cx| {
+                                    surface.request_display_tick(window, cx);
+                                    cx.notify();
+                                });
                             }
                         })
                     })
@@ -1220,6 +1223,99 @@ mod tests {
             anyhow::ensure!(Instant::now() < deadline, "{message}");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn display_callbacks_stop_at_idle_and_follow_demand_across_resize() -> anyhow::Result<()> {
+        let (host, events) = BrowserHost::start(None, None)?;
+        let mut app = TestAppContext::single();
+        let browser = app.open_window(size(px(640.), px(480.)), |window, cx| {
+            BrowserWindow::new(
+                Rc::new(host),
+                events,
+                Some(html_url(concat!(
+                    "<title>Animated</title><script>",
+                    "requestAnimationFrame(function frame() { requestAnimationFrame(frame); });",
+                    "</script>",
+                ))),
+                window,
+                cx,
+            )
+        });
+        let mut cx = VisualTestContext::from_window(browser.into(), &app);
+        wait_for_browser(&browser, &mut cx, "animation did not load", |browser| {
+            browser
+                .current()
+                .is_some_and(|tab| tab.title() == "Animated")
+        })?;
+        let (output, mut ticks) = browser.update(&mut cx, |browser, _, _| {
+            let tab = browser.current().unwrap().connection.as_ref().unwrap();
+            (
+                tab.viewport.clone(),
+                tab.display_ticks.as_ref().unwrap().subscribe(),
+            )
+        })?;
+        let mut deliver_tick = |cx: &mut VisualTestContext, revision| -> anyhow::Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                cx.run_until_parked();
+                cx.update(|window, cx| window.simulate_next_frame(cx));
+                if ticks.borrow_and_update().0 == revision {
+                    return Ok(());
+                }
+                anyhow::ensure!(
+                    Instant::now() < deadline,
+                    "no display tick for revision {revision}"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        wait_for_browser(
+            &browser,
+            &mut cx,
+            "animation did not request a display tick",
+            |_| output.display_tick_request().is_some(),
+        )?;
+        let first = output.display_tick_request().unwrap();
+        deliver_tick(&mut cx, first)?;
+
+        cx.simulate_resize(size(px(740.), px(540.)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        wait_for_browser(
+            &browser,
+            &mut cx,
+            "resize did not request a new display revision",
+            |_| {
+                output
+                    .display_tick_request()
+                    .is_some_and(|revision| revision > first)
+            },
+        )?;
+        deliver_tick(&mut cx, output.display_tick_request().unwrap())?;
+
+        browser.update(&mut cx, |browser, window, cx| {
+            browser.open_address(&html_url("<title>Static</title><p>Idle</p>"), window, cx);
+        })?;
+        wait_for_browser(
+            &browser,
+            &mut cx,
+            "static document did not settle",
+            |browser| {
+                browser.current().is_some_and(|tab| {
+                    tab.title() == "Static"
+                        && output.display_tick_request().is_none()
+                        && output
+                            .read(|frame| Some(frame.document) == tab.state.document)
+                            .unwrap_or(false)
+                })
+            },
+        )?;
+        for _ in 0..2 {
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            assert!(!ticks.has_changed()?);
+        }
+        Ok(())
     }
 
     #[test]
