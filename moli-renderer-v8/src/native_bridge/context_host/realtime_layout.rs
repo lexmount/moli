@@ -121,12 +121,12 @@ struct DocumentLayoutInputs {
     document: DomHandle,
     root: Option<DomHandle>,
     target: Option<WindowDocumentTaskTarget>,
+    dom_revision: u64,
     stylesheet_sources: u64,
 }
 
 #[derive(Debug, PartialEq)]
 struct ScreenLayoutInputs {
-    dom: u64,
     non_dom: u64,
     viewport: LayoutViewport,
     environment: StyloStyleEnvironment,
@@ -140,11 +140,9 @@ impl ScreenLayoutInputs {
     fn permits_reuse(&self) -> bool {
         // Existing source counters saturate. At exhaustion, rebuilding is
         // preferable to falsely treating different inputs as equal.
-        self.dom != u64::MAX
-            && self
-                .documents
-                .iter()
-                .all(|document| document.stylesheet_sources != u64::MAX)
+        self.documents.iter().all(|document| {
+            document.dom_revision != u64::MAX && document.stylesheet_sources != u64::MAX
+        })
     }
 }
 
@@ -368,6 +366,7 @@ impl PageScriptHost {
                 .dom()
                 .document_element_handle_for_document(document),
             target: self.current_window_document_task_target_for_dispatch_scope(dispatch_scope),
+            dom_revision: self.dom_host().document_layout_version(document),
             stylesheet_sources: self
                 .style_engine
                 .source_set_generation_for_document(document),
@@ -384,7 +383,6 @@ impl PageScriptHost {
                 }),
         );
         Ok(ScreenLayoutInputs {
-            dom: self.dom_host().dom_version(),
             non_dom,
             viewport: self.layout_viewport_for_document(document),
             environment: StyloStyleEnvironment::from_emulated_media(self.emulated_media()),
@@ -463,10 +461,12 @@ impl PageScriptHost {
         let Some(state) = &self.realtime_layout_state else {
             return false;
         };
-        if !state.published.borrow().as_ref().is_some_and(|published| {
-            published.dom == self.dom_host().dom_version()
-                && Some(published.non_dom) == state.non_dom_revision.get()
-        }) {
+        if !state
+            .published
+            .borrow()
+            .as_ref()
+            .is_some_and(|published| Some(published.non_dom) == state.non_dom_revision.get())
+        {
             return false;
         }
         self.screen_layout_inputs(state)

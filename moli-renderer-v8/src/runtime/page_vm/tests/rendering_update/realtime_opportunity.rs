@@ -300,6 +300,71 @@ fn realtime_opportunity_coalesces_changes_and_updates_layout_without_capture() {
 }
 
 #[test]
+fn realtime_geometry_reuses_layout_after_detached_dom_mutations() {
+    run_page_vm_large_stack_async_test("realtime-detached-dom", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.vm_mut()
+            .eval(
+                r#"
+document.body.innerHTML = '<div id="probe" style="width:120px"><div style="height:10px"></div></div>';
+globalThis.detached = document.createElement('div');
+detached.style.cssText = 'width:240px;height:8px;overflow:hidden';
+globalThis.detachedText = detached.appendChild(document.createTextNode('initial'));
+globalThis.scratch = document.createDocumentFragment();
+globalThis.otherDocument = document.implementation.createHTMLDocument('inactive');
+"#,
+            )
+            .unwrap();
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetHeight)").unwrap(),
+            "10"
+        );
+        let passes = page.vm().layout_pass_observability_for_test().1;
+
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    r#"(() => {
+    for (let i = 0; i < 12; ++i) {
+        detached.setAttribute('data-revision', String(i));
+        detached.style.width = (229 + i) + 'px';
+        detachedText.data = String(i);
+        scratch.replaceChildren(document.createElement('span'));
+        otherDocument.body.setAttribute('data-revision', String(i));
+        if (probe.offsetWidth !== 120) throw new Error('unexpected probe width');
+    }
+    return [detached.isConnected, otherDocument.body.isConnected, probe.offsetHeight].join('|');
+})()"#,
+                )
+                .unwrap(),
+            "false|true|10"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+
+        assert_eq!(
+            page.vm_mut()
+                .eval("probe.appendChild(detached); [detached.offsetWidth, probe.offsetHeight].join('|')")
+                .unwrap(),
+            "240|18"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
+
+        assert_eq!(
+            page.vm_mut()
+                .eval("scratch.appendChild(detached); String(probe.offsetHeight)")
+                .unwrap(),
+            "10"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
+    });
+}
+
+#[test]
 fn realtime_synchronous_geometry_keeps_the_opportunity_but_avoids_another_build() {
     run_page_vm_large_stack_async_test("realtime-opportunity-after-getter", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
