@@ -183,7 +183,22 @@ impl RendererOwnerLocalStore {
         let Some(mut vm) = self.staged_auxiliary_pages.remove(&reservation) else {
             return;
         };
-        if let Some(environment) = vm.renderer_page_script_environment() {
+        let environment = vm.renderer_page_script_environment();
+        #[cfg(feature = "molio")]
+        let closed_popup_output = environment.as_ref().and_then(|environment| {
+            let runtime = &vm.runtime_hooks.browser_context_runtime;
+            let window = environment.window_identity().auxiliary_window()?;
+            if runtime.auxiliary_navigation_owner() != Some(AuxiliaryNavigationOwner::Renderer)
+                || !window.is_closed()
+            {
+                return None;
+            }
+            Some((
+                environment.output_journal(),
+                runtime.renderer_output_transport_sender()?,
+            ))
+        });
+        if let Some(environment) = environment {
             environment.close_browsing_context();
         }
         let isolate_reservation = vm.take_renderer_document_isolate_reservation_for_attach();
@@ -197,6 +212,12 @@ impl RendererOwnerLocalStore {
                 reservation.token(),
                 reservation.reservation_id(),
             );
+            #[cfg(feature = "molio")]
+            if let Some((journal, transport)) = closed_popup_output {
+                // Retirement sequences the final publication and stream close.
+                // Deliver accepted child popups even if the parent never had a tab.
+                journal.bind_transport(transport);
+            }
         }
     }
 }

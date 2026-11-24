@@ -1193,9 +1193,31 @@ fn address_target(input: &str) -> Option<url::Url> {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use gpui::{TestAppContext, VisualTestContext, size};
+    use gpui::{TestAppContext, VisualTestContext, WindowHandle, size};
 
     use super::*;
+
+    fn html_url(html: &str) -> String {
+        let html: String = url::form_urlencoded::byte_serialize(html.as_bytes()).collect();
+        format!("data:text/html,{}", html.replace('+', "%20"))
+    }
+
+    fn wait_for_browser(
+        browser: &WindowHandle<BrowserWindow>,
+        cx: &mut VisualTestContext,
+        message: &str,
+        condition: impl Fn(&BrowserWindow) -> bool,
+    ) -> anyhow::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if browser.update(cx, |browser, _, _| condition(browser))? {
+                return Ok(());
+            }
+            anyhow::ensure!(Instant::now() < deadline, "{message}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn blank_popup_content_is_not_covered_by_the_new_tab_page() -> anyhow::Result<()> {
@@ -1213,29 +1235,76 @@ mod tests {
             report.document.title = "Invoice";
             report.document.body.innerHTML = "<h1>Invoice</h1>";
         </script>"#;
-        let html: String = url::form_urlencoded::byte_serialize(html.as_bytes()).collect();
-        let url = format!("data:text/html,{}", html.replace('+', "%20"));
+        let url = html_url(html);
         browser.update(&mut cx, |browser, window, cx| {
             browser.open_address(&url, window, cx);
         })?;
 
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            cx.run_until_parked();
-            if browser.update(&mut cx, |browser, _, _| {
-                browser.tabs.len() == 2
-                    && browser
-                        .current()
-                        .is_some_and(|tab| tab.url() == "about:blank" && tab.title() == "Invoice")
-            })? {
-                break;
-            }
-            anyhow::ensure!(Instant::now() < deadline, "invoice popup did not open");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        wait_for_browser(&browser, &mut cx, "invoice popup did not open", |browser| {
+            browser.tabs.len() == 2
+                && browser
+                    .current()
+                    .is_some_and(|tab| tab.url() == "about:blank" && tab.title() == "Invoice")
+        })?;
 
         cx.update(|window, cx| window.draw(cx).clear(cx));
         assert!(cx.debug_bounds("new-tab-page").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn nested_popup_survives_parent_close_before_adoption() -> anyhow::Result<()> {
+        let (host, events) = BrowserHost::start(None)?;
+        let url = html_url(
+            r#"<script>
+                const parent = window.open("about:blank", "parent");
+                const child = parent.eval('window.open("about:blank", "child")');
+                child.document.title = "Nested child";
+                parent.close();
+                document.title = "Parent closed:" + parent.closed;
+            </script>"#,
+        );
+        let mut app = TestAppContext::single();
+        let browser = app.open_window(size(px(640.), px(480.)), |window, cx| {
+            BrowserWindow::new(Rc::new(host), events, Some(url), window, cx)
+        });
+        let mut cx = VisualTestContext::from_window(browser.into(), &app);
+
+        wait_for_browser(&browser, &mut cx, "parent never closed", |browser| {
+            browser
+                .tabs
+                .iter()
+                .any(|tab| tab.title() == "Parent closed:true")
+        })?;
+        wait_for_browser(
+            &browser,
+            &mut cx,
+            "nested child popup did not open",
+            |browser| {
+                browser.tabs.len() == 2
+                    && browser
+                        .current()
+                        .is_some_and(|tab| tab.title() == "Nested child")
+            },
+        )?;
+        let next = html_url("<title>Child navigated</title>");
+        let child = browser.update(&mut cx, |browser, window, cx| {
+            // Tab IDs are allocated monotonically, including for tabs later closed.
+            assert_eq!(browser.next_id, 3, "the closed parent was attached");
+            let child = browser.active;
+            browser.open_address(&next, window, cx);
+            child
+        })?;
+        wait_for_browser(
+            &browser,
+            &mut cx,
+            "nested child popup did not navigate",
+            |browser| {
+                browser.current().is_some_and(|tab| {
+                    tab.id == child && tab.url() == next && tab.title() == "Child navigated"
+                })
+            },
+        )?;
         Ok(())
     }
 }
