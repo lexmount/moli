@@ -248,15 +248,18 @@ impl PageVm {
         }
     }
 
+    fn viewport_pressed_buttons(&self) -> i32 {
+        self.viewport_frames
+            .as_ref()
+            .and_then(|state| state.pressed_pointer)
+            .map_or(0, |pointer| pointer.buttons)
+    }
+
     pub(super) fn dispatch_viewport_pointer(
         &mut self,
         mut input: RendererViewportPointerInput,
     ) -> anyhow::Result<Option<RendererInputDispatchOutcome>> {
-        if self
-            .viewport_frames
-            .as_ref()
-            .is_none_or(|state| state.pressed_pointer.is_none())
-        {
+        if self.viewport_pressed_buttons() == 0 {
             if input.event == "mouseup" {
                 return Ok(None);
             }
@@ -355,6 +358,8 @@ impl PageVm {
         &mut self,
         input: RendererViewportWheelInput,
     ) -> anyhow::Result<()> {
+        // Wheel input observes the buttons admitted by pointer dispatch.
+        let buttons = self.viewport_pressed_buttons();
         let result = self.dispatch_viewport_mouse(
             RendererViewportPointerInput {
                 document: input.document,
@@ -362,7 +367,7 @@ impl PageVm {
                 position: input.position,
                 event: "wheel",
                 button: -1,
-                buttons: input.buttons,
+                buttons,
                 click_count: 0,
                 modifiers: input.modifiers,
             },
