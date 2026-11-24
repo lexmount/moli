@@ -229,6 +229,13 @@ impl ScriptVm {
     }
 
     #[cfg(feature = "molio")]
+    pub(crate) fn accept_viewport_display_tick(&self, time: std::time::Instant) {
+        self._context_host
+            .borrow()
+            .accept_viewport_display_tick(time);
+    }
+
+    #[cfg(feature = "molio")]
     pub(crate) fn request_viewport_frame(&self) {
         self._context_host
             .borrow()

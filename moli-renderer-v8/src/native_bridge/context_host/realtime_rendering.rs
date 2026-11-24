@@ -6,17 +6,29 @@ use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentOwner, WindowDocum
 use crate::frame_owner_model::FrameDocumentTaskOwner;
 use crate::page_task_queue::RendererPageRenderingUpdateTaskId;
 
-const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+fn realtime_frame_interval(max_fps: u32) -> Option<Duration> {
+    let fps = std::num::NonZeroU32::new(max_fps)?;
+    Some(Duration::from_nanos(
+        1_000_000_000u64.div_ceil(u64::from(fps.get())),
+    ))
+}
 
-fn next_frame_deadline(previous: Option<Instant>, now: Instant) -> Instant {
-    let next = previous.unwrap_or(now) + FRAME_INTERVAL;
+fn next_frame_deadline(
+    previous: Option<Instant>,
+    now: Instant,
+    interval: Option<Duration>,
+) -> Instant {
+    let Some(interval) = interval else {
+        return now;
+    };
+    let next = previous.unwrap_or(now) + interval;
     if now <= next {
         return next;
     }
     // Preserve the active burst's cadence while skipping elapsed ticks in
     // constant time. A tick exactly at `now` is eligible; don't replay any of
     // the earlier opportunities missed by a long script or layout pass.
-    let period = FRAME_INTERVAL.as_nanos();
+    let period = interval.as_nanos();
     let phase = now.duration_since(next).as_nanos() % period;
     now + Duration::from_nanos(((period - phase) % period) as u64)
 }
@@ -54,6 +66,11 @@ pub(super) struct RealtimeFrameState {
     // Realtime-only metadata for an active burst. Idle/canceled/retired work
     // drops the cadence without creating a persistent wake-up source.
     last_deadline: Option<Instant>,
+    max_fps: Option<u32>,
+    #[cfg(feature = "molio")]
+    display_tick: Option<Instant>,
+    #[cfg(feature = "molio")]
+    consumed_display_tick: Option<Instant>,
     source_requested: bool,
     #[cfg(test)]
     now_for_test: Option<Instant>,
@@ -68,6 +85,26 @@ impl RealtimeFrameState {
             return now;
         }
         Instant::now()
+    }
+
+    fn next_frame_deadline(&self) -> Instant {
+        let now = self.sampled_now();
+        #[cfg(feature = "molio")]
+        if let Some(tick) = self.display_tick {
+            if self.consumed_display_tick != Some(tick) {
+                return now;
+            }
+            // Display callbacks can stop during a native resize or occlusion.
+            // Resume timer pacing until the window publishes another tick.
+            let timeout = tick + Duration::from_millis(250);
+            if timeout > now {
+                return timeout;
+            }
+        }
+        let max_fps = self
+            .max_fps
+            .unwrap_or(moli_page_types::DEFAULT_REALTIME_MAX_FPS);
+        next_frame_deadline(self.last_deadline, now, realtime_frame_interval(max_fps))
     }
 
     pub(super) fn is_idle(&self) -> bool {
@@ -205,6 +242,43 @@ impl PageScriptHost {
         self.refresh_realtime_rendering_opportunity();
     }
 
+    #[cfg(feature = "molio")]
+    pub(crate) fn accept_viewport_display_tick(&self, time: Instant) {
+        let Some(state) = &self.realtime_layout_state else {
+            return;
+        };
+        let mut frame = state.frame.borrow_mut();
+        if frame.display_tick.is_some_and(|previous| previous >= time) {
+            return;
+        }
+        frame.display_tick = Some(time);
+        let now = frame.sampled_now();
+        if frame
+            .scheduled()
+            .is_some_and(|scheduled| scheduled.sample_all_intersections && scheduled.deadline > now)
+        {
+            // Replace a timer deadline with this display opportunity.
+            frame.phase = FramePhase::Idle;
+        }
+        drop(frame);
+        self.refresh_realtime_rendering_opportunity();
+    }
+
+    pub(crate) fn set_realtime_max_fps(&self, max_fps: u32) {
+        if let Some(state) = &self.realtime_layout_state {
+            let mut frame = state.frame.borrow_mut();
+            if frame.max_fps != Some(max_fps) {
+                frame.max_fps = Some(max_fps);
+                frame.last_deadline = None;
+                if matches!(frame.phase, FramePhase::Scheduled(_)) {
+                    frame.phase = FramePhase::Idle;
+                }
+            }
+            drop(frame);
+            self.refresh_realtime_rendering_opportunity();
+        }
+    }
+
     /// Reconcile semantic demand with the single deadline residence. rAF
     /// registration/cancellation does not manufacture a layout source change.
     pub(crate) fn refresh_realtime_rendering_opportunity(&self) {
@@ -236,6 +310,11 @@ impl PageScriptHost {
         if !self.document_activity().visible {
             frame.phase = FramePhase::Idle;
             frame.last_deadline = None;
+            #[cfg(feature = "molio")]
+            {
+                frame.display_tick = None;
+                frame.consumed_display_tick = None;
+            }
             return;
         }
         let sample_all_intersections = frame.source_requested
@@ -250,7 +329,7 @@ impl PageScriptHost {
             return;
         }
         let deadline = if sample_all_intersections {
-            let tick = next_frame_deadline(frame.last_deadline, frame.sampled_now());
+            let tick = frame.next_frame_deadline();
             Some(pending.map_or(tick, |pending| tick.min(pending.deadline)))
         } else {
             crate::observer_runtime::next_realtime_intersection_deadline(self)
@@ -360,6 +439,10 @@ impl PageScriptHost {
             documents.first() == Some(&target),
             "rendering root changed before its batch"
         );
+        #[cfg(feature = "molio")]
+        if scheduled.sample_all_intersections {
+            frame.consumed_display_tick = frame.display_tick;
+        }
         frame.phase = FramePhase::Running(RunningRealtimeFrame {
             ticket: (id, target),
             documents,
@@ -499,22 +582,56 @@ mod tests {
     #[test]
     fn next_frame_deadline_accepts_current_ticks_and_skips_elapsed_ticks() {
         let anchor = Instant::now();
-        assert_eq!(next_frame_deadline(None, anchor), anchor + FRAME_INTERVAL);
+        let period = realtime_frame_interval(moli_page_types::DEFAULT_REALTIME_MAX_FPS).unwrap();
+        assert_eq!(period, Duration::from_nanos(16_666_667));
+        assert_eq!(
+            next_frame_deadline(None, anchor, Some(period)),
+            anchor + period
+        );
         for (elapsed, expected) in [
-            (Duration::ZERO, FRAME_INTERVAL),
-            (FRAME_INTERVAL, FRAME_INTERVAL),
-            (FRAME_INTERVAL + Duration::from_nanos(1), FRAME_INTERVAL * 2),
-            (FRAME_INTERVAL * 60_000, FRAME_INTERVAL * 60_000),
-            (
-                FRAME_INTERVAL * 60_000 + Duration::from_nanos(1),
-                FRAME_INTERVAL * 60_001,
-            ),
+            (Duration::ZERO, period),
+            (period, period),
+            (period + Duration::from_nanos(1), period * 2),
+            (period * 60_000, period * 60_000),
+            (period * 60_000 + Duration::from_nanos(1), period * 60_001),
         ] {
             assert_eq!(
-                next_frame_deadline(Some(anchor), anchor + elapsed),
+                next_frame_deadline(Some(anchor), anchor + elapsed, Some(period)),
                 anchor + expected,
                 "elapsed: {elapsed:?}"
             );
         }
+    }
+
+    #[test]
+    fn configured_realtime_frame_interval_supports_high_refresh_and_unlimited() {
+        let now = Instant::now();
+        let fast = realtime_frame_interval(120);
+        assert_eq!(fast, Some(Duration::from_nanos(8_333_334)));
+        assert_eq!(next_frame_deadline(None, now, fast), now + fast.unwrap());
+        assert_eq!(
+            next_frame_deadline(Some(now), now, realtime_frame_interval(0)),
+            now
+        );
+    }
+
+    #[cfg(feature = "molio")]
+    #[test]
+    fn viewport_display_clock_consumes_each_tick_once_and_resumes_timer_pacing() {
+        let tick = Instant::now();
+        let mut frame = RealtimeFrameState {
+            now_for_test: Some(tick),
+            display_tick: Some(tick),
+            ..Default::default()
+        };
+        assert_eq!(frame.next_frame_deadline(), tick);
+        frame.consumed_display_tick = Some(tick);
+        let fallback = tick + Duration::from_millis(250);
+        assert_eq!(frame.next_frame_deadline(), fallback);
+        frame.now_for_test = Some(fallback);
+        assert_eq!(
+            frame.next_frame_deadline(),
+            fallback + Duration::from_nanos(16_666_667)
+        );
     }
 }

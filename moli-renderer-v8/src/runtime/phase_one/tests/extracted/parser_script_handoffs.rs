@@ -357,6 +357,7 @@ fn external_async_handoff_marks_parser_stream_already_started_on_live_backend() 
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -480,6 +481,7 @@ fn blocking_classic_handoff_registers_parser_owned_handle_on_live_backend() {
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -613,6 +615,7 @@ fn non_async_post_parse_handoff_registers_pending_before_source_and_seals_withou
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -781,6 +784,7 @@ fn parser_owned_external_module_handoff_starts_pending_script_tree_root_fetch() 
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -1095,6 +1099,7 @@ fn parser_owned_inline_importmap_handoff_registers_parser_owned_handle_on_live_b
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -1259,6 +1264,7 @@ fn parser_owner_style_import_handoff_is_stylesheet_gated_on_live_page_vm() {
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,

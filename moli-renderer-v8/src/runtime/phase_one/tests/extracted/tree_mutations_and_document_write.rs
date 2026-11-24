@@ -1151,6 +1151,7 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,

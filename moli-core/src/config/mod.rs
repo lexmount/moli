@@ -88,6 +88,11 @@ impl BrowserConfig {
         self
     }
 
+    /// Sets the maximum realtime timer cadence. Zero renders when work is ready.
+    pub fn set_realtime_max_fps(&mut self, max_fps: u32) {
+        self.layout_configuration.realtime_max_fps = max_fps;
+    }
+
     pub fn scrollbars_hidden(&self) -> bool {
         self.layout_configuration.scrollbars_hidden
     }

@@ -59,7 +59,7 @@ impl PageVm {
             inherited_security_token,
         )
         .map_err(|error| error.0)?;
-        vm.set_layout_policy(env.layout_configuration.policy);
+        vm.set_layout_configuration(env.layout_configuration);
         vm.set_scrollbars_hidden(
             env.layout_configuration
                 .scrollbars_hidden_for(env.document_settings.scrollbars_hidden),
@@ -140,7 +140,7 @@ impl PageVm {
         self.layout_configuration = env.layout_configuration;
         self.wpt_extensions_enabled = env.wpt_extensions_enabled;
         self.vm_mut()
-            .set_layout_policy(env.layout_configuration.policy);
+            .set_layout_configuration(env.layout_configuration);
         self.vm_mut()
             .set_wpt_extensions_enabled(env.wpt_extensions_enabled)?;
         self.restore_runtime_inspector_sessions_on_named_owner_lane(

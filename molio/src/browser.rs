@@ -1224,7 +1224,7 @@ mod tests {
 
     #[test]
     fn blank_popup_content_is_not_covered_by_the_new_tab_page() -> anyhow::Result<()> {
-        let (host, events) = BrowserHost::start(None)?;
+        let (host, events) = BrowserHost::start(None, None)?;
         let mut app = TestAppContext::single();
         let browser = app.open_window(size(px(640.), px(480.)), |window, cx| {
             BrowserWindow::new(Rc::new(host), events, None, window, cx)
@@ -1257,7 +1257,7 @@ mod tests {
 
     #[test]
     fn nested_popup_survives_parent_close_before_adoption() -> anyhow::Result<()> {
-        let (host, events) = BrowserHost::start(None)?;
+        let (host, events) = BrowserHost::start(None, None)?;
         let url = html_url(
             r#"<script>
                 const parent = window.open("about:blank", "parent");

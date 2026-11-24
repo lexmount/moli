@@ -1,5 +1,12 @@
 use std::{
-    cell::RefCell, fs, future::pending, path::PathBuf, rc::Rc, sync::Arc, thread, time::Duration,
+    cell::RefCell,
+    fs,
+    future::pending,
+    path::PathBuf,
+    rc::Rc,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, Result};
@@ -25,6 +32,7 @@ use crate::downloads::{DownloadClient, Downloads};
 
 pub struct BrowserHost {
     tabs: mpsc::UnboundedSender<OpenTab>,
+    follow_display: bool,
     pub downloads: DownloadClient,
     worker: RefCell<Option<(oneshot::Sender<()>, thread::JoinHandle<()>)>>,
 }
@@ -38,6 +46,7 @@ pub struct TabConnection {
     pub commands: mpsc::UnboundedSender<TabCommand>,
     pub state: watch::Receiver<TabState>,
     pub viewport: Arc<ViewportOutput>,
+    pub display_ticks: Option<watch::Sender<(u64, Instant)>>,
     pub window_identity: RendererPageWindowIdentity,
 }
 
@@ -118,6 +127,7 @@ struct OpenTab {
     commands: mpsc::UnboundedReceiver<TabCommand>,
     state: watch::Sender<TabState>,
     viewport: Arc<ViewportOutput>,
+    display_ticks: Option<watch::Receiver<(u64, Instant)>>,
     page: TabPage,
 }
 
@@ -129,16 +139,18 @@ enum TabPage {
 impl BrowserHost {
     pub fn start(
         profile: Option<PathBuf>,
+        max_fps: Option<u32>,
     ) -> Result<(Self, mpsc::UnboundedReceiver<BrowserEvent>)> {
         let directory = dirs::download_dir()
             .or_else(|| dirs::home_dir().map(|home| home.join("Downloads")))
             .unwrap_or_else(|| std::env::temp_dir().join("molio-downloads"));
-        Self::start_with_download_directory(profile, directory)
+        Self::start_with_download_directory(profile, directory, max_fps)
     }
 
     fn start_with_download_directory(
         profile: Option<PathBuf>,
         directory: PathBuf,
+        max_fps: Option<u32>,
     ) -> Result<(Self, mpsc::UnboundedReceiver<BrowserEvent>)> {
         let (sender, mut requests) = mpsc::unbounded_channel::<OpenTab>();
         let (events, event_rx) = mpsc::unbounded_channel();
@@ -165,6 +177,9 @@ impl BrowserHost {
                         .with_optional_resource_fetch_mask(
                             OptionalResourceFetchMask::IMAGE | OptionalResourceFetchMask::FONT,
                         );
+                    if let Some(max_fps) = max_fps {
+                        config.set_realtime_max_fps(max_fps);
+                    }
                     config.set_profile_dir(profile.clone());
                     let browser = match Browser::new(config) {
                         Ok(browser) => browser,
@@ -227,6 +242,7 @@ impl BrowserHost {
         Ok((
             Self {
                 tabs: sender,
+                follow_display: max_fps.is_none(),
                 downloads: client,
                 worker: RefCell::new(Some((shutdown, worker))),
             },
@@ -262,11 +278,18 @@ impl BrowserHost {
         let (commands, request_rx) = mpsc::unbounded_channel();
         let (state_tx, state) = watch::channel(TabState::default());
         let viewport = Arc::new(ViewportOutput::default());
+        let (display_ticks, display_rx) = if self.follow_display {
+            let (tx, rx) = watch::channel((0, Instant::now()));
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
         self.tabs
             .send(OpenTab {
                 commands: request_rx,
                 state: state_tx,
                 viewport: viewport.clone(),
+                display_ticks: display_rx,
                 page,
             })
             .map_err(|_| anyhow::anyhow!("browser host is unavailable"))?;
@@ -274,6 +297,7 @@ impl BrowserHost {
             commands,
             state,
             viewport,
+            display_ticks,
             window_identity,
         })
     }
@@ -403,6 +427,17 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                 if let Some(icon) = icon {
                     tab.state.send_modify(|state| state.favicon = Some(icon));
                 }
+            }
+            tick = async {
+                if let Some(clock) = &mut tab.display_ticks
+                    && clock.changed().await.is_ok()
+                {
+                    return *clock.borrow_and_update();
+                }
+                pending().await
+            }, if activity.visible && capture.is_some() => {
+                let (revision, time) = tick;
+                let _ = page.viewport_display_tick(revision, time).await;
             }
             event = next_viewport_update(&mut capture) => match event {
                 Some(ViewportUpdate::StateChanged) => {
@@ -728,7 +763,7 @@ mod tests {
     async fn large_data_download_keeps_cross_tab_download_delivery_available() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let (host, _events) =
-            BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+            BrowserHost::start_with_download_directory(None, directory.path().to_owned(), None)?;
         let mut entries = host.downloads.entries.clone();
         let data_tab = host.open_tab()?;
         navigate(
@@ -769,7 +804,7 @@ mod tests {
     async fn http_downloads_use_the_effective_link_referrer_policy() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let (host, _events) =
-            BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+            BrowserHost::start_with_download_directory(None, directory.path().to_owned(), None)?;
         let mut entries = host.downloads.entries.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let origin = format!("http://{}", listener.local_addr()?);
@@ -829,7 +864,7 @@ mod tests {
     async fn background_navigation_download_works_without_a_viewport_subscription() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let (host, _events) =
-            BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+            BrowserHost::start_with_download_directory(None, directory.path().to_owned(), None)?;
         let mut tab = host.open_tab()?;
         let mut entries = host.downloads.entries.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -888,7 +923,7 @@ mod tests {
     async fn attachment_download_survives_tab_close_and_blob_does_not_overwrite_it() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let (host, _events) =
-            BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+            BrowserHost::start_with_download_directory(None, directory.path().to_owned(), None)?;
         let tab = host.open_tab()?;
         let mut entries = host.downloads.entries.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -966,7 +1001,7 @@ mod tests {
     async fn canceling_a_download_removes_the_partial_file() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let (host, _events) =
-            BrowserHost::start_with_download_directory(None, directory.path().to_owned())?;
+            BrowserHost::start_with_download_directory(None, directory.path().to_owned(), None)?;
         let (_tab, entry, server) = start_stalled_download(&host).await?;
         let mut entries = host.downloads.entries.clone();
         host.downloads.send(DownloadCommand::Cancel(entry.id));
@@ -988,8 +1023,11 @@ mod tests {
         let root = tempfile::tempdir()?;
         let profile = root.path().join("profile");
         let directory = root.path().join("downloads");
-        let (host, _events) =
-            BrowserHost::start_with_download_directory(Some(profile.clone()), directory.clone())?;
+        let (host, _events) = BrowserHost::start_with_download_directory(
+            Some(profile.clone()),
+            directory.clone(),
+            None,
+        )?;
         let finished_tab = host.open_tab()?;
         let mut entries = host.downloads.entries.clone();
         navigate(
@@ -1012,7 +1050,7 @@ mod tests {
         assert_eq!(fs::read(directory.join("done.txt"))?, b"done");
         assert_eq!(fs::read_dir(&directory)?.count(), 1);
         let (restored, _restored_events) =
-            BrowserHost::start_with_download_directory(Some(profile), directory)?;
+            BrowserHost::start_with_download_directory(Some(profile), directory, None)?;
         let mut entries = restored.downloads.entries.clone();
         let canceled = download_matching(&mut entries, |entry| entry.name == "slow.dat").await?;
         assert!(matches!(canceled.state, DownloadState::Canceled));
@@ -1148,7 +1186,7 @@ mod tests {
 
     #[tokio::test]
     async fn tabs_keep_their_documents_and_present_bgra_at_the_requested_scale() -> Result<()> {
-        let (host, _events) = BrowserHost::start(None)?;
+        let (host, _events) = BrowserHost::start(None, None)?;
         let (mut red, mut blue) = (host.open_tab()?, host.open_tab()?);
         red.commands
             .send(TabCommand::Navigate(Some(
@@ -1184,7 +1222,7 @@ mod tests {
 
     #[tokio::test]
     async fn viewport_resize_uses_the_pointer_position_for_its_revision() -> Result<()> {
-        let (host, _events) = BrowserHost::start(None)?;
+        let (host, _events) = BrowserHost::start(None, None)?;
         let mut tab = host.open_tab()?;
         let html = concat!(
             "data:text/html,<title>Cursor</title><style>",
@@ -1277,7 +1315,7 @@ mod tests {
             }
         });
 
-        let (host, _events) = BrowserHost::start(None)?;
+        let (host, _events) = BrowserHost::start(None, None)?;
         let mut tab = host.open_tab()?;
 
         for (path, title, pixel) in [
@@ -1369,7 +1407,7 @@ mod tests {
 
     #[tokio::test]
     async fn blank_target_click_adopts_a_separate_tab() -> Result<()> {
-        let (host, mut events) = BrowserHost::start(None)?;
+        let (host, mut events) = BrowserHost::start(None, None)?;
         let mut opener = host.open_tab()?;
         opener.commands.send(TabCommand::Navigate(Some(
             "data:text/html,<title>Videos</title><style>html{background:red}body{margin:0}a{display:block;width:36px;height:24px}</style><a target=_blank href='about:blank%23video'>Video</a>".into(),
@@ -1420,7 +1458,7 @@ mod tests {
     #[tokio::test]
     async fn popup_adoption_keeps_the_fragment_set_by_the_opening_script() -> Result<()> {
         let (base, _requests) = popup_fixture().await?;
-        let (host, mut events) = BrowserHost::start(None)?;
+        let (host, mut events) = BrowserHost::start(None, None)?;
         let mut opener = host.open_tab()?;
         opener
             .commands
@@ -1611,7 +1649,7 @@ mod tests {
     #[tokio::test]
     async fn popup_navigations_preserve_source_and_initial_window() -> Result<()> {
         let (base, mut requests) = popup_fixture().await?;
-        let (host, mut events) = BrowserHost::start(None)?;
+        let (host, mut events) = BrowserHost::start(None, None)?;
         let source = format!("{base}/source");
         let mut opener = host.open_tab()?;
         opener
@@ -1668,7 +1706,7 @@ mod tests {
     #[tokio::test]
     async fn reused_popup_applies_navigation_event_cancellation_and_interception() -> Result<()> {
         let (base, mut requests) = popup_fixture().await?;
-        let (host, mut events) = BrowserHost::start(None)?;
+        let (host, mut events) = BrowserHost::start(None, None)?;
         let source = format!("{base}/event-source");
         let mut opener = host.open_tab()?;
         opener
@@ -1728,7 +1766,7 @@ mod tests {
     #[tokio::test]
     async fn background_popup_updates_metadata_through_redirect_and_script() -> Result<()> {
         let (base, mut requests) = popup_fixture().await?;
-        let (host, mut events) = BrowserHost::start(None)?;
+        let (host, mut events) = BrowserHost::start(None, None)?;
         let mut opener = host.open_tab()?;
         opener
             .commands

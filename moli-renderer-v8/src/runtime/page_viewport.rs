@@ -576,6 +576,17 @@ impl PageVm {
         self.wake_viewport_frames();
     }
 
+    pub(super) fn accept_viewport_display_tick(&self, revision: u64, time: std::time::Instant) {
+        if self.document_settings.document_activity.visible
+            && self
+                .viewport_frames
+                .as_ref()
+                .is_some_and(|state| state.subscription.viewport_revision == revision)
+        {
+            self.vm().accept_viewport_display_tick(time);
+        }
+    }
+
     pub(super) fn wake_viewport_frames(&mut self) {
         if self
             .viewport_frames

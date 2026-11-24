@@ -36,6 +36,7 @@ fn default_runtime_hooks_reject_direct_no_owner_page_vm_construction() {
             layout_configuration: moli_page_types::LayoutConfiguration {
                 policy: crate::real_layout_test_policy(),
                 scrollbars_hidden: false,
+                ..Default::default()
             },
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
