@@ -119,7 +119,7 @@ pub(in crate::native_bridge) fn textarea_value_setter_function<'s>(
     else {
         return;
     };
-    let next_value = normalize_textarea_api_value(&next_value);
+    let next_value = normalize_textarea_api_value(next_value);
     let previous_value = text_control_value(unsafe { &*runtime_ptr }, handle);
     let runtime = unsafe { &mut *runtime_ptr };
     let _ = runtime.set_input_value(handle, &next_value);

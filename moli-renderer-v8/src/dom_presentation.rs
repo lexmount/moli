@@ -1,6 +1,8 @@
 //! DOM text and attribute projections shared by resource discovery and rendering.
 //! These helpers do not build layout boxes or query geometry.
 
+use std::borrow::Cow;
+
 use moli_layout::{
     ChildBoxPolicy, LayoutDisplay, LayoutElementCategory, LayoutFormControlData,
     LayoutFormControlKind, LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace,
@@ -122,10 +124,14 @@ pub(crate) fn textarea_value_from_dom(
     } else {
         host.dom().direct_text_content(node).unwrap_or_default()
     };
-    normalize_textarea_api_value(&value)
+    normalize_textarea_api_value(value).into_owned()
 }
 
-pub(crate) fn normalize_textarea_api_value(value: &str) -> String {
+pub(crate) fn normalize_textarea_api_value<'a>(value: impl Into<Cow<'a, str>>) -> Cow<'a, str> {
+    let value = value.into();
+    if !value.as_bytes().contains(&b'\r') {
+        return value;
+    }
     let mut output = String::with_capacity(value.len());
     let mut chars = value.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -138,7 +144,7 @@ pub(crate) fn normalize_textarea_api_value(value: &str) -> String {
             output.push(ch);
         }
     }
-    output
+    Cow::Owned(output)
 }
 
 pub(crate) fn form_control_data(

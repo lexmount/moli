@@ -1,4 +1,5 @@
 use crate::dom::native::{DomHost, NodeType};
+use crate::dom_presentation::normalize_textarea_api_value;
 use moli_dom::forms::{InputType, MeterElementValues, MeterGaugeRegion};
 use moli_page_types::{
     DocumentNodeAttributeSnapshot, DocumentNodeInspectorIdentity, DocumentNodeSnapshot,
@@ -176,7 +177,7 @@ fn full_user_agent_shadow_root_snapshot(
         };
         (
             TEXTAREA_CONTROL_TREE_KIND,
-            normalize_textarea_api_value(&value),
+            normalize_textarea_api_value(value).into_owned(),
         )
     } else {
         return None;
@@ -1348,22 +1349,6 @@ fn inspector_state_fingerprint(value: &str) -> u64 {
         .fold(0xcbf2_9ce4_8422_2325, |fingerprint, byte| {
             (fingerprint ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
         })
-}
-
-fn normalize_textarea_api_value(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\r' {
-            if chars.peek() == Some(&'\n') {
-                let _ = chars.next();
-            }
-            output.push('\n');
-        } else {
-            output.push(ch);
-        }
-    }
-    output
 }
 
 fn textarea_editor_children(
