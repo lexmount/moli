@@ -39,9 +39,8 @@ use measurement::FullMeasurementTree;
 
 pub(crate) struct PreparedWorldLayout {
     positioned_static_sources: Vec<PositionedStaticSource>,
+    // Post-layout adapters change box geometry before the next feedback pass.
     numeric_unrounded_layouts: Vec<Layout>,
-    numeric_viewport_layout: Layout,
-    numeric_fixed_viewport_layout: Option<Layout>,
     feedback_invalidation_marks: Vec<bool>,
     feedback_invalidation_worklist: Vec<LayoutBoxId>,
 }
@@ -63,12 +62,6 @@ impl PreparedWorldLayout {
         {
             layout_box.unrounded_layout = layout;
         }
-        world.viewport_layout.unrounded_layout = self.numeric_viewport_layout;
-        if let Some(layout) = world.fixed_viewport_layout.as_deref_mut() {
-            layout.unrounded_layout = self
-                .numeric_fixed_viewport_layout
-                .expect("prepared layout has a fixed viewport");
-        }
     }
 
     fn capture_numeric_geometry<N>(&mut self, world: &LayoutWorld<N>)
@@ -82,11 +75,6 @@ impl PreparedWorldLayout {
                 .iter()
                 .map(|layout_box| layout_box.unrounded_layout),
         );
-        self.numeric_viewport_layout = world.viewport_layout.unrounded_layout;
-        self.numeric_fixed_viewport_layout = world
-            .fixed_viewport_layout
-            .as_deref()
-            .map(|layout| layout.unrounded_layout);
     }
 
     /// Clears only the cache entries on changed scrollbar boxes and their
@@ -168,7 +156,6 @@ where
     world.viewport_layout.children.clear();
     world.viewport_layout.cache.clear();
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
-    world.viewport_layout.final_layout = Layout::with_order(0);
     world.fixed_viewport_layout = None;
     let separate_fixed_viewport =
         viewport.frame_size() != (viewport.css_width, viewport.css_height);
@@ -178,8 +165,6 @@ where
     let mut prepared = PreparedWorldLayout {
         positioned_static_sources,
         numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
-        numeric_viewport_layout: Layout::with_order(0),
-        numeric_fixed_viewport_layout: None,
         feedback_invalidation_marks: vec![false; world.boxes.len()],
         feedback_invalidation_worklist: Vec::new(),
     };
@@ -1998,15 +1983,15 @@ where
     }
 
     fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout) {
-        if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
-            viewport.final_layout = *layout;
-        } else {
-            let id = LayoutBoxId::from_taffy(node_id);
-            if self.boxes[id.index()].final_layout != *layout {
-                self.record_numeric_layout_touch(id);
-            }
-            self.boxes[id.index()].final_layout = *layout;
+        if self.is_viewport_taffy_node(node_id) {
+            // Viewport nodes provide the rounding origin for their children.
+            return;
         }
+        let id = LayoutBoxId::from_taffy(node_id);
+        if self.boxes[id.index()].final_layout != *layout {
+            self.record_numeric_layout_touch(id);
+        }
+        self.boxes[id.index()].final_layout = *layout;
     }
 }
 

@@ -832,18 +832,6 @@ struct LiveRuntimeDomHost {
 }
 
 impl LiveRuntimeDomHost {
-    fn resolve_viewport_surface(
-        &self,
-        surface: crate::protocol_types::ViewportSurface,
-    ) -> crate::protocol_types::ViewportSurface {
-        if surface.mobile_viewport().is_none() {
-            return surface;
-        }
-        let host = self.borrow();
-        let content = host.document_meta_content_for_document(host.document_handle(), "viewport");
-        mobile_viewport::resolve(surface, content)
-    }
-
     fn style_viewport(&self) -> crate::style_engine::StyleViewport {
         self.viewport_surface
             .get()

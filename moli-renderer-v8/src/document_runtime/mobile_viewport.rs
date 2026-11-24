@@ -1,6 +1,8 @@
 use moli_page_types::ViewportSurface;
 
-pub(super) fn resolve(mut surface: ViewportSurface, content: Option<&str>) -> ViewportSurface {
+use super::DomHost;
+
+pub(super) fn resolve(host: &DomHost, mut surface: ViewportSurface) -> ViewportSurface {
     let Some(emulation) = surface.emulated_view.as_mut() else {
         return surface;
     };
@@ -14,7 +16,7 @@ pub(super) fn resolve(mut surface: ViewportSurface, content: Option<&str>) -> Vi
     let mut initial_scale = None;
     let mut minimum_scale = 0.25_f64;
     let mut maximum_scale = 5.0_f64;
-    for (name, value) in viewport_directives(content.unwrap_or_default()) {
+    for (name, value) in viewport_directives(viewport_content(host).unwrap_or_default()) {
         match name.to_ascii_lowercase().as_str() {
             "width" => width = device_length(value, device_width, device_height),
             "initial-scale" => initial_scale = scale_value(value),
@@ -70,6 +72,23 @@ pub(super) fn resolve(mut surface: ViewportSurface, content: Option<&str>) -> Vi
     view.width = f64::from(visual_width);
     view.height = f64::from(visual_height);
     surface
+}
+
+fn viewport_content(host: &DomHost) -> Option<&str> {
+    let head = host.document_head_handle()?;
+    host.child_handles(head)
+        .filter_map(|node| {
+            let meta = host.node(node)?.as_element()?;
+            if !meta.is_html_element("meta")
+                || !meta
+                    .attribute_ns("", "name")?
+                    .eq_ignore_ascii_case("viewport")
+            {
+                return None;
+            }
+            meta.attribute_ns("", "content")
+        })
+        .last()
 }
 
 fn viewport_directives(mut content: &str) -> impl Iterator<Item = (&str, &str)> {

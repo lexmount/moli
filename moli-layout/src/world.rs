@@ -285,7 +285,6 @@ pub(crate) struct ViewportLayoutState {
     pub(crate) style: Style<Atom>,
     pub(crate) cache: Cache,
     pub(crate) unrounded_layout: Layout,
-    pub(crate) final_layout: Layout,
 }
 
 /// CSS box whose overflow supplies the viewport scrolling mechanism.
@@ -546,7 +545,6 @@ impl Default for ViewportLayoutState {
             style: Style::default(),
             cache: Cache::new(),
             unrounded_layout: Layout::with_order(0),
-            final_layout: Layout::with_order(0),
         }
     }
 }
