@@ -1262,6 +1262,78 @@ fn discarded_root_pseudo_cannot_cache_lengths_using_the_old_root_font_size() {
 }
 
 #[test]
+fn root_relative_units_follow_the_document_root_line_height_and_font() {
+    let url = "https://root-relative-units.test/";
+    let markup = r#"<!doctype html>
+    <style>
+      html { font: 20px/1.5 Ahem; }
+      html::before { content: ""; }
+      html::before, .probe {
+        display: block;
+        font: 7px/9px monospace;
+        width: 2rch;
+        height: 2rlh;
+      }
+    </style>
+    <div class="probe"></div>"#;
+    let measure = r#"(() => {
+        const before = getComputedStyle(document.documentElement, '::before');
+        const probe = getComputedStyle(document.querySelector('.probe'));
+        return [before.width, before.height, probe.width, probe.height].join('|');
+    })()"#;
+
+    let mut vm = new_parsed_test_vm(url, markup);
+    assert_eq!(vm.eval(measure).unwrap(), "40px|60px|40px|60px");
+
+    vm.eval("document.documentElement.style.lineHeight = '40px'")
+        .unwrap();
+    assert_eq!(vm.eval(measure).unwrap(), "40px|80px|40px|80px");
+
+    vm.eval("document.documentElement.style.fontFamily = 'monospace'")
+        .unwrap();
+    assert_eq!(vm.eval(measure).unwrap(), "20px|80px|20px|80px");
+    vm.eval("document.documentElement.style.lineHeight = 'normal'")
+        .unwrap();
+    assert_eq!(
+        vm.eval("parseFloat(getComputedStyle(document.querySelector('.probe')).height) > 0")
+            .unwrap(),
+        "true"
+    );
+    drop(vm);
+
+    let mut vm = new_rendered_test_vm(url, markup);
+    assert_eq!(vm.eval(measure).unwrap(), "40px|60px|40px|60px");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+                const {width, height} = document.querySelector('.probe').getBoundingClientRect();
+                return [width, height].join('|');
+            })()"#
+        )
+        .unwrap(),
+        "40|60"
+    );
+
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        ..Default::default()
+    }))
+    .unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+                document.body.insertAdjacentHTML('beforeend', '<div id="new-probe" class="probe"></div>');
+                const style = getComputedStyle(document.getElementById('new-probe'));
+                return [style.width, style.height].join('|');
+            })()"#
+        )
+        .unwrap(),
+        "40px|60px"
+    );
+}
+
+#[test]
 fn held_main_document_computed_styles_follow_repeated_viewport_surface_changes() {
     let mut vm = new_storage_test_vm("https://held-main-viewport-units.test/");
     let surface = |inner_width, inner_height| crate::protocol_types::ViewportSurface {
