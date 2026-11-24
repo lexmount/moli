@@ -89,6 +89,80 @@ async fn lazy_images_keep_their_load_behavior_when_loading_changes() -> Result<(
 }
 
 #[tokio::test]
+async fn loading_became_eager_before_image_update_delays_window_load() -> Result<()> {
+    let mut server = ImageServer::spawn(
+        r#"<!doctype html>
+        <img id="blocker" src="/blocker.svg">
+        <script>
+          const events = [];
+          function trackLoad(image, name) {
+            return new Promise(resolve => image.onload = () => {
+              events.push(name);
+              resolve(true);
+            });
+          }
+          const blockerLoaded = trackLoad(document.getElementById('blocker'), 'blocker');
+          const windowLoaded = new Promise(resolve => addEventListener('load', () => {
+            events.push('window');
+            resolve(events.slice());
+          }, {once: true}));
+
+          function makeImage(name, connected) {
+            const image = new Image(4, 4);
+            const loaded = trackLoad(image, name);
+            if (connected) document.body.append(image);
+            image.loading = 'lazy';
+            image.src = '/' + name + '.svg';
+            image.loading = 'eager';
+            if (!connected) document.body.append(image);
+            return loaded;
+          }
+          const detachedLoaded = makeImage('detached', false);
+          const connectedLoaded = makeImage('connected', true);
+
+          const resumed = new Image(4, 4);
+          const resumedLoaded = trackLoad(resumed, 'resumed');
+          resumed.style.marginTop = '8000px';
+          resumed.loading = 'lazy';
+          resumed.src = '/resumed.svg';
+          document.body.append(resumed);
+          queueMicrotask(() => { resumed.loading = 'eager'; });
+        </script>"#,
+        "",
+    )
+    .await?;
+    let (_browser, mut page) = server.open_page().await?;
+    let mut requests = server
+        .wait_for_images(&[
+            "/blocker.svg",
+            "/detached.svg",
+            "/connected.svg",
+            "/resumed.svg",
+        ])
+        .await?;
+
+    finish_image(requests.remove("/blocker.svg").unwrap(), true).await?;
+    assert_eq!(evaluate(&mut page, "blockerLoaded").await?, json!(true));
+    assert_eq!(
+        evaluate(&mut page, "[document.readyState, events]").await?,
+        json!(["interactive", ["blocker"]])
+    );
+
+    finish_image(requests.remove("/detached.svg").unwrap(), true).await?;
+    assert_eq!(evaluate(&mut page, "detachedLoaded").await?, json!(true));
+    finish_image(requests.remove("/connected.svg").unwrap(), true).await?;
+    assert_eq!(evaluate(&mut page, "connectedLoaded").await?, json!(true));
+    assert_eq!(
+        evaluate(&mut page, "windowLoaded").await?,
+        json!(["blocker", "detached", "connected", "window"])
+    );
+
+    finish_image(requests.remove("/resumed.svg").unwrap(), true).await?;
+    assert_eq!(evaluate(&mut page, "resumedLoaded").await?, json!(true));
+    Ok(())
+}
+
+#[tokio::test]
 async fn script_disabled_document_load_waits_for_offscreen_lazy_image() -> Result<()> {
     let mut server = ImageServer::spawn(
         r#"<!doctype html>

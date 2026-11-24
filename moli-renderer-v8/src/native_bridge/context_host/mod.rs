@@ -736,6 +736,16 @@ pub(crate) enum PendingImageLoadEventOwner {
     Child(FrameDocumentImageLoadEventBinding),
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum LazyImageUpdate {
+    Queued {
+        id: ImageLoadEventId,
+        request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+        after_document_adoption: bool,
+    },
+    Deferred,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PendingImageLoadEvent {
     id: ImageLoadEventId,
@@ -988,6 +998,7 @@ pub(crate) struct PageScriptHost {
         Option<Box<intersection_observer_tasks::IntersectionObserverTaskState>>,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
+    pub(super) lazy_image_updates: HashMap<DomHandle, (DomHandle, LazyImageUpdate)>,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
     next_image_load_event_id: u64,
     pending_media_load_sequences: HashMap<DomHandle, PendingMediaLoadSequence>,
