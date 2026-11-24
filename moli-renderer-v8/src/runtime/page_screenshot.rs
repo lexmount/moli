@@ -2,10 +2,10 @@
 
 use crate::layout_renderer::layout_viewport_for_surface;
 use crate::native_bridge::LayoutPublicationRequest;
-use crate::style_engine::StyloStyleEnvironment;
+use moli_action_window::ActionBarrier;
 use moli_layout::{
-    LayoutRect, LayoutTransform2D, PaintCaptureRegion, PaintCaptureRequest, PaintCaptureSurface,
-    PaintViewport,
+    LayoutFlushReason, LayoutRect, LayoutTransform2D, PaintCaptureRegion, PaintCaptureRequest,
+    PaintCaptureSurface, PaintViewport,
 };
 use moli_page_types::{LayoutPolicy, ViewportSurface};
 use std::sync::Arc;
@@ -255,9 +255,13 @@ impl PageVm {
         &mut self,
         request: RendererCaptureScreenshotRequest,
     ) -> anyhow::Result<RendererCaptureScreenshotReply> {
-        let barrier = match request.purpose {
-            RendererScreenshotPurpose::Screenshot => moli_action_window::ActionBarrier::Screenshot,
-            RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
+        let (barrier, reason) = match request.purpose {
+            RendererScreenshotPurpose::Screenshot => {
+                (ActionBarrier::Screenshot, LayoutFlushReason::Screenshot)
+            }
+            RendererScreenshotPurpose::Print { .. } => {
+                (ActionBarrier::Explicit, LayoutFlushReason::Print)
+            }
         };
         if !self.vm().is_debugger_paused() {
             self.flush_page_action_window(barrier)?;
@@ -269,18 +273,7 @@ impl PageVm {
         }
         let capture = self.prepare_image_capture(
             paint_capture,
-            match request.purpose {
-                RendererScreenshotPurpose::Screenshot => moli_layout::LayoutFlushReason::Screenshot,
-                RendererScreenshotPurpose::Print { .. } => moli_layout::LayoutFlushReason::Print,
-            },
-            match request.purpose {
-                RendererScreenshotPurpose::Screenshot => LayoutPublicationRequest::Screen,
-                RendererScreenshotPurpose::Print { .. } => LayoutPublicationRequest::Transient,
-            },
-            match request.purpose {
-                RendererScreenshotPurpose::Screenshot => None,
-                RendererScreenshotPurpose::Print { .. } => self.print_style_environment_override(),
-            },
+            reason,
             #[cfg(feature = "devtools")]
             None,
         )?;
@@ -336,7 +329,7 @@ impl PageVm {
         use RendererDevToolsPageReply::CaptureScreencastFrame;
         let debugger_paused = self.vm().is_debugger_paused();
         if !debugger_paused {
-            self.flush_page_action_window(moli_action_window::ActionBarrier::Screencast)?;
+            self.flush_page_action_window(ActionBarrier::Screencast)?;
         }
         if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(CaptureScreencastFrame(LayoutDisabled));
@@ -381,9 +374,7 @@ impl PageVm {
         });
         let Some(capture) = self.prepare_image_capture(
             paint_capture,
-            moli_layout::LayoutFlushReason::Screencast,
-            LayoutPublicationRequest::Screen,
-            None,
+            LayoutFlushReason::Screencast,
             paint_session,
         )?
         else {
@@ -429,15 +420,14 @@ impl PageVm {
     fn prepare_image_capture(
         &mut self,
         mut paint_capture: PaintCaptureRequest,
-        reason: moli_layout::LayoutFlushReason,
-        publication: LayoutPublicationRequest,
-        environment_override: Option<StyloStyleEnvironment>,
+        reason: LayoutFlushReason,
         #[cfg(feature = "devtools")] paint_session: Option<&super::RendererScreencastPaintSession>,
     ) -> anyhow::Result<Option<PreparedImageCapture>> {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(Instant::now);
         use moli_page_types::VisionDeficiency;
-        let deficiency = if reason == moli_layout::LayoutFlushReason::Print {
+        let is_print = reason == LayoutFlushReason::Print;
+        let deficiency = if is_print {
             VisionDeficiency::None
         } else {
             self.document_settings.emulated_media.vision_deficiency
@@ -447,11 +437,19 @@ impl PageVm {
                 vision::BLURRED_VISION_SIGMA_CSS_PX * moli_image::GAUSSIAN_BLUR_OUTSET;
         }
         let surface = self.vm().viewport_surface().unwrap_or_default();
-        let viewport = if reason == moli_layout::LayoutFlushReason::Print {
+        let (viewport, publication, environment_override) = if is_print {
             let (width, height) = surface.css_layout_size();
-            PaintViewport::new(width, height, surface.device_pixel_ratio as f32)
+            (
+                PaintViewport::new(width, height, surface.device_pixel_ratio as f32),
+                LayoutPublicationRequest::Transient,
+                self.print_style_environment_override(),
+            )
         } else {
-            layout_viewport_for_surface(surface)
+            (
+                layout_viewport_for_surface(surface),
+                LayoutPublicationRequest::Screen,
+                None,
+            )
         };
         let layout_started = profile_enabled.then(Instant::now);
         #[cfg(feature = "devtools")]
@@ -481,10 +479,10 @@ impl PageVm {
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
         #[cfg(feature = "devtools")]
-        let snapshot = if reason != moli_layout::LayoutFlushReason::Print {
-            self.paint_overlay_highlight(snapshot)
-        } else {
+        let snapshot = if is_print {
             snapshot
+        } else {
+            self.paint_overlay_highlight(snapshot)
         };
 
         if profile_enabled {

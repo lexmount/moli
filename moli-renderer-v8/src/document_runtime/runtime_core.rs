@@ -29,7 +29,7 @@ impl DocumentRuntime {
     ) {
         self.dom_host.configured_viewport_surface = surface;
         self.set_resolved_viewport_surface(
-            surface.map(|surface| self.dom_host.resolve_viewport_surface(surface)),
+            surface.map(|surface| mobile_viewport::resolve(self.dom_host(), surface)),
         );
     }
 
@@ -54,7 +54,7 @@ impl DocumentRuntime {
                 && host.parent_node(change.target()) == head
                 && host.is_html_element_named(change.target(), "meta")
         });
-        (tree_changed || meta_changed).then(|| self.dom_host.resolve_viewport_surface(configured))
+        (tree_changed || meta_changed).then(|| mobile_viewport::resolve(host, configured))
     }
 
     pub(crate) fn set_resolved_viewport_surface(

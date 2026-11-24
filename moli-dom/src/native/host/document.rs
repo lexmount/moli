@@ -706,25 +706,6 @@ impl DomHost {
         self.dom.document_head_handle_for_document(document_handle)
     }
 
-    pub fn document_meta_content_for_document(
-        &self,
-        document: DomHandle,
-        name: &str,
-    ) -> Option<&str> {
-        let head = self.document_head_handle_for_document(document)?;
-        self.child_handles(head)
-            .filter_map(|node| {
-                let meta = self.node(node)?.as_element()?;
-                if !meta.is_html_element("meta")
-                    || !meta.attribute_ns("", "name")?.eq_ignore_ascii_case(name)
-                {
-                    return None;
-                }
-                meta.attribute_ns("", "content")
-            })
-            .last()
-    }
-
     pub fn document_body_handle(&self) -> Option<DomHandle> {
         self.dom.document_body_handle()
     }
