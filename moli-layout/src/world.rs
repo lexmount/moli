@@ -275,11 +275,10 @@ pub struct LayoutBox<N> {
     pub(crate) final_layout: Layout,
 }
 
-/// Layout-only initial containing block.
+/// Layout-only containing block for a viewport.
 ///
-/// The CSS viewport is not a DOM box, but Taffy needs a real root node so the
-/// root element can remain auto-height while fixed and root-level absolute
-/// boxes resolve against the viewport rather than the root element's box.
+/// Taffy sizes viewport-positioned boxes against these nodes. The root
+/// element remains auto-height inside the initial containing block.
 #[derive(Debug)]
 pub(crate) struct ViewportLayoutState {
     pub(crate) children: Vec<LayoutBoxId>,
@@ -689,6 +688,7 @@ where
     pub(crate) environment: crate::LayoutEnvironment,
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
+    pub(crate) fixed_viewport_layout: Option<Box<ViewportLayoutState>>,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
     /// Full numeric measurement retains baselines without publishing layouts.
     pub(crate) measure_baselines: bool,
@@ -719,6 +719,7 @@ where
             environment: crate::LayoutEnvironment::default(),
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
+            fixed_viewport_layout: None,
             css_image_references: Vec::new(),
             measure_baselines: false,
             table_cell_percentage_height: None,
@@ -796,8 +797,34 @@ where
         taffy::NodeId::from(self.boxes.len())
     }
 
+    pub(crate) fn fixed_viewport_taffy_node(&self) -> taffy::NodeId {
+        taffy::NodeId::from(self.boxes.len() + 1)
+    }
+
+    pub(crate) fn viewport_layout_for_node(
+        &self,
+        node: taffy::NodeId,
+    ) -> Option<&ViewportLayoutState> {
+        match usize::from(node).checked_sub(self.boxes.len()) {
+            Some(0) => Some(&self.viewport_layout),
+            Some(1) => self.fixed_viewport_layout.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn viewport_layout_for_node_mut(
+        &mut self,
+        node: taffy::NodeId,
+    ) -> Option<&mut ViewportLayoutState> {
+        match usize::from(node).checked_sub(self.boxes.len()) {
+            Some(0) => Some(&mut self.viewport_layout),
+            Some(1) => self.fixed_viewport_layout.as_deref_mut(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_viewport_taffy_node(&self, node: taffy::NodeId) -> bool {
-        usize::from(node) == self.boxes.len()
+        self.viewport_layout_for_node(node).is_some()
     }
 
     /// Resolves every numeric layout origin in one preorder forest traversal.

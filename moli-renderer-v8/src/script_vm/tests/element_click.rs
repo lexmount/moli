@@ -2,11 +2,62 @@ use super::*;
 use crate::runtime::{
     RendererElementClickError, RendererElementClickTarget, RendererPointerEventProperties,
 };
-use moli_page_types::LayoutPolicy;
+use moli_page_types::{EmulatedView, LayoutPolicy, MobileViewport, ViewportSurface};
 
 const REALTIME_CLICK_FIXTURE: &str = r#"<!doctype html><style>body{margin:0}</style>
 <div id=under style="position:absolute;left:0;top:0;width:640px;height:200px"></div>
 <button id=target style="position:absolute;left:40px;top:40px;width:120px;height:70px;border:0;padding:0">go</button>"#;
+
+#[test]
+fn native_element_click_uses_the_visible_mobile_frame() {
+    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        let mut vm = new_parsed_test_vm(
+            "https://mobile-native-click.test/",
+            r#"<!doctype html><meta name="viewport" content="width=980, minimum-scale=1">
+            <style>body{margin:0}button{width:2000px;height:100px}</style>
+            <button id="target">go</button>"#,
+        );
+        vm.set_layout_policy(policy);
+        vm.set_viewport_surface(Some(ViewportSurface {
+            inner_width: 375,
+            inner_height: 667,
+            device_pixel_ratio: 1.0,
+            emulated_view: Some(EmulatedView {
+                width: 375,
+                height: 667,
+                device_size: (375, 667),
+                css_layout_size: None,
+                scale: 1.0,
+                native_device_pixel_ratio: 1.0,
+                viewport: None,
+                mobile_viewport: Some(MobileViewport {
+                    width: 375.0,
+                    height: 667.0,
+                    scale: 1.0,
+                }),
+            }),
+            ..ViewportSurface::default()
+        }))
+        .unwrap();
+        vm.eval(
+            "window.clicks=[]; target.onclick=event=>clicks.push([event.clientX,event.isTrusted])",
+        )
+        .unwrap();
+        publish_layout_for_test(&mut vm);
+        let target = vm.document_runtime.get_element_by_id("target").unwrap();
+        let RendererElementClickTarget::Pointer(click) = vm.prepare_element_click(target).unwrap()
+        else {
+            panic!("{policy:?} must prepare pointer input");
+        };
+        assert_eq!(click.root_x, 187.0, "{policy:?}");
+        vm.dispatch_prepared_element_click(click).unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify(clicks)").unwrap(),
+            "[[187,true]]",
+            "{policy:?}"
+        );
+    }
+}
 
 #[test]
 fn realtime_native_click_preparation_observes_current_geometry_and_obstructions() {

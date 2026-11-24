@@ -142,12 +142,7 @@ where
             .and_then(|root_box| self.scroll_extent(root_box))
             .is_some_and(|extent| extent.is_scroll_container);
         let root_rect = if root.is_none() {
-            LayoutTransform2D::IDENTITY.map_rect(LayoutRect::new(
-                0.0,
-                0.0,
-                self.viewport.css_width as f32,
-                self.viewport.css_height as f32,
-            ))
+            LayoutTransform2D::IDENTITY.map_rect(self.scroll_extent(self.root_box)?.scrollport)
         } else if let Some((geometry, extent, space)) = root_box.and_then(|root_box| {
             let geometry = self.box_geometry(root_box)?;
             Some((

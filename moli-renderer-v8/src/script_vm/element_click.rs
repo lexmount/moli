@@ -87,10 +87,11 @@ impl ScriptVm {
             let viewport = host
                 .with_latest_layout_tree_for_document(document, |tree| tree.viewport)
                 .ok_or_else(|| layout_error(moli_layout::LayoutError::NoLayoutSnapshot))?;
+            let (width, height) = viewport.frame_size();
             let left = rect.left.max(0.0);
             let top = rect.top.max(0.0);
-            let right = rect.right.min(f64::from(viewport.css_width));
-            let bottom = rect.bottom.min(f64::from(viewport.css_height));
+            let right = rect.right.min(f64::from(width));
+            let bottom = rect.bottom.min(f64::from(height));
             if right <= left || bottom <= top {
                 return Err(ClickError::NoClickableRect);
             }
