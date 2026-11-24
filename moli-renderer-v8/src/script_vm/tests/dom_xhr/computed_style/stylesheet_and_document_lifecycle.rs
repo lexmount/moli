@@ -1236,6 +1236,32 @@ fn root_relative_font_sizes_follow_the_document_root_font_size() {
 }
 
 #[test]
+fn discarded_root_pseudo_cannot_cache_lengths_using_the_old_root_font_size() {
+    let url = "https://discarded-root-pseudo.test/";
+    let markup = r#"<!doctype html>
+    <style>
+      html { font-size: 10px; }
+      html::before, span { content: none; display: inline-block; width: 6rem; }
+    </style>
+    <span id="probe">Probe</span>"#;
+
+    let mut vm = new_parsed_test_vm(url, markup);
+    assert_eq!(
+        vm.eval("getComputedStyle(document.getElementById('probe')).width")
+            .expect("first style read should resolve the span width"),
+        "60px"
+    );
+    drop(vm);
+
+    let mut vm = new_rendered_test_vm(url, markup);
+    assert_eq!(
+        vm.eval("document.getElementById('probe').getBoundingClientRect().width")
+            .expect("first layout should use the same span width"),
+        "60"
+    );
+}
+
+#[test]
 fn held_main_document_computed_styles_follow_repeated_viewport_surface_changes() {
     let mut vm = new_storage_test_vm("https://held-main-viewport-units.test/");
     let surface = |inner_width, inner_height| crate::protocol_types::ViewportSurface {

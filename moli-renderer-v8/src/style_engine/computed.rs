@@ -944,14 +944,18 @@ fn resolve_with_root_font_size<E: TElement>(
     let device = context.shared.stylist.device();
     let size = primary.get_font().clone_font_size().computed_size();
     let font_size = primary.effective_zoom.unzoom(size.px());
-    let recascade_pseudos = !styles.pseudos.is_empty() && device.root_font_size().px() != font_size;
-    device.set_root_font_size(font_size);
-    if recascade_pseudos {
-        // Eager pseudos were cascaded together with the root using the old basis.
-        context.thread_local.rule_cache = Default::default();
-        return resolve(context);
+    if device.root_font_size().px() == font_size {
+        return styles;
     }
-    styles
+    device.set_root_font_size(font_size);
+
+    // Stylo can cache lengths using the old rem basis before discarding an eager pseudo.
+    context.thread_local.rule_cache = Default::default();
+    if styles.pseudos.is_empty() {
+        styles
+    } else {
+        resolve(context)
+    }
 }
 
 fn element_style_is_current<E: TElement>(
