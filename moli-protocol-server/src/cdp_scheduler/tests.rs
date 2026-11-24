@@ -179,10 +179,10 @@ async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
                 PageScreencastSubscriptionStatus::CaptureInProgress
             );
             let completed = captures.pop().expect("first pending capture").wait().await;
-            let next_due = capture_started
-                + std::time::Duration::from_millis(u64::from(
-                    scheduler.page_screencast_interval_ms,
-                )) * 3;
+            let interval =
+                std::time::Duration::from_millis(u64::from(scheduler.page_screencast_interval_ms))
+                    * 3;
+            let next_due = first_due + interval;
             let emitted_at = next_due + std::time::Duration::from_millis(10);
             let frame = scheduler
                 .complete_page_screencast_capture(completed, emitted_at)
@@ -249,6 +249,21 @@ async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
                     "params": {"sessionId": registration.generation()}}),
             )
             .await;
+            assert_eq!(scheduler.next_page_screencast_deadline(), Some(next_due));
+
+            let mut captures = scheduler.start_due_page_screencast_captures(far_due);
+            assert_eq!(captures.len(), 1, "skip missed intervals");
+            let next_due = far_due + interval;
+            let completed = captures.pop().expect("overdue capture").wait().await;
+            assert!(
+                scheduler
+                    .complete_page_screencast_capture(
+                        completed,
+                        far_due + std::time::Duration::from_millis(5),
+                    )
+                    .is_none(),
+                "the page has no new visual state"
+            );
             assert_eq!(scheduler.next_page_screencast_deadline(), Some(next_due));
 
             command(
