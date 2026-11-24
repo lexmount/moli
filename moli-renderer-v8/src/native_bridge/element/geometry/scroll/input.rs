@@ -1,5 +1,6 @@
 use super::super::provider::{read_element_metrics, read_scroll_into_view_geometry};
 use super::*;
+use crate::native_bridge::WindowDocumentTaskTarget;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -187,6 +188,7 @@ pub(crate) struct WheelScrollTarget(Option<LatchedScrollBox>);
 struct LatchedScrollBox {
     source: DomHandle,
     document: DomHandle,
+    owner: WindowDocumentTaskTarget,
     alive: Arc<AtomicBool>,
 }
 
@@ -194,10 +196,12 @@ impl WheelScrollTarget {
     fn new(runtime: &PageScriptHost, source: Option<DomHandle>) -> Self {
         Self(source.and_then(|source| {
             let document = runtime.dom_host().owner_document_handle(source)?;
+            let owner = runtime.input_owner_for_document(document)?;
             Some(LatchedScrollBox {
                 source,
                 document,
-                alive: runtime.watch_wheel_scroll_target(document, source)?,
+                owner,
+                alive: runtime.watch_wheel_scroll_target(document, owner, source)?,
             })
         }))
     }
@@ -258,7 +262,8 @@ pub(crate) fn perform_latched_wheel_scroll_default_action(
     }
     let source = target.source;
     let runtime = unsafe { &*runtime_ptr };
-    if !runtime.dom_host().is_connected(source)
+    if runtime.input_document_for_owner(target.owner) != Some(target.document)
+        || !runtime.dom_host().is_connected(source)
         || runtime.dom_host().owner_document_handle(source) != Some(target.document)
     {
         target.alive.store(false, Ordering::Relaxed);

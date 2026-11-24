@@ -1217,6 +1217,7 @@ where
                         .cloned();
                     FrozenLayoutBox {
                         display,
+                        list_marker_position: layout_box.style.list_marker_position(),
                         geometry,
                         scroll_extent,
                         coordinate_space,

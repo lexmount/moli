@@ -510,7 +510,7 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                     TabCommand::CancelPointer { document, viewport_revision } => {
                         page.cancel_viewport_pointer(document, viewport_revision).await
                     }
-                    TabCommand::Wheel(input) if activity.visible => {
+                    TabCommand::Wheel(input) if activity.visible || input.phase.is_terminal() => {
                         page.enqueue_viewport_wheel(input)
                     }
                     TabCommand::Key(input) if activity.focused => {

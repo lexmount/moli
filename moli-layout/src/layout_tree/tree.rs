@@ -2,7 +2,7 @@
 
 use std::{fmt::Debug, hash::Hash, ops::Deref};
 
-use crate::{LayoutDisplay, LayoutError};
+use crate::{LayoutDisplay, LayoutError, LayoutListMarkerPosition};
 
 use super::model::{
     FrozenCoordinateSpace, LayoutBoxGeometry, LayoutClipNode, LayoutCoordinateSpaceId,
@@ -49,6 +49,8 @@ pub(crate) struct CssSizing {
 pub struct FrozenLayoutBox<N> {
     /// Computed display used to construct this box.
     pub display: LayoutDisplay,
+    /// Marker placement used when constructing the layout box.
+    pub list_marker_position: LayoutListMarkerPosition,
     pub geometry: LayoutBoxGeometry,
     pub scroll_extent: LayoutScrollExtent,
     pub coordinate_space: FrozenCoordinateSpace,

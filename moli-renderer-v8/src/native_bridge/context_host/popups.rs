@@ -2102,6 +2102,7 @@ impl PageScriptHost {
     }
 
     fn retire_lightweight_popup_document_owner(&mut self, owner: LightweightPopupDocumentOwner) {
+        self.retire_wheel_scroll_targets(super::WindowDocumentOwner::LightweightPopup(owner));
         self.retire_realtime_rendering_document(super::WindowDocumentOwner::LightweightPopup(
             owner,
         ));

@@ -105,6 +105,9 @@ impl PageScriptHost {
         retired_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         document_handle: DomHandle,
     ) {
+        self.retire_wheel_scroll_targets(crate::native_bridge::WindowDocumentOwner::Frame(
+            retired_owner,
+        ));
         self.retire_embedded_document_fonts(document_handle);
         self.retire_realtime_rendering_document(crate::native_bridge::WindowDocumentOwner::Frame(
             retired_owner,
