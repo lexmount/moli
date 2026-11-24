@@ -1,27 +1,50 @@
 use std::{
     cell::{OnceCell, RefCell},
     rc::Rc,
+    sync::{Arc, OnceLock, Weak},
 };
 
 use moli_layout::{LayoutCssImageReference, ScreenPaintLayout};
 use tokio::{sync::watch, task::JoinHandle};
 
 use crate::document_runtime::DomHandle;
+use crate::raster_worker::RendererRasterStream;
 
 /// The active CDP subscription owns the sender. Polls clone it while a
 /// request is in flight. Closing the channel only wakes cache cleanup.
-#[derive(Clone, Debug)]
-pub struct RendererScreencastPaintSession(watch::Sender<()>);
+#[derive(Clone)]
+pub struct RendererScreencastPaintSession(Arc<ScreencastPaintSession>);
+
+struct ScreencastPaintSession {
+    active: watch::Sender<()>,
+    raster: OnceLock<Arc<RendererRasterStream>>,
+}
 
 impl Default for RendererScreencastPaintSession {
     fn default() -> Self {
-        Self(watch::channel(()).0)
+        Self(Arc::new(ScreencastPaintSession {
+            active: watch::Sender::new(()),
+            raster: OnceLock::new(),
+        }))
+    }
+}
+
+impl std::fmt::Debug for RendererScreencastPaintSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RendererScreencastPaintSession")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RendererScreencastPaintSession {
+    pub(crate) fn raster_stream(&self) -> Weak<RendererRasterStream> {
+        Arc::downgrade(self.0.raster.get_or_init(Arc::default))
     }
 }
 
 impl PartialEq for RendererScreencastPaintSession {
     fn eq(&self, other: &Self) -> bool {
-        self.0.same_channel(&other.0)
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -68,7 +91,7 @@ impl ScreencastPaintState {
         let store = self.0.get_or_init(Default::default);
         let mut paint = store.borrow_mut();
         paint.release_closed_consumers();
-        let closed = session.0.subscribe();
+        let closed = session.0.active.subscribe();
         if paint
             .consumers
             .iter()

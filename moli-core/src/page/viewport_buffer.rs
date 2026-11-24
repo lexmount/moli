@@ -6,8 +6,8 @@ use moli_paint::{
     RasterBufferLayout, RasterPixelFormat, raster_buffer_layout, raster_snapshot_into,
 };
 use moli_renderer_v8::{
-    RendererDocumentLifecycleIdentity, RendererViewportCursor, RendererViewportEditor,
-    RendererViewportFrame,
+    RendererDocumentLifecycleIdentity, RendererRasterStream, RendererViewportCursor,
+    RendererViewportEditor, RendererViewportFrame,
 };
 use parking_lot::Mutex;
 use tokio::{sync::watch, task::JoinHandle};
@@ -83,6 +83,22 @@ struct ReadyFrame {
     pixels: Option<Arc<Vec<u8>>>,
 }
 
+impl ReadyFrame {
+    fn new(
+        frame: &RendererViewportFrame,
+        layout: RasterBufferLayout,
+        pixels: Option<Arc<Vec<u8>>>,
+    ) -> Self {
+        Self {
+            document: frame.document,
+            viewport_revision: frame.viewport_revision,
+            sequence: frame.sequence,
+            layout,
+            pixels,
+        }
+    }
+}
+
 #[derive(Default)]
 struct OutputState {
     binding: u64,
@@ -105,7 +121,6 @@ impl OutputState {
 pub struct ViewportOutput {
     state: Mutex<OutputState>,
     reader: Mutex<()>,
-    raster: Arc<tokio::sync::Mutex<()>>,
     changes: watch::Sender<()>,
 }
 
@@ -114,7 +129,6 @@ impl Default for ViewportOutput {
         Self {
             state: Mutex::default(),
             reader: Mutex::default(),
-            raster: Arc::default(),
             changes: watch::Sender::new(()),
         }
     }
@@ -299,53 +313,70 @@ async fn rasterize_frames(
     output: Arc<ViewportOutput>,
     binding: u64,
 ) {
+    let raster = RendererRasterStream::default();
     loop {
-        let frame = snapshots.borrow_and_update().clone();
-        if let Some(frame) = frame {
-            let source = snapshots.clone();
+        let needs_raster = {
+            let current = snapshots.borrow_and_update();
+            let frame = current.as_ref();
+            if frame.is_some_and(|frame| frame.snapshot.is_some()) {
+                true
+            } else {
+                output.publish(
+                    binding,
+                    frame.map(|frame| ReadyFrame::new(frame, buffers.layout, None)),
+                );
+                false
+            }
+        };
+        if needs_raster {
             let output = Arc::clone(&output);
-            // Serialize jobs across resize as well. A blocking job may still
-            // be running after its subscription is dropped.
-            let raster = Arc::clone(&output.raster).lock_owned().await;
-            let job = tokio::task::spawn_blocking(move || {
-                let _raster = raster;
-                let current_binding = output.state.lock().binding;
-                if current_binding == binding {
-                    match buffers.paint(&frame) {
-                        Ok(pixels) => {
-                            let current = source.borrow();
-                            if current.as_ref().is_some_and(|current| {
-                                current.document == frame.document
-                                    && current.viewport_revision == frame.viewport_revision
-                            }) {
-                                output.publish(
-                                    binding,
-                                    Some(ReadyFrame {
-                                        document: frame.document,
-                                        viewport_revision: frame.viewport_revision,
-                                        sequence: frame.sequence,
-                                        layout: buffers.layout,
-                                        pixels,
-                                    }),
-                                );
+            let job = async {
+                raster
+                    .submit(move || {
+                        // The producer keeps replacing its watch value while
+                        // another output has the worker. Sample at execution.
+                        if output.state.lock().binding == binding {
+                            let frame = snapshots.borrow_and_update().clone();
+                            if let Some(frame) = frame {
+                                match buffers.paint(&frame) {
+                                    Ok(pixels) => {
+                                        let current = snapshots.borrow();
+                                        if current.as_ref().is_some_and(|current| {
+                                            current.document == frame.document
+                                                && current.viewport_revision
+                                                    == frame.viewport_revision
+                                        }) {
+                                            output.publish(
+                                                binding,
+                                                Some(ReadyFrame::new(
+                                                    &frame,
+                                                    buffers.layout,
+                                                    pixels,
+                                                )),
+                                            );
+                                        }
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(%error, "could not paint viewport buffer");
+                                    }
+                                }
+                            } else {
+                                output.publish(binding, None);
                             }
                         }
-                        Err(error) => tracing::warn!(%error, "could not paint viewport buffer"),
-                    }
-                }
-                buffers
-            })
-            .await
-            .context("viewport raster worker stopped");
+                        (snapshots, buffers)
+                    })?
+                    .await
+                    .context("viewport raster job was cancelled")
+            }
+            .await;
             match job {
-                Ok(storage) => buffers = storage,
+                Ok(latest) => (snapshots, buffers) = latest,
                 Err(error) => {
                     tracing::warn!(%error);
                     break;
                 }
             }
-        } else {
-            output.publish(binding, None);
         }
         if snapshots.changed().await.is_err() {
             break;

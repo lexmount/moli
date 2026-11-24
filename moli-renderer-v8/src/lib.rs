@@ -97,6 +97,8 @@ mod parser_script;
 mod permissions_policy;
 mod queue_microtask;
 mod range_boundary;
+#[cfg(feature = "devtools")]
+mod raster_worker;
 mod referrer_policy;
 mod render_runtime;
 mod renderer_resource_scheduler;
@@ -237,6 +239,9 @@ pub use host::{
 };
 pub use local_executor::is_on_js_local_executor;
 pub use native_bridge::element::ClientRect as RendererClientRect;
+#[cfg(feature = "molio")]
+#[doc(hidden)]
+pub use raster_worker::RendererRasterStream;
 #[cfg(feature = "devtools")]
 pub use runtime::RendererScreencastPaintSession;
 pub use runtime::{
