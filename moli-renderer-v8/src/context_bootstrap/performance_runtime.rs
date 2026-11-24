@@ -10,6 +10,7 @@ mod lazy_subobjects;
 mod marks_measures;
 use moli_webapi::performance::memory;
 use moli_webapi::performance::name;
+mod measurement_interfaces;
 pub(in crate::context_bootstrap) use name::PerformanceEntryName;
 mod resource_buffer;
 mod window_state;
