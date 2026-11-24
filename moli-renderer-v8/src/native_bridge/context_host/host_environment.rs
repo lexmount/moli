@@ -2147,6 +2147,7 @@ impl PageScriptHost {
         old_state: Option<StyloElementState>,
     ) {
         if self.layout_policy().is_realtime()
+            && self.dom_host().is_connected(element)
             && (old_state.is_none() || old_state != self.retained_current_element_state(element))
         {
             self.note_realtime_layout_input_change();
@@ -2218,7 +2219,7 @@ impl PageScriptHost {
         state_names: Vec<String>,
         old_custom_states: Vec<String>,
     ) {
-        if !state_names.is_empty() {
+        if !state_names.is_empty() && self.dom_host().is_connected(element) {
             self.note_realtime_layout_input_change();
         }
         let dom_host = self.dom_host() as *const _;
@@ -2575,7 +2576,13 @@ impl PageScriptHost {
     }
 
     pub(crate) fn note_style_mutation_effects(&mut self, effects: &[StyleMutationEffect]) {
-        if !effects.is_empty() {
+        // The native DOM revision already covers removals from a live tree,
+        // even when the removed roots themselves are now disconnected.
+        if self.layout_policy().is_realtime()
+            && effects
+                .iter()
+                .any(|effect| effect.touches_connected_tree(self.dom_host()))
+        {
             self.note_realtime_layout_input_change();
         }
         if style_mutation_effects_affect_layout_metric(effects) {
@@ -2613,7 +2620,9 @@ impl PageScriptHost {
     }
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
-        self.note_realtime_layout_input_change();
+        if self.dom_host().is_connected(root) {
+            self.note_realtime_layout_input_change();
+        }
         self.clear_layout_rect_cache();
         let dom_host = self.dom_host() as *const _;
         self.style_engine
@@ -2621,7 +2630,9 @@ impl PageScriptHost {
     }
 
     pub(crate) fn note_style_subtree_context_change(&mut self, root: DomHandle) {
-        self.note_realtime_layout_input_change();
+        if self.dom_host().is_connected(root) {
+            self.note_realtime_layout_input_change();
+        }
         self.clear_layout_rect_cache();
         let dom_host = self.dom_host() as *const _;
         self.style_engine

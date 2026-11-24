@@ -136,7 +136,7 @@ impl DomHost {
                     ),
                 );
             }
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [parent]);
             if let Some(document) = owner_document {
                 self.update_document_target_from_url(document);
             }
@@ -226,7 +226,7 @@ impl DomHost {
             }
         }
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, open_popovers.iter().copied());
         }
     }
 
@@ -451,7 +451,11 @@ impl DomHost {
                     departed_connected_shadow_tree_document,
                 ),
             );
-            self.record_mutation(MutationScope::QueryState);
+            let previous_parent = removal_record.as_ref().map(|(parent, ..)| *parent);
+            self.record_mutation(
+                MutationScope::QueryState,
+                [parent].into_iter().chain(previous_parent),
+            );
             if let Some(document) = old_owner_document {
                 self.update_document_target_from_url(document);
             }
@@ -679,7 +683,7 @@ impl DomHost {
         records_enabled: bool,
         old_value: Option<String>,
     ) -> DomMutationEffects {
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [handle]);
         let mut effects = self.node_update_effects(handle);
         effects.mark_style_character_data_mutation(handle);
         if let Some(parent) = self.parent_node(handle) {
@@ -798,7 +802,7 @@ impl DomHost {
                     return DomMutationEffects::default();
                 }
                 comment.set_data(value.to_owned());
-                self.record_mutation(MutationScope::QueryState);
+                self.record_mutation(MutationScope::QueryState, [handle]);
                 let mut effects = self.node_update_effects(handle);
                 if records_enabled {
                     effects.mark_character_data_mutation(handle, old_value);
@@ -824,7 +828,7 @@ impl DomHost {
                     return DomMutationEffects::default();
                 }
                 pi.set_data(value.to_owned());
-                self.record_mutation(MutationScope::QueryState);
+                self.record_mutation(MutationScope::QueryState, [handle]);
                 let mut effects = self.node_update_effects(handle);
                 if records_enabled {
                     effects.mark_character_data_mutation(handle, old_value);

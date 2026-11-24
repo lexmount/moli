@@ -2369,6 +2369,33 @@ mod tests {
     }
 
     #[test]
+    fn layout_versions_follow_connected_nodes_across_document_moves() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let document = host.document_node_id();
+        let parent = host.create_element("main");
+        let child = host.create_element("div");
+        assert!(host.append_child(document, parent));
+        assert!(host.append_child(parent, child));
+
+        let frame_document = host.create_detached_html_document();
+        let frame_parent = host.create_element("main");
+        assert!(host.append_child(frame_document, frame_parent));
+        host.mark_subtree_connected_preserving_owner_document(frame_document);
+
+        let document_version = host.document_layout_version(document);
+        let frame_version = host.document_layout_version(frame_document);
+        assert!(host.set_attribute(frame_parent, "data-test", "updated"));
+        assert_eq!(host.document_layout_version(document), document_version);
+        assert!(host.document_layout_version(frame_document) > frame_version);
+
+        let frame_version = host.document_layout_version(frame_document);
+        assert!(host.append_child(frame_parent, child));
+        assert_eq!(host.owner_document_handle(child), Some(frame_document));
+        assert!(host.document_layout_version(document) > document_version);
+        assert!(host.document_layout_version(frame_document) > frame_version);
+    }
+
+    #[test]
     fn implicit_move_to_detached_parent_invalidates_old_document_tree_scopes() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let document = host.document_node_id();

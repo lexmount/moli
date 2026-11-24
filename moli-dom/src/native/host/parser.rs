@@ -229,7 +229,7 @@ impl DomHost {
             if referrer_attribute_changed {
                 self.dom.process_meta_referrer(node_id);
             }
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [node_id]);
         }
     }
 }

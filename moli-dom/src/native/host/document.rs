@@ -52,6 +52,7 @@ impl DomHost {
         let mut host = Self {
             dom,
             dom_version: Cell::new(0),
+            document_layout_versions: RefCell::new(HashMap::new()),
             query_version: Cell::new(0),
             shadow_root_binding_version: Cell::new(0),
             connected_shadow_roots_version: Cell::new(0),
@@ -197,6 +198,15 @@ impl DomHost {
         self.dom_version.get()
     }
 
+    /// Revision of the connected DOM inputs to one Document's layout.
+    pub fn document_layout_version(&self, document: DomHandle) -> u64 {
+        self.document_layout_versions
+            .borrow()
+            .get(&document)
+            .copied()
+            .unwrap_or(0)
+    }
+
     pub fn shadow_root_binding_version(&self) -> u64 {
         self.shadow_root_binding_version.get()
     }
@@ -223,13 +233,39 @@ impl DomHost {
             .unwrap_or(0)
     }
 
-    pub(super) fn record_mutation(&self, scope: MutationScope) {
-        self.dom_version
-            .set(self.dom_version.get().saturating_add(1));
+    pub(super) fn record_mutation(
+        &self,
+        scope: MutationScope,
+        layout_targets: impl IntoIterator<Item = DomHandle>,
+    ) {
+        let revision = self.dom_version.get().saturating_add(1);
+        self.dom_version.set(revision);
+        for handle in layout_targets {
+            if let Some(document) = self.layout_document_for_mutation_target(handle) {
+                self.document_layout_versions
+                    .borrow_mut()
+                    .insert(document, revision);
+            }
+        }
         if matches!(scope, MutationScope::QueryState) {
             self.query_version
                 .set(self.query_version.get().saturating_add(1));
             self.live_collection_cache.borrow_mut().clear();
+        }
+    }
+
+    pub(super) fn layout_document_for_mutation_target(
+        &self,
+        handle: DomHandle,
+    ) -> Option<DomHandle> {
+        let node = self.node(handle)?;
+        if node.is_document() {
+            Some(handle)
+        } else if node.is_connected() {
+            node.owner_document()
+        } else {
+            // DOM isConnected also includes nodes in inactive Documents.
+            None
         }
     }
 
@@ -384,10 +420,11 @@ impl DomHost {
             self.record_connected_shadow_roots_mutation();
             self.record_document_tree_scope_mutations(touched_documents);
         }
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [root]);
     }
 
     pub fn mark_subtree_disconnected_preserving_owner_document(&mut self, root: DomHandle) {
+        let previous_document = self.layout_document_for_mutation_target(root);
         let mut touched_shadow_root = false;
         let mut touched_documents = HashSet::new();
         let mut stylesheet_owners = Vec::new();
@@ -417,7 +454,7 @@ impl DomHost {
             self.record_connected_shadow_roots_mutation();
             self.record_document_tree_scope_mutations(touched_documents);
         }
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, previous_document);
     }
 
     fn tree_scope_owner_document_for_shadow_host(&self, handle: DomHandle) -> Option<DomHandle> {
@@ -591,11 +628,13 @@ impl DomHost {
     }
 
     pub fn set_active_element_handle(&self, handle: Option<DomHandle>) {
-        if self.active_element.get() == handle {
-            return;
+        let previous = self.active_element.replace(handle);
+        if previous != handle {
+            self.record_mutation(
+                MutationScope::QueryState,
+                previous.into_iter().chain(handle),
+            );
         }
-        self.active_element.set(handle);
-        self.record_mutation(MutationScope::QueryState);
     }
 
     pub fn element_matches_focus(&self, handle: DomHandle) -> bool {
@@ -663,18 +702,20 @@ impl DomHost {
         if *hovered == next {
             return false;
         }
-        *hovered = next;
-        drop(hovered);
-        self.record_mutation(MutationScope::QueryState);
+        let previous = std::mem::replace(&mut *hovered, next);
+        self.record_mutation(
+            MutationScope::QueryState,
+            previous.into_iter().chain(hovered.iter().copied()),
+        );
         true
     }
 
     pub fn clear_hovered_element_handles(&self) {
-        if self.hovered_elements.borrow().is_empty() {
+        let mut hovered = self.hovered_elements.borrow_mut();
+        if hovered.is_empty() {
             return;
         }
-        self.hovered_elements.borrow_mut().clear();
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, hovered.drain(..));
     }
 
     pub(super) fn prune_disconnected_hovered_elements(&self) {
@@ -1071,7 +1112,7 @@ impl DomHost {
             return false;
         }
         document.set_design_mode_enabled(design_mode_enabled);
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [document_handle]);
         true
     }
 
@@ -1199,7 +1240,7 @@ impl DomHost {
         }
         document.set_url(url);
         self.dom.process_base_element(document_handle, true);
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [document_handle]);
         self.update_document_target_from_url(document_handle);
         true
     }
@@ -1219,7 +1260,7 @@ impl DomHost {
             return false;
         }
         self.dom.process_base_element(document_handle, true);
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [document_handle]);
         true
     }
 
@@ -1242,7 +1283,7 @@ impl DomHost {
             return false;
         }
         document.set_character_set(character_set);
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [document_handle]);
         true
     }
 
@@ -1262,7 +1303,7 @@ impl DomHost {
             return false;
         }
         document.set_content_type(content_type);
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [document_handle]);
         true
     }
 
@@ -1281,7 +1322,7 @@ impl DomHost {
             return false;
         }
         document.set_quirks_mode(quirks_mode);
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [document_handle]);
         true
     }
 
@@ -1300,7 +1341,7 @@ impl DomHost {
             return false;
         }
         document.set_default_language(language);
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [document_handle]);
         true
     }
 
@@ -1319,7 +1360,7 @@ impl DomHost {
             return false;
         }
         document.set_source_last_modified_ms(timestamp_ms);
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [document_handle]);
         true
     }
 
@@ -1369,7 +1410,7 @@ impl DomHost {
         };
         let changed = document.set_css_target(target);
         if changed {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [document_handle]);
         }
         changed
     }
@@ -1478,7 +1519,7 @@ impl DomHost {
             return false;
         }
         document.set_ready_state(state);
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [document_handle]);
         true
     }
 
@@ -1767,7 +1808,7 @@ impl DomHost {
             return false;
         };
         *document = source.clone_for_node();
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [document_handle]);
         true
     }
 
@@ -1777,7 +1818,7 @@ impl DomHost {
         self.active_element.set(None);
         self.hovered_elements.borrow_mut().clear();
         let handle = self.dom.replace_main_document(document);
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [handle]);
         handle
     }
 
@@ -2223,7 +2264,7 @@ impl DomHost {
             // Reference-target forwarding changes live `labels` and form-control
             // resolution even though it is neither a tree nor an attribute
             // mutation. Keep it in the same query-version invalidation domain.
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [host]);
         }
         changed
     }

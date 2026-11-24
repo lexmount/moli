@@ -47,6 +47,18 @@ pub(crate) enum StyleMutationEffect {
 }
 
 impl StyleMutationEffect {
+    pub(crate) fn touches_connected_tree(&self, host: &DomHost) -> bool {
+        match self {
+            Self::Attribute { element: node, .. }
+            | Self::CharacterData { node }
+            | Self::ChildList { parent: node, .. }
+            | Self::SlotAssignment { slot: node, .. } => host.is_connected(*node),
+            Self::ConnectedSubtrees { roots } | Self::DisconnectedSubtrees { roots } => {
+                roots.iter().any(|&root| host.is_connected(root))
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn attribute_for_element_ns(
         host: &DomHost,
