@@ -34,9 +34,17 @@ fn media_ranges_getter<'s>(
         return;
     };
     let ranges: &[(f64, f64)] = &[];
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     let video_ranges;
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     let ranges = if member == "buffered" || member == "seekable" {
         video_ranges = unsafe { &*_host }.video_buffered(_handle);
         video_ranges.as_slice()

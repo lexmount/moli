@@ -198,7 +198,11 @@ fn apply_media_subresource_terminal(
     successful: bool,
     _response: Option<&mut crate::protocol_types::NavigationResponse>,
 ) {
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     let successful = {
         let mut host = context_host.borrow_mut();
         if successful

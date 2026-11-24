@@ -600,7 +600,7 @@ async fn run_video_load_turns(
 
     let decoder_completion = usize::from(cfg!(all(
         feature = "video",
-        target_os = "linux",
+        any(target_os = "linux", target_os = "macos"),
         target_pointer_width = "64"
     )));
     tokio::time::timeout(Duration::from_secs(5), async {

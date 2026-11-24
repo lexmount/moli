@@ -31,7 +31,11 @@ pub(in crate::native_bridge) fn media_play_callback<'s>(
         rv.set_undefined();
         return;
     };
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     {
         if unsafe { &*runtime_ptr }
             .dom_host()
@@ -81,7 +85,11 @@ pub(in crate::native_bridge) fn media_pause_callback<'s>(
     };
     let runtime = unsafe { &mut *runtime_ptr };
     let changed = runtime.set_media_paused(handle, true);
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     runtime.stop_video_clock(scope, handle);
     if changed {
         dispatch_text_control_event(scope, runtime_ptr, handle, "pause");
@@ -101,7 +109,11 @@ pub(in crate::native_bridge) fn media_load_callback<'s>(
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     runtime.reset_video_playback(scope, handle);
     let _ = runtime.cancel_pending_media_load_sequence(handle);
     let error_changed = runtime.set_media_error_code(handle, None);
@@ -124,7 +136,11 @@ pub(in crate::native_bridge) fn media_load_callback<'s>(
     rv.set_undefined();
 }
 
-#[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+#[cfg(all(
+    feature = "video",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
 fn play_decoded_video<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut crate::native_bridge::PageScriptHost,

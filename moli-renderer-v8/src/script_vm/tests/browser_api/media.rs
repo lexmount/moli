@@ -149,7 +149,11 @@ async fn media_report_only_csp_reports_without_blocking_load() {
         "report-only media loadstart turn",
     )
     .await;
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while !vm
             .run_one_media_element_event_executor_turn(&loader)
@@ -184,7 +188,11 @@ async fn media_report_only_csp_reports_without_blocking_load() {
     );
 }
 
-#[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+#[cfg(all(
+    feature = "video",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
 #[tokio::test]
 async fn media_source_appends_h264_and_paints_the_seeked_frame() {
     use base64::Engine as _;

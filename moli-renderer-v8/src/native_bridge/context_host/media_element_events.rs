@@ -27,9 +27,17 @@ pub(super) enum PendingMediaElementEventPayload {
         track: v8::Global<v8::Object>,
         event_type: String,
     },
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     VideoUpdate(super::video_playback::PendingVideoUpdate),
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     MediaSource(super::media_source_playback::MediaSourceEvent),
 }
 
@@ -278,11 +286,19 @@ impl PageScriptHost {
                     &event_type,
                 )
             }
-            #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "video",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
             PendingMediaElementEventPayload::VideoUpdate(update) => {
                 super::video_playback::apply_video_update(scope, host_ptr, update)
             }
-            #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "video",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
             PendingMediaElementEventPayload::MediaSource(event) => {
                 super::media_source_playback::apply_media_source_event(scope, host_ptr, event)
             }
@@ -304,11 +320,19 @@ impl PageScriptHost {
 
     fn retire_media_element_event_payload(&mut self, payload: PendingMediaElementEventPayload) {
         match payload {
-            #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "video",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
             PendingMediaElementEventPayload::VideoUpdate(update) => {
                 self.discard_video_update(update);
             }
-            #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "video",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
             PendingMediaElementEventPayload::MediaSource(_) => {}
             PendingMediaElementEventPayload::SeekCompletion {
                 media_handle,

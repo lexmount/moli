@@ -490,9 +490,17 @@ impl PageScriptHost {
             image_loaders: HashMap::new(),
             next_image_load_event_id: 1,
             pending_media_load_sequences: HashMap::new(),
-            #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "video",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
             video_playbacks: HashMap::new(),
-            #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "video",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
             media_source_urls: HashMap::new(),
             next_media_load_sequence_id: 1,
             pending_text_track_load_sequences: HashMap::new(),

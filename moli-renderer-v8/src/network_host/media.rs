@@ -60,7 +60,11 @@ pub(crate) fn start_media_element_resource_fetch(
     };
     let (request_mode, credentials_mode) = media_cross_origin_request_modes(element);
 
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     if host.try_attach_media_source(scope, media_handle, sequence, &request_url)? {
         return Ok(MediaElementResourceFetchStart::Pending);
     }
@@ -81,7 +85,11 @@ pub(crate) fn start_media_element_resource_fetch(
             SubresourceRequestInitiatorType::Other,
             &result,
         );
-        #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+        #[cfg(all(
+            feature = "video",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
         if successful
             && host.manages_video(media_handle)
             && let Ok(response) = &mut result
@@ -143,7 +151,11 @@ pub(crate) fn media_response_status_is_successful(status: u16) -> bool {
     (200..300).contains(&status)
 }
 
-#[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+#[cfg(all(
+    feature = "video",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
 pub(crate) fn is_mp4_video_response(response: &crate::protocol_types::NavigationResponse) -> bool {
     matches!(response.body_bytes().get(4..8), Some(b"ftyp" | b"moov"))
         || moli_web_mime::response_header_value(&response.headers, "content-type").is_some_and(
