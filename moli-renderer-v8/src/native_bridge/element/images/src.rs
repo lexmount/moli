@@ -1,6 +1,6 @@
 use crate::document_runtime::{DocumentSubresourceCspKind, DomHandle};
 use crate::dom::native::Node;
-use crate::native_bridge::context_host::LazyImageUpdate;
+use crate::native_bridge::context_host::{ImageLoader, QueuedImageUpdate};
 use crate::native_bridge::{ImageLoadEventId, PageScriptHost, WindowDocumentTaskTarget};
 use crate::page_task_queue::{
     PageImageLoadEventTargetEffect, RendererPageImageLoadEventKind,
@@ -114,10 +114,8 @@ fn queue_image_load_event(
     request_initiator_type: SubresourceRequestInitiatorType,
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
-    if matches!(
-        runtime.lazy_image_updates.get(&handle),
-        Some((_, LazyImageUpdate::Queued { .. }))
-    ) {
+    let loader = runtime.image_loader(handle);
+    if matches!(loader, Some(ImageLoader::Queued(_))) {
         return;
     }
     let allow_deferred_lazy = matches!(trigger, ImageLoadQueueTrigger::LazyReveal);
@@ -135,8 +133,7 @@ fn queue_image_load_event(
     let invalid_empty_source =
         selected_source.is_empty() && connected_empty_src_without_srcset(runtime, handle);
     if selected_source.is_empty() && !invalid_empty_source {
-        runtime.lazy_image_updates.remove(&handle);
-        let _ = runtime.cancel_pending_image_load_event(handle);
+        runtime.cancel_image_load(handle);
         let _ = runtime.process_image_decode_requests_for_element(scope, handle);
         return;
     }
@@ -155,13 +152,11 @@ fn queue_image_load_event(
     };
     if !allow_deferred_lazy && image_load_is_deferred(runtime, handle) {
         if !selected_source.is_empty()
-            && !runtime.lazy_image_updates.contains_key(&handle)
+            && loader.is_none()
             && let Some(document) = runtime.dom_host().owner_document_handle(handle)
         {
             if matches!(trigger, ImageLoadQueueTrigger::LazyUpdateMicrotask { .. }) {
-                runtime
-                    .lazy_image_updates
-                    .insert(handle, (document, LazyImageUpdate::Deferred));
+                runtime.defer_image_update(handle, document);
             } else {
                 // The callback resolves the pending entry through its creation
                 // realm. Bind it to the image's owner even for borrowed setters.
@@ -181,36 +176,26 @@ fn queue_image_load_event(
                     && let Some(callback) = v8::Function::builder(apply_lazy_image_update)
                         .data(data.into())
                         .build(scope)
-                {
-                    runtime.lazy_image_updates.insert(
+                    && runtime.register_queued_image_update(
                         handle,
-                        (
-                            document,
-                            LazyImageUpdate::Queued {
-                                id,
-                                request_initiator_type,
-                                after_document_adoption,
-                            },
-                        ),
-                    );
+                        QueuedImageUpdate {
+                            id,
+                            owner_document_handle: document,
+                            request_initiator_type,
+                            after_document_adoption,
+                        },
+                    )
+                {
                     scope.enqueue_microtask(callback);
                 }
             }
         }
         return;
     }
-    let pending_before_registration = runtime.pending_image_load_event(handle);
-    let was_deferred = runtime
-        .lazy_image_updates
-        .remove(&handle)
-        .is_some_and(|(document, _)| {
-            runtime.dom_host().owner_document_handle(handle) == Some(document)
-        });
-    let delays_load = !was_deferred
-        && !runtime
-            .dom_host()
-            .node(handle)
-            .is_some_and(|node| image_uses_lazy_loading(runtime, node));
+    let delays_load = !runtime
+        .dom_host()
+        .node(handle)
+        .is_some_and(|node| image_uses_lazy_loading(runtime, node));
     let Some(pending) = runtime.register_pending_image_load_event(
         handle,
         target,
@@ -219,7 +204,6 @@ fn queue_image_load_event(
     ) else {
         if let Some(pending) = runtime
             .pending_image_load_event(handle)
-            .or(pending_before_registration)
             .filter(|pending| runtime.pending_image_load_event_is_current(handle, *pending))
         {
             let followup =
@@ -469,33 +453,26 @@ fn apply_lazy_image_update<'s>(
     };
     let handle = DomHandle::new(element as usize);
     let runtime = unsafe { &mut *runtime_ptr };
-    let Some(&(
-        document,
-        LazyImageUpdate::Queued {
-            id,
-            request_initiator_type,
-            after_document_adoption,
-        },
-    )) = runtime.lazy_image_updates.get(&handle)
+    let Some(update) = runtime.take_queued_image_update(handle, ImageLoadEventId::new(sequence))
     else {
         return;
     };
-    if id.get() != sequence {
-        return;
-    }
-    runtime.lazy_image_updates.remove(&handle);
-    if runtime.dom_host().owner_document_handle(handle) == Some(document) {
-        // Scrolling can reveal the image while its update is still queued.
-        // Check the final attributes and live scroll offsets against the sample.
-        let trigger = if lazy_image_is_revealed(runtime, document, handle) {
-            ImageLoadQueueTrigger::LazyReveal
-        } else {
-            ImageLoadQueueTrigger::LazyUpdateMicrotask {
-                after_document_adoption,
-            }
-        };
-        queue_image_load_event(scope, runtime_ptr, handle, trigger, request_initiator_type);
-    }
+    // Scrolling can reveal the image while its update is still queued.
+    // Check the final attributes and live scroll offsets against the sample.
+    let trigger = if lazy_image_is_revealed(runtime, update.owner_document_handle, handle) {
+        ImageLoadQueueTrigger::LazyReveal
+    } else {
+        ImageLoadQueueTrigger::LazyUpdateMicrotask {
+            after_document_adoption: update.after_document_adoption,
+        }
+    };
+    queue_image_load_event(
+        scope,
+        runtime_ptr,
+        handle,
+        trigger,
+        update.request_initiator_type,
+    );
 }
 
 pub(crate) fn image_selected_source_url(runtime: &PageScriptHost, handle: DomHandle) -> String {
@@ -667,8 +644,7 @@ pub(crate) fn apply_image_attribute_mutation_plan(
 }
 
 pub(crate) fn reset_image_load_dispatch(runtime: &mut PageScriptHost, handle: DomHandle) {
-    runtime.lazy_image_updates.remove(&handle);
-    let _ = runtime.cancel_pending_image_load_event(handle);
+    runtime.cancel_image_load(handle);
     let _ = runtime.retire_image_resource_for_element(handle);
     if let Some(element) = runtime
         .dom_host_mut()

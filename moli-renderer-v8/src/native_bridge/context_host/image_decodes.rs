@@ -102,16 +102,15 @@ impl PageScriptHost {
                 self.settle_image_decode_request(scope, request, ImageDecodeCompletion::Resolve);
             return true;
         }
-        let waits_for_current_load = self
-            .pending_image_load_events
-            .get(&request.element)
-            .is_some_and(|pending| {
-                self.pending_image_load_event_is_current(request.element, *pending)
-                    && !matches!(
-                        pending.network_state,
-                        PendingImageLoadNetworkState::Failed(_)
-                    )
-            });
+        let waits_for_current_load =
+            self.pending_image_load_event(request.element)
+                .is_some_and(|pending| {
+                    self.pending_image_load_event_is_current(request.element, pending)
+                        && !matches!(
+                            pending.network_state,
+                            PendingImageLoadNetworkState::Failed(_)
+                        )
+                });
         if waits_for_current_load {
             request.state = PendingImageDecodeRequestState::PendingLoad;
             self.pending_image_decode_requests.insert(id, request);

@@ -487,8 +487,7 @@ impl PageScriptHost {
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
             user_interaction_tasks:
                 super::user_interaction_tasks::UserInteractionTaskState::default(),
-            lazy_image_updates: HashMap::new(),
-            pending_image_load_events: HashMap::new(),
+            image_loaders: HashMap::new(),
             next_image_load_event_id: 1,
             pending_media_load_sequences: HashMap::new(),
             next_media_load_sequence_id: 1,
@@ -1312,11 +1311,6 @@ impl PageScriptHost {
         self.compact_scoped_custom_element_registry_wrappers();
     }
 
-    #[cfg(test)]
-    pub(crate) fn has_pending_image_load_event_for_test(&self, handle: DomHandle) -> bool {
-        self.pending_image_load_events.contains_key(&handle)
-    }
-
     fn queue_page_module_reaction(&self, event: RendererPageModuleReactionEvent) {
         if self.page_module_reaction_sender().send(event).is_err() {
             tracing::debug!("discarded module reaction after its stable Page route closed");
@@ -1719,58 +1713,6 @@ impl PageScriptHost {
         {
             self.pending_text_control_change_commit = None;
         }
-    }
-
-    pub(crate) fn pending_image_load_event(
-        &self,
-        handle: DomHandle,
-    ) -> Option<super::PendingImageLoadEvent> {
-        self.pending_image_load_events.get(&handle).copied()
-    }
-
-    pub(crate) fn next_image_load_event_id(&mut self) -> super::ImageLoadEventId {
-        let id = super::ImageLoadEventId::new(self.next_image_load_event_id);
-        self.next_image_load_event_id = self
-            .next_image_load_event_id
-            .checked_add(1)
-            .expect("image load-event id space exhausted");
-        id
-    }
-
-    pub(crate) fn insert_pending_image_load_event(
-        &mut self,
-        handle: DomHandle,
-        pending: super::PendingImageLoadEvent,
-    ) -> bool {
-        let std::collections::hash_map::Entry::Vacant(entry) =
-            self.pending_image_load_events.entry(handle)
-        else {
-            return false;
-        };
-        entry.insert(pending);
-        true
-    }
-
-    pub(crate) fn take_pending_image_load_event(
-        &mut self,
-        handle: DomHandle,
-    ) -> Option<super::PendingImageLoadEvent> {
-        self.pending_image_load_events.remove(&handle)
-    }
-
-    pub(crate) fn take_pending_image_load_event_if_matches(
-        &mut self,
-        handle: DomHandle,
-        id: super::ImageLoadEventId,
-    ) -> Option<super::PendingImageLoadEvent> {
-        if !self
-            .pending_image_load_events
-            .get(&handle)
-            .is_some_and(|pending| pending.id() == id)
-        {
-            return None;
-        }
-        self.pending_image_load_events.remove(&handle)
     }
 
     pub(crate) fn pending_media_load_sequence(

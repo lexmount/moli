@@ -739,13 +739,18 @@ pub(crate) enum PendingImageLoadEventOwner {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum LazyImageUpdate {
-    Queued {
-        id: ImageLoadEventId,
-        request_initiator_type: crate::types::SubresourceRequestInitiatorType,
-        after_document_adoption: bool,
-    },
-    Deferred,
+pub(super) struct QueuedImageUpdate {
+    pub(super) id: ImageLoadEventId,
+    pub(super) owner_document_handle: DomHandle,
+    pub(super) request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+    pub(super) after_document_adoption: bool,
+}
+
+/// The current update or admitted load for one image element.
+pub(super) enum ImageLoader {
+    Queued(QueuedImageUpdate),
+    Deferred(DomHandle),
+    Admitted(PendingImageLoadEvent),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1000,8 +1005,7 @@ pub(crate) struct PageScriptHost {
         Option<Box<intersection_observer_tasks::IntersectionObserverTaskState>>,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
-    pub(super) lazy_image_updates: HashMap<DomHandle, (DomHandle, LazyImageUpdate)>,
-    pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
+    image_loaders: HashMap<DomHandle, ImageLoader>,
     next_image_load_event_id: u64,
     pending_media_load_sequences: HashMap<DomHandle, PendingMediaLoadSequence>,
     next_media_load_sequence_id: u64,
