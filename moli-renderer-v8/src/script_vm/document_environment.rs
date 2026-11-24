@@ -323,7 +323,7 @@ impl ScriptVm {
     ) -> Result<()> {
         let mut host = self._context_host.borrow_mut();
         if host.document_activity() != activity {
-            host.queue_non_layout_environment_change();
+            host.queue_document_activity_change(activity);
             host.set_document_activity(activity);
         }
         Ok(())
