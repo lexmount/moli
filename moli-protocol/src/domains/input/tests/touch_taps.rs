@@ -149,6 +149,48 @@ async fn touch_tap_rejects_drags_cancellation_and_multi_contact_gestures() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn touch_end_points_release_only_the_named_contacts() {
+    let mut ctx = TestContext::new();
+    load_tap_fixture(
+        &mut ctx,
+        r#"
+        window.contactLog=[];
+        for (const type of ['touchstart', 'touchend', 'touchmove']) {
+            tap.addEventListener(type, e => contactLog.push([
+                type,
+                [...e.touches].map(t => t.identifier),
+                [...e.changedTouches].map(t => t.identifier),
+            ]));
+        }
+        "#,
+    )
+    .await;
+    for (id, kind, points) in [
+        (23100, "touchStart", json!([{"x":20,"y":20,"id":7}])),
+        (23101, "touchStart", json!([{"x":30,"y":30,"id":3}])),
+        (23102, "touchEnd", json!([{"x":20,"y":20,"id":7}])),
+        (23103, "touchMove", json!([{"x":40,"y":30,"id":3}])),
+        (23104, "touchEnd", json!([])),
+    ] {
+        contact(&mut ctx, id, kind, points).await;
+    }
+    assert_eq!(
+        evaluate_string(&mut ctx, "JSON.stringify([clicks,contactLog])").await,
+        json!([
+            0,
+            [
+                ["touchstart", [7], [7]],
+                ["touchstart", [3, 7], [3]],
+                ["touchend", [3], [7]],
+                ["touchmove", [3], [3]],
+                ["touchend", [], [3]]
+            ]
+        ])
+        .to_string()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn touch_end_without_a_contact_does_not_click() {
     let mut ctx = TestContext::new();
     load_tap_fixture(&mut ctx, "").await;
