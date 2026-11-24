@@ -100,6 +100,7 @@ impl ScriptVm {
                     let events = context_bootstrap::take_realtime_media_query_events(
                         scope, host_ptr, target,
                     );
+                    let mut media_result = Ok(());
                     for (event_index, prepared) in events.iter().enumerate() {
                         if !unsafe { &*host_ptr }
                             .realtime_rendering_opportunity_is_current(id, root)
@@ -146,8 +147,16 @@ impl ScriptVm {
                             unsafe { &*host_ptr }
                                 .restore_realtime_media_query_notifications(target, &uncalled);
                         }
-                        invoked |= result?;
+                        match result {
+                            Ok(dispatched) => invoked |= dispatched,
+                            Err(error) => {
+                                media_result = Err(error);
+                                break;
+                            }
+                        }
                     }
+                    context_bootstrap::finish_realtime_media_query_events(scope, host_ptr, &events);
+                    media_result?;
                     continue;
                 }
                 let Some(binding) = environment_binding(scope, host_ptr, target) else {

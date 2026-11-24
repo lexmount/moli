@@ -7,7 +7,8 @@ pub(crate) use self::evaluation::dispatch_media_query_list_change_events;
 pub(in crate::context_bootstrap) use self::evaluation::read_media_query_matches;
 pub(in crate::context_bootstrap) use self::evaluation::realtime_media_query_listeners_changed;
 pub(crate) use self::evaluation::{
-    dispatch_realtime_media_query_event, take_realtime_media_query_events,
+    dispatch_realtime_media_query_event, finish_realtime_media_query_events,
+    take_realtime_media_query_events,
 };
 pub(super) use self::evaluation::{
     install_media_query_list_template_bindings, window_match_media_callback,
