@@ -19,7 +19,7 @@ use crate::{
         CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
     },
     document_runtime::DomHandle,
-    layout_renderer::ContainerSizeFeedback,
+    layout_renderer::{ContainerSizeFeedback, layout_viewport_for_surface},
     native_bridge::element::iframe_handle_viewport,
     script_vm::web_fonts::DocumentWebFontCompletion,
     style_engine::{StyleViewport, StyloStyleEnvironment},
@@ -248,10 +248,8 @@ impl PageScriptHost {
 
     pub(crate) fn layout_viewport_for_document(&self, document: DomHandle) -> LayoutViewport {
         let surface = self.viewport_surface().unwrap_or_default();
-        let device_pixel_ratio = surface.device_pixel_ratio as f32;
         if document == self.document_handle() {
-            let (width, height) = surface.css_layout_size();
-            return LayoutViewport::new(width, height, device_pixel_ratio);
+            return layout_viewport_for_surface(surface);
         }
 
         let child_viewport = self
@@ -266,7 +264,7 @@ impl PageScriptHost {
                 .and_then(|viewport| viewport.height)
                 .map(css_viewport_dimension)
                 .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_height as u32),
-            device_pixel_ratio,
+            surface.device_pixel_ratio as f32,
         )
     }
 

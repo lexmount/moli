@@ -290,10 +290,7 @@ pub(crate) fn observable_caret_position(
             Some(LayoutQueryAnswer::DocumentMetrics(metrics)),
             Some(LayoutQueryAnswer::CaretPosition(position)),
         ) => {
-            let inside_viewport = point.x >= 0.0
-                && point.y >= 0.0
-                && point.x < metrics.viewport.css_width as f32
-                && point.y < metrics.viewport.css_height as f32;
+            let inside_viewport = metrics.viewport.contains(point);
             Ok(inside_viewport.then_some(position).flatten())
         }
         _ => Err(provider_contract_error("caret position")),

@@ -377,10 +377,8 @@ fn retarget_element_to_tree_scope(
 }
 
 fn point_is_inside_viewport(metrics: moli_layout::LayoutDocumentMetrics, x: f64, y: f64) -> bool {
-    x >= 0.0
-        && y >= 0.0
-        && x < f64::from(metrics.viewport.css_width)
-        && y < f64::from(metrics.viewport.css_height)
+    let (width, height) = metrics.viewport.frame_size();
+    x >= 0.0 && y >= 0.0 && x < f64::from(width) && y < f64::from(height)
 }
 
 fn element_at_point(

@@ -199,14 +199,14 @@ fn perform_bubbling_scroll_into_view(
                 f64::from(target_bounds.x),
                 f64::from(target_bounds.right()),
                 f64::from(metrics.scroll_offset.x),
-                f64::from(metrics.client_size.width),
+                f64::from(metrics.scrollport_size.width),
             )
         } else {
             aligned_scroll_position(
                 f64::from(target_bounds.x),
                 f64::from(target_bounds.right()),
                 f64::from(metrics.scroll_offset.x),
-                f64::from(metrics.client_size.width),
+                f64::from(metrics.scrollport_size.width),
                 params.horizontal,
             )
         };
@@ -215,14 +215,14 @@ fn perform_bubbling_scroll_into_view(
                 f64::from(target_bounds.y),
                 f64::from(target_bounds.bottom()),
                 f64::from(metrics.scroll_offset.y),
-                f64::from(metrics.client_size.height),
+                f64::from(metrics.scrollport_size.height),
             )
         } else {
             aligned_scroll_position(
                 f64::from(target_bounds.y),
                 f64::from(target_bounds.bottom()),
                 f64::from(metrics.scroll_offset.y),
-                f64::from(metrics.client_size.height),
+                f64::from(metrics.scrollport_size.height),
                 params.vertical,
             )
         };
@@ -273,7 +273,7 @@ fn perform_bubbling_scroll_into_view(
         translate_quads_for_scroll(
             &mut geometry.target_rects,
             metrics.scrollport,
-            metrics.client_size,
+            metrics.scrollport_size,
             delta_x,
             delta_y,
         );
@@ -372,7 +372,7 @@ fn target_bounds_in_scroll_content(
     let mut max_y = f64::NEG_INFINITY;
     for point in target_quads.iter().flat_map(|quad| quad.points) {
         let local =
-            map_viewport_point_to_scrollport(point, metrics.scrollport, metrics.client_size)?;
+            map_viewport_point_to_scrollport(point, metrics.scrollport, metrics.scrollport_size)?;
         let x = local.0 + f64::from(metrics.scroll_offset.x);
         let y = local.1 + f64::from(metrics.scroll_offset.y);
         min_x = min_x.min(x);

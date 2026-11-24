@@ -15,6 +15,7 @@ pub struct LayoutViewport {
     pub css_width: u32,
     pub css_height: u32,
     pub device_pixel_ratio: f32,
+    mobile_frame_size: Option<(u32, u32)>,
 }
 
 impl LayoutViewport {
@@ -23,16 +24,35 @@ impl LayoutViewport {
             css_width,
             css_height,
             device_pixel_ratio,
+            mobile_frame_size: None,
         }
     }
 
-    /// Tests CSS coordinates against the half-open viewport, excluding NaN
+    /// Gives the mobile root scrollport the frame dimensions in CSS pixels.
+    pub const fn with_mobile_frame_size(mut self, width: u32, height: u32) -> Self {
+        self.mobile_frame_size = Some((width, height));
+        self
+    }
+
+    pub const fn mobile_frame_size(self) -> Option<(u32, u32)> {
+        self.mobile_frame_size
+    }
+
+    pub const fn frame_size(self) -> (u32, u32) {
+        match self.mobile_frame_size {
+            Some(size) => size,
+            None => (self.css_width, self.css_height),
+        }
+    }
+
+    /// Tests CSS coordinates against the half-open frame, excluding NaN
     /// and infinite points without walking any layout geometry.
     pub fn contains(self, point: LayoutPoint) -> bool {
+        let (width, height) = self.frame_size();
         point.x >= 0.0
             && point.y >= 0.0
-            && f64::from(point.x) < f64::from(self.css_width)
-            && f64::from(point.y) < f64::from(self.css_height)
+            && f64::from(point.x) < f64::from(width)
+            && f64::from(point.y) < f64::from(height)
     }
 }
 

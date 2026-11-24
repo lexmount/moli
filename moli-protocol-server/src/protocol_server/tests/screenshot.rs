@@ -458,6 +458,148 @@ async fn websocket_cdp_capture_screenshot_preserves_default_mock_boundary() {
     abort_test_cdp_server(protocol_server).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_mobile_root_scrolls_using_frame_size() {
+    let html = r#"<!doctype html>
+        <meta name="viewport" content="width=980, minimum-scale=1">
+        <style>
+        html { overflow-y: hidden; background: white; }
+        body { margin: 0; }
+        #wide { width: 100vw; height: 100px; position: relative; }
+        #right { position: absolute; right: 40px; top: 0; width: 20px; height: 20px; background: red; }
+        </style>
+        <div id="wide"><div id="right"></div></div>"#;
+    let url = format!(
+        "data:text/html,{}",
+        percent_encoding::utf8_percent_encode(html, percent_encoding::NON_ALPHANUMERIC),
+    );
+    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        let (addr, server) = spawn_test_protocol_server_with_layout_policy(policy).await;
+        let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+            .await
+            .unwrap();
+        let target = open_screenshot_target(&mut socket, &url).await;
+        let session = target.session_id.as_str();
+        let applied = send_cdp_command(
+            &mut socket,
+            7,
+            "Emulation.setDeviceMetricsOverride",
+            Some(session),
+            json!({"width":375,"height":667,"deviceScaleFactor":1,"mobile":true}),
+        )
+        .await;
+        assert_cdp_success(&applied, 7);
+
+        // OnDemand getters and setters consume the last published layout.
+        let before = capture_png(&mut socket, session, 8).await;
+        let (width, height, pixels) = decode_png(&before);
+        assert_eq!((width, height), (375, 667), "{policy:?}");
+        assert_eq!(pixel(&pixels, width, 365, 10), [255; 4], "{policy:?}");
+
+        let evaluated = send_cdp_command(
+            &mut socket,
+            9,
+            "Runtime.evaluate",
+            Some(session),
+            json!({
+                "returnByValue": true,
+                "expression": r#"(() => {
+                    const root = document.scrollingElement;
+                    root.scrollLeft = 605;
+                    const requestedLeft = root.scrollLeft;
+                    root.scrollLeft = 10000;
+                    root.scrollTop = 10000;
+                    const limits = [root.scrollLeft, root.scrollTop];
+                    root.scrollLeft = 0;
+                    root.scrollTop = 0;
+                    document.getElementById('right').scrollIntoView({block: 'nearest', inline: 'end'});
+                    return {
+                        frame: [innerWidth, innerHeight],
+                        css: [root.clientWidth, root.clientHeight],
+                        wide: document.getElementById('wide').getBoundingClientRect().width,
+                        media: matchMedia('(min-width: 600px)').matches,
+                        requestedLeft, limits,
+                        scrolledIntoView: [scrollX, scrollY],
+                        outside: document.elementFromPoint(375, 10) === null,
+                    };
+                })()"#,
+            }),
+        )
+        .await;
+        assert_cdp_success(&evaluated, 9);
+        assert_eq!(
+            response_by_id(&evaluated, 9)["result"]["result"]["value"],
+            json!({
+                "frame": [375, 667],
+                "css": [980, 1743],
+                "wide": 980,
+                "media": true,
+                "requestedLeft": 605,
+                "limits": [605, 1076],
+                "scrolledIntoView": [565, 0],
+                "outside": true,
+            }),
+            "{policy:?}",
+        );
+
+        let after = capture_png(&mut socket, session, 10).await;
+        let (width, height, pixels) = decode_png(&after);
+        assert_eq!((width, height), (375, 667), "{policy:?}");
+        assert_eq!(
+            pixel(&pixels, width, 365, 10),
+            [255, 0, 0, 255],
+            "{policy:?}",
+        );
+        let hit = send_cdp_command(
+            &mut socket,
+            11,
+            "Runtime.evaluate",
+            Some(session),
+            json!({"expression": r#"
+                (() => {
+                    const hit = document.elementFromPoint(365, 10)?.id;
+                    document.documentElement.style.direction = 'rtl';
+                    document.getElementById('wide').style.width = '1180px';
+                    return hit;
+                })()
+            "#}),
+        )
+        .await;
+        assert_cdp_success(&hit, 11);
+        assert_eq!(
+            response_by_id(&hit, 11)["result"]["result"]["value"],
+            "right",
+            "{policy:?}"
+        );
+
+        capture_png(&mut socket, session, 12).await;
+        let rtl = send_cdp_command(
+            &mut socket,
+            13,
+            "Runtime.evaluate",
+            Some(session),
+            json!({"returnByValue": true, "expression": r#"
+                (() => {
+                    const root = document.scrollingElement;
+                    root.scrollLeft = -10000;
+                    const minimum = [root.scrollLeft, scrollX];
+                    root.scrollLeft = 10000;
+                    return [minimum, root.scrollLeft];
+                })()
+            "#}),
+        )
+        .await;
+        assert_cdp_success(&rtl, 13);
+        assert_eq!(
+            response_by_id(&rtl, 13)["result"]["result"]["value"],
+            json!([[-200, -200], 605]),
+            "{policy:?}",
+        );
+        let _ = socket.close(None).await;
+        abort_test_cdp_server(server).await;
+    }
+}
+
 #[tokio::test]
 async fn websocket_cdp_highlights_and_following_queries_complete_while_paused() {
     let (addr, server) = spawn_test_protocol_server().await;

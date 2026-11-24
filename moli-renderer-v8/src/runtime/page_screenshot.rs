@@ -1,5 +1,6 @@
 //! Screenshot and screencast requests, replies and pixel capture.
 
+use crate::layout_renderer::layout_viewport_for_surface;
 use crate::native_bridge::LayoutPublicationRequest;
 use crate::style_engine::StyloStyleEnvironment;
 use moli_layout::{
@@ -84,6 +85,7 @@ struct RendererVisualState {
     resource_generation: u64,
     viewport_width: u32,
     viewport_height: u32,
+    mobile_frame_size: Option<(u32, u32)>,
     device_pixel_ratio_bits: u32,
     base_background_color: [u8; 4],
 }
@@ -111,6 +113,7 @@ impl RendererVisualStateToken {
                 resource_generation,
                 viewport_width: viewport.css_width,
                 viewport_height: viewport.css_height,
+                mobile_frame_size: viewport.mobile_frame_size(),
                 device_pixel_ratio_bits: viewport.device_pixel_ratio.to_bits(),
                 base_background_color,
             }),
@@ -339,8 +342,7 @@ impl PageVm {
             return Ok(CaptureScreencastFrame(LayoutDisabled));
         }
         let surface = self.vm().viewport_surface().unwrap_or_default();
-        let (width, height) = surface.css_layout_size();
-        let viewport = PaintViewport::new(width, height, surface.device_pixel_ratio as f32);
+        let viewport = layout_viewport_for_surface(surface);
         let visual_state_before = self
             .vm()
             .visual_state_token(
@@ -445,8 +447,12 @@ impl PageVm {
                 vision::BLURRED_VISION_SIGMA_CSS_PX * moli_image::GAUSSIAN_BLUR_OUTSET;
         }
         let surface = self.vm().viewport_surface().unwrap_or_default();
-        let (width, height) = surface.css_layout_size();
-        let viewport = PaintViewport::new(width, height, surface.device_pixel_ratio as f32);
+        let viewport = if reason == moli_layout::LayoutFlushReason::Print {
+            let (width, height) = surface.css_layout_size();
+            PaintViewport::new(width, height, surface.device_pixel_ratio as f32)
+        } else {
+            layout_viewport_for_surface(surface)
+        };
         let layout_started = profile_enabled.then(Instant::now);
         #[cfg(feature = "devtools")]
         let reusable = match paint_session {

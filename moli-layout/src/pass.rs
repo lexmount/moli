@@ -442,6 +442,11 @@ where
     let phase_started = Instant::now();
     let mut world = build_layout_world(source, styles)?;
     world.environment = request.environment;
+    if request.viewport.mobile_frame_size().is_some() {
+        // Mobile viewport scrollbars overlay content. Classic scrollbar
+        // gutters would resize the CSS layout in response to frame overflow.
+        world.viewport_scroll_policy.suppress_classic_scrollbars();
+    }
     let box_tree_elapsed = phase_started.elapsed();
     debug_assert!(
         world

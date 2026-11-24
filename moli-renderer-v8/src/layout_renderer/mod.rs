@@ -12,10 +12,21 @@ use moli_layout::{
     DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
     LayoutViewport, finish_measured_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
 };
+use moli_page_types::ViewportSurface;
 use moli_selector::QueryContainerSizes;
 
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use container_feedback::ContainerQueryFeedback;
+
+pub(crate) fn layout_viewport_for_surface(surface: ViewportSurface) -> LayoutViewport {
+    let (width, height) = surface.css_layout_size();
+    let viewport = LayoutViewport::new(width, height, surface.device_pixel_ratio as f32);
+    if surface.mobile_viewport().is_some() {
+        viewport.with_mobile_frame_size(surface.inner_width, surface.inner_height)
+    } else {
+        viewport
+    }
+}
 
 /// Measured sizes are provisional until a Realtime screen pass publishes.
 /// Captures and failed passes restore the previous tables for CSSOM reads.
