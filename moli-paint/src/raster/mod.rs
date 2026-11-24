@@ -13,7 +13,7 @@ mod filters;
 #[cfg(test)]
 mod tests;
 
-use crate::geometry::{device_transform, to_backend_shape};
+use crate::geometry::{device_transform, to_backend_rect, to_backend_shape};
 use crate::scene::{paint_fragment, sanitize_unit, to_backend_blend_mode, to_backend_color};
 use crate::validation::validate_fragment_stream;
 use crate::{PaintError, RasterImage};
@@ -21,13 +21,15 @@ use anyrender::ImageRenderer;
 use anyrender::PaintScene;
 use anyrender_vello_cpu::VelloCpuImageRenderer;
 use filters::{apply_software_color_filter, is_software_color_filter};
-use moli_layout::{PaintCaptureSurface, PaintColor, PaintFragment, PaintSnapshot};
+use moli_layout::{
+    PaintCaptureSurface, PaintColor, PaintFragment, PaintSnapshot, pixel_snap_paint_rect,
+};
 use peniko::kurbo::{Affine, Rect};
 use peniko::{
     Blob, Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
     ImageSampler,
 };
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 /// Maximum estimated RGBA bytes simultaneously owned by the output and nested
 /// filter surfaces in one raster call.
@@ -91,11 +93,156 @@ pub fn raster_snapshot_into(
         });
     }
     render_snapshot(snapshot, dimensions, pixels);
+    convert_raster_output(pixels, format);
+    Ok(dimensions)
+}
+
+/// Finds the affected device-pixel rows when a snapshot only changes raster
+/// image contents. Anything that may change other paint or sample outside the
+/// damaged rows conservatively invalidates the viewport.
+pub fn raster_damage_rows(
+    previous: &PaintSnapshot,
+    current: &PaintSnapshot,
+    layout: RasterBufferLayout,
+) -> Range<u32> {
+    let full = 0..layout.height;
+    if previous.surface != current.surface
+        || previous.raster_crop.is_some()
+        || current.raster_crop.is_some()
+        || previous.canvas_color != current.canvas_color
+        || previous.fragments != current.fragments
+        || previous.fonts != current.fonts
+        || previous.svg_images != current.svg_images
+        || previous.images.len() != current.images.len()
+    {
+        return full;
+    }
+    if previous
+        .images
+        .iter()
+        .zip(&current.images)
+        .all(|(old, new)| Arc::ptr_eq(&old.image, &new.image))
+    {
+        return 0..0;
+    }
+    let scale = f64::from(current.surface.device_scale);
+    let mut top = layout.height;
+    let mut bottom = 0;
+    for fragment in &current.fragments {
+        match fragment {
+            PaintFragment::PushLayer {
+                filter: Some(_), ..
+            } => return full,
+            PaintFragment::Image(image) => {
+                let Some((old, new)) = previous
+                    .images
+                    .get(image.image.index())
+                    .zip(current.images.get(image.image.index()))
+                else {
+                    return full;
+                };
+                if Arc::ptr_eq(&old.image, &new.image) {
+                    continue;
+                }
+                let Some(rect) =
+                    pixel_snap_paint_rect(image.repeat_bounds.unwrap_or(image.destination))
+                        .and_then(to_backend_rect)
+                else {
+                    return full;
+                };
+                let bounds = device_transform(image.transform, scale).transform_rect_bbox(rect);
+                if !bounds.is_finite() {
+                    return full;
+                }
+                // Widen to include the antialiasing fringe at transformed edges.
+                if bounds.x1 > -2.0 && bounds.x0 < f64::from(layout.width) + 2.0 {
+                    let first = (bounds.y0.floor() - 2.0) as u32;
+                    let end = ((bounds.y1.ceil() + 2.0) as u32).min(layout.height);
+                    if first < end {
+                        top = top.min(first);
+                        bottom = bottom.max(end);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if top < bottom { top..bottom } else { 0..0 }
+}
+
+/// Repaints full-width rows of an existing viewport buffer, rounded out to
+/// backend tile rows. Other rows retain the pixels established by damage
+/// tracking. Filter-bearing snapshots use the regular full-surface path.
+pub fn raster_snapshot_rows_into(
+    snapshot: &PaintSnapshot,
+    pixels: &mut [u8],
+    format: RasterPixelFormat,
+    rows: Range<u32>,
+) -> Result<RasterBufferLayout, PaintError> {
+    let layout = validated_snapshot_layout(snapshot)?;
+    if pixels.len() != layout.byte_len {
+        return Err(PaintError::UnexpectedBufferLength {
+            expected: layout.byte_len,
+            actual: pixels.len(),
+        });
+    }
+    let start = rows.start.min(layout.height);
+    let end = rows.end.min(layout.height);
+    if start >= end {
+        return Ok(layout);
+    }
+    // Vello CPU rasterizes 4-pixel-high tile rows. Keep the original device
+    // alignment so edges take the same coverage path as a full viewport.
+    const TILE_HEIGHT: u32 = 4;
+    let start = start / TILE_HEIGHT * TILE_HEIGHT;
+    let end = (end.div_ceil(TILE_HEIGHT) * TILE_HEIGHT).min(layout.height);
+    if (start == 0 && end == layout.height)
+        || snapshot.fragments.iter().any(|fragment| {
+            matches!(
+                fragment,
+                PaintFragment::PushLayer {
+                    filter: Some(_),
+                    ..
+                }
+            )
+        })
+    {
+        render_snapshot(snapshot, layout, pixels);
+        convert_raster_output(pixels, format);
+        return Ok(layout);
+    }
+    let row_bytes = layout.width as usize * 4;
+    let target = &mut pixels[start as usize * row_bytes..end as usize * row_bytes];
+    let region = RasterBufferLayout {
+        width: layout.width,
+        height: end - start,
+        byte_len: target.len(),
+    };
+    let mut recording = anyrender::Scene::new();
+    paint_fragment_stream(
+        &mut recording,
+        snapshot,
+        &snapshot.fragments,
+        f64::from(snapshot.surface.device_scale),
+        layout,
+    );
+    let mut renderer = VelloCpuImageRenderer::new(region.width, region.height);
+    renderer.render(
+        |scene| {
+            paint_canvas(scene, snapshot.canvas_color, region);
+            scene.append_scene(recording, Affine::translate((0.0, -f64::from(start))));
+        },
+        target,
+    );
+    convert_raster_output(target, format);
+    Ok(layout)
+}
+
+fn convert_raster_output(pixels: &mut [u8], format: RasterPixelFormat) {
     match format {
         RasterPixelFormat::Rgba8 => unpremultiply::<false>(pixels),
         RasterPixelFormat::Bgra8 => unpremultiply::<true>(pixels),
     }
-    Ok(dimensions)
 }
 
 fn validated_snapshot_layout(snapshot: &PaintSnapshot) -> Result<RasterBufferLayout, PaintError> {
