@@ -26,8 +26,8 @@ use super::{
     StyloAnonymousBoxKind, StyloComputedStyleSnapshot, clear_element_styles_for_resolution,
     document_quirks_mode, element_style_is_current, marker_style_decision,
     populate_inline_style_attribute_for_resolution, publish_resolved_element_styles,
-    style_validation_path_needs_resolution, stylo_pseudo_element_for_computed_style,
-    with_cached_lazy_pseudo_style,
+    resolve_with_root_font_size, style_validation_path_needs_resolution,
+    stylo_pseudo_element_for_computed_style, with_cached_lazy_pseudo_style,
 };
 
 /// One binding and stylesheet read scope for a stable document world. Create
@@ -341,14 +341,16 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                         .bloom_filter
                         .insert_parents_recovering(element, depth);
                     context.thread_local.current_dom_depth = depth;
-                    let styles = StyleResolverForElement::new(
-                        element,
-                        context,
-                        RuleInclusion::All,
-                        PseudoElementResolution::IfApplicable,
-                    )
-                    .resolve_style_with_default_parents()
-                    .into();
+                    let styles = resolve_with_root_font_size(context, |context| {
+                        StyleResolverForElement::new(
+                            element,
+                            context,
+                            RuleInclusion::All,
+                            PseudoElementResolution::IfApplicable,
+                        )
+                        .resolve_style_with_default_parents()
+                        .into()
+                    });
                     context.thread_local.bloom_filter.push(element);
                     styles
                 });

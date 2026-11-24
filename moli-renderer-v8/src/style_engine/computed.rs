@@ -926,6 +926,34 @@ fn publish_resolved_element_styles<E: TElement>(
         );
 }
 
+fn resolve_with_root_font_size<E: TElement>(
+    context: &mut StyleContext<E>,
+    resolve: impl Fn(&mut StyleContext<E>) -> ElementStyles,
+) -> ElementStyles {
+    let styles = resolve(context);
+    let primary = styles.primary();
+    if !primary
+        .flags
+        .contains(ComputedValueFlags::IS_ROOT_ELEMENT_STYLE)
+    {
+        return styles;
+    }
+
+    // On-demand resolution skips Stylo's finish_restyle, which normally
+    // publishes the rem basis before the document's descendants cascade.
+    let device = context.shared.stylist.device();
+    let size = primary.get_font().clone_font_size().computed_size();
+    let font_size = primary.effective_zoom.unzoom(size.px());
+    let recascade_pseudos = !styles.pseudos.is_empty() && device.root_font_size().px() != font_size;
+    device.set_root_font_size(font_size);
+    if recascade_pseudos {
+        // Eager pseudos were cascaded together with the root using the old basis.
+        context.thread_local.rule_cache = Default::default();
+        return resolve(context);
+    }
+    styles
+}
+
 fn element_style_is_current<E: TElement>(
     world: &DocumentStyleWorld,
     element: E,
@@ -960,7 +988,9 @@ fn resolve_element_styles<'dom>(
             );
             let target = DomHandle::new(element.as_node().debug_id());
             clear_element_styles_for_resolution(world, element);
-            let styles = resolve_style(context, element, RuleInclusion::All, pseudo_element, None);
+            let styles = resolve_with_root_font_size(context, |context| {
+                resolve_style(context, element, RuleInclusion::All, pseudo_element, None)
+            });
             let required_generation = world
                 .document_state
                 .lazy_invalidation_roots
@@ -1013,7 +1043,9 @@ where
             continue;
         }
         clear_element_styles_for_resolution(world, ancestor);
-        let styles = resolve_style(context, ancestor, RuleInclusion::All, None, None);
+        let styles = resolve_with_root_font_size(context, |context| {
+            resolve_style(context, ancestor, RuleInclusion::All, None, None)
+        });
         resolution_count = resolution_count.saturating_add(1);
         publish_resolved_element_styles(world, ancestor, styles, required_generation);
         force_descendants = true;
