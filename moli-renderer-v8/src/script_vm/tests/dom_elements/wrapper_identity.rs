@@ -275,6 +275,44 @@ fn borrowed_shadow_and_template_accessors_use_the_receiver_realm() {
 }
 
 #[test]
+fn shadow_root_created_after_adoption_uses_the_node_document_realm() {
+    let mut vm = new_parsed_test_vm(
+        "https://wrapper-shadow-adoption.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+    let result = vm
+        .eval(
+            r#"
+        (() => {
+          const child = document.body.appendChild(document.createElement("iframe")).contentWindow;
+          const failures = [];
+          for (const [source, target] of [[window, child], [child, window]]) {
+            const sourceDocs = [source.document, source.document.implementation.createHTMLDocument("")];
+            const targetDocs = [target.document, target.document.implementation.createHTMLDocument("")];
+            for (const sourceDoc of sourceDocs) {
+              for (const targetDoc of targetDocs) {
+                const host = targetDoc.adoptNode(sourceDoc.createElement("div"));
+                const root = host.attachShadow({mode: "open"});
+                const description = [source === window, sourceDoc === source.document,
+                                     targetDoc === target.document].join(":");
+                if (!(root instanceof target.ShadowRoot) || root instanceof source.ShadowRoot) {
+                  failures.push("prototype:" + description);
+                }
+                if (root.ownerDocument !== targetDoc || root.host !== host || host.shadowRoot !== root) {
+                  failures.push("identity:" + description);
+                }
+              }
+            }
+          }
+          return JSON.stringify(failures);
+        })()
+    "#,
+        )
+        .expect("new shadow roots should use the node document's realm after adoption");
+    assert_eq!(result, "[]");
+}
+
+#[test]
 fn child_form_indexed_and_named_access_wraps_unseen_controls_in_its_realm() {
     let mut vm = new_parsed_test_vm(
         "https://wrapper-form-access.test/",
