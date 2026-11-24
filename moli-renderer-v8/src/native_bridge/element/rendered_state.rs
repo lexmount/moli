@@ -1,3 +1,4 @@
+use moli_layout::LayoutError;
 use moli_webapi::element_visibility::parse_check_visibility_options;
 use std::collections::HashSet;
 
@@ -165,10 +166,31 @@ pub(crate) fn element_is_being_rendered(runtime: &PageScriptHost, handle: DomHan
     ElementRenderedState::read(runtime, handle).box_state() == ElementBoxState::Box
 }
 
-pub(crate) fn text_source_is_in_rendered_content(
+pub(crate) fn rendered_text_sources(
     scope: &mut StyleObservation<'_>,
-    handle: DomHandle,
-) -> bool {
+    document: DomHandle,
+    sources: &[DomHandle],
+) -> Result<HashSet<DomHandle>, LayoutError> {
+    let mut rendered = match super::geometry::observable_sources_with_fragments(
+        scope.runtime(),
+        document,
+        sources,
+    ) {
+        Ok(rendered) => rendered,
+        Err(LayoutError::NoLayoutSnapshot) => HashSet::new(),
+        Err(error) => return Err(error),
+    };
+    // An on-demand layout snapshot can predate DOM edits in this script turn.
+    // Resolve missing text sources against the current rendered tree.
+    for &source in sources {
+        if !rendered.contains(&source) && text_source_is_in_rendered_content(scope, source) {
+            rendered.insert(source);
+        }
+    }
+    Ok(rendered)
+}
+
+fn text_source_is_in_rendered_content(scope: &mut StyleObservation<'_>, handle: DomHandle) -> bool {
     let state = ElementRenderedState::read_in_scope(scope, handle);
     if state.box_state() == ElementBoxState::NoBox
         || !state
@@ -179,15 +201,20 @@ pub(crate) fn text_source_is_in_rendered_content(
     {
         return false;
     }
-    let runtime = scope.runtime();
-    let document = runtime.dom_host().owner_document_handle(handle);
-    let parents = std::iter::successors(rendered_tree_parent(runtime, handle), |parent| {
-        rendered_tree_parent(runtime, *parent)
-    });
-    parents
-        .take_while(|parent| Some(*parent) != document)
-        .filter_map(|parent| runtime.dom_host().node(parent)?.as_element())
+    rendered_dom_ancestors(scope.runtime(), handle)
         .all(|element| !rendered_element_ignores_dom_children(element) && !element.is_html_select())
+}
+
+pub(super) fn rendered_dom_ancestors(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+) -> impl Iterator<Item = &Element> {
+    let document = runtime.dom_host().owner_document_handle(handle);
+    std::iter::successors(rendered_tree_parent(runtime, handle), move |parent| {
+        rendered_tree_parent(runtime, *parent)
+    })
+    .take_while(move |parent| Some(*parent) != document)
+    .filter_map(move |parent| runtime.dom_host().node(parent)?.as_element())
 }
 
 pub(super) fn rendered_element_ignores_dom_children(element: &Element) -> bool {
@@ -200,9 +227,16 @@ pub(super) fn rendered_element_ignores_dom_children(element: &Element) -> bool {
         || element.is_html_element("object")
         || element.is_html_element("img")
         || element.is_html_element("embed")
-        // An SVG stop does not establish a rendered text subtree.
         || (element.namespace() == "http://www.w3.org/2000/svg"
-            && element.local_name() == "stop")
+            && (element.local_name() == "stop"
+                || svg_local_name_is_non_rendered_container(element.local_name())))
+}
+
+pub(crate) fn svg_local_name_is_non_rendered_container(local_name: &str) -> bool {
+    matches!(
+        local_name,
+        "clipPath" | "defs" | "marker" | "mask" | "pattern" | "symbol"
+    )
 }
 
 impl ElementRenderedState {

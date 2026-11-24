@@ -1,5 +1,6 @@
 use super::callbacks::*;
 use super::*;
+use crate::native_bridge::element::svg_local_name_is_non_rendered_container;
 use crate::web_api_interfaces;
 pub(super) use moli_webapi::svg_values::{
     SvgAngleObjectDeclaration, SvgAnimatedAngleObjectDeclaration,
@@ -1487,13 +1488,6 @@ fn svg_bbox_has_non_rendered_ancestor(
         current = node.parent_node_id();
     }
     false
-}
-
-fn svg_local_name_is_non_rendered_container(local_name: &str) -> bool {
-    matches!(
-        local_name,
-        "clipPath" | "defs" | "marker" | "mask" | "pattern" | "symbol"
-    )
 }
 
 fn svg_element_has_display_none(

@@ -19,11 +19,11 @@ use super::super::{
 };
 use super::geometry::read_client_rects;
 use super::{
-    html_element_getter_receiver, html_element_setter_receiver, observable_sources_with_fragments,
-    property_string_value,
+    html_element_getter_receiver, html_element_setter_receiver, property_string_value,
     rendered_state::{
         ElementBoxState, ElementRenderedState, ElementRenderedStyle,
-        rendered_child_participates_in_flat_tree, rendered_element_ignores_dom_children,
+        rendered_child_participates_in_flat_tree, rendered_dom_ancestors,
+        rendered_element_ignores_dom_children, rendered_text_sources,
     },
     styles::StyleObservation,
     trusted_types::{TrustedHtmlSink, trusted_html_sink_dom_string},
@@ -750,24 +750,20 @@ fn node_inner_text(
     if !runtime.dom_host().is_connected(handle) {
         return Ok(node.text_content(runtime.dom_host().dom()));
     }
-    let sources = inner_text_source_handles(runtime, handle);
+    let mut style_scope = StyleObservation::new(runtime);
     let rendered_text_sources = if let Some(document) = runtime.layout_document_for_source(handle) {
-        match observable_sources_with_fragments(runtime, document, &sources) {
-            Ok(sources) => sources,
-            Err(moli_layout::LayoutError::NoLayoutSnapshot) => {
-                return Ok(node.text_content(runtime.dom_host().dom()));
-            }
-            Err(error) => return Err(error),
-        }
+        let sources = inner_text_source_handles(runtime, handle);
+        rendered_text_sources(&mut style_scope, document, &sources)?
     } else {
         HashSet::new()
     };
-    let mut style_scope = StyleObservation::new(runtime);
     let rendered_state = ElementRenderedState::read_in_scope(&mut style_scope, handle);
     if rendered_state.has_content_visibility_lock() {
         return Ok(String::new());
     }
-    if rendered_state.box_state() == ElementBoxState::NoBox {
+    if rendered_state.box_state() == ElementBoxState::NoBox
+        || rendered_dom_ancestors(runtime, handle).any(rendered_element_ignores_dom_children)
+    {
         return Ok(node.text_content(runtime.dom_host().dom()));
     }
     // The lightweight rendered-state path derives box presence from computed
