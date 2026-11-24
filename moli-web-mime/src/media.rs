@@ -39,6 +39,6 @@ pub fn is_media_source_type_supported(input: &str) -> bool {
         codecs
             .split(',')
             .map(str::trim)
-            .any(|codec| codec.to_ascii_lowercase().starts_with("avc1."))
+            .all(|codec| codec.to_ascii_lowercase().starts_with("avc1."))
     })
 }
