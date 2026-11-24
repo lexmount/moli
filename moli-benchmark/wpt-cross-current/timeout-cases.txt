@@ -28,7 +28,6 @@ dom/events/EventListener-invoke-legacy.html
 dom/events/scrolling/scrollend-fires-to-text-input.html
 dom/events/webkit-animation-end-event.html
 dom/events/webkit-animation-iteration-event.html
-dom/events/webkit-animation-start-event.html
 dom/events/webkit-transition-end-event.html
 editing/crashtests/designMode-caret-change.html
 editing/crashtests/inserthorizontalrule-in-textarea-in-editor-and-undo-on-error-events.html

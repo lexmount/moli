@@ -4901,6 +4901,7 @@ dom/events/scrolling/save-iframe-scroll-offset-when-display-none.html
 dom/events/scrolling/scroll-event-fired-to-element.html
 dom/events/scrolling/scrollend-event-fired-after-instant-scroll-in-microtask.html
 dom/events/shadow-relatedTarget.html
+dom/events/webkit-animation-start-event.html
 dom/events/window-composed-path.html
 dom/historical-mutation-events.html
 dom/historical.html
