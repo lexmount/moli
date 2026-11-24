@@ -75,3 +75,6 @@ fn document_svg_root_uses_registered_document_proxy_identity() {
         "true"
     );
 }
+
+#[path = "svg_animated_number.rs"]
+mod svg_animated_number;
