@@ -10,7 +10,7 @@ use moli_core::page::{
 };
 use tokio::sync::watch;
 
-use crate::conn::command_admission::SyntheticScrollAdmissionQueue;
+use crate::conn::command_admission::CommandAdmissionQueue;
 
 use super::page_residence_token::{TargetPageResidencePublisher, TargetPageResidenceToken};
 use super::{NavigationRequestId, RendererPageResidenceIdentity, TargetPageAttachmentId};
@@ -403,7 +403,7 @@ pub(crate) struct TargetPageSlot {
     loaded_page_absence_reason: TargetPageAbsenceReason,
     page_attachment_id: Option<TargetPageAttachmentId>,
     page_residence_publisher: Option<TargetPageResidencePublisher>,
-    pub(in crate::conn) synthetic_scroll_admissions: SyntheticScrollAdmissionQueue,
+    pub(in crate::conn) synthetic_scroll_admissions: CommandAdmissionQueue,
     pending_navigation_request: Option<PendingNavigationRequest>,
     committed_document_navigation: Option<DocumentNavigationToken>,
     renderer_document_lifecycle: RendererDocumentLifecycleProtocolState,
@@ -693,7 +693,7 @@ impl TargetPageSlot {
     }
 
     fn supersede_page_residence(&mut self) {
-        self.synthetic_scroll_admissions = SyntheticScrollAdmissionQueue::default();
+        self.synthetic_scroll_admissions = CommandAdmissionQueue::default();
         if let Some(publisher) = self.page_residence_publisher.take() {
             publisher.supersede();
         }

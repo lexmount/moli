@@ -3,6 +3,16 @@ use super::child_frame_nodes::child_frame_document_contains_live_handle;
 use crate::script_vm::MouseDispatchCompletion;
 
 impl PageVm {
+    pub(in crate::runtime) fn bind_wheel_input_controller(
+        &mut self,
+        controller: std::rc::Rc<std::cell::RefCell<crate::wheel_input::WheelInputController>>,
+    ) {
+        if !std::rc::Rc::ptr_eq(&self.vm().wheel_input, &controller) {
+            controller.borrow_mut().retire_document();
+            self.vm_mut().wheel_input = controller;
+        }
+    }
+
     pub(crate) fn dispatch_mouse_event_at_point_with_pointer(
         &mut self,
         x: f64,
@@ -32,7 +42,6 @@ impl PageVm {
             pointer,
             modifiers,
             intercept_drags,
-            true,
             MouseDispatchCompletion::FinishTurn,
         )?;
         #[cfg(feature = "molio")]
@@ -64,6 +73,9 @@ impl PageVm {
             "Position out of bounds"
         );
         gesture.validate_anchor(true);
+        if let Some(owner) = self.vm().wheel_document_owner() {
+            let _ = gesture.accepts_document(owner);
+        }
         Ok(RendererInputDispatchOutcome::default())
     }
 
@@ -73,10 +85,40 @@ impl PageVm {
         y: f64,
         delta_x: f64,
         delta_y: f64,
-        cancelable: bool,
+        end: bool,
         intercept_drags: bool,
         gesture: crate::runtime::RendererSyntheticWheelGesture,
     ) -> Result<RendererInputDispatchOutcome> {
+        use crate::wheel_input::{WheelInput, WheelPhase, WheelSource};
+        let Some(owner) = self.vm().wheel_document_owner() else {
+            return Ok(RendererInputDispatchOutcome::default());
+        };
+        if !gesture.accepts_document(owner) {
+            return Ok(RendererInputDispatchOutcome::default());
+        }
+        // Aura filters producer samples (including End) before platform
+        // phase inference. Native terminal phases bypass this producer filter.
+        if end && !self.synthetic_wheel_anchor_in_bounds(x, y) {
+            return Ok(RendererInputDispatchOutcome::default());
+        }
+        if end {
+            return self.vm_mut().dispatch_wheel_input(
+                WheelInput {
+                    position: (x, y),
+                    delta: (0., 0.),
+                    modifiers: 0,
+                    timestamp: std::time::Instant::now(),
+                    phase: WheelPhase::Ended,
+                    source: WheelSource::Platform,
+                },
+                -1,
+                None,
+                0,
+                RendererPointerEventProperties::default(),
+                intercept_drags,
+                MouseDispatchCompletion::FinishTurn,
+            );
+        }
         // Root widget coordinates are independent of capture scale.
         let in_bounds = self.synthetic_wheel_anchor_in_bounds(x, y);
         anyhow::ensure!(gesture.validate_anchor(in_bounds), "Position out of bounds");
@@ -86,14 +128,21 @@ impl PageVm {
             // update while the protocol continues its elapsed-time progress.
             return Ok(RendererInputDispatchOutcome::default());
         }
-        self.vm_mut().dispatch_gesture_wheel(
-            x,
-            y,
-            delta_x,
-            delta_y,
-            cancelable,
+        self.vm_mut().dispatch_wheel_input(
+            WheelInput {
+                position: (x, y),
+                delta: (delta_x, delta_y),
+                modifiers: 0,
+                timestamp: std::time::Instant::now(),
+                phase: WheelPhase::Unspecified,
+                source: WheelSource::Platform,
+            },
+            -1,
+            None,
+            0,
+            RendererPointerEventProperties::default(),
             intercept_drags,
-            &gesture,
+            MouseDispatchCompletion::FinishTurn,
         )
     }
 

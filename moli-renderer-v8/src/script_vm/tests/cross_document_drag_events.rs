@@ -179,7 +179,6 @@ fn start_native_drag(
                 RendererPointerEventProperties::default(),
                 0,
                 true,
-                true,
                 MouseDispatchCompletion::FinishTurn,
             )
             .unwrap();

@@ -116,6 +116,8 @@ pub struct RendererViewportPointerInput {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RendererViewportWheelPhase {
+    /// A mouse wheel whose platform does not provide transaction phases.
+    Unspecified,
     Started,
     Moved,
     Ended,
@@ -137,8 +139,10 @@ pub struct RendererViewportWheelInput {
 
 impl RendererViewportWheelInput {
     pub(crate) fn coalesce(&mut self, next: &Self) -> bool {
-        if self.phase != RendererViewportWheelPhase::Moved
-            || next.phase != RendererViewportWheelPhase::Moved
+        if !matches!(
+            self.phase,
+            RendererViewportWheelPhase::Moved | RendererViewportWheelPhase::Unspecified
+        ) || next.phase != self.phase
             || self.document != next.document
             || self.viewport_revision != next.viewport_revision
             || self.buttons != next.buttons
@@ -321,25 +325,30 @@ impl PageVm {
         Ok(())
     }
 
-    fn dispatch_viewport_mouse(
-        &mut self,
-        input: RendererViewportPointerInput,
-        delta: (f64, f64),
-    ) -> anyhow::Result<Option<RendererInputDispatchOutcome>> {
-        if input.document != self.document_lifecycle.identity()
-            || !self.document_settings.document_activity.visible
-            || !self.viewport_frames.as_ref().is_some_and(|state| {
-                state.subscription.viewport_revision == input.viewport_revision
+    fn accepts_viewport_input(
+        &self,
+        document: RendererDocumentLifecycleIdentity,
+        revision: u64,
+    ) -> bool {
+        document == self.document_lifecycle.identity()
+            && self.document_settings.document_activity.visible
+            && self.viewport_frames.as_ref().is_some_and(|state| {
+                state.subscription.viewport_revision == revision
                     && state
                         .subscription
                         .updates
                         .borrow()
                         .as_ref()
-                        .is_some_and(|frame| {
-                            frame.document == input.document && frame.snapshot.is_some()
-                        })
+                        .is_some_and(|frame| frame.document == document && frame.snapshot.is_some())
             })
-        {
+    }
+
+    fn dispatch_viewport_mouse(
+        &mut self,
+        input: RendererViewportPointerInput,
+        delta: (f64, f64),
+    ) -> anyhow::Result<Option<RendererInputDispatchOutcome>> {
+        if !self.accepts_viewport_input(input.document, input.viewport_revision) {
             return Ok(None);
         }
         match self.dispatch_mouse_event_at_point_with_pointer(
@@ -371,22 +380,47 @@ impl PageVm {
         &mut self,
         input: RendererViewportWheelInput,
     ) -> anyhow::Result<()> {
-        // Wheel input observes the buttons admitted by pointer dispatch.
+        use crate::wheel_input::{WheelInput, WheelPhase, WheelSource};
+        if input.document != self.document_lifecycle.identity() {
+            return Ok(());
+        }
+        let terminal = matches!(
+            input.phase,
+            RendererViewportWheelPhase::Ended | RendererViewportWheelPhase::Cancelled
+        );
+        if !terminal && !self.accepts_viewport_input(input.document, input.viewport_revision) {
+            return Ok(());
+        }
+        let phase = match input.phase {
+            RendererViewportWheelPhase::Ended => WheelPhase::Ended,
+            RendererViewportWheelPhase::Cancelled => WheelPhase::Cancelled,
+            RendererViewportWheelPhase::Unspecified => WheelPhase::Unspecified,
+            RendererViewportWheelPhase::Started => WheelPhase::Began,
+            RendererViewportWheelPhase::Moved => WheelPhase::Changed,
+        };
         let buttons = self.viewport_pressed_buttons();
-        let result = self.dispatch_viewport_mouse(
-            RendererViewportPointerInput {
-                document: input.document,
-                viewport_revision: input.viewport_revision,
+        let result = self.vm_mut().dispatch_wheel_input(
+            WheelInput {
                 position: input.position,
-                event: "wheel",
-                button: -1,
-                buttons,
-                click_count: 0,
+                delta: input.delta,
                 modifiers: input.modifiers,
+                timestamp: std::time::Instant::now(),
+                phase,
+                source: WheelSource::Platform,
             },
-            input.delta,
+            -1,
+            Some(buttons),
+            0,
+            super::RendererPointerEventProperties::default(),
+            false,
+            crate::script_vm::MouseDispatchCompletion::FinishTurn,
         );
         if let Err(error) = &result {
+            if error.downcast_ref::<moli_layout::LayoutError>()
+                == Some(&moli_layout::LayoutError::NoLayoutSnapshot)
+            {
+                return Ok(());
+            }
             tracing::warn!(%error, "viewport wheel dispatch failed");
         }
         result.map(drop)

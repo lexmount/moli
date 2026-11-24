@@ -13,8 +13,9 @@ mod ace_page_tasks;
 mod cursor;
 mod drag_source;
 mod mouse_boundary;
-mod synthetic_wheel;
 mod touch_tap;
+mod wheel;
+use crate::native_bridge::element::InputSurfaceHit;
 use drag_source::dispatch_drag_source_event;
 use mouse_boundary::dispatch_mouse_boundary_events;
 use touch_tap::dispatch_touch_tap_activation;
@@ -1051,7 +1052,6 @@ impl ScriptVm {
             pointer,
             0,
             false,
-            true,
             MouseDispatchCompletion::FinishTurn,
         )
     }
@@ -1069,10 +1069,24 @@ impl ScriptVm {
         pointer: RendererPointerEventProperties,
         modifiers: u8,
         intercept_drags: bool,
-        wheel_cancelable: bool,
         completion: MouseDispatchCompletion,
     ) -> Result<RendererInputDispatchOutcome> {
-        self.dispatch_mouse_input_with_gesture(
+        if event_name == "wheel" {
+            return self.dispatch_direct_wheel(
+                x,
+                y,
+                button,
+                buttons,
+                click_count,
+                delta_x,
+                delta_y,
+                pointer,
+                modifiers,
+                intercept_drags,
+                completion,
+            );
+        }
+        self.dispatch_mouse_input_to_target(
             x,
             y,
             event_name,
@@ -1084,13 +1098,13 @@ impl ScriptVm {
             pointer,
             modifiers,
             intercept_drags,
-            wheel_cancelable,
+            true,
             completion,
             None,
         )
     }
 
-    fn dispatch_mouse_input_with_gesture(
+    fn dispatch_mouse_input_to_target(
         &mut self,
         x: f64,
         y: f64,
@@ -1105,18 +1119,18 @@ impl ScriptVm {
         intercept_drags: bool,
         wheel_cancelable: bool,
         completion: MouseDispatchCompletion,
-        gesture: Option<&crate::runtime::RendererSyntheticWheelGesture>,
+        wheel_targets: Option<(
+            InputSurfaceHit,
+            WheelScrollTarget,
+            crate::wheel_input::PreparedWheel,
+        )>,
     ) -> Result<RendererInputDispatchOutcome> {
-        let (surface_hit, wheel_scroll_target) = if let Some(gesture) = gesture {
-            let Some((hit, scroll_target)) =
-                self.prepare_gesture_wheel(gesture, x, y, delta_x, delta_y)?
-            else {
-                return self.finish_input_event_dispatch_turn(Ok(input_dispatch_outcome(false)));
+        let (surface_hit, wheel_scroll_target, prepared_wheel) =
+            if let Some((hit, target, prepared)) = wheel_targets {
+                (hit, Some(target), Some(prepared))
+            } else {
+                (self.mouse_input_surface_hit(x, y, event_name)?, None, None)
             };
-            (hit, Some(scroll_target))
-        } else {
-            (self.mouse_input_surface_hit(x, y, event_name)?, None)
-        };
         let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
         let is_release = event_name == "mouseup";
         let full_release = is_release && prepared.buttons == 0;
@@ -1158,22 +1172,6 @@ impl ScriptVm {
             wheel_cancelable,
             wheel_scroll_target.as_ref(),
         );
-        if let Some(gesture) = gesture {
-            let mut targets = gesture.targets.lock();
-            match result.as_ref().ok().and_then(|outcome| outcome.wheel) {
-                Some(
-                    RendererWheelDispatchOutcome::Scrolled
-                    | RendererWheelDispatchOutcome::Unconsumed,
-                ) => {
-                    targets.scroll_target = wheel_scroll_target;
-                }
-                _ => {
-                    // Blink retargets the next wheel after a canceled event.
-                    targets.wheel = None;
-                    targets.ancestors.clear();
-                }
-            }
-        }
         if is_release {
             self.suppress_compat_mouse_events = false;
         }
@@ -1181,11 +1179,28 @@ impl ScriptVm {
             self.mouse_routed_frame = None;
             self._context_host.borrow_mut().clear_mouse_press();
         }
-        // For standalone input the event scope covers the turn-end checkpoint.
-        match completion {
+        // Capture the actual ACK before a checkpoint error can replace the
+        // command result. Keep the input scope through the entire checkpoint.
+        let wheel_outcome = result.as_ref().ok().and_then(|outcome| outcome.wheel);
+        let result = match completion {
             MouseDispatchCompletion::FinishTurn => self.finish_input_event_dispatch_turn(result),
             MouseDispatchCompletion::DeferToBatch => result,
+        };
+        if let Some(mut prepared) = prepared_wheel {
+            if matches!(
+                wheel_outcome,
+                Some(
+                    RendererWheelDispatchOutcome::Scrolled
+                        | RendererWheelDispatchOutcome::Unconsumed
+                )
+            ) {
+                prepared.targets.scroll_target = wheel_scroll_target;
+            }
+            self.wheel_input
+                .borrow_mut()
+                .acknowledge(prepared, wheel_outcome);
         }
+        result
     }
 
     #[cfg(feature = "molio")]

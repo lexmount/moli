@@ -16,6 +16,7 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     #[cfg(feature = "devtools")]
     {
         vm._context_host.borrow_mut().clear_mouse_input_state();
+        vm.wheel_input.borrow_mut().retire_document();
         vm.pending_touch_tap = None;
         vm.mouse_routed_frame = None;
         // Target views were disabled when their dispatch ended. Retiring the

@@ -958,6 +958,8 @@ pub(super) struct ScriptVm {
     script_execution_memory: script_execution_memory::ScriptExecutionMemoryCounters,
     runtime_observable_source_queue: RendererRuntimeObservableSourceQueue,
     page_context_cancel_tx: RendererPageContextCancelSender,
+    #[cfg(feature = "devtools")]
+    pub(crate) wheel_input: Rc<RefCell<crate::wheel_input::WheelInputController>>,
     pressed_mouse_buttons: i32,
     hovered_mouse_handle: Option<DomHandle>,
     #[cfg(feature = "devtools")]
@@ -2484,6 +2486,8 @@ impl ScriptVmDefaultWorldBootstrap {
             script_execution_memory:
                 script_execution_memory::ScriptExecutionMemoryCounters::default(),
             runtime_observable_source_queue: RendererRuntimeObservableSourceQueue::default(),
+            #[cfg(feature = "devtools")]
+            wheel_input: Default::default(),
             pressed_mouse_buttons: 0,
             hovered_mouse_handle: None,
             #[cfg(feature = "devtools")]

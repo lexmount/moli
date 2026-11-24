@@ -401,7 +401,13 @@ impl MoliSurface {
     }
 
     fn wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some((document, position)) = self.viewport_input_position(event.position) {
+        let terminal = matches!(event.touch_phase, TouchPhase::Ended | TouchPhase::Cancelled);
+        let position = self.viewport_input_position(event.position).or_else(|| {
+            terminal
+                .then(|| self.document.map(|document| (document, (0., 0.))))
+                .flatten()
+        });
+        if let Some((document, position)) = position {
             let delta = event.delta.pixel_delta(px(40.));
             self.send(TabCommand::Wheel(RendererViewportWheelInput {
                 document,
@@ -415,6 +421,10 @@ impl MoliSurface {
                 modifiers: modifiers(event.modifiers),
                 phase: match event.touch_phase {
                     TouchPhase::Started => RendererViewportWheelPhase::Started,
+                    // GPUI represents an unphased line wheel as Moved.
+                    TouchPhase::Moved if !event.delta.precise() => {
+                        RendererViewportWheelPhase::Unspecified
+                    }
                     TouchPhase::Moved => RendererViewportWheelPhase::Moved,
                     TouchPhase::Ended => RendererViewportWheelPhase::Ended,
                     TouchPhase::Cancelled => RendererViewportWheelPhase::Cancelled,

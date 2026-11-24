@@ -114,7 +114,7 @@ pub trait PageInputExt {
         y: f64,
         delta_x: f64,
         delta_y: f64,
-        cancelable: bool,
+        end: bool,
         intercept_drags: bool,
         gesture: crate::page::RendererSyntheticWheelGesture,
     ) -> Result<PendingPageCommand>;
@@ -340,7 +340,7 @@ impl PageInputExt for Page {
         y: f64,
         delta_x: f64,
         delta_y: f64,
-        cancelable: bool,
+        end: bool,
         intercept_drags: bool,
         gesture: crate::page::RendererSyntheticWheelGesture,
     ) -> Result<PendingPageCommand> {
@@ -350,7 +350,7 @@ impl PageInputExt for Page {
                 y,
                 delta_x,
                 delta_y,
-                cancelable,
+                end,
                 intercept_drags,
                 gesture,
             },

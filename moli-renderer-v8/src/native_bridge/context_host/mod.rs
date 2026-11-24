@@ -145,6 +145,7 @@ mod messages;
 mod module_owner_tasks;
 #[cfg(feature = "devtools")]
 mod mouse_click;
+mod wheel_targets;
 #[cfg(feature = "devtools")]
 pub(crate) use mouse_click::MouseReleaseFollowUp;
 #[cfg(feature = "devtools")]
@@ -999,7 +1000,7 @@ pub(crate) struct PageScriptHost {
     #[cfg(feature = "devtools")]
     mouse_input: mouse_click::MouseInputState,
     #[cfg(feature = "devtools")]
-    synthetic_scroll_targets: RefCell<Vec<mouse_click::SyntheticScrollTargetWatch>>,
+    wheel_scroll_targets: RefCell<Vec<wheel_targets::WheelTargetWatch>>,
     lazy_media_load_candidates: HashSet<DomHandle>,
     canvas_resources: canvas_resources::CanvasResourceStore,
     image_resources: image_resources::ImageResourceStore,

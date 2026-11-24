@@ -47,7 +47,7 @@ pub enum RendererDevToolsPageCommand {
         y: f64,
         delta_x: f64,
         delta_y: f64,
-        cancelable: bool,
+        end: bool,
         intercept_drags: bool,
     },
     DispatchTouchEvent {

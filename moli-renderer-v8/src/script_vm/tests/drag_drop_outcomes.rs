@@ -47,7 +47,6 @@ fn start_drag(vm: &mut ScriptVm) -> RendererDragData {
                 RendererPointerEventProperties::default(),
                 0,
                 true,
-                true,
                 MouseDispatchCompletion::FinishTurn,
             )
             .expect("dispatch native drag gesture");

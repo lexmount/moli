@@ -57,7 +57,6 @@ fn mouse(
         RendererPointerEventProperties::default(),
         0,
         intercept,
-        true,
         MouseDispatchCompletion::FinishTurn,
     )
     .unwrap()

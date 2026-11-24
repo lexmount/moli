@@ -161,6 +161,28 @@ fn prepare(
                         }
                         started += segment.duration;
                     }
+                    let end = SyntheticWheel {
+                        owner: owner.clone(),
+                        page: page.clone(),
+                        x,
+                        y,
+                        delta_x: 0.0,
+                        delta_y: 0.0,
+                        end: true,
+                        gesture: sequence.gesture.clone(),
+                    };
+                    if let Some(pending) = driver
+                        .with_state(move |state| state.prepare_synthetic_wheel(end))
+                        .map_err(input_workflow_error)??
+                    {
+                        let _ = complete_wheel(
+                            &mut driver,
+                            pending.wait().await,
+                            page.target_id().map(str::to_owned),
+                            context.context_mut(),
+                        )
+                        .await?;
+                    }
                 }
                 Ok(())
             }
@@ -176,41 +198,12 @@ fn prepare(
 
 pub(super) struct SyntheticWheelSequence {
     gesture: RendererSyntheticWheelGesture,
-    began: Option<WheelSequenceBegin>,
-    first_update: bool,
-}
-
-struct WheelSequenceBegin {
-    direction: Option<WheelDirection>,
-    first_scroll_consumed: Option<bool>,
-}
-
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum WheelDirection {
-    Left,
-    Right,
-    Up,
-    Down,
-}
-
-impl WheelDirection {
-    fn from_delta(x: f64, y: f64) -> Option<Self> {
-        if x.abs() > y.abs() {
-            Some(if x < 0.0 { Self::Left } else { Self::Right })
-        } else if y != 0.0 {
-            Some(if y < 0.0 { Self::Up } else { Self::Down })
-        } else {
-            None
-        }
-    }
 }
 
 impl SyntheticWheelSequence {
     pub(super) fn new(command: &RendererSyntheticWheelGesture) -> Self {
         Self {
             gesture: command.next_sequence(),
-            began: None,
-            first_update: true,
         }
     }
 
@@ -225,22 +218,6 @@ impl SyntheticWheelSequence {
         delta_x: f64,
         delta_y: f64,
     ) -> Result<bool, DevToolsError> {
-        let direction = WheelDirection::from_delta(delta_x, delta_y);
-        // Like Aura's wheel phase handler, re-latch on a new dominant
-        // direction only after an unconsumed first scroll update.
-        let restart = self.began.as_ref().is_some_and(|began| {
-            began.first_scroll_consumed == Some(false)
-                && began
-                    .direction
-                    .zip(direction)
-                    .is_some_and(|(initial, next)| initial != next)
-        });
-        let phase_began = self.first_update || restart;
-        let gesture = if restart {
-            self.gesture.restart_phase()
-        } else {
-            self.gesture.clone()
-        };
         let wheel = SyntheticWheel {
             owner: owner.clone(),
             page: page.clone(),
@@ -248,8 +225,8 @@ impl SyntheticWheelSequence {
             y,
             delta_x,
             delta_y,
-            phase_began,
-            gesture: gesture.clone(),
+            end: false,
+            gesture: self.gesture.clone(),
         };
         let pending = driver
             .with_state(move |state| state.prepare_synthetic_wheel(wheel))
@@ -257,44 +234,13 @@ impl SyntheticWheelSequence {
         let Some(pending) = pending else {
             return Ok(false);
         };
-        let outcome = complete_wheel(
+        let _ = complete_wheel(
             driver,
             pending.wait().await,
             page.target_id().map(str::to_owned),
             context,
         )
         .await?;
-        // Generated time phases advance even when bounds filtering drops Began.
-        // Only a real Began ACK can select a new Page dispatch mode.
-        self.first_update = false;
-        if let Some(outcome) = outcome {
-            if restart {
-                self.gesture = gesture;
-                self.began = None;
-            }
-            let canceled = outcome == RendererWheelDispatchOutcome::Canceled;
-            if phase_began {
-                let owner = owner.clone();
-                let page = page.clone();
-                driver
-                    .with_state(move |state| {
-                        state.acknowledge_synthetic_wheel_began(&owner, &page, canceled)
-                    })
-                    .map_err(input_workflow_error)?;
-            }
-            let began = self.began.get_or_insert(WheelSequenceBegin {
-                direction,
-                first_scroll_consumed: None,
-            });
-            if let Some(direction) = direction {
-                began.direction.get_or_insert(direction);
-                if !canceled {
-                    began
-                        .first_scroll_consumed
-                        .get_or_insert(outcome == RendererWheelDispatchOutcome::Scrolled);
-                }
-            }
-        }
         Ok(true)
     }
 }
@@ -331,7 +277,7 @@ pub(crate) struct SyntheticWheel {
     y: f64,
     delta_x: f64,
     delta_y: f64,
-    phase_began: bool,
+    end: bool,
 }
 
 impl SyntheticWheel {
@@ -347,10 +293,6 @@ impl SyntheticWheel {
         {
             return Ok(None);
         }
-        let Some(admission_queue) = conn.synthetic_scroll_admissions_for_owner(&self.owner) else {
-            return Ok(None);
-        };
-        let cancelable = self.phase_began || admission_queue.cancelable();
         let intercept_drags = drag::intercept_drags_enabled(conn, &self.owner);
         start_page_input_command(
             conn,
@@ -363,7 +305,7 @@ impl SyntheticWheel {
                     self.y,
                     self.delta_x,
                     self.delta_y,
-                    cancelable,
+                    self.end,
                     intercept_drags,
                     self.gesture,
                 )
