@@ -9142,6 +9142,8 @@ import-maps/static-after-innerText.html
 import-maps/static-integrity.html
 inert/dynamic-inert-on-focused-element.html
 inert/inert-and-contenteditable.html
+inert/inert-and-find-flat-tree.html
+inert/inert-and-find.html
 inert/inert-canvas-fallback-content.html
 inert/inert-computed-style.html
 inert/inert-does-not-match-disabled-selector.html
@@ -9152,6 +9154,7 @@ inert/inert-on-non-html.html
 inert/inert-on-slots.html
 inert/inert-with-modal-dialog-001.html
 inert/inert-with-modal-dialog-002.html
+inert/inert-with-modal-dialog-003.html
 inert/nested-inert-unfocusable.html
 infrastructure/assumptions/allowed-to-play.html
 infrastructure/assumptions/cookie.html
