@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use moli_selector::{StyloDomHostBinding, StyloElement};
-use selectors::Element as _;
 use style::{
     Atom,
     animation::DocumentAnimationSet,
@@ -27,8 +26,8 @@ use super::{
     StyloAnonymousBoxKind, StyloComputedStyleSnapshot, clear_element_styles_for_resolution,
     document_quirks_mode, element_style_is_current, marker_style_decision,
     populate_inline_style_attribute_for_resolution, publish_resolved_element_styles,
-    resolve_document_root_styles, style_validation_path_needs_resolution,
-    stylo_pseudo_element_for_computed_style, with_cached_lazy_pseudo_style,
+    style_validation_path_needs_resolution, stylo_pseudo_element_for_computed_style,
+    with_cached_lazy_pseudo_style,
 };
 
 /// One binding and stylesheet read scope for a stable document world. Create
@@ -337,27 +336,19 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                 );
                 clear_element_styles_for_resolution(world, element);
                 let styles = self.context.with_stylo(|context| {
-                    let styles = if element.is_root() {
-                        resolve_document_root_styles(
-                            context,
-                            element,
-                            PseudoElementResolution::IfApplicable,
-                        )
-                    } else {
-                        context
-                            .thread_local
-                            .bloom_filter
-                            .insert_parents_recovering(element, depth);
-                        context.thread_local.current_dom_depth = depth;
-                        StyleResolverForElement::new(
-                            element,
-                            context,
-                            RuleInclusion::All,
-                            PseudoElementResolution::IfApplicable,
-                        )
-                        .resolve_style_with_default_parents()
-                        .into()
-                    };
+                    context
+                        .thread_local
+                        .bloom_filter
+                        .insert_parents_recovering(element, depth);
+                    context.thread_local.current_dom_depth = depth;
+                    let styles = StyleResolverForElement::new(
+                        element,
+                        context,
+                        RuleInclusion::All,
+                        PseudoElementResolution::IfApplicable,
+                    )
+                    .resolve_style_with_default_parents()
+                    .into();
                     context.thread_local.bloom_filter.push(element);
                     styles
                 });
@@ -430,6 +421,114 @@ impl Drop for StyloLayoutThreadStateGuard {
     fn drop(&mut self) {
         if self.entered {
             thread_state::exit(ThreadState::LAYOUT);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dom::native::NativeDom;
+    use crate::style_engine::{
+        FullStyleWorldSnapshot, StyleViewport, StyleWorldKey, StyloStylesheetSource,
+    };
+    use style::context::ElementCascadeInputs;
+    use style::invalidation::element::restyle_hints::RestyleHint;
+    use style::matching::MatchMethods;
+    use style_traits::ToCss;
+
+    #[test]
+    fn stylo_root_pseudos_use_current_font_bases_on_match_and_recascade() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url.clone()));
+        let document = host.document_handle();
+        let html = host.create_element("html");
+        assert!(host.append_child(document, html));
+
+        let engine = MoliStyleEngine::new();
+        let source = StyloStylesheetSource::new(
+            r#"html { font: 20px/30px monospace; }
+               html::before { content: ""; font: 7px/9px monospace; width: 2rch; height: 2rlh; }"#
+                .into(),
+            url.clone(),
+        );
+        let mut inputs = FullStyleWorldSnapshot::default();
+        inputs.document_stylesheet_sources.push(source);
+        let key = StyleWorldKey::new(&inputs, StyleViewport::default());
+        engine.ensure_retained_style_system_for_document(&host, document, key, &inputs);
+        let world = engine.world_for_document(document);
+
+        for (replacement, width) in [(None, "20px"), (Some("font-family: Ahem"), "40px")] {
+            if let Some(replacement) = replacement {
+                assert!(host.set_attribute(html, "style", replacement));
+                populate_inline_style_attribute_for_resolution(
+                    &engine,
+                    &host,
+                    &url,
+                    html,
+                    document_quirks_mode(&host, document),
+                );
+            }
+
+            engine.dom_adapter.with_bound_host(&host, |adapter| {
+                let root = adapter.element(&host, html).unwrap();
+                with_resolution_context(&world, adapter, |mut scope| {
+                    scope.with_stylo(|context| {
+                        let mut data = unsafe { root.ensure_data() };
+                        let mut important_rules_changed = true;
+                        let cascade_inputs = replacement.map(|_| {
+                            let mut inputs = ElementCascadeInputs::new_from_element_data(&data);
+                            important_rules_changed = root.replace_rules(
+                                RestyleHint::RESTYLE_STYLE_ATTRIBUTE,
+                                context,
+                                &mut inputs,
+                            );
+                            inputs
+                        });
+                        let mut resolver = StyleResolverForElement::new(
+                            root,
+                            context,
+                            RuleInclusion::All,
+                            PseudoElementResolution::IfApplicable,
+                        );
+                        let styles = match cascade_inputs {
+                            Some(inputs) => resolver.cascade_styles_with_default_parents(inputs),
+                            None => resolver.resolve_style_with_default_parents(),
+                        };
+                        let before = styles.pseudos.get(&PseudoElement::Before).unwrap();
+                        assert_eq!(before.get_position().width.to_css_string(), width);
+                        assert_eq!(before.get_position().height.to_css_string(), "60px");
+
+                        let child_hint = root.finish_restyle(
+                            context,
+                            &mut data,
+                            styles,
+                            important_rules_changed,
+                        );
+                        if replacement.is_some() {
+                            assert!(
+                                child_hint.contains(
+                                    RestyleHint::RESTYLE_IF_AFFECTED_BY_WM_OR_ANCESTOR_FONT
+                                )
+                            );
+                        }
+
+                        let shared = context.shared;
+                        let device = shared.stylist.device();
+                        let published_font_size = device.root_font_size();
+                        let published_ch = device.root_font_metrics_ch();
+                        StyleResolverForElement::new(
+                            root,
+                            context,
+                            RuleInclusion::DefaultOnly,
+                            PseudoElementResolution::IfApplicable,
+                        )
+                        .resolve_style_with_default_parents();
+                        assert_eq!(device.root_font_size(), published_font_size);
+                        assert_eq!(device.root_font_metrics_ch(), published_ch);
+                    });
+                });
+            });
         }
     }
 }

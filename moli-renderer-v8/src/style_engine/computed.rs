@@ -20,7 +20,6 @@ use style::{
     },
     selector_parser::PseudoElement,
     servo_arc::Arc as ServoArc,
-    style_resolver::{PseudoElementResolution, StyleResolverForElement},
     stylesheets::{CssRuleType, UrlExtraData},
     stylist::RuleInclusion,
     traversal::resolve_style,
@@ -927,49 +926,6 @@ fn publish_resolved_element_styles<E: TElement>(
         );
 }
 
-fn resolve_canonical_element_styles<E: TElement>(
-    context: &mut StyleContext<E>,
-    element: E,
-    pseudo_element: Option<&PseudoElement>,
-) -> ElementStyles {
-    if !element.is_root() {
-        return resolve_style(context, element, RuleInclusion::All, pseudo_element, None);
-    }
-
-    let pseudo_resolution = if pseudo_element.is_some() {
-        PseudoElementResolution::Force
-    } else {
-        PseudoElementResolution::IfApplicable
-    };
-    resolve_document_root_styles(context, element, pseudo_resolution)
-}
-
-fn resolve_document_root_styles<E: TElement>(
-    context: &mut StyleContext<E>,
-    root: E,
-    pseudo_resolution: PseudoElementResolution,
-) -> ElementStyles {
-    debug_assert!(root.is_root());
-    context.thread_local.bloom_filter.clear();
-    context.thread_local.current_dom_depth = 0;
-
-    let primary =
-        StyleResolverForElement::new(root, context, RuleInclusion::All, pseudo_resolution)
-            .resolve_primary_style(None, None);
-
-    // On-demand resolution skips finish_restyle. Publish the root bases
-    // before any eager pseudo or descendant uses them.
-    let device = context.shared.stylist.device();
-    if device.update_root_font_relative_state(&primary.style.0) {
-        // The rule cache does not track changes in root-relative lengths.
-        context.thread_local.rule_cache = Default::default();
-    }
-
-    StyleResolverForElement::new(root, context, RuleInclusion::All, pseudo_resolution)
-        .resolve_style_with_primary(primary, None)
-        .into()
-}
-
 fn element_style_is_current<E: TElement>(
     world: &DocumentStyleWorld,
     element: E,
@@ -1004,7 +960,7 @@ fn resolve_element_styles<'dom>(
             );
             let target = DomHandle::new(element.as_node().debug_id());
             clear_element_styles_for_resolution(world, element);
-            let styles = resolve_canonical_element_styles(context, element, pseudo_element);
+            let styles = resolve_style(context, element, RuleInclusion::All, pseudo_element, None);
             let required_generation = world
                 .document_state
                 .lazy_invalidation_roots
@@ -1057,7 +1013,7 @@ where
             continue;
         }
         clear_element_styles_for_resolution(world, ancestor);
-        let styles = resolve_canonical_element_styles(context, ancestor, None);
+        let styles = resolve_style(context, ancestor, RuleInclusion::All, None, None);
         resolution_count = resolution_count.saturating_add(1);
         publish_resolved_element_styles(world, ancestor, styles, required_generation);
         force_descendants = true;
