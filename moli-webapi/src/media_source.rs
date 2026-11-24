@@ -1,7 +1,13 @@
 use crate::interfaces as web_api_interfaces;
-use moli_web_mime::is_media_source_type_supported;
+use moli_web_mime::media_source_tracks;
 use moli_webapi_declare::WebApiFunctionTemplate;
 use moli_webidl as webidl;
+
+pub const SUPPORTS_MSE_AAC: bool = cfg!(all(
+    feature = "media-ext",
+    target_os = "macos",
+    target_pointer_width = "64"
+));
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "MediaSource.isTypeSupported")]
@@ -48,5 +54,11 @@ fn media_source_is_type_supported_callback<'s>(
     let Some(parsed) = webidl::parse_args::<MediaSourceIsTypeSupportedArgs>(scope, &args) else {
         return;
     };
-    rv.set(v8::Boolean::new(scope, is_media_source_type_supported(&parsed.media_type)).into());
+    rv.set(
+        v8::Boolean::new(
+            scope,
+            media_source_tracks(&parsed.media_type, SUPPORTS_MSE_AAC).is_some(),
+        )
+        .into(),
+    );
 }

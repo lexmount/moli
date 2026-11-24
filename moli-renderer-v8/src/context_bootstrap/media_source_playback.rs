@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use moli_web_mime::{MediaSourceTracks, media_source_tracks};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::media_queries::{
@@ -18,11 +19,12 @@ const MEDIA_SOURCE: &str = "__moliMediaSource";
 const ATTACHED: &str = "__moliMediaSourceVideo";
 const ENDED: &str = "__moliMediaSourceEnded";
 const DURATION: &str = "__moliMediaSourceDuration";
-const BUFFER: &str = "__moliMediaSourceVideoBuffer";
+const BUFFERS: &str = "__moliMediaSourceTrackBuffers";
 const SOURCE_BUFFERS: &str = "__moliMediaSourceBuffers";
 const ACTIVE_BUFFERS: &str = "__moliMediaSourceActiveBuffers";
 const UPDATING: &str = "__moliSourceBufferUpdating";
 const OFFSET: &str = "__moliSourceBufferTimestampOffset";
+const TRACKS: &str = "__moliSourceBufferTracks";
 const MAX_APPEND_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(WebApiFunctionTemplate)]
@@ -174,7 +176,7 @@ pub(crate) fn attach(
 
 pub(crate) fn detach(scope: &mut v8::PinScope<'_, '_>, source: v8::Local<'_, v8::Object>) {
     let undefined = v8::undefined(scope);
-    for key in [ATTACHED, ENDED, DURATION, BUFFER] {
+    for key in [ATTACHED, ENDED, DURATION, BUFFERS] {
         set_private_value(scope, source, key, undefined.into());
     }
 }
@@ -320,21 +322,24 @@ fn add_source_buffer<'s>(
     if parsed.media_type.is_empty() {
         return crate::util::throw_type_error(scope, "The SourceBuffer media type is empty.");
     }
-    if !moli_web_mime::is_media_source_type_supported(&parsed.media_type) {
+    let Some(tracks) = media_source_tracks(
+        &parsed.media_type,
+        moli_webapi::media_source::SUPPORTS_MSE_AAC,
+    ) else {
         return super::constructors::throw_dom_exception_value(
             scope,
             "This SourceBuffer media type is unsupported.",
             "NotSupportedError",
         );
-    }
+    };
     let source = target(scope, args.this());
-    if open_source(scope, source).is_none() {
+    let Some((host, media)) = open_source(scope, source) else {
         return;
-    }
-    if get_private_object(scope, source, BUFFER).is_some() {
+    };
+    if !unsafe { &mut *host }.add_media_source_tracks(media, tracks) {
         return super::constructors::throw_dom_exception_value(
             scope,
-            "The MediaSource already has a video buffer.",
+            "The MediaSource already has a buffer for these tracks.",
             "QuotaExceededError",
         );
     }
@@ -346,7 +351,21 @@ fn add_source_buffer<'s>(
         return;
     };
     initialize_simple_event_target(scope, buffer);
-    set_private_value(scope, source, BUFFER, buffer.into());
+    let track_code = v8::Integer::new(
+        scope,
+        match tracks {
+            MediaSourceTracks::Video => 1,
+            MediaSourceTracks::Audio => 2,
+            MediaSourceTracks::VideoAndAudio => 3,
+        },
+    );
+    set_private_value(scope, buffer, TRACKS, track_code.into());
+    let buffers = source_buffers(scope, source).unwrap_or_else(|| {
+        let buffers = v8::Array::new(scope, 0);
+        set_private_value(scope, source, BUFFERS, buffers.into());
+        buffers
+    });
+    buffers.set_index(scope, buffers.length(), buffer.into());
     rv.set(buffer.into());
 }
 
@@ -359,8 +378,11 @@ fn end_of_stream<'s>(
     let Some((host, media)) = open_source(scope, source) else {
         return;
     };
-    if get_private_object(scope, source, BUFFER).is_some_and(|buffer| flag(scope, buffer, UPDATING))
-    {
+    if source_buffers(scope, source).is_some_and(|buffers| {
+        (0..buffers.length()).any(|index| {
+            buffer_at(scope, buffers, index).is_some_and(|buffer| flag(scope, buffer, UPDATING))
+        })
+    }) {
         return invalid_state(scope);
     }
     if let Some(duration) = unsafe { &mut *host }.end_media_source(scope, media) {
@@ -403,12 +425,28 @@ fn lists<'s>(
     rv.set(list.into());
 }
 
-fn list_buffer<'s>(
+fn source_buffers<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Array>> {
+    get_private_object(scope, source, BUFFERS)?.try_into().ok()
+}
+
+fn buffer_at<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    buffers: v8::Local<'s, v8::Array>,
+    index: u32,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let value = buffers.get_index(scope, index)?;
+    value.try_into().ok()
+}
+
+fn list_buffers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     list: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
+) -> Option<v8::Local<'s, v8::Array>> {
     let source = get_private_object(scope, list, MEDIA_SOURCE)?;
-    get_private_object(scope, source, BUFFER)
+    source_buffers(scope, source)
 }
 
 fn list_length<'s>(
@@ -417,7 +455,7 @@ fn list_length<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let list = target(scope, args.this());
-    rv.set_uint32(u32::from(list_buffer(scope, list).is_some()));
+    rv.set_uint32(list_buffers(scope, list).map_or(0, |buffers| buffers.length()));
 }
 
 fn index<'s>(
@@ -426,8 +464,8 @@ fn index<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    if index == 0
-        && let Some(buffer) = list_buffer(scope, args.holder())
+    if let Some(buffers) = list_buffers(scope, args.holder())
+        && let Some(buffer) = buffer_at(scope, buffers, index)
     {
         rv.set(buffer.into());
         v8::Intercepted::kYes
@@ -442,7 +480,7 @@ fn query_index<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
-    if index == 0 && list_buffer(scope, args.holder()).is_some() {
+    if list_buffers(scope, args.holder()).is_some_and(|buffers| index < buffers.length()) {
         rv.set_int32(v8::PropertyAttribute::READ_ONLY.as_u32() as i32);
         v8::Intercepted::kYes
     } else {
@@ -464,14 +502,26 @@ fn buffer_attachment<'s>(
     buffer: v8::Local<'s, v8::Object>,
 ) -> Option<(*mut PageScriptHost, DomHandle, v8::Local<'s, v8::Object>)> {
     let source = get_private_object(scope, buffer, MEDIA_SOURCE)?;
-    if let Some(current) = get_private_object(scope, source, BUFFER)
-        && current == buffer
+    if let Some(buffers) = source_buffers(scope, source)
+        && (0..buffers.length()).any(|index| buffer_at(scope, buffers, index) == Some(buffer))
         && let Some((host, media)) = source_attachment(scope, source)
     {
         return Some((host, media, source));
     }
     invalid_state(scope);
     None
+}
+
+fn buffer_tracks<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    buffer: v8::Local<'s, v8::Object>,
+) -> MediaSourceTracks {
+    match get_private_value(scope, buffer, TRACKS).and_then(|value| value.uint32_value(scope)) {
+        Some(1) => MediaSourceTracks::Video,
+        Some(2) => MediaSourceTracks::Audio,
+        Some(3) => MediaSourceTracks::VideoAndAudio,
+        _ => unreachable!("attached SourceBuffer must have a track type"),
+    }
 }
 
 fn buffered<'s>(
@@ -483,7 +533,7 @@ fn buffered<'s>(
     let Some((host, media, _)) = buffer_attachment(scope, buffer) else {
         return;
     };
-    let ranges = unsafe { &*host }.video_buffered(media);
+    let ranges = unsafe { &*host }.media_source_buffered(media, buffer_tracks(scope, buffer));
     rv.set(super::new_time_ranges_value(scope, &ranges).into());
 }
 
@@ -563,7 +613,9 @@ fn append_buffer<'s>(
     }
     let bytes = Bytes::from(data.to_vec(scope));
     let offset = offset(scope, buffer);
-    if unsafe { &mut *host }.append_media_source_buffer(scope, media, buffer, bytes, offset) {
+    let tracks = buffer_tracks(scope, buffer);
+    if unsafe { &mut *host }.append_media_source_buffer(scope, media, buffer, tracks, bytes, offset)
+    {
         set_updating(scope, buffer, true);
     } else {
         invalid_state(scope);

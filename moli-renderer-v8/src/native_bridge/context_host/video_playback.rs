@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use moli_video::{DecodeRequest, DecodeResult, VideoFrame, VideoMetadata, VideoWorker};
+use moli_video::{
+    AudioPlayback, DecodeRequest, DecodeResult, VideoFrame, VideoMetadata, VideoWorker,
+};
 use parking_lot::Mutex;
 
 use super::media_element_events::PendingMediaElementEventPayload;
@@ -50,8 +52,58 @@ pub(super) struct VideoPlayback {
 pub(super) struct FragmentPlayback {
     pub(super) source: v8::Global<v8::Object>,
     pub(super) ranges: Vec<(f64, f64)>,
+    pub(super) video_ranges: Vec<(f64, f64)>,
+    pub(super) audio_ranges: Vec<(f64, f64)>,
+    pub(super) has_video: bool,
+    pub(super) audio: Option<AudioPlayback>,
     pub(super) duration: Option<f64>,
     pub(super) waiting: bool,
+}
+
+impl FragmentPlayback {
+    pub(super) fn update_ranges(&mut self, end_of_stream: bool) {
+        self.ranges.clear();
+        if self.audio.is_none() {
+            self.ranges.extend_from_slice(&self.video_ranges);
+        } else if !self.has_video {
+            self.ranges.extend_from_slice(&self.audio_ranges);
+        } else {
+            let end = end_of_stream.then(|| self.end_time());
+            let mut video = self.video_ranges.iter().peekable();
+            let mut audio = self.audio_ranges.iter().peekable();
+            let mut left = video.next();
+            let mut right = audio.next();
+            while let (Some(&(vs, ve)), Some(&(as_, ae))) = (left, right) {
+                let ve = if video.peek().is_none() {
+                    end.unwrap_or(ve)
+                } else {
+                    ve
+                };
+                let ae = if audio.peek().is_none() {
+                    end.unwrap_or(ae)
+                } else {
+                    ae
+                };
+                let start = vs.max(as_);
+                let end = ve.min(ae);
+                if start < end {
+                    self.ranges.push((start, end));
+                }
+                if ve <= ae {
+                    left = video.next();
+                } else {
+                    right = audio.next();
+                }
+            }
+        }
+    }
+
+    pub(super) fn end_time(&self) -> f64 {
+        self.video_ranges
+            .last()
+            .map_or(0.0, |(_, end)| *end)
+            .max(self.audio_ranges.last().map_or(0.0, |(_, end)| *end))
+    }
 }
 
 impl VideoPlayback {
@@ -106,11 +158,28 @@ impl VideoPlayback {
             position: self.position,
             rate,
         });
+        if let Some(audio) = self
+            .fragment
+            .as_ref()
+            .and_then(|fragment| fragment.audio.as_ref())
+        {
+            audio.set_clock(
+                self.clock
+                    .map(|clock| (clock.anchor, clock.position, clock.rate)),
+            );
+        }
     }
 }
 
 impl Drop for VideoPlayback {
     fn drop(&mut self) {
+        if let Some(audio) = self
+            .fragment
+            .as_ref()
+            .and_then(|fragment| fragment.audio.as_ref())
+        {
+            audio.set_clock(None);
+        }
         if let Some(timer) = self.timer.take() {
             timer.abort();
         }
@@ -173,6 +242,7 @@ impl PageScriptHost {
         media: DomHandle,
     ) {
         if let Some(mut video) = self.remove_video_playback(media) {
+            video.update_clock(false, 0.0);
             if let Some(fragment) = video.fragment.take() {
                 self.detach_media_source(scope, media, fragment.source);
             }
@@ -419,6 +489,7 @@ impl PageScriptHost {
         let playing =
             !element.media_paused() && !element.media_seeking() && element.media_ready_state() >= 2;
         let rate = element.media_playback_rate();
+        self.update_video_audio_gain(media);
         let Some(video) = self.video_playbacks.get_mut(&media) else {
             return;
         };
@@ -428,6 +499,23 @@ impl PageScriptHost {
             .is_some_and(|fragment| fragment.waiting);
         video.update_clock(playing && video.metadata.is_some() && !awaiting_data, rate);
         self.pump_video(scope, media);
+    }
+
+    pub(crate) fn update_video_audio_gain(&self, media: DomHandle) {
+        let Some(audio) = self
+            .current_video(media)
+            .and_then(|video| video.fragment.as_ref())
+            .and_then(|fragment| fragment.audio.as_ref())
+        else {
+            return;
+        };
+        if let Some(element) = self.dom_host().node(media).and_then(Node::as_element) {
+            audio.set_gain(if element.media_muted() {
+                0.0
+            } else {
+                element.media_volume() as f32
+            });
+        }
     }
 
     pub(crate) fn seek_video(
@@ -451,7 +539,7 @@ impl PageScriptHost {
             return false;
         }
         let video = self.video_playbacks.get_mut(&media).expect("video target");
-        video.clock = None;
+        video.update_clock(false, 0.0);
         video.position = time;
         video.at_end = false;
         video.drained = false;
@@ -715,8 +803,8 @@ fn present_video(
         video.last_timeupdate = Some(now);
     }
     if ended {
+        video.update_clock(false, 0.0);
         video.position = video.duration().unwrap_or(position);
-        video.clock = None;
         video.at_end = true;
         host.set_media_paused(media, true);
     }

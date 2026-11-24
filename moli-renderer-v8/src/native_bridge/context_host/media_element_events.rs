@@ -53,6 +53,12 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'_, '_>,
         media_handle: DomHandle,
     ) -> bool {
+        #[cfg(all(
+            feature = "media-ext",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        self.update_video_audio_gain(media_handle);
         self.queue_media_element_event_for_node(
             scope,
             media_handle,
