@@ -5,6 +5,7 @@ use url::Url;
 
 use crate::{
     dom::native::{DomHost, NativeDom, NativeNodeId},
+    host::{RuntimeScriptStartDecision, ScriptElementLoaderOptions, decide_runtime_script_start},
     parser::{HtmlParser, XmlParser},
     webidl,
 };
@@ -342,9 +343,12 @@ pub(crate) fn parse_detached_html_document_from_source<'s>(
     document_url: Url,
     source: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let parsed = HtmlParser::with_scripting_enabled(false)
-        .parse_without_declarative_shadow_roots(document_url, source.to_owned());
-    build_detached_document(scope, parsed, DetachedDocumentKind::Html, false)
+    let mut parsed = DomHost::from_dom(
+        HtmlParser::with_scripting_enabled(false)
+            .parse_without_declarative_shadow_roots(document_url, source.to_owned()),
+    );
+    prepare_windowless_html_document_scripts(&mut parsed);
+    build_detached_document_from_dom_host(scope, parsed, DetachedDocumentKind::Html, false)
 }
 
 pub(crate) fn parse_detached_html_document_from_source_with_declarative_shadow_roots<'s>(
@@ -352,9 +356,22 @@ pub(crate) fn parse_detached_html_document_from_source_with_declarative_shadow_r
     document_url: Url,
     source: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let parsed =
+    let mut parsed =
         HtmlParser::with_scripting_enabled(false).parse_dom_host(document_url, source.to_owned());
+    prepare_windowless_html_document_scripts(&mut parsed);
     build_detached_document_from_dom_host(scope, parsed, DetachedDocumentKind::Html, true)
+}
+
+fn prepare_windowless_html_document_scripts(parsed: &mut DomHost) {
+    let options = ScriptElementLoaderOptions::with_scripting_enabled(false);
+    for script in parsed.connected_script_handles(parsed.document_handle()) {
+        if let RuntimeScriptStartDecision::Skip {
+            commit_start: true, ..
+        } = decide_runtime_script_start(parsed, script, options)
+        {
+            parsed.set_script_already_started(script, true);
+        }
+    }
 }
 
 /// Builds the DOM projection used for a non-top browsing-context document.
@@ -432,21 +449,6 @@ fn child_document_url_is_xml_like(url: &Url) -> bool {
     path.ends_with(".xml") || path.ends_with(".xhtml") || path.ends_with(".svg")
 }
 
-fn build_detached_document<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parsed: NativeDom,
-    kind: DetachedDocumentKind,
-    expose_declarative_shadow_roots: bool,
-) -> Option<v8::Local<'s, v8::Object>> {
-    build_detached_document_with_content_type(
-        scope,
-        parsed,
-        kind,
-        expose_declarative_shadow_roots,
-        None,
-    )
-}
-
 fn build_detached_document_with_content_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     parsed: NativeDom,
@@ -455,10 +457,14 @@ fn build_detached_document_with_content_type<'s>(
     content_type: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let _ = expose_declarative_shadow_roots;
+    let mut parsed = DomHost::from_dom(parsed);
+    for script in parsed.connected_script_handles(parsed.document_handle()) {
+        parsed.set_script_already_started(script, true);
+    }
     build_detached_document_object_from_dom_host_with_content_type(
         scope,
         kind.bridge_kind(),
-        DomHost::from_dom(parsed),
+        parsed,
         content_type,
         None,
     )

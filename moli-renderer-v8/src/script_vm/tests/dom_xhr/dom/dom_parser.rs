@@ -126,6 +126,75 @@ fn dom_parser_xml_text_content_excludes_processing_instruction_descendants() {
 }
 
 #[test]
+fn parsed_html_document_scripts_keep_preparation_state_after_transfer() {
+    let mut vm = new_storage_html_test_vm("https://parsed-html-scripts.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const markup = '<script>window.ran.push("parsed")</script>'
+    + '<script id="empty"></script>'
+    + '<script id="data" type="application/json">window.ran.push("data")</script>'
+    + '<template><script>window.ran.push("template")</script></template>';
+  const results = [];
+  for (const parse of [
+    () => new DOMParser().parseFromString('<body>' + markup, 'text/html'),
+    () => Document.parseHTMLUnsafe('<body>' + markup),
+  ]) {
+    for (const useImport of [false, true]) {
+      window.ran = [];
+      const parsed = parse();
+      parsed.getElementById('data').type = 'text/javascript';
+      const body = useImport ? document.importNode(parsed.body, true) : parsed.body;
+      document.body.append(body);
+      body.querySelector('#empty').textContent = 'window.ran.push("empty")';
+      body.append(body.querySelector('template').content.cloneNode(true));
+      body.remove();
+      results.push(window.ran.join(','));
+    }
+  }
+  return results.join('|');
+})()
+"#,
+        )
+        .expect("parsed HTML document script state probe should run");
+
+    assert_eq!(
+        result,
+        "data,empty,template|data,empty,template|data,empty,template|data,empty,template"
+    );
+}
+
+#[test]
+fn dom_parser_xml_scripts_stay_inert_after_transfer() {
+    let mut vm = new_storage_html_test_vm("https://parsed-xml-scripts.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const source = '<svg xmlns="http://www.w3.org/2000/svg" '
+    + 'xmlns:s="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+    + '<s:script>window.ran.push("svg")</s:script><h:script id="empty"/></svg>';
+  window.ran = [];
+  for (const useImport of [false, true]) {
+    const root = new DOMParser().parseFromString(source, 'application/xml').documentElement;
+    const svg = useImport ? document.importNode(root, true) : root;
+    document.body.append(svg);
+    svg.querySelector('#empty').textContent = 'window.ran.push("xml")';
+    svg.remove();
+  }
+  return JSON.stringify(window.ran);
+})()
+"#,
+        )
+        .expect("DOMParser XML script state probe should run");
+
+    assert_eq!(result, "[]");
+}
+
+#[test]
 fn dom_parser_inner_html_supports_html_sanitizer_roundtrip_path() {
     let mut vm = new_storage_test_vm("https://dom-parser-sanitizer-path.test/");
 
