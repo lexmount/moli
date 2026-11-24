@@ -535,6 +535,39 @@ fn document_receiver_runtime_and_handle<'s>(
     Some((runtime_ptr, handle))
 }
 
+const DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT: &str = "__moliDetachedDocumentOriginSource";
+
+fn document_origin_source_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    crate::util::get_private_object(scope, document, DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT)
+        .unwrap_or(document)
+}
+
+pub(crate) fn inherit_detached_document_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+    source_document: v8::Local<'s, v8::Object>,
+) {
+    let source_document = document_origin_source_object(scope, source_document);
+    set_private_value(
+        scope,
+        document,
+        DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT,
+        source_document.into(),
+    );
+}
+
+pub(crate) fn document_domain_value_for_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    let origin_source = document_origin_source_object(scope, document);
+    let (runtime_ptr, handle) = document_receiver_runtime_and_handle(scope, origin_source)?;
+    Some(unsafe { &*runtime_ptr }.document_domain_value_for_document_handle(handle))
+}
+
 fn document_obsolete_noop_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -969,12 +1002,10 @@ fn document_domain_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, args.this())
-    else {
+    let Some(value) = document_domain_value_for_object(scope, args.this()) else {
         rv.set_undefined();
         return;
     };
-    let value = unsafe { &*runtime_ptr }.document_domain_value_for_document_handle(handle);
     set_document_string_return_value(scope, &mut rv, &value);
 }
 
