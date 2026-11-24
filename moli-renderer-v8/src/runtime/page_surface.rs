@@ -549,12 +549,7 @@ pub struct RendererInterceptedDrag {
     pub drag_operations_mask: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RendererWheelDispatchOutcome {
-    Canceled,
-    Scrolled,
-    Unconsumed,
-}
+pub use moli_input::WheelDispatchOutcome as RendererWheelDispatchOutcome;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RendererInputDispatchOutcome {

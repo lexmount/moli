@@ -5671,6 +5671,7 @@ dependencies = [
  "moli-image",
  "moli-import-map",
  "moli-indexeddb",
+ "moli-input",
  "moli-inspector-json",
  "moli-layout",
  "moli-local-executor",
