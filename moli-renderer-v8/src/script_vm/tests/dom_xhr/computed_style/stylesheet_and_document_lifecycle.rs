@@ -1194,6 +1194,48 @@ fn computed_style_child_document_viewport_units_use_css_iframe_size() {
 }
 
 #[test]
+fn root_relative_font_sizes_follow_the_document_root_font_size() {
+    let mut vm = new_parsed_test_vm(
+        "https://root-font-size.test/",
+        r#"<!doctype html>
+        <style>
+          html { font-size: 10px; }
+          html::before { content: "Root"; display: block; font-size: 2.4rem; width: 6rem; }
+          .title { font-size: 2.4rem; line-height: 3.2rem; width: 4rem; }
+        </style>
+        <div class="title">Title</div>"#,
+    );
+    let measure = r#"(() => {
+        const title = document.querySelector('.title');
+        const style = getComputedStyle(title);
+        const before = getComputedStyle(document.documentElement, '::before');
+        return [style.fontSize, style.lineHeight, style.width, before.fontSize, before.width].join('|');
+    })()"#;
+
+    assert_eq!(vm.eval(measure).unwrap(), "24px|32px|40px|24px|60px");
+
+    vm.eval("document.documentElement.style.fontSize = '20px'")
+        .unwrap();
+    assert_eq!(vm.eval(measure).unwrap(), "48px|64px|80px|48px|120px");
+
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        ..Default::default()
+    }))
+    .unwrap();
+    vm.eval("document.body.innerHTML = '<div class=title>New title</div>'")
+        .unwrap();
+    publish_layout_for_test(&mut vm);
+    assert_eq!(vm.eval(measure).unwrap(), "48px|64px|80px|48px|120px");
+    assert_eq!(
+        vm.eval("document.querySelector('.title').getBoundingClientRect().width")
+            .unwrap(),
+        "80"
+    );
+}
+
+#[test]
 fn held_main_document_computed_styles_follow_repeated_viewport_surface_changes() {
     let mut vm = new_storage_test_vm("https://held-main-viewport-units.test/");
     let surface = |inner_width, inner_height| crate::protocol_types::ViewportSurface {

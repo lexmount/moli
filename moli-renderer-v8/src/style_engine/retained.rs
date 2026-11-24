@@ -383,6 +383,9 @@ fn update_document_scope(
     if device_changed {
         let device =
             new_style_device_with_viewport(key.style_viewport(), key.environment, key.quirks_mode);
+        // A viewport or environment change can keep the root's computed style
+        // current while replacing the device used to cascade new descendants.
+        device.set_root_font_size(retained.stylist.device().root_font_size().px());
         let guard = shared_lock.read();
         let guards = StylesheetGuards::same(&guard);
         device_affected_origins = retained.stylist.set_device(device, &guards);
