@@ -1,4 +1,7 @@
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use html5ever::{
     ParseOpts,
@@ -344,6 +347,10 @@ impl HtmlParserSession {
 
     pub(super) fn append_to_current_inserted_input(&self, input: StrTendril) -> bool {
         self.input.borrow_mut().append_to_current_inserted(input)
+    }
+
+    pub(super) fn current_input_insertion_point(&self) -> Rc<BufferQueue> {
+        self.input.borrow().current()
     }
 
     pub(super) fn append_at_current_insertion_point(&self, input: StrTendril) {
