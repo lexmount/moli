@@ -231,14 +231,14 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         new_entries,
         new_side_entries,
     );
-    let (css_text, resolution_text) = state.css_text_and_style_resolution_text();
+    let (css_text, override_text) = state.css_text_and_style_resolution_override();
     if update_inline_style_base && let Some(inline_base_url) = &inline_base_url {
         unsafe { &mut *runtime_ptr }
             .set_element_inline_style_base_url(handle, inline_base_url.clone());
     }
     if style_string(runtime, handle) == css_text {
         let runtime = unsafe { &mut *runtime_ptr };
-        runtime.set_element_inline_style_resolution_text(handle, resolution_text);
+        runtime.set_element_inline_style_resolution_override(handle, override_text);
         runtime.set_element_inline_style_declaration_state(handle, state);
         return Some(false);
     }
@@ -250,7 +250,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         inline_base_url.as_ref(),
     );
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_element_inline_style_resolution_text(handle, resolution_text);
+    runtime.set_element_inline_style_resolution_override(handle, override_text);
     runtime.set_element_inline_style_declaration_state(handle, state);
     Some(true)
 }
@@ -270,9 +270,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_
         inline_style_declaration_state_from_css_text(css_text, Some(&base_url))
     };
     state.refresh_pdb_entries();
-    let (css_text, resolution_text) = state.css_text_and_style_resolution_text();
+    let (css_text, override_text) = state.css_text_and_style_resolution_override();
     set_reflected_style_attribute_with_inline_base_url(scope, runtime_ptr, handle, &css_text, None);
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_element_inline_style_resolution_text(handle, resolution_text);
+    runtime.set_element_inline_style_resolution_override(handle, override_text);
     runtime.set_element_inline_style_declaration_state(handle, state);
 }

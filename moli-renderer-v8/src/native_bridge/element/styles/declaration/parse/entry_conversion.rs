@@ -57,8 +57,7 @@ pub(in crate::native_bridge::element::styles) fn set_style_entries_with_inline_b
     inline_base_url: Option<&url::Url>,
 ) {
     let state = inline_style_declaration_state_from_entries(entries);
-    let css_text = state.css_text();
-    let resolution_text = state.style_resolution_text();
+    let (css_text, override_text) = state.css_text_and_style_resolution_override();
     set_reflected_style_attribute_with_inline_base_url(
         scope,
         runtime_ptr,
@@ -67,7 +66,7 @@ pub(in crate::native_bridge::element::styles) fn set_style_entries_with_inline_b
         inline_base_url,
     );
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_element_inline_style_resolution_text(handle, resolution_text);
+    runtime.set_element_inline_style_resolution_override(handle, override_text);
     runtime.set_element_inline_style_declaration_state(
         handle,
         inline_style_declaration_state_from_serialized_entries(entries, &css_text, inline_base_url),
@@ -82,11 +81,10 @@ pub(in crate::native_bridge::element::styles) fn set_style_entries_if_changed_wi
     inline_base_url: Option<&url::Url>,
 ) -> bool {
     let state = inline_style_declaration_state_from_entries(entries);
-    let css_text = state.css_text();
-    let resolution_text = state.style_resolution_text();
+    let (css_text, override_text) = state.css_text_and_style_resolution_override();
     if style_string(unsafe { &*runtime_ptr }, handle) == css_text {
         let runtime = unsafe { &mut *runtime_ptr };
-        runtime.set_element_inline_style_resolution_text(handle, resolution_text);
+        runtime.set_element_inline_style_resolution_override(handle, override_text);
         runtime.set_element_inline_style_declaration_state(
             handle,
             inline_style_declaration_state_from_serialized_entries(
@@ -105,7 +103,7 @@ pub(in crate::native_bridge::element::styles) fn set_style_entries_if_changed_wi
         inline_base_url,
     );
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_element_inline_style_resolution_text(handle, resolution_text);
+    runtime.set_element_inline_style_resolution_override(handle, override_text);
     runtime.set_element_inline_style_declaration_state(
         handle,
         inline_style_declaration_state_from_serialized_entries(entries, &css_text, inline_base_url),
