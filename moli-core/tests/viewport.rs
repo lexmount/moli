@@ -928,6 +928,99 @@ async fn viewport_resize_cancels_a_pressed_pointer_and_releases_capture() -> Res
 }
 
 #[tokio::test]
+async fn viewport_replacement_releases_each_pressed_mouse_button() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser
+        .fetch(&html_url(
+            r#"<!doctype html><style>body { margin: 0; } div { width: 100px; height: 100px; }</style>
+            <div></div><script>
+                const pressed = new Set();
+                const canceled = [];
+                addEventListener('mousedown', event => pressed.add(event.button));
+                addEventListener('mouseup', event => {
+                    pressed.delete(event.button);
+                    if (event.target === window) canceled.push(event.button + ':' + event.buttons);
+                });
+                globalThis.statusText = () => [...pressed].join(',') + '|' + canceled.join(',');
+            </script>"#,
+        ))
+        .await?;
+    let surface = ViewportSurface::default();
+    let mut frames = page.subscribe_viewport_frames(surface, 1).await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+    let left = RendererViewportPointerInput {
+        document,
+        viewport_revision: 1,
+        position: (16., 16.),
+        event: "mousedown",
+        button: 0,
+        buttons: 1,
+        click_count: 1,
+        modifiers: 0,
+    };
+    let right = RendererViewportPointerInput {
+        button: 2,
+        buttons: 3,
+        ..left
+    };
+    assert!(page.dispatch_viewport_pointer(left).await?.is_some());
+    assert!(page.dispatch_viewport_pointer(right).await?.is_some());
+    assert_eq!(
+        page.evaluate_runtime_expression_async("statusText()")
+            .await?["value"],
+        "0,2|"
+    );
+
+    let mut resized = page
+        .subscribe_viewport_frames(
+            ViewportSurface {
+                inner_width: surface.inner_width + 10,
+                ..surface
+            },
+            2,
+        )
+        .await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async("statusText()")
+            .await?["value"],
+        "|0:2,2:0"
+    );
+
+    frame(&mut resized, |frame| frame.snapshot.is_some()).await?;
+    page.evaluate_runtime_expression_async("canceled.length = 0")
+        .await?;
+    let left = RendererViewportPointerInput {
+        viewport_revision: 2,
+        ..left
+    };
+    let right = RendererViewportPointerInput {
+        viewport_revision: 2,
+        ..right
+    };
+    assert!(page.dispatch_viewport_pointer(left).await?.is_some());
+    assert!(page.dispatch_viewport_pointer(right).await?.is_some());
+    assert!(
+        page.dispatch_viewport_pointer(RendererViewportPointerInput {
+            event: "mouseup",
+            buttons: 1,
+            ..right
+        })
+        .await?
+        .is_some()
+    );
+    page.cancel_viewport_pointer(document, 2).await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async("statusText()")
+            .await?["value"],
+        "|0:0"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_cancel_uses_the_press_window_and_respects_mouse_suppression() -> Result<()> {
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
