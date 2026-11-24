@@ -124,10 +124,12 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         if blocked {
             CssInlineStyleDeclarationState::default()
         } else {
-            inline_style_declaration_state_from_css_text(
+            let mut state = inline_style_declaration_state_from_css_text(
                 &style_string(runtime, handle),
                 existing_inline_base_url.as_ref(),
-            )
+            );
+            state.refresh_pdb_entries();
+            state
         }
     });
     let update_inline_style_base = name == "background-image" && !value.is_empty();
@@ -158,14 +160,23 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             }
             // Parsing is complete. Move the block out until publication so no
             // borrow of the declaration store spans an author callback.
+            let had_cached_state = initial.is_none();
             let mut state = initial.unwrap_or_else(|| {
                 unsafe { &mut *runtime_ptr }
                     .take_element_inline_style_declaration_state(handle)
                     .expect("cached inline style declaration state")
             });
             if let Some(parsed) = parsed {
-                parsed.apply(&mut state.block);
-                for property in style_property_mutation_cleanup_names_with_pdb(name) {
+                let cleanup_names = style_property_mutation_cleanup_names_with_pdb(name);
+                let compare_longhand = cleanup_names.is_empty() && !update_inline_style_base;
+                if !parsed.apply(&mut state.block, compare_longhand) {
+                    if had_cached_state {
+                        unsafe { &mut *runtime_ptr }
+                            .set_element_inline_style_declaration_state(handle, state);
+                    }
+                    return Some(false);
+                }
+                for property in cleanup_names {
                     state.block.remove_property(&property);
                 }
             } else {

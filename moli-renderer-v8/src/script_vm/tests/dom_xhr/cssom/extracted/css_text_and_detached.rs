@@ -58,6 +58,62 @@ fn reentrant_custom_element_style_reactions_keep_the_latest_declarations() {
 }
 
 #[test]
+fn inline_style_noop_preserves_attribute_text_and_custom_element_reactions() {
+    let mut vm = new_storage_html_test_vm("https://cssom-noop.test/");
+    assert_eq!(
+        vm.eval(r#"
+(() => {
+  const reactions = [];
+  class MutationProbe extends HTMLElement {
+    static observedAttributes = ['style'];
+    attributeChangedCallback(name, oldValue, newValue) { reactions.push([oldValue, newValue]); }
+  }
+  customElements.define('mutation-probe', MutationProbe);
+  const el = document.body.appendChild(document.createElement('mutation-probe'));
+  const observer = new MutationObserver(() => {});
+  observer.observe(el, {attributes: true, attributeOldValue: true});
+  const check = (name, mutate, expectedText, records, expectedReactions) => {
+    mutate();
+    const actual = [el.getAttribute('style'), observer.takeRecords().map(r => r.oldValue), reactions.splice(0)];
+    if (JSON.stringify(actual) !== JSON.stringify([expectedText, records, expectedReactions])) {
+      throw new Error(`${name} produced ${JSON.stringify(actual)}`);
+    }
+  };
+  const raw = 'width:10px;/* original */';
+  el.setAttribute('style', raw);
+  observer.takeRecords();
+  reactions.length = 0;
+  check('same width', () => el.style.width = '10px', raw, [], [[raw, raw]]);
+  check('same setProperty', () => el.style.setProperty('width', '10px'), raw, [], [[raw, raw]]);
+  check('invalid width', () => el.style.width = 'invalid', raw, [], [[raw, raw]]);
+  check('missing height', () => el.style.removeProperty('height'), raw, [], [[raw, raw]]);
+  check('same setAttribute', () => el.setAttribute('style', raw), raw, [raw], [[raw, raw]]);
+  const canonical = 'width: 10px;';
+  check('cssText', () => el.style.cssText = canonical, canonical, [raw], [[raw, canonical]]);
+  check('same cssText', () => el.style.cssText = canonical, canonical, [canonical], [[canonical, canonical]]);
+  el.style.height = '20px';
+  el.style.width = '11px';
+  if (el.style.cssText !== 'width: 11px; height: 20px;') throw new Error(el.style.cssText);
+  el.style.marginLeft = '1px';
+  el.style.marginInlineStart = '2px';
+  el.style.marginLeft = '1px';
+  if (!el.style.cssText.endsWith('margin-inline-start: 2px; margin-left: 1px;') ||
+      getComputedStyle(el).marginLeft !== '1px') throw new Error('logical order');
+  el.style.backgroundImage = 'url(a.png)';
+  const former = el.getAttribute('style');
+  el.style.backgroundImage = 'url(./a.png)';
+  if (el.getAttribute('style') === former || !el.style.backgroundImage.includes('./a.png')) {
+    throw new Error('specified URL spelling');
+  }
+  return 'ok';
+})()
+"#)
+        .expect("CSSOM must preserve the observable effects of no-op writes"),
+        "ok"
+    );
+}
+
+#[test]
 fn detached_css_style_css_text_parses_serializes_and_tracks_order() {
     let mut vm = new_storage_test_vm("https://detached-style-css-text.test/");
 
@@ -126,7 +182,7 @@ fn detached_css_style_css_text_parses_serializes_and_tracks_order() {
 
     assert_eq!(
         result,
-        "6,color,background-image,margin-top,margin-right,red,url(\"a;b\"),0px,important,color: red; background-image: url(\"a;b\"); margin: 0px !important;|6,margin-top,margin-right,margin-bottom,blue,none,,url(\"a;b\"),margin: 0px !important; display: none; color: blue;|0|0|important,true|0|"
+        "6,color,background-image,margin-top,margin-right,red,url(\"a;b\"),0px,important,color: red; background-image: url(\"a;b\"); margin: 0px !important;|6,color,margin-top,margin-right,blue,none,,url(\"a;b\"),color: blue; margin: 0px !important; display: none;|0|0|important,true|0|"
     );
 }
 #[test]
