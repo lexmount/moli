@@ -11,6 +11,8 @@ struct MousePress {
 pub(super) struct MouseInputState {
     press: Option<MousePress>,
     element_under_mouse: Option<DomHandle>,
+    #[cfg(feature = "molio")]
+    compat_press_owner: Option<WindowDocumentTaskTarget>,
 }
 
 pub(crate) enum MouseReleaseFollowUp {
@@ -40,6 +42,16 @@ impl PageScriptHost {
 
     pub(crate) fn clear_mouse_input_state(&mut self) {
         self.mouse_input = MouseInputState::default();
+    }
+
+    #[cfg(feature = "molio")]
+    pub(crate) fn set_compat_mouse_press_owner(&mut self, owner: Option<WindowDocumentTaskTarget>) {
+        self.mouse_input.compat_press_owner = owner;
+    }
+
+    #[cfg(feature = "molio")]
+    pub(crate) fn take_compat_mouse_press_owner(&mut self) -> Option<WindowDocumentTaskTarget> {
+        self.mouse_input.compat_press_owner.take()
     }
 
     pub(crate) fn set_mouse_event_target(&mut self, target: Option<DomHandle>) {
