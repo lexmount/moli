@@ -63,7 +63,7 @@ impl ScriptVmDefaultWorldBootstrap {
                 .borrow_mut()
                 .mark_main_document_initial_empty();
         }
-        let (bootstrap, context) =
+        let (mut bootstrap, context) =
             bootstrap.default_world_in_entered_scope(scope, global_template)?;
         // A propagated origin sandbox gives the popup a fresh opaque origin.
         // Keep its unique token; copying the opener's token would bypass SOP.
@@ -85,6 +85,18 @@ impl ScriptVmDefaultWorldBootstrap {
             )
             .map_err(|error| Box::new((error, bootstrap.document_runtime.dom_host().clone())))?;
         }
+        let proxy = context.global(scope);
+        bootstrap
+            .renderer_page_script_environment
+            .as_ref()
+            .expect("a related Page retains its script environment")
+            .install_initial_main_window_proxy(v8::Global::new(scope, proxy))
+            .map_err(|error| Box::new((error, bootstrap.document_runtime.dom_host().clone())))?;
+        bootstrap
+            .main_world
+            .current_mut()
+            .expect("a related Page has a main world before WindowProxy publication")
+            .mark_main_world_published();
         let mut vm = bootstrap.finish_in_scope(scope);
         vm.set_initial_storage_backends_in_scope(
             context,

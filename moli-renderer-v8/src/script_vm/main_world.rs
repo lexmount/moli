@@ -1,5 +1,31 @@
 use super::*;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MainWorldBootstrapFailureForTest {
+    Bindings,
+    Baseline,
+}
+
+#[cfg(test)]
+static BOOTSTRAP_FAILURES: parking_lot::Mutex<Vec<(u64, MainWorldBootstrapFailureForTest)>> =
+    parking_lot::Mutex::new(Vec::new());
+
+#[cfg(test)]
+impl MainWorldBootstrapFailureForTest {
+    pub(super) fn arm(self, page_id: u64) {
+        let mut failures = BOOTSTRAP_FAILURES.lock();
+        assert!(!failures.iter().any(|(id, _)| *id == page_id));
+        failures.push((page_id, self));
+    }
+
+    fn take(page_id: u64) -> Option<Self> {
+        let mut failures = BOOTSTRAP_FAILURES.lock();
+        let index = failures.iter().position(|(id, _)| *id == page_id)?;
+        Some(failures.swap_remove(index).1)
+    }
+}
+
 pub(super) enum MainWorld {
     // The large startup seeds are released when the realm is materialized.
     Pending(Box<PendingMainWorld>),
@@ -61,12 +87,15 @@ pub(super) fn initialize(
     inspector: &mut DocumentInspectorBinding,
     pending: &PendingMainWorld,
 ) -> Result<(WindowRealmRuntime, ScriptGlobalsBaseline)> {
-    // An interrupted bootstrap can retain the proxy while the main world is
-    // still Pending. Derive reuse from the live environment on every attempt.
+    // A navigation may already have a page-owned proxy while the new main world is pending.
     let reuse_main_window_proxy = environment
         .as_ref()
         .is_some_and(RendererPageScriptEnvironment::has_main_window_proxy);
-    let runtime = isolate
+    #[cfg(test)]
+    let failure = environment
+        .as_ref()
+        .and_then(|environment| MainWorldBootstrapFailureForTest::take(environment.page_id()));
+    let mut runtime = isolate
         .with_entered_renderer_document_isolate_and_bootstrap(|isolate, assets| {
             ScriptVmContextBootstrap::new_main_default(
                 isolate,
@@ -76,11 +105,15 @@ pub(super) fn initialize(
                 promise_reject_dispatch,
                 indexed_db_manager,
                 Some(storage_bucket_store),
-                environment,
+                environment.clone(),
                 reuse_main_window_proxy,
             )
         })?
         .into_runtime();
+    #[cfg(test)]
+    if failure == Some(MainWorldBootstrapFailureForTest::Bindings) {
+        anyhow::bail!("forced main-world bootstrap failure after bindings");
+    }
     isolate.with_entered_renderer_document_isolate(|isolate| {
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
@@ -125,6 +158,12 @@ pub(super) fn initialize(
     })?;
     register_main_window_execution_context_for_bootstrap(isolate, host, &runtime.context)?;
     let url = host.borrow().document_url().clone();
+    #[cfg(test)]
+    if failure == Some(MainWorldBootstrapFailureForTest::Baseline) {
+        isolate.with_renderer_document_isolate_mut(|isolate| {
+            isolate.set_slot(MainWorldBootstrapFailureForTest::Baseline);
+        });
+    }
     let baseline = isolate.with_renderer_document_isolate_and_inspector_mut(|v8, backend| {
         ScriptVmDefaultWorldBootstrap::capture_baseline_globals_and_attach_context(
             isolate.clone(),
@@ -136,6 +175,18 @@ pub(super) fn initialize(
             root_frame_id,
         )
     })?;
+    // Keep the Page's once-only proxy unpublished until every fallible
+    // initialization step succeeds. A failed first demand can then retry.
+    if !reuse_main_window_proxy && let Some(environment) = environment {
+        isolate.with_entered_renderer_document_isolate(|isolate| {
+            let scope = pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = v8::Local::new(scope, &runtime.context);
+            let proxy = context.global(scope);
+            environment.install_initial_main_window_proxy(v8::Global::new(scope, proxy))
+        })?;
+    }
+    runtime.mark_main_world_published();
     Ok((runtime, baseline))
 }
 
@@ -146,7 +197,7 @@ impl ScriptVm {
 
     pub(crate) fn ensure_main_world(&mut self) -> Result<&WindowRealmRuntime> {
         if let Some(pending) = self.main_world.pending() {
-            let (runtime, baseline_globals) = initialize(
+            let initialization = initialize(
                 &self.renderer_document_isolate,
                 &self._context_host,
                 self.resource_owner_id,
@@ -157,7 +208,13 @@ impl ScriptVm {
                 self.root_frame_id.as_deref(),
                 &mut self.page_inspector,
                 pending,
-            )?;
+            );
+            let (runtime, baseline_globals) = initialization.inspect_err(|_| {
+                // A dropped bootstrap queues its Realm teardown. Finish it
+                // before another command can retry with the same native DOM.
+                self.renderer_document_isolate
+                    .with_renderer_document_isolate_mut(|_| {});
+            })?;
             self.renderer_document_isolate
                 .with_renderer_document_isolate_mut(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));

@@ -265,6 +265,7 @@ impl ScriptVmContextBootstrap {
             runtime_observable_context_token,
             unsafe { &*host_ptr }.deferred_context_host_release_queue(),
             matches!(mode, WindowContextBootstrapMode::Isolated { .. }),
+            matches!(mode, WindowContextBootstrapMode::MainDefault) && !reuse_main_window_proxy,
         );
         if reusable_window_proxy.is_some()
             && let WindowContextBootstrapMode::Isolated {
@@ -288,15 +289,6 @@ impl ScriptVmContextBootstrap {
             return Err(anyhow::anyhow!(
                 "V8 did not attach the committed main WindowProxy to the replacement context"
             ));
-        }
-        if matches!(mode, WindowContextBootstrapMode::MainDefault)
-            && reusable_window_proxy.is_none()
-            && let Some(environment) = renderer_page_script_environment.as_ref()
-        {
-            environment.install_initial_main_window_proxy(v8::Global::new(
-                scope,
-                local_context.global(scope),
-            ))?;
         }
         if matches!(mode, WindowContextBootstrapMode::MainDefault)
             && reusable_window_proxy.is_some()
