@@ -344,6 +344,8 @@ pub(crate) fn window_open_callback<'s>(
             creator_child_handle,
             &parsed.target_name,
             if parsed.raw_url.is_empty() { "" } else { &url },
+            #[cfg(feature = "molio")]
+            popup_disposition,
             &navigation_initiator.origin(),
             entered_base_url,
             creator_policy_container,

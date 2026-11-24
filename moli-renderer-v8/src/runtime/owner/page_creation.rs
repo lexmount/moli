@@ -938,6 +938,16 @@ impl RendererOwnerHandle {
                         moli_url::is_about_blank(&final_url),
                         "a staged auxiliary Page only accepts its initial blank adoption"
                     );
+                    #[cfg(feature = "molio")]
+                    if owner
+                        .state
+                        .browser_context_runtime
+                        .auxiliary_navigation_owner()
+                        == Some(AuxiliaryNavigationOwner::Renderer)
+                    {
+                        env.document_settings.document_activity =
+                            page_vm.document_settings.document_activity;
+                    }
                     let started = Instant::now();
                     page_vm.adopt_initial_auxiliary_page(&loader, &env)?;
                     return Ok(if page_vm.vm_mut().has_pending_location_navigation() {

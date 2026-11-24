@@ -350,6 +350,8 @@ fn navigate_hyperlink_popup_target<'s>(
             child_handle,
             target_name,
             resolved_url,
+            #[cfg(feature = "molio")]
+            disposition,
             &navigation_initiator.origin(),
             creator.base_url,
             creator.policy_container,

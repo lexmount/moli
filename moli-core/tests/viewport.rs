@@ -44,6 +44,90 @@ async fn page_state(
 }
 
 #[tokio::test]
+async fn background_popup_activity_is_set_before_exposure_and_preserved_by_adoption() -> Result<()>
+{
+    use moli_core::{
+        RendererOutputItem, RendererOutputTransportMessage, RendererOwnerAction,
+        page::RendererPopupDisposition,
+    };
+
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut output = browser.subscribe_viewport_actions();
+    let mut opener = browser
+        .fetch(&html_url(
+            r#"<!doctype html><style>body { margin: 0; }</style>
+                <button id="open">Open background tab</button>
+                <script>
+                    document.getElementById("open").onclick = () => {
+                        const child = window.open("about:blank", "background-probe");
+                        document.title = child.document.visibilityState + ":" + child.document.hasFocus();
+                    };
+                </script>"#,
+        ))
+        .await?;
+    let mut frames = opener
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+
+    let new_tab_modifier = if cfg!(target_os = "macos") {
+        0b100
+    } else {
+        0b010
+    };
+    for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+        let pending = opener.start_dispatch_mouse_event_at_point_with_pointer_outcome(
+            12.,
+            10.,
+            event,
+            0,
+            Some(buttons),
+            1,
+            0.,
+            0.,
+            Default::default(),
+            new_tab_modifier,
+            false,
+        )?;
+        opener.finish_dispatch_mouse_event_at_point_with_outcome(pending.wait().await?)?;
+    }
+    let popup = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(item) = output.recv().await {
+            if let RendererOutputTransportMessage::Publication(publication) = item {
+                for record in publication.into_records() {
+                    if let RendererOutputItem::OwnerAction(RendererOwnerAction::Popup(popup)) =
+                        record.into_parts().1
+                    {
+                        return Some(popup.into_parts());
+                    }
+                }
+            }
+        }
+        None
+    })
+    .await?
+    .context("background popup activation")?;
+    assert_eq!(popup.disposition, RendererPopupDisposition::Background);
+    let initial = opener
+        .evaluate_runtime_expression_async("document.title")
+        .await?;
+    assert_eq!(initial["value"], "hidden:false", "synchronous opener read");
+
+    let mut child = browser.adopt_viewport_page(&popup).await?;
+    const ACTIVITY: &str = "document.visibilityState + ':' + document.hasFocus()";
+    let adopted = child.evaluate_runtime_expression_async(ACTIVITY).await?;
+    assert_eq!(adopted["value"], "hidden:false", "adopted background tab");
+
+    child
+        .set_document_activity_async(DocumentActivity::new(true, true))
+        .await?;
+    let selected = child.evaluate_runtime_expression_async(ACTIVITY).await?;
+    assert_eq!(selected["value"], "visible:true", "selected tab");
+    Ok(())
+}
+
+#[tokio::test]
 async fn queued_viewport_wheel_preserves_input_order_and_document_scope() -> Result<()> {
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
