@@ -3,6 +3,25 @@ use std::sync::Arc;
 use super::*;
 
 impl DomHost {
+    /// Data attributes can affect CSS without changing native box inputs.
+    pub fn attribute_affects_native_layout(name: &str) -> bool {
+        !name.starts_with("data-")
+    }
+
+    fn record_attribute_mutation(
+        &self,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        local_name: &str,
+    ) {
+        let affects_native_layout =
+            namespace.is_some() || Self::attribute_affects_native_layout(local_name);
+        self.record_mutation(
+            MutationScope::QueryState,
+            affects_native_layout.then_some(handle),
+        );
+    }
+
     pub fn explicit_element_references(
         &self,
         handle: DomHandle,
@@ -150,7 +169,7 @@ impl DomHost {
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
                 self.record_named_index_candidate(handle);
             }
-            self.record_mutation(MutationScope::QueryState, [handle]);
+            self.record_attribute_mutation(handle, namespace.as_deref(), &local_name);
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
                 self.update_target_after_indicated_part_mutation(handle);
             }
@@ -291,7 +310,7 @@ impl DomHost {
             if local_name.eq_ignore_ascii_case("id") || local_name.eq_ignore_ascii_case("name") {
                 self.record_named_index_candidate(handle);
             }
-            self.record_mutation(MutationScope::QueryState, [handle]);
+            self.record_attribute_mutation(handle, namespace, local_name);
             if local_name.eq_ignore_ascii_case("id") || local_name.eq_ignore_ascii_case("name") {
                 self.update_target_after_indicated_part_mutation(handle);
             }
@@ -420,7 +439,7 @@ impl DomHost {
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
                 self.record_named_index_candidate(handle);
             }
-            self.record_mutation(MutationScope::QueryState, [handle]);
+            self.record_attribute_mutation(handle, None, name);
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
                 self.update_target_after_indicated_part_mutation(handle);
             }
@@ -487,7 +506,7 @@ impl DomHost {
             if local_name.eq_ignore_ascii_case("id") || local_name.eq_ignore_ascii_case("name") {
                 self.record_named_index_candidate(handle);
             }
-            self.record_mutation(MutationScope::QueryState, [handle]);
+            self.record_attribute_mutation(handle, namespace, local_name);
             if local_name.eq_ignore_ascii_case("id") || local_name.eq_ignore_ascii_case("name") {
                 self.update_target_after_indicated_part_mutation(handle);
             }

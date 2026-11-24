@@ -83,6 +83,7 @@ mod source_scope_plan;
 mod state;
 #[cfg(debug_assertions)]
 pub(crate) use state::ComputedStyleObservationInputEpochs;
+pub(crate) use state::ScreenStyleInvalidation;
 mod stylesheet;
 mod stylesheet_resources;
 mod target_plan;
@@ -262,6 +263,22 @@ impl MoliStyleEngine {
         self.document_worlds
             .generation_snapshot_for_document(document)
             .computed_cache_generation
+    }
+
+    pub(crate) fn screen_style_invalidation(
+        &self,
+        document: DomHandle,
+    ) -> state::ScreenStyleInvalidation {
+        self.document_worlds
+            .active_world(document)
+            .map(|world| world.document_state.screen_style_invalidation.get())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn publish_screen_styles(&self, document: DomHandle) {
+        if let Some(world) = self.document_worlds.active_world(document) {
+            world.document_state.publish_screen_styles();
+        }
     }
 
     /// Visual output changes with source inputs, not with materialization of
@@ -863,6 +880,7 @@ impl MoliStyleEngine {
             pending,
             boundary,
         );
+        world.document_state.finish_screen_style_invalidation();
     }
 
     #[cfg(test)]

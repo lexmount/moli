@@ -256,9 +256,10 @@ fn realtime_plain_scroll_matches_a_fresh_layout_without_rebuilding() {
         .eval(&format!("scrollTo(0,100);scroller.scrollTop=70;{sample}"))
         .unwrap();
     assert_eq!(vm.layout_pass_observability_for_test().1, initial_builds);
-    let rebuilt = vm
-        .eval(&format!("moving.dataset.layoutCheck='fresh';{sample}"))
-        .unwrap();
+    vm._context_host
+        .borrow()
+        .note_realtime_layout_input_change();
+    let rebuilt = vm.eval(sample).unwrap();
     assert_eq!(projected, rebuilt);
     assert_eq!(
         vm.layout_pass_observability_for_test().1,
@@ -304,11 +305,10 @@ fn realtime_zoomed_rtl_scroll_matches_a_fresh_layout_without_rebuilding() {
             _ => unreachable!(),
         }
         assert_eq!(vm.layout_pass_observability_for_test().1, builds);
-        let fresh = vm
-            .eval(&format!(
-                "target.dataset.layoutCheck='{requested}';{sample}"
-            ))
-            .unwrap();
+        vm._context_host
+            .borrow()
+            .note_realtime_layout_input_change();
+        let fresh = vm.eval(sample).unwrap();
         assert_eq!(projected, fresh);
         builds += 1;
         assert_eq!(vm.layout_pass_observability_for_test().1, builds);

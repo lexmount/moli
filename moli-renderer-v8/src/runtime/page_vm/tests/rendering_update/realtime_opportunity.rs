@@ -435,6 +435,77 @@ globalThis.otherDocument = document.implementation.createHTMLDocument('inactive'
 }
 
 #[test]
+fn realtime_geometry_uses_data_attribute_style_invalidation() {
+    run_page_vm_large_stack_async_test("realtime-data-attributes", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.vm_mut()
+            .eval(
+                r#"
+document.body.innerHTML = `
+  <style>
+    #probe { width: 120px }
+    #probe:has(> [data-wide]) { width: 200px }
+    #attributeValue { width: attr(data-width type(<length>), 60px) }
+  </style>
+  <div id="probe"><span id="child"></span></div><div id="attributeValue"></div>`;
+"#,
+            )
+            .unwrap();
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetWidth)").unwrap(),
+            "120"
+        );
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    r#"(() => {
+                for (let i = 0; i < 12; ++i) {
+                    child.dataset.unused = i;
+                    if (probe.offsetWidth !== 120) throw new Error('unexpected width');
+                }
+                return child.dataset.unused;
+            })()"#
+                )
+                .unwrap(),
+            "11",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    r#"
+child.dataset.wide = '';
+getComputedStyle(probe).color;
+String(probe.offsetWidth)
+"#
+                )
+                .unwrap(),
+            "200",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    r#"
+child.removeAttribute('data-wide');
+attributeValue.dataset.width = '180px';
+[probe.offsetWidth, attributeValue.offsetWidth].join('|')
+"#
+                )
+                .unwrap(),
+            "120|180",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
+    });
+}
+
+#[test]
 fn realtime_synchronous_geometry_keeps_the_opportunity_but_avoids_another_build() {
     run_page_vm_large_stack_async_test("realtime-opportunity-after-getter", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

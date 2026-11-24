@@ -2384,7 +2384,7 @@ mod tests {
 
         let document_version = host.document_layout_version(document);
         let frame_version = host.document_layout_version(frame_document);
-        assert!(host.set_attribute(frame_parent, "data-test", "updated"));
+        assert!(host.set_attribute(frame_parent, "width", "120"));
         assert_eq!(host.document_layout_version(document), document_version);
         assert!(host.document_layout_version(frame_document) > frame_version);
 

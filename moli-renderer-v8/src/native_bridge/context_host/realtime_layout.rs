@@ -15,8 +15,9 @@ use super::screencast_paint::{
 };
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
-    document_runtime::DomHandle, layout_renderer::ContainerSizeFeedback,
-    style_engine::StyloStyleEnvironment,
+    document_runtime::DomHandle,
+    layout_renderer::ContainerSizeFeedback,
+    style_engine::{ScreenStyleInvalidation, StyloStyleEnvironment},
 };
 
 /// The consumer explicitly decides whether a pass may update screen geometry.
@@ -34,6 +35,7 @@ enum LayoutPublication {
     CurrentScreen {
         document: DomHandle,
         inputs: ScreenLayoutInputs,
+        source_dom_version: u64,
         paint_generation: Option<u64>,
     },
     Transient,
@@ -181,6 +183,7 @@ impl PageScriptHost {
             LayoutPublication::CurrentScreen {
                 document,
                 inputs,
+                source_dom_version: self.dom_host().dom_version(),
                 paint_generation: self.screen_paint_generation(state),
             },
         ))
@@ -199,6 +202,7 @@ impl PageScriptHost {
             LayoutPublication::CurrentScreen {
                 document,
                 inputs,
+                source_dom_version,
                 paint_generation,
             } => {
                 let state = self.realtime_layout_state.as_ref().ok_or_else(|| {
@@ -207,7 +211,10 @@ impl PageScriptHost {
                         "layout policy changed during pass",
                     )
                 })?;
-                if pass.viewport != inputs.viewport || self.screen_layout_inputs(state)? != inputs {
+                if pass.viewport != inputs.viewport
+                    || self.dom_host().dom_version() != source_dom_version
+                    || self.screen_layout_inputs(state)? != inputs
+                {
                     return Err(LayoutError::source_contract(
                         "screen layout",
                         "source inputs or Document owners changed during layout",
@@ -239,6 +246,9 @@ impl PageScriptHost {
     }
 
     fn did_publish_screen_layout(&self, state: &RealtimeLayoutState, inputs: ScreenLayoutInputs) {
+        for document in &inputs.documents {
+            self.style_engine.publish_screen_styles(document.document);
+        }
         // Attach the verified inputs after the geometry update retires the previous validity.
         *state.published.borrow_mut() = Some(inputs);
         state.scroll_projection_dirty.set(false);
@@ -404,6 +414,14 @@ impl PageScriptHost {
             .expect("Realtime policy installs its document state");
         let inputs = self.screen_layout_inputs(state)?;
         let document = self.document_handle();
+        let resolve_style_changes = inputs.documents.iter().any(|document| {
+            self.style_engine
+                .screen_style_invalidation(document.document)
+                == ScreenStyleInvalidation::Pending
+        });
+        if resolve_style_changes {
+            self.prepare_current_screen_styles(&inputs);
+        }
         if self.can_reuse_screen_layout(state, &inputs)
             && (inputs.documents[0].root.is_none()
                 || !state.scroll_projection_dirty.get()
@@ -416,7 +434,10 @@ impl PageScriptHost {
 
         // Native invalidation/geometry only: no input dispatch, callbacks,
         // network admission, or nested event-loop checkpoint at this boundary.
-        self.prepare_current_screen_styles(&inputs);
+        if !resolve_style_changes {
+            self.prepare_current_screen_styles(&inputs);
+        }
+        let source_dom_version = self.dom_host().dom_version();
         let paint_generation = self.screen_paint_generation(state);
         let request = LayoutPassRequest::new(inputs.viewport, reason)
             .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
@@ -425,7 +446,9 @@ impl PageScriptHost {
         let Some((pass, feedback)) =
             self.build_layout_pass_for_document_in_environment(document, request, None)?
         else {
-            if self.screen_layout_inputs(state)? != inputs {
+            if self.dom_host().dom_version() != source_dom_version
+                || self.screen_layout_inputs(state)? != inputs
+            {
                 return Err(LayoutError::source_contract(
                     "screen layout",
                     "source inputs or Document owners changed during layout",
@@ -444,6 +467,7 @@ impl PageScriptHost {
             PreparedLayoutPublication(LayoutPublication::CurrentScreen {
                 document,
                 inputs,
+                source_dom_version,
                 paint_generation,
             }),
             pass,
@@ -480,6 +504,11 @@ impl PageScriptHost {
     ) -> bool {
         inputs.permits_reuse()
             && state.published.borrow().as_ref() == Some(inputs)
+            && inputs.documents.iter().all(|document| {
+                self.style_engine
+                    .screen_style_invalidation(document.document)
+                    == ScreenStyleInvalidation::Clean
+            })
             && (inputs.documents[0].root.is_none()
                 || self
                     .document_layout_state
