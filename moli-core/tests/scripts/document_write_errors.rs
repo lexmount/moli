@@ -92,3 +92,6 @@ async fn child_open_parser_reports_written_script_errors_without_throwing_into_w
 {
     written_script_errors_are_reported(true, true).await
 }
+
+#[path = "module_document_write.rs"]
+mod module_document_write;
