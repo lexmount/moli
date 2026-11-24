@@ -658,8 +658,7 @@ use reflection::{
     set_boolean_attribute_property_on_object_or_detached,
     set_dom_string_attribute_property_on_object,
     set_nullable_dom_string_attribute_property_on_object, set_reflected_attribute,
-    set_reflected_boolean_attribute, set_reflected_style_attribute_with_inline_base_url,
-    set_usv_string_attribute_property_on_object,
+    set_reflected_boolean_attribute, set_usv_string_attribute_property_on_object,
 };
 pub(crate) use shadow_dom::install_element_internals_template_bindings;
 pub(super) use shadow_dom::{

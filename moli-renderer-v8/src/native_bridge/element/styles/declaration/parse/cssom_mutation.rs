@@ -232,27 +232,19 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         new_side_entries,
     );
     let (css_text, override_text) = state.css_text_and_style_resolution_override();
-    if update_inline_style_base && let Some(inline_base_url) = &inline_base_url {
-        unsafe { &mut *runtime_ptr }
-            .set_element_inline_style_base_url(handle, inline_base_url.clone());
-    }
-    if style_string(runtime, handle) == css_text {
-        let runtime = unsafe { &mut *runtime_ptr };
-        runtime.set_element_inline_style_resolution_override(handle, override_text);
-        runtime.set_element_inline_style_declaration_state(handle, state);
-        return Some(false);
-    }
-    set_reflected_style_attribute_with_inline_base_url(
+    let attribute_changed = style_string(runtime, handle) != css_text;
+    commit_inline_style_declaration(
         scope,
         runtime_ptr,
         handle,
-        &css_text,
-        inline_base_url.as_ref(),
+        state,
+        attribute_changed.then_some(css_text.as_str()),
+        override_text,
+        inline_base_url
+            .as_ref()
+            .filter(|_| attribute_changed || update_inline_style_base),
     );
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_element_inline_style_resolution_override(handle, override_text);
-    runtime.set_element_inline_style_declaration_state(handle, state);
-    Some(true)
+    Some(attribute_changed)
 }
 
 pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_pdb_storage(
@@ -271,8 +263,51 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_
     };
     state.refresh_pdb_entries();
     let (css_text, override_text) = state.css_text_and_style_resolution_override();
-    set_reflected_style_attribute_with_inline_base_url(scope, runtime_ptr, handle, &css_text, None);
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_element_inline_style_resolution_override(handle, override_text);
-    runtime.set_element_inline_style_declaration_state(handle, state);
+    commit_inline_style_declaration(
+        scope,
+        runtime_ptr,
+        handle,
+        state,
+        Some(&css_text),
+        override_text,
+        None,
+    );
+}
+
+pub(super) fn commit_inline_style_declaration(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    state: CssInlineStyleDeclarationState,
+    attribute_text: Option<&str>,
+    override_text: Option<String>,
+    base_url: Option<&url::Url>,
+) {
+    let publish = |runtime: &mut PageScriptHost| {
+        if let Some(base_url) = base_url {
+            runtime.set_element_inline_style_base_url(handle, base_url.clone());
+        }
+        runtime.set_element_inline_style_resolution_override(handle, override_text);
+        runtime.set_element_inline_style_declaration_state(handle, state);
+    };
+    let Some(attribute_text) = attribute_text else {
+        publish(unsafe { &mut *runtime_ptr });
+        return;
+    };
+    crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let runtime = unsafe { &mut *runtime_ptr };
+        let _ = runtime.set_style_attribute_from_cssom_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            handle,
+            attribute_text,
+        );
+        runtime.set_element_inline_style_csp_state(
+            handle,
+            crate::style_engine::InlineStyleCspState::Cssom,
+        );
+        // Publish the CSSOM and rendering views before the reaction scope
+        // invokes attributeChangedCallback and permits another mutation.
+        publish(runtime);
+    });
 }

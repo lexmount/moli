@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::super::super::super::PageScriptHost;
-use super::super::super::{set_reflected_style_attribute_with_inline_base_url, style_string};
+use super::super::super::style_string;
 use super::super::STYLE_DECLARATION_BASE_URL_SLOT;
 use super::properties::{
     all_shorthand_applies_to, animation_shorthand_longhands, box_shorthand_components,
