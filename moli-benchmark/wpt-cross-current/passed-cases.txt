@@ -3769,6 +3769,7 @@ css/css-typed-om/the-stylepropertymap/properties/border-image-outset.html
 css/css-typed-om/the-stylepropertymap/properties/border-image-slice.html
 css/css-typed-om/the-stylepropertymap/properties/border-image-source.html
 css/css-typed-om/the-stylepropertymap/properties/border-image-width.html
+css/css-typed-om/the-stylepropertymap/properties/border-radius.html
 css/css-typed-om/the-stylepropertymap/properties/border-style.html
 css/css-typed-om/the-stylepropertymap/properties/border-width.html
 css/css-typed-om/the-stylepropertymap/properties/bottom.html
