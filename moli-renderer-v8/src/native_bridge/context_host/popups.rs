@@ -1517,7 +1517,10 @@ impl PageScriptHost {
 
     pub(crate) fn lightweight_popup_bar_props_visible(&self, popup_id: u64) -> bool {
         self.lightweight_popup_record(popup_id)
-            .is_some_and(|record| record.is_open() && !record.auxiliary_window.is_popup())
+            .is_some_and(|record| {
+                matches!(record.lifecycle, LightweightPopupLifecycle::Open(_))
+                    && !record.auxiliary_window.is_popup()
+            })
     }
 
     pub(crate) fn lightweight_popup_is_open(&self, popup_id: u64) -> bool {
