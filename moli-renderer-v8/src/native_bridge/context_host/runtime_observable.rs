@@ -584,6 +584,15 @@ impl PageScriptHost {
         self.retire_font_face_loads_for_context_token(context_token);
         self.retire_realtime_animation_frame_realm(context_token);
         self.retire_realtime_media_query_realm(context_token);
+        let revoked_blob_object_url_count =
+            self.child_default_context_bootstrap
+                .as_ref()
+                .map_or(0, |config| {
+                    crate::blob::cleanup_object_urls_for_context(
+                        config.resource_owner_id,
+                        context_token,
+                    )
+                });
         crate::observer_runtime::retire_context_token(self, context_token);
         let retired_indexed_db_connections = self.retire_indexed_db_context(context_token);
         let owners = self
@@ -610,13 +619,15 @@ impl PageScriptHost {
                 ?context_token,
                 retired_count,
                 retired_indexed_db_connections,
+                revoked_blob_object_url_count,
                 "retired LocalWindow bindings with destroyed V8 execution context"
             );
-        } else if retired_indexed_db_connections > 0 {
+        } else if retired_indexed_db_connections > 0 || revoked_blob_object_url_count > 0 {
             tracing::debug!(
                 ?context_token,
                 retired_indexed_db_connections,
-                "retired IndexedDB state with destroyed V8 execution context"
+                revoked_blob_object_url_count,
+                "retired context-owned state with destroyed V8 execution context"
             );
         }
         retired_count
@@ -637,6 +648,15 @@ impl PageScriptHost {
         self.retire_font_face_loads_for_context_token(context_token);
         self.retire_realtime_animation_frame_realm(context_token);
         self.retire_realtime_media_query_realm(context_token);
+        let revoked_blob_object_url_count =
+            self.child_default_context_bootstrap
+                .as_ref()
+                .map_or(0, |config| {
+                    crate::blob::cleanup_object_urls_for_context(
+                        config.resource_owner_id,
+                        context_token,
+                    )
+                });
         crate::observer_runtime::retire_context_token(self, context_token);
         self.retire_indexed_db_context(context_token);
         let retired_realm_count = self
@@ -645,6 +665,7 @@ impl PageScriptHost {
         tracing::debug!(
             ?context_token,
             retired_realm_count,
+            revoked_blob_object_url_count,
             "retired isolated Window realm registration"
         );
         retired_realm_count
