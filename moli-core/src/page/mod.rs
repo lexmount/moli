@@ -402,3 +402,4 @@ pub use moli_renderer_v8::{
 
 #[cfg(feature = "devtools")]
 pub use moli_renderer_v8::RendererSyntheticWheelGesture;
+pub use moli_renderer_v8::RendererWheelDispatchOutcome;

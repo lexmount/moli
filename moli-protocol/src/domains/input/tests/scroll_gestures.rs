@@ -147,6 +147,81 @@ async fn scroll_gesture_repeat_resets_target_and_cancellation_mode() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_repeat_starts_cancelable_after_skipping_an_outside_update() {
+    use super::super::scroll::SyntheticWheelSequence;
+    use crate::conn::{CommandOwnerScope, ProtocolWorkflowDriver};
+    use moli_core::page::RendererSyntheticWheelGesture;
+
+    let mut ctx = fixture(
+        "a.addEventListener('wheel', e => {
+            e.preventDefault();
+            events.push([e.deltaY, e.cancelable, e.defaultPrevented]);
+        }, {passive:false});",
+    )
+    .await;
+    let (owner, page) = ctx.with_fixture(|conn| {
+        let owner = CommandOwnerScope::capture(conn, None);
+        let page = conn
+            .target_page_residence_identity_for_owner(&owner)
+            .unwrap();
+        (owner, page)
+    });
+    let command = RendererSyntheticWheelGesture::default();
+    let mut first = SyntheticWheelSequence::new(&command);
+    let mut repeat = SyntheticWheelSequence::new(&command);
+    let mut driver = ProtocolWorkflowDriver::new(ctx.handle());
+    let mut context = CommandDispatchContext::default();
+
+    // Run the normal protocol update path with a resize between each step.
+    for (id, width, delta) in [(35001, 600, 25.0), (35002, 100, 50.0), (35003, 600, 75.0)] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Emulation.setDeviceMetricsOverride",
+            "params": { "width": width, "height": 400, "deviceScaleFactor": 1, "mobile": false }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), None);
+        let sequence = if id == 35001 { &mut first } else { &mut repeat };
+        assert!(
+            ctx.drive_owned_wait(sequence.dispatch_update(
+                &mut driver,
+                &mut context,
+                &owner,
+                &page,
+                120.0,
+                20.0,
+                0.0,
+                delta,
+            ))
+            .await
+            .unwrap(),
+        );
+    }
+    assert!(
+        ctx.drive_owned_wait(repeat.dispatch_update(
+            &mut driver,
+            &mut context,
+            &owner,
+            &page,
+            120.0,
+            20.0,
+            0.0,
+            100.0,
+        ))
+        .await
+        .unwrap(),
+    );
+
+    let value = snapshot(&mut ctx).await;
+    assert_eq!(
+        value["events"],
+        json!([[25, true, true], [75, true, true], [100, true, true]]),
+        "{value}"
+    );
+    assert_eq!(value["a"], 0, "{value}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn scroll_gesture_retargets_after_cancellation_and_target_removal() {
     for remove in [false, true] {
         let mut ctx=fixture(&format!("document.addEventListener('wheel',e=>{{events.push([e.target.id,e.cancelable,e.deltaY]);total+=e.deltaY;if(events.length===1){{e.preventDefault();b.style.display='block';{} }} }},{{passive:false}});",if remove { "a.remove();" } else { "" })).await;
@@ -213,6 +288,35 @@ async fn scroll_gesture_latches_viewport_at_boundary_for_reverse_overscroll() {
         .parse()
         .unwrap();
     assert!((scroll_y - 100.0).abs() < 0.05, "scrollY was {scroll_y}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_relatches_after_an_unconsumed_initial_update() {
+    for (initial_page, expected_inner, expected_page) in [(0, 100.0, 0.0), (20, 0.0, 100.0)] {
+        let mut ctx = fixture("").await;
+        assert!(
+            evaluate_bool(
+                &mut ctx,
+                &format!("scrollTo(0, {initial_page}); scrollY === {initial_page}"),
+            )
+            .await
+        );
+        gesture(
+            &mut ctx,
+            json!({"yDistance":100,"yOverscroll":100,"speed":200}),
+        )
+        .await;
+
+        let value = snapshot(&mut ctx).await;
+        assert!(
+            (value["a"].as_f64().unwrap() - expected_inner).abs() < 0.05,
+            "initial scrollY {initial_page}: {value}"
+        );
+        assert!(
+            (value["page"].as_f64().unwrap() - expected_page).abs() < 0.05,
+            "initial scrollY {initial_page}: {value}"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

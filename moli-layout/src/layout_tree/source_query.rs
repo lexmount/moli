@@ -974,6 +974,7 @@ mod tests {
             LayoutSize::new(100.0, 100.0),
             box_id,
             vec![FrozenLayoutBox {
+                display: crate::LayoutDisplay::Block,
                 geometry: LayoutBoxGeometry {
                     id: box_id,
                     effective_zoom: 1.0,

@@ -116,7 +116,7 @@ impl PageVm {
         );
         Ok(RendererInputDispatchOutcome {
             handled: true,
-            wheel_default_prevented: false,
+            wheel: None,
             triggered_top_level_navigation: false,
             pending_download: None,
             pending_file_chooser: None,

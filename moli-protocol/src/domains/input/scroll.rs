@@ -107,9 +107,7 @@ fn prepare(
                         .take()
                         .unwrap_or_else(|| admission_queue.reserve());
                     admission.wait().await;
-                    let gesture = command_gesture.next_sequence();
-                    let mut first = true;
-                    let mut cancelable = true;
+                    let mut sequence = SyntheticWheelSequence::new(&command_gesture);
                     let mut started = Instant::now();
                     for segment in &segments {
                         let mut sent = (0.0, 0.0);
@@ -122,34 +120,20 @@ fn prepare(
                             tokio::time::sleep_until(started + next).await;
                             let elapsed = started.elapsed();
                             let position = segment.position_at(elapsed);
-                            let wheel = SyntheticWheel {
-                                owner: owner.clone(),
-                                page: page.clone(),
-                                x,
-                                y,
-                                delta_x: position.0 - sent.0,
-                                delta_y: position.1 - sent.1,
-                                cancelable,
-                                gesture: gesture.clone(),
-                            };
-                            let pending = driver
-                                .with_state(move |state| state.prepare_synthetic_wheel(wheel))
-                                .map_err(input_workflow_error)??;
-                            let Some(pending) = pending else {
+                            if !sequence
+                                .dispatch_update(
+                                    &mut driver,
+                                    context.context_mut(),
+                                    &owner,
+                                    &page,
+                                    x,
+                                    y,
+                                    position.0 - sent.0,
+                                    position.1 - sent.1,
+                                )
+                                .await?
+                            {
                                 return Ok(());
-                            };
-                            let canceled = complete_wheel(
-                                &mut driver,
-                                pending.wait().await,
-                                page.target_id().map(str::to_owned),
-                                context.context_mut(),
-                            )
-                            .await?;
-                            if first {
-                                // Only an unconsumed Began wheel permits later
-                                // wheels to become non-blocking/non-cancelable.
-                                cancelable = canceled;
-                                first = false;
                             }
                             sent = position;
                             if elapsed >= segment.duration {
@@ -171,12 +155,126 @@ fn prepare(
     ))
 }
 
+pub(super) struct SyntheticWheelSequence {
+    gesture: RendererSyntheticWheelGesture,
+    began: Option<WheelSequenceBegin>,
+}
+
+struct WheelSequenceBegin {
+    direction: Option<WheelDirection>,
+    canceled: bool,
+    first_scroll_consumed: Option<bool>,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum WheelDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl WheelDirection {
+    fn from_delta(x: f64, y: f64) -> Option<Self> {
+        if x.abs() > y.abs() {
+            Some(if x < 0.0 { Self::Left } else { Self::Right })
+        } else if y != 0.0 {
+            Some(if y < 0.0 { Self::Up } else { Self::Down })
+        } else {
+            None
+        }
+    }
+}
+
+impl SyntheticWheelSequence {
+    pub(super) fn new(command: &RendererSyntheticWheelGesture) -> Self {
+        Self {
+            gesture: command.next_sequence(),
+            began: None,
+        }
+    }
+
+    pub(super) async fn dispatch_update(
+        &mut self,
+        driver: &mut ProtocolWorkflowDriver,
+        context: &mut CommandDispatchContext,
+        owner: &CommandOwnerScope,
+        page: &TargetPageResidenceIdentity,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+    ) -> Result<bool, DevToolsError> {
+        let direction = WheelDirection::from_delta(delta_x, delta_y);
+        // Like Aura's wheel phase handler, re-latch on a new dominant
+        // direction only after an unconsumed first scroll update.
+        let restart = self.began.as_ref().is_some_and(|began| {
+            began.first_scroll_consumed == Some(false)
+                && began
+                    .direction
+                    .zip(direction)
+                    .is_some_and(|(initial, next)| initial != next)
+        });
+        let gesture = if restart {
+            self.gesture.restart_phase()
+        } else {
+            self.gesture.clone()
+        };
+        let wheel = SyntheticWheel {
+            owner: owner.clone(),
+            page: page.clone(),
+            x,
+            y,
+            delta_x,
+            delta_y,
+            cancelable: restart || self.began.as_ref().is_none_or(|began| began.canceled),
+            gesture: gesture.clone(),
+        };
+        let pending = driver
+            .with_state(move |state| state.prepare_synthetic_wheel(wheel))
+            .map_err(input_workflow_error)??;
+        let Some(pending) = pending else {
+            return Ok(false);
+        };
+        let outcome = complete_wheel(
+            driver,
+            pending.wait().await,
+            page.target_id().map(str::to_owned),
+            context,
+        )
+        .await?;
+        // A skipped update never enters the wheel phase or changes its
+        // cancelability. A canceled wheel has no default scroll update.
+        if let Some(outcome) = outcome {
+            if restart {
+                self.gesture = gesture;
+                self.began = None;
+            }
+            let canceled = outcome == RendererWheelDispatchOutcome::Canceled;
+            let began = self.began.get_or_insert(WheelSequenceBegin {
+                direction,
+                canceled,
+                first_scroll_consumed: None,
+            });
+            if let Some(direction) = direction {
+                began.direction.get_or_insert(direction);
+                if !canceled {
+                    began
+                        .first_scroll_consumed
+                        .get_or_insert(outcome == RendererWheelDispatchOutcome::Scrolled);
+                }
+            }
+        }
+        Ok(true)
+    }
+}
+
 async fn complete_wheel(
     driver: &mut ProtocolWorkflowDriver,
     completed: CompletedInputCommandDispatch,
     target_id: Option<String>,
     gesture_context: &mut CommandDispatchContext,
-) -> Result<bool, DevToolsError> {
+) -> Result<Option<RendererWheelDispatchOutcome>, DevToolsError> {
     let (permit, response_flush) = driver
         .with_state(|state| state.begin_command_response_flush_permit())
         .map_err(input_workflow_error)?;
@@ -192,7 +290,7 @@ async fn complete_wheel(
         .map_err(input_workflow_error)?;
     gesture_context.extend_renderer_output_dependencies(dependencies);
     permit.finish();
-    completed.result.map(|_| completed.wheel_canceled)
+    completed.result.map(|_| completed.wheel)
 }
 
 pub(crate) struct SyntheticWheel {

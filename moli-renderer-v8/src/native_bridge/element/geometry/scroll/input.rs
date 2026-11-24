@@ -171,8 +171,8 @@ fn perform_wheel_scroll_chain_default_action(
                 current_y,
             );
         } else {
-            set_node_scroll_position(scope, runtime_ptr, source, target_x, target_y, true);
-            changed = true;
+            changed |=
+                set_node_scroll_position(scope, runtime_ptr, source, target_x, target_y, true);
         }
     }
     Ok(changed)
@@ -193,10 +193,11 @@ struct LatchedScrollBox {
 impl WheelScrollTarget {
     fn new(runtime: &PageScriptHost, source: Option<DomHandle>) -> Self {
         Self(source.and_then(|source| {
+            let document = runtime.dom_host().owner_document_handle(source)?;
             Some(LatchedScrollBox {
                 source,
-                document: runtime.dom_host().owner_document_handle(source)?,
-                alive: runtime.watch_synthetic_scroll_target(source),
+                document,
+                alive: runtime.watch_synthetic_scroll_target(document, source)?,
             })
         }))
     }
@@ -234,8 +235,7 @@ pub(crate) fn select_wheel_scroll_target(
         }
     }
 
-    // The initial delta can point out of the viewport's scroll range even
-    // though the overscroll segment will reverse and scroll the viewport.
+    // The viewport remains a valid target at its scroll boundary.
     let host = runtime.dom_host();
     let viewport = host
         .owner_document_handle(handle)
@@ -268,6 +268,10 @@ pub(crate) fn perform_latched_wheel_scroll_default_action(
         target.alive.store(false, Ordering::Relaxed);
         return Ok(false);
     };
+    // Reading the metrics can publish layout and retire this scroll box.
+    if !target.alive.load(Ordering::Relaxed) {
+        return Ok(false);
+    }
     let is_viewport = runtime
         .dom_host()
         .dom()

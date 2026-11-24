@@ -37,6 +37,13 @@ impl RendererSyntheticWheelGesture {
         }
     }
 
+    /// Re-latch after a direction change while retaining the gesture's Document.
+    pub fn restart_phase(&self) -> Self {
+        let restarted = self.next_sequence();
+        restarted.targets.lock().document = self.targets.lock().document;
+        restarted
+    }
+
     pub(crate) fn validate_anchor(&self, in_bounds: bool) -> bool {
         if in_bounds {
             self.anchor_validated.store(true, Ordering::Relaxed);

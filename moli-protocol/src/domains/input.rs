@@ -23,9 +23,9 @@ use moli_core::page::{
     CompletedPageCommand, Page, PageInputExt, PendingPageCommand, RendererDragData,
     RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
     RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
-    RendererPointerEventProperties, RendererTouchPoint, decode_element_click_dispatch_completion,
-    decode_element_click_preparation_completion, decode_input_dispatch_outcome_completion,
-    decode_insert_text_completion,
+    RendererPointerEventProperties, RendererTouchPoint, RendererWheelDispatchOutcome,
+    decode_element_click_dispatch_completion, decode_element_click_preparation_completion,
+    decode_input_dispatch_outcome_completion, decode_insert_text_completion,
 };
 use serde::Deserialize;
 #[cfg(test)]
@@ -94,13 +94,13 @@ pub(crate) enum InputCommandDispatchStep {
 struct CompletedInputCommandResult {
     result: Result<AutomationResult, DevToolsError>,
     protocol_events: Vec<BackgroundProtocolEvent>,
-    wheel_canceled: bool,
+    wheel: Option<RendererWheelDispatchOutcome>,
 }
 
 #[derive(Default)]
 struct InputCommandSideEffects {
     protocol_events: Vec<BackgroundProtocolEvent>,
-    wheel_canceled: bool,
+    wheel: Option<RendererWheelDispatchOutcome>,
 }
 
 impl InputCommandSideEffects {
@@ -1409,12 +1409,12 @@ async fn complete_input_workflow(
     let result =
         complete_input_operation(driver, completed, command_context, &mut side_effects).await;
     let mut protocol_events = command_context.take_deferred_command_events();
-    let wheel_canceled = side_effects.wheel_canceled;
+    let wheel = side_effects.wheel;
     protocol_events.extend(side_effects.into_events());
     CompletedInputCommandResult {
         result,
         protocol_events,
-        wheel_canceled,
+        wheel,
     }
 }
 
@@ -1480,7 +1480,7 @@ async fn complete_input_operation(
             )
         }
     };
-    side_effects.wheel_canceled = outcome.wheel_default_prevented;
+    side_effects.wheel = outcome.wheel;
     handle_input_dispatch_outcome(
         driver,
         side_effects,

@@ -1,15 +1,15 @@
 use super::*;
 use crate::dom::native::{DomHost, DomMutationEffects};
-use std::{
-    cell::RefCell,
-    sync::{
-        Arc, Weak,
-        atomic::{AtomicBool, Ordering},
-    },
+use moli_layout::{FrozenLayoutTree, LayoutDisplay};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, Ordering},
 };
 
-struct SyntheticScrollTargetWatch {
+pub(super) struct SyntheticScrollTargetWatch {
+    document: DomHandle,
     source: DomHandle,
+    box_path: Vec<(DomHandle, LayoutDisplay)>,
     alive: Weak<AtomicBool>,
 }
 
@@ -25,7 +25,6 @@ pub(super) struct MouseInputState {
     element_under_mouse: Option<DomHandle>,
     #[cfg(feature = "molio")]
     compat_press_owners: [Option<WindowDocumentTaskTarget>; 5],
-    synthetic_scroll_targets: RefCell<Vec<SyntheticScrollTargetWatch>>,
 }
 
 pub(crate) enum MouseReleaseFollowUp {
@@ -37,9 +36,16 @@ pub(crate) enum MouseReleaseFollowUp {
 }
 
 impl PageScriptHost {
-    pub(crate) fn watch_synthetic_scroll_target(&self, source: DomHandle) -> Arc<AtomicBool> {
+    pub(crate) fn watch_synthetic_scroll_target(
+        &self,
+        document: DomHandle,
+        source: DomHandle,
+    ) -> Option<Arc<AtomicBool>> {
+        let box_path = self
+            .with_latest_layout_tree_for_document(document, |tree| scroll_box_path(tree, source))
+            .flatten()?;
         let alive = Arc::new(AtomicBool::new(true));
-        let mut watches = self.mouse_input.synthetic_scroll_targets.borrow_mut();
+        let mut watches = self.synthetic_scroll_targets.borrow_mut();
         watches.retain(|watch| {
             watch
                 .alive
@@ -47,10 +53,39 @@ impl PageScriptHost {
                 .is_some_and(|alive| alive.load(Ordering::Relaxed))
         });
         watches.push(SyntheticScrollTargetWatch {
+            document,
             source,
+            box_path,
             alive: Arc::downgrade(&alive),
         });
-        alive
+        Some(alive)
+    }
+
+    pub(super) fn note_synthetic_scroll_target_layout(
+        &self,
+        document: DomHandle,
+        tree: &FrozenLayoutTree<DomHandle>,
+    ) {
+        self.synthetic_scroll_targets.borrow_mut().retain(|watch| {
+            let Some(alive) = watch.alive.upgrade() else {
+                return false;
+            };
+            let member = self
+                .dom_host()
+                .dom()
+                .document_element_handle_for_document(watch.document)
+                .and_then(|root| tree.tree_for_root(root));
+            let survives = match member {
+                Some(member) => {
+                    scroll_box_path(member, watch.source).as_ref() == Some(&watch.box_path)
+                }
+                None => document != watch.document && document != self.document_handle(),
+            };
+            if !survives {
+                alive.store(false, Ordering::Relaxed);
+            }
+            survives && alive.load(Ordering::Relaxed)
+        });
     }
 
     pub(crate) fn note_synthetic_scroll_target_removals(
@@ -58,28 +93,25 @@ impl PageScriptHost {
         dom: &DomHost,
         effects: &DomMutationEffects,
     ) {
-        self.mouse_input
-            .synthetic_scroll_targets
-            .get_mut()
-            .retain(|watch| {
-                let Some(alive) = watch.alive.upgrade() else {
-                    return false;
-                };
-                if !alive.load(Ordering::Relaxed) {
-                    return false;
-                }
-                // Mutation facts preserve actual removals even when the same node
-                // is reinserted before the next wheel, with no observer installed.
-                for mutation in effects.style().child_list_mutations() {
-                    for &root in mutation.removed_nodes() {
-                        if in_shadow_including_subtree(dom, root, watch.source) {
-                            alive.store(false, Ordering::Relaxed);
-                            return false;
-                        }
+        self.synthetic_scroll_targets.get_mut().retain(|watch| {
+            let Some(alive) = watch.alive.upgrade() else {
+                return false;
+            };
+            if !alive.load(Ordering::Relaxed) {
+                return false;
+            }
+            // Mutation facts preserve actual removals even when the same node
+            // is reinserted before the next wheel, with no observer installed.
+            for mutation in effects.style().child_list_mutations() {
+                for &root in mutation.removed_nodes() {
+                    if in_shadow_including_subtree(dom, root, watch.source) {
+                        alive.store(false, Ordering::Relaxed);
+                        return false;
                     }
                 }
-                true
-            });
+            }
+            true
+        });
     }
 
     pub(crate) fn mouse_press_handle(&self) -> Option<DomHandle> {
@@ -99,12 +131,7 @@ impl PageScriptHost {
     }
 
     pub(crate) fn clear_mouse_input_state(&mut self) {
-        // A drag can reset mouse state while a wheel gesture remains active.
-        // Its removal watches belong to the gesture's independent lifetime.
-        self.mouse_input = MouseInputState {
-            synthetic_scroll_targets: std::mem::take(&mut self.mouse_input.synthetic_scroll_targets),
-            ..MouseInputState::default()
-        };
+        self.mouse_input = MouseInputState::default();
     }
 
     #[cfg(feature = "molio")]
@@ -217,6 +244,28 @@ impl PageScriptHost {
             _ => None,
         }
     }
+}
+
+fn scroll_box_path(
+    tree: &FrozenLayoutTree<DomHandle>,
+    source: DomHandle,
+) -> Option<Vec<(DomHandle, LayoutDisplay)>> {
+    let scroller = tree
+        .boxes
+        .iter()
+        .find(|layout_box| layout_box.principal_source == Some(source))?;
+    if source != tree.source_root() && !scroller.scroll_extent.is_scroll_container {
+        return None;
+    }
+    // Each publication numbers its boxes again. Compare the source-backed
+    // boxes that establish this scroller's structure and their display types.
+    Some(
+        std::iter::successors(Some(scroller), |layout_box| {
+            tree.boxes.get(layout_box.structural_parent?.index())
+        })
+        .filter_map(|layout_box| Some((layout_box.principal_source?, layout_box.display)))
+        .collect(),
+    )
 }
 
 fn in_shadow_including_subtree(dom: &DomHost, root: DomHandle, target: DomHandle) -> bool {

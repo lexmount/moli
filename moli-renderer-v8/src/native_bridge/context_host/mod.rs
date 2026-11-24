@@ -998,6 +998,8 @@ pub(crate) struct PageScriptHost {
     pointers: HashMap<i32, pointer_capture::PointerState>,
     #[cfg(feature = "devtools")]
     mouse_input: mouse_click::MouseInputState,
+    #[cfg(feature = "devtools")]
+    synthetic_scroll_targets: RefCell<Vec<mouse_click::SyntheticScrollTargetWatch>>,
     lazy_media_load_candidates: HashSet<DomHandle>,
     canvas_resources: canvas_resources::CanvasResourceStore,
     image_resources: image_resources::ImageResourceStore,

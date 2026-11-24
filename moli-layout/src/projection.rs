@@ -1205,6 +1205,7 @@ where
                         .get(&LayoutBoxId::from_index(geometry.id.index()))
                         .cloned();
                     FrozenLayoutBox {
+                        display,
                         geometry,
                         scroll_extent,
                         coordinate_space,
