@@ -73,10 +73,7 @@ impl ViewportImage {
         // at a band boundary requires the whole-frame image to avoid seams.
         let banded = frame.band_versions.len() == height.div_ceil(VIEWPORT_BAND_HEIGHT) as usize
             && frame.band_versions.len() > 1
-            && f32::from(bounds.size.width) * scale == width as f32
-            && f32::from(bounds.size.height) * scale == height as f32
-            && (f32::from(bounds.origin.x) * scale).fract() == 0.0
-            && (f32::from(bounds.origin.y) * scale).fract() == 0.0;
+            && Self::bands_fit(bounds, scale, width, height);
         let previous = previous.filter(|image| {
             image.width == width && image.height == height && image.banded == banded
         });
@@ -113,12 +110,36 @@ impl ViewportImage {
         })
     }
 
+    fn bands_fit(bounds: Bounds<Pixels>, scale: f32, width: u32, height: u32) -> bool {
+        f32::from(bounds.size.width) * scale == width as f32
+            && f32::from(bounds.size.height) * scale == height as f32
+            && (f32::from(bounds.origin.x) * scale).fract() == 0.0
+            && (f32::from(bounds.origin.y) * scale).fract() == 0.0
+    }
+
+    fn paint_bounds(&self, bounds: Bounds<Pixels>, window: &Window) -> Bounds<Pixels> {
+        if !self.banded {
+            return bounds;
+        }
+        // Only the atlas tiles may remain while a new viewport is rasterized.
+        // Draw them at native size and let the surface clip the old image.
+        let scale = window.scale_factor();
+        Bounds::new(
+            window.pixel_snap_point(bounds.origin),
+            size(
+                px(self.width as f32 / scale),
+                px(self.height as f32 / scale),
+            ),
+        )
+    }
+
     fn paint(
         &self,
         bounds: Bounds<Pixels>,
         window: &mut Window,
         pixels: Option<&[u8]>,
     ) -> anyhow::Result<bool> {
+        let bounds = self.paint_bounds(bounds, window);
         let row_bytes = self.width as usize * 4;
         for band in &self.bands {
             let top = bounds.size.height * (band.start as f32 / self.height as f32);
@@ -264,10 +285,19 @@ impl MoliSurface {
             return Ok(false);
         }
         if !self.is_new_frame(&frame) {
-            if let Some(image) = self.image.as_ref() {
+            let Some(image) = self.image.as_ref() else {
+                return Ok(false);
+            };
+            if !image.banded
+                || ViewportImage::bands_fit(
+                    bounds,
+                    window.scale_factor(),
+                    image.width,
+                    image.height,
+                )
+            {
                 return image.paint(bounds, window, frame.pixels);
             }
-            return Ok(false);
         }
         let Some(pixels) = frame.pixels else {
             self.cancel_pointer();
@@ -984,10 +1014,85 @@ mod tests {
     use gpui::{ScrollDelta, TestAppContext, VisualTestContext};
     use moli_core::{
         PageId,
-        page::{RendererDocumentToken, RendererFrameToken, RendererLifecycleEpoch},
+        page::{
+            RendererDocumentToken, RendererFrameToken, RendererLifecycleEpoch, ViewportBuffers,
+        },
     };
 
     use super::*;
+
+    fn test_document() -> RendererDocumentLifecycleIdentity {
+        let page_id = PageId::new_for_testing(1);
+        RendererDocumentLifecycleIdentity {
+            frame: RendererFrameToken { page_id },
+            document: RendererDocumentToken::new_for_testing(page_id, 1),
+            epoch: RendererLifecycleEpoch(0),
+        }
+    }
+
+    #[test]
+    fn viewport_resize_repaints_the_same_frame_without_scaling_bands() -> anyhow::Result<()> {
+        let mut app = TestAppContext::single();
+        let original = size(px(64.), px(512.));
+        let resized = size(px(96.), px(768.));
+        let handle = app.open_window(resized, MoliSurface::new);
+        let mut cx = VisualTestContext::from_window(handle.into(), &app);
+        let document = test_document();
+        let (surface, viewport) = handle.update(&mut cx, |surface, window, cx| {
+            let viewport = ViewportSurface {
+                inner_width: 64,
+                inner_height: 512,
+                device_pixel_ratio: f64::from(window.scale_factor()),
+                ..Default::default()
+            };
+            surface.document = Some(document);
+            surface.viewport = Some(viewport);
+            (cx.entity(), viewport)
+        })?;
+        let layout = ViewportBuffers::layout_for(viewport)?;
+        let pixels = Rc::new(vec![255; layout.byte_len]);
+        let versions = Rc::new(vec![
+            1;
+            layout.height.div_ceil(VIEWPORT_BAND_HEIGHT) as usize
+        ]);
+
+        for (draw_size, ready, banded) in [
+            (original, true, true),
+            (resized, false, true),
+            (resized, true, false),
+        ] {
+            let (surface, pixels, versions) = (surface.clone(), pixels.clone(), versions.clone());
+            cx.draw(Point::default(), draw_size, |_, _| {
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, (), window, cx| {
+                        surface.update(cx, |surface, _| {
+                            if ready {
+                                let frame = ViewportFrameRef {
+                                    document,
+                                    viewport_revision: surface.revision,
+                                    sequence: 1,
+                                    layout,
+                                    pixels: Some(pixels.as_slice()),
+                                    band_versions: versions.as_slice(),
+                                };
+                                assert!(surface.paint_ready_image(frame, bounds, window).unwrap());
+                            } else {
+                                surface.paint_image(bounds, window).unwrap();
+                            }
+                            let image = surface.image.as_ref().unwrap();
+                            assert_eq!(image.banded, banded);
+                            let expected_size = if banded { original } else { draw_size };
+                            assert_eq!(image.paint_bounds(bounds, window).size, expected_size);
+                            assert_eq!(surface.presented, Some((document, 1)));
+                        });
+                    },
+                )
+                .size_full()
+            });
+        }
+        Ok(())
+    }
 
     #[test]
     fn pixel_wheel_uses_platform_phases_only_after_started() -> anyhow::Result<()> {
@@ -998,12 +1103,7 @@ mod tests {
         let mut cx = VisualTestContext::from_window(handle.into(), &app);
         cx.update(|window, cx| window.draw(cx).clear(cx));
         let (commands, mut received) = mpsc::unbounded_channel();
-        let page_id = PageId::new_for_testing(1);
-        let document = RendererDocumentLifecycleIdentity {
-            frame: RendererFrameToken { page_id },
-            document: RendererDocumentToken::new_for_testing(page_id, 1),
-            epoch: RendererLifecycleEpoch(0),
-        };
+        let document = test_document();
         handle.update(&mut cx, |surface, _, _| -> anyhow::Result<()> {
             surface.commands = Some(commands);
             surface.document = Some(document);
@@ -1013,7 +1113,17 @@ mod tests {
                 inner_height: 120,
                 ..Default::default()
             });
-            surface.image = Some(BgraImage::new(size(1_u32.into(), 1_u32.into()))?);
+            surface.image = Some(ViewportImage {
+                width: 1,
+                height: 1,
+                banded: false,
+                bands: vec![ViewportBandImage {
+                    start: 0,
+                    end: 1,
+                    version: 1,
+                    texture: Rc::new(BgraImage::new(size(1_u32.into(), 1_u32.into()))?),
+                }],
+            });
             Ok(())
         })??;
 
