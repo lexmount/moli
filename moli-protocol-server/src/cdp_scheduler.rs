@@ -671,9 +671,14 @@ impl CdpScheduler {
                                 .page_screencasts
                                 .get_mut(&session_id)
                                 .expect("due screencast schedule must exist");
-                            // The interval spaces capture starts. A capture that
-                            // takes longer still waits for its ACK before retrying.
-                            schedule.next_due_at = now + schedule.interval;
+                            // Preserve the interval across timer jitter. When
+                            // a whole interval was missed, start a new cadence.
+                            let next_tick = schedule.next_due_at + schedule.interval;
+                            schedule.next_due_at = if now < next_tick {
+                                next_tick
+                            } else {
+                                now + schedule.interval
+                            };
                             pending.push(capture);
                         }
                         PageScreencastCaptureStart::Retry => {
@@ -722,14 +727,7 @@ impl CdpScheduler {
                 generation,
                 visual_state,
             }),
-            PageScreencastCaptureCompletion::Unchanged => {
-                let schedule = self
-                    .page_screencasts
-                    .get_mut(&session_id)
-                    .expect("matching screencast schedule must exist");
-                schedule.next_due_at = now + schedule.interval;
-                None
-            }
+            PageScreencastCaptureCompletion::Unchanged => None,
             PageScreencastCaptureCompletion::Retry => {
                 let schedule = self
                     .page_screencasts
