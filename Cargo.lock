@@ -1127,6 +1127,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "camino"
+version = "1.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbad30e4b4c14a39e3cc8aed085a12a327257c316619c93581e017bc52be591"
+
+[[package]]
 name = "castaway"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5706,6 +5712,7 @@ dependencies = [
  "moli-v8-platform",
  "moli-v8-test-util",
  "moli-v8-util",
+ "moli-video",
  "moli-web-errors",
  "moli-web-mime",
  "moli-web-storage",
@@ -5965,6 +5972,17 @@ dependencies = [
  "serde_json",
  "v8",
  "widestring",
+]
+
+[[package]]
+name = "moli-video"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "moli-image",
+ "parking_lot",
+ "rsmpeg",
 ]
 
 [[package]]
@@ -8251,6 +8269,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsmpeg"
+version = "0.18.0+ffmpeg.8.0"
+source = "git+https://github.com/lexmount/rsmpeg?rev=1af0bdc68d9fdea8a1bd82ea0aa593e2b7579825#1af0bdc68d9fdea8a1bd82ea0aa593e2b7579825"
+dependencies = [
+ "bon",
+ "paste",
+ "rusty_ffmpeg",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "rsqlite-vfs"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8395,6 +8424,18 @@ dependencies = [
  "integer-encoding",
  "rand 0.8.8",
  "snap",
+]
+
+[[package]]
+name = "rusty_ffmpeg"
+version = "0.17.0+ffmpeg.8.1"
+source = "git+https://github.com/lexmount/rusty_ffmpeg?rev=3b3221af6cdf3fa58d54c4f3de0c578ed2f57ec2#3b3221af6cdf3fa58d54c4f3de0c578ed2f57ec2"
+dependencies = [
+ "bindgen 0.72.1",
+ "camino",
+ "cc",
+ "once_cell",
+ "pkg-config",
 ]
 
 [[package]]

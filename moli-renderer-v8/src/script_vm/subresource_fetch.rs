@@ -196,7 +196,36 @@ fn apply_media_subresource_terminal(
     sequence: crate::native_bridge::MediaLoadSequenceId,
     internal_id: u64,
     successful: bool,
+    _response: Option<&mut crate::protocol_types::NavigationResponse>,
 ) {
+    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    let successful = {
+        let mut host = context_host.borrow_mut();
+        if successful
+            && host.pending_media_load_sequence_is_current(media_handle, sequence)
+            && host.manages_video(media_handle)
+            && let Some(response) = _response
+        {
+            if crate::network_host::is_mp4_video_response(response) {
+                if host.start_buffered_video(
+                    scope,
+                    media_handle,
+                    sequence,
+                    Some(internal_id),
+                    response.body_bytes().len(),
+                    || bytes::Bytes::from(response.take_body_bytes()),
+                ) {
+                    return;
+                }
+                false
+            } else {
+                host.reset_video_playback(scope, media_handle);
+                true
+            }
+        } else {
+            successful
+        }
+    };
     let followup = context_host
         .borrow_mut()
         .complete_pending_media_load_network_request_if_matches(

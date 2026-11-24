@@ -333,6 +333,8 @@ impl PageScriptHost {
         &mut self,
         document_handle: DomHandle,
     ) -> usize {
+        #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+        self.discard_video_playbacks_for_document(document_handle);
         let handles = self
             .pending_media_load_sequences
             .iter()

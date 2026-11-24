@@ -229,6 +229,12 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         let attribute_width = numeric_dimension_attribute(self.host(), node, "width");
         let attribute_height = numeric_dimension_attribute(self.host(), node, "height");
         let intrinsic = self.runtime.image_resource_intrinsic_size(node);
+        #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+        let intrinsic = self
+            .runtime
+            .video_dimensions(node)
+            .map(|(width, height)| (width as f32, height as f32))
+            .or(intrinsic);
         Some(ReplacedMetrics {
             intrinsic_width: intrinsic.map(|(width, _)| width),
             intrinsic_height: intrinsic.map(|(_, height)| height),
@@ -264,6 +270,16 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             }
             Some(LayoutReplacedKind::Canvas) => {
                 let pixels = self.runtime.canvas_pixels_for_layout(node)?;
+                Some(LayoutImageResource {
+                    intrinsic_width: pixels.width as f32,
+                    intrinsic_height: pixels.height as f32,
+                    pixels: Some(pixels),
+                    svg: None,
+                })
+            }
+            #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+            Some(LayoutReplacedKind::Media) => {
+                let pixels = self.runtime.video_image(node)?;
                 Some(LayoutImageResource {
                     intrinsic_width: pixels.width as f32,
                     intrinsic_height: pixels.height as f32,

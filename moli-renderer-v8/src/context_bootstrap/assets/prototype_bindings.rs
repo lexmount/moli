@@ -405,6 +405,12 @@ pub(super) fn install_constructor_template_bindings<'s>(
     }
     install_media_cue_template_bindings(scope, template, spec.interface.name());
     install_media_source_template_bindings(scope, template, spec.interface.name());
+    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    crate::context_bootstrap::media_source_playback::install(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     super::super::picture_in_picture::install(scope, template, spec.interface.name());
     super::super::video_codecs::install_video_codec_template_bindings(
         scope,

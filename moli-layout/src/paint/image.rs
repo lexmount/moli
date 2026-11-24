@@ -40,7 +40,10 @@ pub(super) fn project_replaced_image<N>(
     };
     if !matches!(
         kind,
-        LayoutReplacedKind::Image | LayoutReplacedKind::Svg | LayoutReplacedKind::Canvas
+        LayoutReplacedKind::Image
+            | LayoutReplacedKind::Svg
+            | LayoutReplacedKind::Canvas
+            | LayoutReplacedKind::Media
     ) {
         return;
     }

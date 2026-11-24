@@ -31,6 +31,10 @@ pub(crate) enum RendererPageMediaElementEventTaskKind {
     SeekCompletion,
     LoadEventPhase,
     TextTrackListEvent,
+    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    VideoUpdate,
+    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    MediaSourceEvent,
 }
 
 pub(crate) type RendererPageMediaElementEventOwner = RendererPageWindowDocumentTaskOwner;

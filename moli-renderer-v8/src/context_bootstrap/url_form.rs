@@ -28,6 +28,16 @@ fn url_create_object_url_callback<'s>(
         );
         return;
     };
+    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    if let Some(source) = super::media_source_playback::media_source_object(scope, object)
+        && let Some(host) = context_host_ptr_from_global_bridge(scope)
+        && let Some(url) =
+            unsafe { &mut *host }.create_media_source_url(scope, source, storage_key.clone())
+        && let Some(value) = v8_string(scope, &url)
+    {
+        rv.set(value.into());
+        return;
+    }
     let Some(url) = blob::create_object_url_for_object(scope, object, storage_key) else {
         throw_type_error(
             scope,
@@ -91,6 +101,10 @@ fn url_revoke_object_url_callback<'s>(
     if parsed.url.starts_with("blob:")
         && let Some(storage_key) = current_object_url_storage_key(scope)
     {
+        #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+        if let Some(host) = context_host_ptr_from_global_bridge(scope) {
+            unsafe { &mut *host }.revoke_media_source_url(&parsed.url, &storage_key);
+        }
         blob::revoke_object_url(scope, &parsed.url, storage_key);
     }
     rv.set_undefined();
