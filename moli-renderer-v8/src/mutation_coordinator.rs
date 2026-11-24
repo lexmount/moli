@@ -50,6 +50,7 @@ pub(crate) struct RuntimeMutationOptions {
     pub(crate) state_preserving_move: bool,
     pub(crate) parser_created: bool,
     pub(crate) check_inline_style_csp: bool,
+    pub(crate) defer_document_followups_to_parser_owner: bool,
 }
 
 impl RuntimeMutationOptions {
@@ -61,6 +62,7 @@ impl RuntimeMutationOptions {
             state_preserving_move: false,
             parser_created: false,
             check_inline_style_csp: true,
+            defer_document_followups_to_parser_owner: false,
         }
     }
 
@@ -72,6 +74,7 @@ impl RuntimeMutationOptions {
             state_preserving_move: false,
             parser_created: true,
             check_inline_style_csp: true,
+            defer_document_followups_to_parser_owner: false,
         }
     }
 
