@@ -5,6 +5,7 @@
 mod tests;
 
 use std::{
+    num::NonZeroUsize,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -21,8 +22,9 @@ use tracing::debug;
 
 use super::{
     CurlMultiRuntimeConfig, CurlRuntimeCommand,
-    config::{make_runtime_multi, runtime_wait_timeout},
+    config::{make_runtime_multi, make_websocket_multi, runtime_wait_timeout},
     diagnostics::Diagnostics,
+    poll_fds::MultiPollFds,
 };
 use crate::{
     CurlMultiCompletion, CurlTransferId,
@@ -46,12 +48,17 @@ pub(super) struct CurlRuntimeOwner<H: Handler, C> {
     diagnostics: Diagnostics,
     http: HttpRegistry<H, C>,
     websockets: WebSocketRegistry,
+    max_websocket_connections: NonZeroUsize,
+    websocket_poll_fds: MultiPollFds,
     // Drop the registries' easy handles before their Multi, including on unwind.
     multi: Multi,
+    // Allocated only when the first WebSocket is admitted. HTTP-only runtimes
+    // keep their existing single Multi and owner-thread footprint.
+    websocket_multi: Option<Multi>,
 }
 
 impl<H: Handler, C> CurlRuntimeOwner<H, C> {
-    /// Construct all native state on its owner thread, including the shared pool.
+    /// Construct all native state on its owner thread.
     pub(super) fn run(
         config: CurlMultiRuntimeConfig,
         command_rx: Receiver<CurlRuntimeCommand<H, C>>,
@@ -64,6 +71,8 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
         #[cfg(test)]
         owner_started.store(true, Ordering::SeqCst);
         let multi = make_runtime_multi(&config);
+        let owner_waker = multi.waker();
+        let max_websocket_connections = config.max_websocket_connections;
         let _ = waker_tx.send(multi.waker());
         let mut owner = Self {
             command_rx,
@@ -72,8 +81,11 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
             poll_interval: config.poll_interval,
             diagnostics: Diagnostics::from_env(),
             http: HttpRegistry::new(config, completion_tx),
-            websockets: WebSocketRegistry::new(websocket_rx),
+            websockets: WebSocketRegistry::new(websocket_rx, owner_waker),
+            max_websocket_connections,
+            websocket_poll_fds: MultiPollFds::default(),
             multi,
+            websocket_multi: None,
         };
         owner.drive();
     }
@@ -83,9 +95,13 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
             self.drain_commands();
             self.http.advance(&mut self.multi);
             self.process_completed_transfers();
+            if self.websocket_multi.is_none() && !self.websockets.submissions().is_empty() {
+                self.websocket_multi = Some(make_websocket_multi(self.max_websocket_connections));
+            }
             let progressed = self
-                .websockets
-                .advance(&mut self.multi, &mut self.diagnostics);
+                .websocket_multi
+                .as_mut()
+                .is_some_and(|multi| self.websockets.advance(multi, &mut self.diagnostics));
             if let Some(counters) = self.diagnostics.counters() {
                 counters.turns += 1;
                 counters.progressed_turns += u64::from(progressed);
@@ -137,7 +153,7 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
         self.closed = true;
         self.shutdown_requested.store(true, Ordering::SeqCst);
         self.http.shutdown(&mut self.multi);
-        self.websockets.shutdown(&mut self.multi);
+        self.websockets.shutdown(self.websocket_multi.as_mut());
     }
 
     fn wait_for_next_owner_event(&mut self) {
@@ -163,7 +179,10 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
         match event {
             CurlOwnerEvent::Command(Ok(command)) => self.handle_command(command),
             CurlOwnerEvent::WebSocket(Ok(submission)) => {
-                self.websockets.admit(submission, &mut self.multi)
+                let multi = self
+                    .websocket_multi
+                    .get_or_insert_with(|| make_websocket_multi(self.max_websocket_connections));
+                self.websockets.admit(submission, multi)
             }
             CurlOwnerEvent::Command(Err(_)) | CurlOwnerEvent::WebSocket(Err(_)) => self.close(),
             CurlOwnerEvent::Dns(Ok(completion)) => self.http.claim_dns_completion(completion),
@@ -174,32 +193,39 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
     fn process_completed_transfers(&mut self) {
         if let Err(error) = self.multi.perform() {
             debug!("curl multi runtime perform failed: {error}");
-            self.websockets
-                .fail_sessions(&mut self.multi, &error.to_string());
         }
-        // Drain CURLMSG_DONE once. A WebSocket DONE starts its open residence;
-        // HTTP DONE removes a finished transfer, preserving notification order.
         let mut completed = Vec::new();
         self.multi.messages(|message| {
             let Some(id) = message.token().ok().and_then(CurlTransferId::from_token) else {
                 return;
             };
-            // Both registries use result_for2 to retain the easy error buffer.
-            let result = self
-                .http
-                .completion_result(id, &message)
-                .or_else(|| self.websockets.handshake_result(id, &message));
-            if let Some(result) = result {
+            if let Some(result) = self.http.completion_result(id, &message) {
                 completed.push((id, result));
             }
         });
-        for (id, result) in &completed {
-            if !self.http.contains(*id) {
-                self.websockets
-                    .complete_handshake(*id, result.clone(), &mut self.multi);
-            }
-        }
         self.http.complete(&mut self.multi, completed);
+
+        let Some(multi) = &mut self.websocket_multi else {
+            return;
+        };
+        if let Err(error) = multi.perform() {
+            debug!("curl WebSocket runtime perform failed: {error}");
+            self.websockets.fail_sessions(multi, &error.to_string());
+        }
+        // A WebSocket DONE starts its open residence. Its easy handle must
+        // stay attached to this pool until the WebSocket actually terminates.
+        let mut completed = Vec::new();
+        multi.messages(|message| {
+            let Some(id) = message.token().ok().and_then(CurlTransferId::from_token) else {
+                return;
+            };
+            if let Some(result) = self.websockets.handshake_result(id, &message) {
+                completed.push((id, result));
+            }
+        });
+        for (id, result) in completed {
+            self.websockets.complete_handshake(id, result, multi);
+        }
     }
 
     fn wait_for_curl_progress(&mut self, runnable: bool) {
@@ -211,6 +237,12 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
             Duration::from_secs(1)
         };
         let mut timeout = runtime_wait_timeout(&self.multi, interval).unwrap_or(interval);
+        if let Some(multi) = &mut self.websocket_multi {
+            timeout = timeout.min(runtime_wait_timeout(multi, interval).unwrap_or(interval));
+            if let Err(error) = self.websocket_poll_fds.refresh(multi) {
+                self.websockets.fail_sessions(multi, &error.to_string());
+            }
+        }
         for deadline in [self.http.next_deadline(), self.websockets.next_deadline()]
             .into_iter()
             .flatten()
@@ -220,16 +252,19 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
         if runnable {
             timeout = Duration::ZERO;
         }
-        // libcurl adds HTTP/handshake sockets and its waker to these open WS fds.
-        let fds = self.websockets.poll_fds();
+        // One poll waits for HTTP, WebSocket handshakes, open WS I/O and the
+        // common owner waker. Both registries and DNS use that same waker.
+        let fds = self.websockets.poll_fds(self.websocket_poll_fds.iter());
         let started = self.diagnostics.poll_start();
         let result = self.multi.poll(fds, timeout);
         self.diagnostics.polled(started, timeout, runnable);
         match result {
             Ok(_) => self.websockets.apply_readiness(),
-            Err(error) => self
-                .websockets
-                .fail_sessions(&mut self.multi, &error.to_string()),
+            Err(error) => {
+                if let Some(multi) = &mut self.websocket_multi {
+                    self.websockets.fail_sessions(multi, &error.to_string());
+                }
+            }
         }
         self.diagnostics
             .report(self.websockets.session_count(), false);

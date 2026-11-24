@@ -94,6 +94,7 @@ fn completion_starts_queued_job(per_origin: bool) {
         ..CurlMultiRuntimeConfig::default()
     };
     let multi = make_runtime_multi(&config);
+    let max_websocket_connections = config.max_websocket_connections;
     let (command_tx, command_rx) = crossbeam_channel::unbounded();
     let (completion_tx, completed) = crossbeam_channel::unbounded();
     let (_websocket_tx, websocket_rx) = CurlWebSocketConnector::channel();
@@ -110,8 +111,11 @@ fn completion_starts_queued_job(per_origin: bool) {
         poll_interval: config.poll_interval,
         diagnostics: Diagnostics::from_env(),
         http: HttpRegistry::new(config, completion_tx),
-        websockets: WebSocketRegistry::new(websocket_rx),
+        websockets: WebSocketRegistry::new(websocket_rx, multi.waker()),
+        max_websocket_connections,
+        websocket_poll_fds: MultiPollFds::default(),
         multi,
+        websocket_multi: None,
     };
 
     // Prepare a real active transfer on this thread so the test can explicitly
