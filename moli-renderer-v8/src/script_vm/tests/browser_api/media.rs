@@ -194,6 +194,70 @@ async fn media_report_only_csp_reports_without_blocking_load() {
     target_pointer_width = "64"
 ))]
 #[tokio::test]
+async fn media_source_object_url_uses_the_executing_window_during_child_resource_tasks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-source-realm.test/",
+        &loader,
+    );
+    vm.eval(
+        r#"
+        const frame = document.createElement('iframe');
+        frame.id = 'child';
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.srcdoc = '<!doctype html><p>Child</p>';
+        document.body.appendChild(frame);
+        globalThis.media = document.body.appendChild(document.createElement('video'));
+        globalThis.mediaSource = new MediaSource();
+        "#,
+    )
+    .unwrap();
+    vm.drain_ready_child_frame_task_executor_turns_for_setup(&loader, 32)
+        .await
+        .unwrap();
+
+    vm.with_default_context_scope(|scope, host_ptr| {
+        let host = unsafe { &mut *host_ptr };
+        let child = host.dom_host().element_handle_by_id("child").unwrap();
+        assert_eq!(
+            host.storage_context_for_child_browsing_context(child)
+                .unwrap()
+                .storage_key()
+                .origin(),
+            "null"
+        );
+        // The selected resource task can still attribute work to the child
+        // while a callback executes in the main Window.
+        let previous = crate::native_bridge::enter_active_child_window_scope(scope, Some(child));
+        let source = crate::util::v8str(
+            scope,
+            r#"
+            globalThis.mediaUrl = URL.createObjectURL(mediaSource);
+            media.src = mediaUrl;
+            URL.revokeObjectURL(mediaUrl);
+            "#,
+        );
+        let result = v8::Script::compile(scope, source, None)
+            .and_then(|script| crate::script_execution::execute_compiled_script(scope, script));
+        crate::native_bridge::restore_active_child_window_scope(scope, previous);
+        assert!(result.is_some(), "creating and attaching the object URL");
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(
+        vm.eval("new URL(mediaUrl).origin").unwrap(),
+        "https://media-source-realm.test"
+    );
+    assert_eq!(vm.eval("mediaSource.readyState").unwrap(), "open");
+}
+
+#[cfg(all(
+    feature = "media-ext",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
+#[tokio::test]
 async fn media_source_appends_h264_and_paints_the_seeked_frame() {
     use base64::Engine as _;
     use moli_layout::{LayoutFlushReason, LayoutPassRequest, LayoutViewport, PaintFragment};

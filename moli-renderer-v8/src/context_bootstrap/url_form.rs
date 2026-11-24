@@ -2,7 +2,7 @@
 //! parsing and all URLSearchParams bindings live in moli-webapi.
 use super::exposed_interfaces::TemplateBuildProfile;
 use super::*;
-use crate::util::{get_private_value, throw_type_error, v8_string};
+use crate::util::{throw_type_error, v8_string};
 use crate::{blob, web_api_interfaces, webidl};
 use moli_webapi_declare::WebApiFunctionTemplate;
 #[derive(webidl::WebIdlArgs)]
@@ -60,38 +60,15 @@ fn current_object_url_storage_key(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<moli_storage_key::MoliStorageKey> {
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let active_child_handle = current_child_context_handle(scope)
-            .or_else(|| crate::native_bridge::active_child_window_handle(scope));
-        return Some(
-            unsafe { &mut *host_ptr }
-                .active_storage_context(scope, active_child_handle)
-                .storage_key()
-                .clone(),
-        );
+        let host = unsafe { &mut *host_ptr };
+        // A child resource task can invoke callbacks in a different Window.
+        // Object URL storage follows the executing realm's settings object.
+        let identity = host.current_runtime_window_execution_context_identity(scope)?;
+        return host
+            .storage_context_for_window_execution_context_identity(identity)
+            .map(|context| context.storage_key().clone());
     }
     crate::worker::worker_storage_key(scope)
-}
-
-fn current_child_context_handle(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Option<crate::document_runtime::DomHandle> {
-    let global = scope.get_current_context().global(scope);
-    get_private_value(
-        scope,
-        global,
-        crate::context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
-    )
-    .and_then(|value| dom_handle_from_value(scope, value))
-}
-
-fn dom_handle_from_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> Option<crate::document_runtime::DomHandle> {
-    value
-        .number_value(scope)
-        .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
-        .map(|value| crate::document_runtime::DomHandle::new(value as usize))
 }
 
 fn url_revoke_object_url_callback<'s>(
