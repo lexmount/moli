@@ -1005,6 +1005,7 @@ css/css-conditional/container-queries/style-query-container-name-change.html
 css/css-conditional/container-queries/style-query-document-element.html
 css/css-conditional/container-queries/style-query-no-cycle.html
 css/css-conditional/container-queries/style-query-registered-custom-em-change.html
+css/css-conditional/container-queries/style-query-registered-custom-rem-change.html
 css/css-conditional/container-queries/style-query-registered-custom-removed-initial.html
 css/css-conditional/container-queries/style-query-unset-on-root.html
 css/css-conditional/container-queries/style-query-with-container-name-custom-change.html
@@ -10588,6 +10589,7 @@ svg/types/scripted/SVGGraphicsElement.getBBox-08.html
 svg/types/scripted/SVGLength-ch.html
 svg/types/scripted/SVGLength-ic.html
 svg/types/scripted/SVGLength-px-with-context.html
+svg/types/scripted/SVGLength-rem.html
 svg/types/scripted/SVGLength-viewport.html
 svg/types/scripted/SVGLength-zoom.html
 svg/types/scripted/SVGLength.html

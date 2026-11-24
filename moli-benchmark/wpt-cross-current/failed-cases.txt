@@ -73,7 +73,6 @@ css/css-conditional/container-queries/scroll-state/at-container-stuck-serializat
 css/css-conditional/container-queries/scroll-state/container-type-scroll-state-computed.html
 css/css-conditional/container-queries/scroll-state/container-type-scroll-state-parsing.html
 css/css-conditional/container-queries/style-container-for-shadow-dom.html
-css/css-conditional/container-queries/style-query-registered-custom-rem-change.html
 css/css-counter-styles/counter-style-at-rule/prefix-suffix-syntax.html
 css/css-counter-styles/counter-style-at-rule/speak-as-syntax.html
 css/css-counter-styles/counter-style-at-rule/symbols-syntax.html
@@ -2278,7 +2277,6 @@ svg/types/scripted/SVGGraphicsElement.getScreenCTM.html
 svg/types/scripted/SVGLength-cap.html
 svg/types/scripted/SVGLength-lh.html
 svg/types/scripted/SVGLength-px.html
-svg/types/scripted/SVGLength-rem.html
 svg/types/scripted/SVGLength-rlh.html
 viewport/viewport-segments.html
 wasm/core/memory64/table64.wast.js.html
