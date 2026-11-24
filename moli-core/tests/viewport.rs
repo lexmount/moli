@@ -592,7 +592,16 @@ async fn viewport_resize_cancels_a_pressed_pointer_and_releases_capture() -> Res
             for (const type of ['gotpointercapture', 'pointercancel', 'lostpointercapture', 'pointerup', 'click']) {
                 target.addEventListener(type, () => events.push(type));
             }
-            window.statusText = () => events.join(',') + ':' + target.hasPointerCapture(pressedId);
+            let dragging = false;
+            target.addEventListener('mousedown', () => {
+                dragging = true;
+                events.push('mousedown');
+            });
+            addEventListener('mouseup', event => {
+                dragging = false;
+                events.push(event.target === window ? 'window-mouseup' : 'element-mouseup');
+            });
+            window.statusText = () => events.join(',') + ':' + target.hasPointerCapture(pressedId) + ':' + dragging;
         </script>"#;
     let mut page = browser.fetch(&html_url(html)).await?;
     let surface = ViewportSurface::default();
@@ -625,16 +634,18 @@ async fn viewport_resize_cancels_a_pressed_pointer_and_releases_capture() -> Res
     assert_eq!(
         page.evaluate_runtime_expression_async("statusText()")
             .await?["value"],
-        "gotpointercapture:true"
+        "mousedown,gotpointercapture:true:true"
     );
 
     // The UI cancels before sending the new viewport, so this also works if
     // allocating the replacement frame buffers fails.
     page.cancel_viewport_pointer(document, 1).await?;
+    let canceled =
+        "mousedown,gotpointercapture,pointercancel,window-mouseup,lostpointercapture:false:false";
     assert_eq!(
         page.evaluate_runtime_expression_async("statusText()")
             .await?["value"],
-        "gotpointercapture,pointercancel,lostpointercapture:false"
+        canceled
     );
     let release = RendererViewportPointerInput {
         event: "mouseup",
@@ -642,6 +653,11 @@ async fn viewport_resize_cancels_a_pressed_pointer_and_releases_capture() -> Res
         ..press
     };
     assert!(page.dispatch_viewport_pointer(release).await?.is_none());
+    assert_eq!(
+        page.evaluate_runtime_expression_async("statusText()")
+            .await?["value"],
+        canceled
+    );
 
     // A renderer rebind also ends a press when the caller replaces its
     // frame subscription directly.
@@ -661,7 +677,7 @@ async fn viewport_resize_cancels_a_pressed_pointer_and_releases_capture() -> Res
     assert_eq!(
         page.evaluate_runtime_expression_async("statusText()")
             .await?["value"],
-        "gotpointercapture,pointercancel,lostpointercapture:false"
+        canceled
     );
 
     frame(&mut resized, |frame| frame.snapshot.is_some()).await?;
@@ -680,7 +696,115 @@ async fn viewport_resize_cancels_a_pressed_pointer_and_releases_capture() -> Res
     assert_eq!(
         page.evaluate_runtime_expression_async("statusText()")
             .await?["value"],
-        "gotpointercapture,pointerup,lostpointercapture,click:false"
+        "mousedown,gotpointercapture,pointerup,element-mouseup,lostpointercapture,click:false:false"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_cancel_uses_the_press_window_and_respects_mouse_suppression() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let html = r#"<!doctype html>
+        <div id="top-target" style="position:absolute;left:0;top:0;width:25px;height:100px"></div>
+        <iframe id="child" style="position:absolute;left:40px;top:25px;width:120px;height:100px;border:0"
+            srcdoc="<body style='margin:0'>
+                <div id='target' style='width:100px;height:80px'></div>
+                <script>
+                    window.inputEvents = [];
+                    window.suppressMouse = true;
+                    const target = document.getElementById('target');
+                    target.addEventListener('pointerdown', event => {
+                        inputEvents.push('pointerdown');
+                        if (suppressMouse) event.preventDefault();
+                    });
+                    for (const type of ['pointercancel', 'mousedown', 'click']) {
+                        target.addEventListener(type, () => inputEvents.push(type));
+                    }
+                    addEventListener('mouseup', event => {
+                        const atWindow = event.target === window && event.view === window;
+                        inputEvents.push(['mouseup', atWindow, event.isTrusted, event.clientX,
+                            event.clientY, event.button, event.buttons].join('/'));
+                    });
+                </script>"></iframe>
+        <script>
+            window.topMouseUps = 0;
+            document.getElementById('top-target').addEventListener('mousedown', event => {
+                event.target.remove();
+            });
+            addEventListener('mouseup', () => topMouseUps++);
+        </script>"#;
+    let mut page = browser.fetch(&html_url(html)).await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+    let press = RendererViewportPointerInput {
+        document,
+        viewport_revision: 1,
+        position: (56., 41.),
+        event: "mousedown",
+        button: 0,
+        buttons: 1,
+        click_count: 1,
+        modifiers: 0,
+    };
+    let release = RendererViewportPointerInput {
+        event: "mouseup",
+        buttons: 0,
+        ..press
+    };
+    const LOG: &str = "`${child.contentWindow.inputEvents.join(',')}:${topMouseUps}`";
+
+    assert!(page.dispatch_viewport_pointer(press).await?.is_some());
+    page.cancel_viewport_pointer(document, 1).await?;
+    assert!(page.dispatch_viewport_pointer(release).await?.is_none());
+    assert_eq!(
+        page.evaluate_runtime_expression_async(LOG).await?["value"],
+        "pointerdown,pointercancel:0"
+    );
+
+    page.evaluate_runtime_expression_async(
+        "child.contentWindow.suppressMouse = false; child.contentWindow.inputEvents.length = 0",
+    )
+    .await?;
+    assert!(page.dispatch_viewport_pointer(press).await?.is_some());
+    page.cancel_viewport_pointer(document, 1).await?;
+    assert!(page.dispatch_viewport_pointer(release).await?.is_none());
+    assert_eq!(
+        page.evaluate_runtime_expression_async(LOG).await?["value"],
+        "pointerdown,mousedown,pointercancel,mouseup/true/true/16/16/0/0:0"
+    );
+
+    // An uncaptured pointer can cross into the iframe after the element
+    // pressed in the parent was removed. The parent Window owns the mouseup.
+    page.evaluate_runtime_expression_async("child.contentWindow.inputEvents.length = 0")
+        .await?;
+    let parent_press = RendererViewportPointerInput {
+        position: (10., 41.),
+        ..press
+    };
+    let move_into_child = RendererViewportPointerInput {
+        event: "mousemove",
+        button: -1,
+        ..press
+    };
+    assert!(
+        page.dispatch_viewport_pointer(parent_press)
+            .await?
+            .is_some()
+    );
+    assert!(
+        page.dispatch_viewport_pointer(move_into_child)
+            .await?
+            .is_some()
+    );
+    page.cancel_viewport_pointer(document, 1).await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async(LOG).await?["value"],
+        "pointercancel:1"
     );
     Ok(())
 }

@@ -63,6 +63,8 @@ use crate::util::{
     node_wrapper_from_handle, utf16_len, utf16_next_scalar_boundary,
     utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, utf16_units,
 };
+#[cfg(feature = "molio")]
+use crate::{host::EventTargetHandle, native_bridge::OwnerDispatchScope};
 
 fn related_target_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -734,6 +736,54 @@ impl PreparedPointerEvent<'_> {
     }
 }
 
+#[cfg(feature = "molio")]
+fn dispatch_cancel_mouseup(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    owner: WindowDocumentTaskTarget,
+    position: InputPosition,
+    sampled: Option<&PublishedFrameGeometry>,
+    button: i32,
+    modifiers: u8,
+) {
+    let runtime = unsafe { &*runtime_ptr };
+    // Pointer listeners may retire an iframe before the compatibility event.
+    let Some(document) = runtime.input_document_for_owner(owner) else {
+        return;
+    };
+    let coordinates = position.coordinates(runtime.input_frame_transform(document, sampled));
+    let Some(event) = construct_mouse_event_for_target(
+        scope,
+        runtime_ptr,
+        document,
+        "mouseup",
+        coordinates,
+        button,
+        0,
+        modifiers,
+    ) else {
+        return;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    match owner.dispatch_scope() {
+        OwnerDispatchScope::Top => {
+            let _ = runtime.dispatch_public_event_best_effort(
+                scope,
+                runtime_ptr,
+                EventTargetHandle::Window,
+                event,
+                "pointer cancel mouseup",
+            );
+        }
+        OwnerDispatchScope::Child(frame) => {
+            runtime.dispatch_child_window_event(scope, frame, "mouseup", event);
+        }
+        OwnerDispatchScope::LightweightPopup(popup) => {
+            let _ = runtime.dispatch_lightweight_popup_window_event(scope, popup, "mouseup", event);
+        }
+    }
+}
+
 fn dispatch_pointer_exit_events(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
@@ -1030,6 +1080,8 @@ impl ScriptVm {
             if runtime.pointer_is_known(pointer.pointer_id) {
                 runtime.set_pointer_buttons_active(pointer.pointer_id, false);
             }
+            #[cfg(feature = "molio")]
+            runtime.set_compat_mouse_press_owner(None);
         }
         if idle_move {
             self.suppress_compat_mouse_events = false;
@@ -1071,9 +1123,9 @@ impl ScriptVm {
         (x, y): (f64, f64),
         modifiers: u8,
     ) -> Result<()> {
-        self.pressed_mouse_buttons = 0;
+        let pressed_buttons = std::mem::take(&mut self.pressed_mouse_buttons);
         self.mouse_routed_frame = None;
-        self.suppress_compat_mouse_events = false;
+        let suppress_compat_mouse_events = self.suppress_compat_mouse_events;
         self.pending_drag_gesture = None;
         self.active_scrollbar_drag = None;
 
@@ -1085,6 +1137,7 @@ impl ScriptVm {
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
             let runtime = move || unsafe { &*runtime_ptr };
             let sampled = runtime().published_frame_geometry();
+            let press_owner = unsafe { &mut *runtime_ptr }.take_compat_mouse_press_owner();
             // Native dragging has already canceled the DOM pointer stream.
             let active_drag = unsafe { &mut *active_drag };
             if let Some(session) = active_drag.as_ref() {
@@ -1106,6 +1159,9 @@ impl ScriptVm {
             let id = pointer.pointer_id;
             if runtime().pointer_buttons_active(id) {
                 let position = InputPosition::headless(x, y);
+                let released_button = single_changed_mouse_button(pressed_buttons)
+                    .or_else(|| runtime().mouse_press_button())
+                    .unwrap_or(0);
                 let coordinates_for = |target: Option<DomHandle>| {
                     target.map_or_else(
                         || position.coordinates(None),
@@ -1139,6 +1195,18 @@ impl ScriptVm {
                 if let (Some(target), Some(event)) = (target, event) {
                     let _ = dispatch_public_event(scope, runtime_ptr, target, event);
                 }
+                // A canceled pointer ends its compatibility mouse sequence at the Window.
+                if !suppress_compat_mouse_events && let Some(owner) = press_owner {
+                    dispatch_cancel_mouseup(
+                        scope,
+                        runtime_ptr,
+                        owner,
+                        position,
+                        sampled.as_deref(),
+                        released_button,
+                        modifiers,
+                    );
+                }
                 cancel.release_capture(scope, runtime_ptr, event);
                 if let Some(target) = target {
                     dispatch_pointer_exit_events(scope, runtime_ptr, target, cancel);
@@ -1149,6 +1217,7 @@ impl ScriptVm {
             }
             Ok(())
         });
+        self.suppress_compat_mouse_events = false;
         self.finish_input_event_dispatch_turn(result)
     }
 
@@ -1293,7 +1362,10 @@ impl ScriptVm {
         }
         let buttons = buttons.unwrap_or(self.pressed_mouse_buttons);
         if event_name == "mousedown" {
-            self._context_host.borrow_mut().clear_mouse_press();
+            let mut runtime = self._context_host.borrow_mut();
+            runtime.clear_mouse_press();
+            #[cfg(feature = "molio")]
+            runtime.set_compat_mouse_press_owner(None);
             self.pending_drag_gesture = None;
         } else if event_name == "mouseup" || self.pressed_mouse_buttons & 1 == 0 {
             self.pending_drag_gesture = None;
@@ -1754,6 +1826,14 @@ impl ScriptVm {
                     )
                 };
                 if let Some(event) = event {
+                    #[cfg(feature = "molio")]
+                    if event_name == "mousedown" {
+                        // The element can disappear or later moves can reach another
+                        // frame while the Window still owns the mouse press.
+                        let owner = InputDocument::for_target(runtime(), mouse_dispatch_handle)
+                            .map(|document| document.owner);
+                        unsafe { &mut *runtime_ptr }.set_compat_mouse_press_owner(owner);
+                    }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
                     if event_name == "wheel" && dispatched.allows_default() {
