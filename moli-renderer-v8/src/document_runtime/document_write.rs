@@ -713,23 +713,19 @@ impl DocumentRuntime {
             == Some(handle)
     }
 
-    fn upgrade_inserted_html_fragment_custom_elements(
-        &mut self,
+    fn enqueue_parsed_fragment_upgrades(
+        &self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         insertion_parent: DomHandle,
-        roots: &[DomHandle],
-    ) -> bool {
-        if roots.is_empty()
-            || self.is_template_contents_fragment(insertion_parent)
+        fragment: DomHandle,
+    ) {
+        if self.is_template_contents_fragment(insertion_parent)
             || unsafe { &*host_ptr }.custom_elements_subtree_lifecycle_quiescent()
         {
-            return true;
+            return;
         }
-        for &root in roots {
-            custom_elements::enqueue_upgrade_reactions_for_subtree(scope, host_ptr, root);
-        }
-        true
+        custom_elements::enqueue_fragment_upgrade_reactions(scope, host_ptr, fragment);
     }
 
     pub(crate) fn set_inner_html(
@@ -778,6 +774,7 @@ impl DocumentRuntime {
         let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
         let records_enabled = self.dom_host().mutation_records_enabled();
         let removes_existing_children = !existing_children.is_empty();
+        self.enqueue_parsed_fragment_upgrades(scope, host_ptr, target, fragment);
         for &child in &existing_children {
             let _ = self
                 .remove_child_appending_to_current_reaction_queue(scope, host_ptr, target, child);
@@ -785,16 +782,6 @@ impl DocumentRuntime {
         let changed = self.append_html_fragment_child_appending_to_current_reaction_queue(
             scope, host_ptr, target, fragment,
         ) || removes_existing_children;
-        if changed
-            && !self.upgrade_inserted_html_fragment_custom_elements(
-                scope,
-                host_ptr,
-                target,
-                &added_children,
-            )
-        {
-            return false;
-        }
         if changed && records_enabled {
             crate::observer_runtime::coalesce_child_list_replacement_records(
                 host_ptr,
@@ -835,30 +822,19 @@ impl DocumentRuntime {
         ) else {
             return false;
         };
-        let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
         let existing_children = self
             .dom_host()
             .node(target)
             .map(|node| node.child_ids(self.dom_host().dom()).collect::<Vec<_>>())
             .unwrap_or_default();
+        self.enqueue_parsed_fragment_upgrades(scope, host_ptr, target, fragment);
         for child in existing_children {
             let _ = self
                 .remove_child_appending_to_current_reaction_queue(scope, host_ptr, target, child);
         }
-        let changed = self.append_html_fragment_child_appending_to_current_reaction_queue(
+        self.append_html_fragment_child_appending_to_current_reaction_queue(
             scope, host_ptr, target, fragment,
-        );
-        if changed
-            && !self.upgrade_inserted_html_fragment_custom_elements(
-                scope,
-                host_ptr,
-                target,
-                &added_children,
-            )
-        {
-            return false;
-        }
-        changed
+        )
     }
 
     pub(crate) fn set_outer_html(
@@ -877,13 +853,9 @@ impl DocumentRuntime {
         let previous_sibling = self.dom_host().node(handle).and_then(Node::prev_sibling);
         let next_sibling = self.dom_host().node(handle).and_then(Node::next_sibling);
         let records_enabled = self.dom_host().mutation_records_enabled();
-        let removed =
-            self.remove_child_appending_to_current_reaction_queue(scope, host_ptr, parent, handle);
-        if !removed {
-            return false;
-        }
         if html.is_empty() {
-            return true;
+            return self
+                .remove_child_appending_to_current_reaction_queue(scope, host_ptr, parent, handle);
         }
         let Some(fragment) = self.build_fragment_from_html(
             scope,
@@ -897,6 +869,10 @@ impl DocumentRuntime {
             return false;
         };
         let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
+        self.enqueue_parsed_fragment_upgrades(scope, host_ptr, parent, fragment);
+        if !self.remove_child_appending_to_current_reaction_queue(scope, host_ptr, parent, handle) {
+            return false;
+        }
         let changed = self.insert_html_fragment_child_appending_to_current_reaction_queue(
             scope,
             host_ptr,
@@ -904,16 +880,6 @@ impl DocumentRuntime {
             fragment,
             next_sibling,
         );
-        if changed
-            && !self.upgrade_inserted_html_fragment_custom_elements(
-                scope,
-                host_ptr,
-                parent,
-                &added_children,
-            )
-        {
-            return false;
-        }
         if changed && records_enabled {
             crate::observer_runtime::coalesce_child_list_replacement_records(
                 host_ptr,
@@ -953,20 +919,9 @@ impl DocumentRuntime {
         ) else {
             return false;
         };
-        let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
+        self.enqueue_parsed_fragment_upgrades(scope, host_ptr, context_handle, fragment);
         let _ = target;
-        let changed = insert(self, scope, host_ptr, fragment);
-        if changed
-            && !self.upgrade_inserted_html_fragment_custom_elements(
-                scope,
-                host_ptr,
-                context_handle,
-                &added_children,
-            )
-        {
-            return false;
-        }
-        changed
+        insert(self, scope, host_ptr, fragment)
     }
 
     pub(crate) fn has_pending_document_write_external_script_load(&self) -> bool {
