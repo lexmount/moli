@@ -12,7 +12,9 @@ pub(super) use engine::{
     HtmlSerializationOptions, HtmlSerializationTarget, HtmlSerializedShadowRoot,
     HtmlShadowRootProvider, serialize_html_with_options,
 };
-use engine::{serialize_html, serialize_html_with_limit};
+use engine::{
+    serialize_html, serialize_html_with_limit, serialize_html_with_stored_scripting_state,
+};
 use std::borrow::Cow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,7 +155,12 @@ impl NativeDom {
     }
 
     pub fn serialize_document(&self) -> String {
-        self.serialize_document_with_scripting_enabled(true)
+        serialize_html_with_stored_scripting_state(
+            self,
+            self.document_node_id,
+            HtmlSerializationTarget::ChildrenOnly,
+        )
+        .unwrap_or_default()
     }
 
     pub fn serialize_document_with_scripting_enabled(&self, scripting_enabled: bool) -> String {
@@ -167,7 +174,11 @@ impl NativeDom {
     }
 
     pub fn outer_html(&self, node_id: NativeNodeId) -> Option<String> {
-        self.outer_html_with_scripting_enabled(node_id, true)
+        serialize_html_with_stored_scripting_state(
+            self,
+            node_id,
+            HtmlSerializationTarget::IncludeNode,
+        )
     }
 
     pub fn outer_html_with_scripting_enabled(
@@ -197,7 +208,11 @@ impl NativeDom {
     }
 
     pub fn inner_html(&self, node_id: NativeNodeId) -> Option<String> {
-        self.inner_html_with_scripting_enabled(node_id, true)
+        serialize_html_with_stored_scripting_state(
+            self,
+            node_id,
+            HtmlSerializationTarget::ChildrenOnly,
+        )
     }
 
     pub fn inner_html_with_scripting_enabled(
