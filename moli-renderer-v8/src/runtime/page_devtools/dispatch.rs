@@ -719,8 +719,7 @@ impl PageVm {
                 Ok(RendererPageReply::Unit)
             }
             RendererDevToolsPageCommand::CaptureScreencastFrame(request) => self
-                .capture_screencast_frame(request)
-                .map(RendererDevToolsPageReply::CaptureScreencastFrame)
+                .dispatch_screencast_frame(request)
                 .map(RendererPageReply::DevTools),
             RendererDevToolsPageCommand::DocumentFrontendNodeIdsForBackendNodeIds {
                 inspector_session_id,

@@ -1186,6 +1186,8 @@ impl RendererPageCommandPending {
             }
             None => wait_for_dispatch.await?,
         };
+        #[cfg(feature = "devtools")]
+        let reply = reply.finish_screencast_raster().await?;
         Ok(reply)
     }
 }
