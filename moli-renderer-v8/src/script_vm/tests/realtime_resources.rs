@@ -627,3 +627,32 @@ async fn realtime_font_selection_temporary_media_and_viewport_preserve_screen_fo
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 3);
 }
+
+#[test]
+fn realtime_match_media_only_tracks_lists_with_change_listeners() {
+    let mut vm = new_parsed_test_vm("https://realtime-media.test/", "<!doctype html><div></div>");
+    vm.set_layout_policy(LayoutPolicy::Realtime);
+    vm.eval("for (let i = 0; i < 512; i++) { void matchMedia('(min-width: 10px)').matches; }")
+        .unwrap();
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .realtime_media_query_count_for_test(),
+        0
+    );
+    vm.eval("globalThis.query = matchMedia('(min-width: 10px)'); query.onchange = () => {};")
+        .unwrap();
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .realtime_media_query_count_for_test(),
+        1
+    );
+    vm.eval("query.onchange = null;").unwrap();
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .realtime_media_query_count_for_test(),
+        0
+    );
+}

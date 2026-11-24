@@ -16,7 +16,6 @@ struct RealtimeMediaQuery {
     target: WindowDocumentTaskTarget,
     media: String,
     matches: bool,
-    listening: bool,
     queued: bool,
     execution_context: WindowExecutionContextIdentity,
     list: Rc<v8::Weak<v8::Object>>,
@@ -31,9 +30,8 @@ pub(crate) struct RealtimeMediaQueryNotification {
     pub(crate) list: Rc<v8::Weak<v8::Object>>,
 }
 
-/// Native sampling plus weak wrapper residence. The existing realm-local MQL
-/// registry retains wrappers/listeners; this state does not strongly retain a
-/// Context, callback, or second layout tree.
+/// Native sampling of subscribed media query lists. The realm-local listener
+/// registry roots active lists; this state holds weak handles to their wrappers.
 #[derive(Default)]
 pub(super) struct RealtimeEnvironmentState {
     next_query: u64,
@@ -109,14 +107,26 @@ impl PageScriptHost {
             .as_ref()
             .is_some_and(|state| state.environment.borrow().has_pending())
     }
+
+    pub(crate) fn allocate_realtime_media_query_id(&self) -> anyhow::Result<u64> {
+        let state = self.realtime_layout_state.as_ref().expect("Realtime MQL");
+        let mut environment = state.environment.borrow_mut();
+        environment.next_query = environment
+            .next_query
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("media query identity exhausted"))?;
+        Ok(environment.next_query)
+    }
+
     pub(crate) fn register_realtime_media_query<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
+        id: u64,
         target: WindowDocumentTaskTarget,
         media: String,
         matches: bool,
         list: v8::Local<'s, v8::Object>,
-    ) -> anyhow::Result<u64> {
+    ) -> anyhow::Result<()> {
         let context = list
             .get_creation_context(scope)
             .ok_or_else(|| anyhow::anyhow!("media query list has no creation context"))?;
@@ -137,25 +147,18 @@ impl PageScriptHost {
         // Creating/upgrading V8 weak handles must not hold a state borrow.
         let list = Rc::new(v8::Weak::new(scope, list));
         let state = self.realtime_layout_state.as_ref().expect("Realtime MQL");
-        let mut environment = state.environment.borrow_mut();
-        let id = environment
-            .next_query
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("media query identity exhausted"))?;
-        environment.next_query = id;
-        environment.queries.insert(
+        state.environment.borrow_mut().queries.insert(
             id,
             RealtimeMediaQuery {
                 target,
                 media,
                 matches,
-                listening: false,
                 queued: false,
                 execution_context,
                 list,
             },
         );
-        Ok(id)
+        Ok(())
     }
 
     pub(crate) fn realtime_media_query_is_current(
@@ -210,29 +213,24 @@ impl PageScriptHost {
         self.refresh_realtime_rendering_opportunity();
     }
 
-    pub(crate) fn set_realtime_media_query_listening(&self, id: u64, listening: bool) {
-        if let Some(state) = &self.realtime_layout_state
-            && let Some(query) = state.environment.borrow_mut().queries.get_mut(&id)
-        {
-            query.listening = listening;
-        }
+    #[cfg(test)]
+    pub(crate) fn realtime_media_query_count_for_test(&self) -> usize {
+        self.realtime_layout_state
+            .as_ref()
+            .map_or(0, |state| state.environment.borrow().queries.len())
     }
 
-    pub(crate) fn realtime_media_query_matches(&self, id: u64) -> bool {
-        self.realtime_layout_state.as_ref().is_some_and(|state| {
-            state
-                .environment
-                .borrow()
-                .queries
-                .get(&id)
-                .is_some_and(|query| {
-                    self.window_document_owner_is_current_for_dispatch_scope(
-                        query.target.owner(),
-                        query.target.dispatch_scope(),
-                    ) && self.window_execution_context_identity_is_current(query.execution_context)
-                        && query.matches
-                })
-        })
+    pub(crate) fn realtime_media_query_matches(&self, id: u64) -> Option<bool> {
+        let state = self.realtime_layout_state.as_ref()?;
+        let environment = state.environment.borrow();
+        let query = environment.queries.get(&id)?;
+        Some(
+            self.window_document_owner_is_current_for_dispatch_scope(
+                query.target.owner(),
+                query.target.dispatch_scope(),
+            ) && self.window_execution_context_identity_is_current(query.execution_context)
+                && query.matches,
+        )
     }
 
     /// Sampling happens when an actual screen input is committed, including a
@@ -269,7 +267,7 @@ impl PageScriptHost {
                 let query = environment.queries.get_mut(&id).expect("sampled query");
                 if matches != query.matches {
                     query.matches = matches;
-                    query.queued |= query.listening;
+                    query.queued = true;
                 }
             }
         }
