@@ -176,10 +176,6 @@ fn page_screencast_interval(interval_ms: u32, every_nth_frame: u32) -> Duration 
     Duration::from_millis(u64::from(interval_ms)) * every_nth_frame
 }
 
-fn next_page_screencast_deadline(now: TokioInstant, interval: Duration) -> TokioInstant {
-    now + interval
-}
-
 fn append_unique_target_ids(target_ids: &mut Vec<String>, additional: Vec<String>) {
     for target_id in additional {
         if !target_ids.contains(&target_id) {
@@ -670,15 +666,21 @@ impl CdpScheduler {
                         })
                         .expect("live protocol actor state")
                     {
-                        PageScreencastCaptureStart::Pending(capture) => pending.push(capture),
+                        PageScreencastCaptureStart::Pending(capture) => {
+                            let schedule = self
+                                .page_screencasts
+                                .get_mut(&session_id)
+                                .expect("due screencast schedule must exist");
+                            // The interval spaces capture starts. A capture that
+                            // takes longer still waits for its ACK before retrying.
+                            schedule.next_due_at = now + schedule.interval;
+                            pending.push(capture);
+                        }
                         PageScreencastCaptureStart::Retry => {
                             if let Some(schedule) = self.page_screencasts.get_mut(&session_id)
                                 && schedule.registration.generation() == registration.generation()
                             {
-                                schedule.next_due_at = next_page_screencast_deadline(
-                                    now,
-                                    PAGE_SCREENCAST_RETRY_INTERVAL,
-                                );
+                                schedule.next_due_at = now + PAGE_SCREENCAST_RETRY_INTERVAL;
                             }
                         }
                         PageScreencastCaptureStart::Stale => {
@@ -725,7 +727,7 @@ impl CdpScheduler {
                     .page_screencasts
                     .get_mut(&session_id)
                     .expect("matching screencast schedule must exist");
-                schedule.next_due_at = next_page_screencast_deadline(now, schedule.interval);
+                schedule.next_due_at = now + schedule.interval;
                 None
             }
             PageScreencastCaptureCompletion::Retry => {
@@ -733,8 +735,7 @@ impl CdpScheduler {
                     .page_screencasts
                     .get_mut(&session_id)
                     .expect("matching screencast schedule must exist");
-                schedule.next_due_at =
-                    next_page_screencast_deadline(now, PAGE_SCREENCAST_RETRY_INTERVAL);
+                schedule.next_due_at = now + PAGE_SCREENCAST_RETRY_INTERVAL;
                 None
             }
             PageScreencastCaptureCompletion::Stale => {
@@ -749,13 +750,11 @@ impl CdpScheduler {
         session_id: &Option<String>,
         generation: i32,
         visual_state: RendererVisualStateToken,
-        now: TokioInstant,
     ) {
         if let Some(schedule) = self.page_screencasts.get_mut(session_id)
             && schedule.registration.generation() == generation
         {
             schedule.known_visual_state = Some(visual_state);
-            schedule.next_due_at = next_page_screencast_deadline(now, schedule.interval);
         }
     }
 

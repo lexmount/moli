@@ -37,12 +37,11 @@ use super::{
     CdpScheduler, ForegroundNavigationNetworkBarrier, ProtocolOutputSequence,
     ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues,
     devtools_navigation_lifecycle_milestone, drain_pending_background_events,
-    next_page_screencast_deadline, page_screencast_interval,
+    page_screencast_interval,
 };
 
 #[test]
-fn screencast_deadlines_respect_configured_milliseconds_without_catch_up() {
-    let started = tokio::time::Instant::now();
+fn screencast_interval_respects_configured_milliseconds() {
     assert_eq!(
         page_screencast_interval(1000, 1),
         std::time::Duration::from_secs(1)
@@ -52,12 +51,6 @@ fn screencast_deadlines_respect_configured_milliseconds_without_catch_up() {
         std::time::Duration::from_secs(3)
     );
 
-    let completion = started + std::time::Duration::from_secs(10);
-    assert_eq!(
-        next_page_screencast_deadline(completion, page_screencast_interval(1000, 1)),
-        started + std::time::Duration::from_secs(11),
-        "an overdue capture schedules from completion instead of catching up"
-    );
     assert_eq!(
         page_screencast_interval(17, 1),
         std::time::Duration::from_millis(17)
@@ -65,10 +58,6 @@ fn screencast_deadlines_respect_configured_milliseconds_without_catch_up() {
     assert_eq!(
         page_screencast_interval(17, 3),
         std::time::Duration::from_millis(51)
-    );
-    assert_eq!(
-        next_page_screencast_deadline(completion, page_screencast_interval(17, 3)),
-        completion + std::time::Duration::from_millis(51)
     );
     assert_eq!(
         page_screencast_interval(u32::MAX, 2),
@@ -155,7 +144,7 @@ async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
                 &mut scheduler,
                 &mut receivers,
                 json!({"id": 4, "method": "Page.startScreencast", "sessionId": session_id,
-            "params": {"format": "png", "maxWidth": 8, "maxHeight": 8}}),
+            "params": {"format": "png", "maxWidth": 8, "maxHeight": 8, "everyNthFrame": 3}}),
             )
             .await;
 
@@ -175,7 +164,8 @@ async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
             let first_due = scheduler
                 .next_page_screencast_deadline()
                 .expect("first capture deadline");
-            let mut captures = scheduler.start_due_page_screencast_captures(first_due);
+            let capture_started = first_due + std::time::Duration::from_millis(100);
+            let mut captures = scheduler.start_due_page_screencast_captures(capture_started);
             assert_eq!(
                 captures.len(),
                 1,
@@ -189,7 +179,11 @@ async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
                 PageScreencastSubscriptionStatus::CaptureInProgress
             );
             let completed = captures.pop().expect("first pending capture").wait().await;
-            let emitted_at = tokio::time::Instant::now();
+            let next_due = capture_started
+                + std::time::Duration::from_millis(u64::from(
+                    scheduler.page_screencast_interval_ms,
+                )) * 3;
+            let emitted_at = next_due + std::time::Duration::from_millis(10);
             let frame = scheduler
                 .complete_page_screencast_capture(completed, emitted_at)
                 .expect("the first actual capture must produce a frame");
@@ -208,7 +202,6 @@ async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
                 &frame.session_id,
                 frame.generation,
                 frame.visual_state,
-                emitted_at,
             );
 
             assert_eq!(
@@ -225,6 +218,7 @@ async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
                 "keep the live subscription"
             );
             let blocked_due = scheduler.page_screencasts[&session_key].next_due_at;
+            assert_eq!(blocked_due, next_due);
             let far_due = emitted_at + std::time::Duration::from_secs(3600);
             assert!(blocked_due <= far_due);
             // This is an explicit scheduler poll input, not elapsed wall time. Even
@@ -249,9 +243,18 @@ async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
             assert!(scheduler.next_page_screencast_deadline().is_none());
 
             command(
+                &mut scheduler,
+                &mut receivers,
+                json!({"id": 5, "method": "Page.screencastFrameAck", "sessionId": session_id,
+                    "params": {"sessionId": registration.generation()}}),
+            )
+            .await;
+            assert_eq!(scheduler.next_page_screencast_deadline(), Some(next_due));
+
+            command(
         &mut scheduler,
         &mut receivers,
-        json!({"id": 5, "method": "Page.stopScreencast", "sessionId": session_id, "params": {}}),
+        json!({"id": 6, "method": "Page.stopScreencast", "sessionId": session_id, "params": {}}),
     )
     .await;
             assert_eq!(
@@ -267,7 +270,7 @@ async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
             command(
                 &mut scheduler,
                 &mut receivers,
-                json!({"id": 6, "method": "Page.screencastFrameAck", "sessionId": session_id,
+                json!({"id": 7, "method": "Page.screencastFrameAck", "sessionId": session_id,
             "params": {"sessionId": registration.generation()}}),
             )
             .await;
@@ -290,7 +293,7 @@ async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
             let closed = command(
                 &mut scheduler,
                 &mut receivers,
-                json!({"id": 7, "method": "Target.closeTarget", "params": {"targetId": target_id}}),
+                json!({"id": 8, "method": "Target.closeTarget", "params": {"targetId": target_id}}),
             )
             .await;
             assert_eq!(closed["success"], true);
