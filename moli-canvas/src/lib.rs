@@ -11,8 +11,8 @@ pub use encode::{
     image_dimensions_from_bytes, image_intrinsic_dimensions_from_bytes,
 };
 pub use pixel::{
-    copy_rgba8_rect, flip_y_rgba8_in_place, multiply_u8_color, premultiply_rgba8_in_place,
-    scale_rgba8, scale_rgba8_bilinear, scale_rgba8_nearest,
+    composite_rgba8_over, copy_rgba8_rect, flip_y_rgba8_in_place, multiply_u8_color,
+    premultiply_rgba8_in_place, scale_rgba8, scale_rgba8_bilinear, scale_rgba8_nearest,
 };
 pub use rect::{css_named_color_rgb, normalize_rect, paint_rect, serialize_srgb_color};
 pub use text::{draw_text, measure_text_width};
@@ -553,5 +553,29 @@ mod tests {
             DrawImageBlit::new(1.0, 0.0, 1.0, 2.0, 0.0, 0.0, 1.0, 2.0).expect("valid crop"),
         );
         assert_eq!(cropped, vec![0, 255, 0, 255, 255, 255, 0, 255]);
+    }
+
+    #[test]
+    fn draw_image_composites_transparency_over_the_background() {
+        let source = [255, 0, 0, 255, 255, 255, 255, 0, 0, 255, 0, 128];
+        let expected = [[255, 0, 0, 255], [0, 0, 255, 255], [0, 128, 127, 255]];
+
+        for scale in [1, 2] {
+            let width = 3 * scale;
+            let mut destination = [0, 0, 255, 255].repeat(width as usize);
+            blit_draw_image(
+                &mut destination,
+                width,
+                1,
+                &source,
+                3,
+                1,
+                DrawImageBlit::new(0.0, 0.0, 3.0, 1.0, 0.0, 0.0, f64::from(width), 1.0)
+                    .expect("valid blit"),
+            );
+            for (column, pixel) in destination.as_chunks::<4>().0.iter().enumerate() {
+                assert_eq!(*pixel, expected[column / scale as usize]);
+            }
+        }
     }
 }

@@ -1,4 +1,4 @@
-use crate::pixel::{copy_rgba8_rect, scale_rgba8};
+use crate::pixel::{composite_rgba8_over, copy_rgba8_rect, scale_rgba8};
 use crate::types::{
     DrawImageBlit, ImageDataRect, Rgba8Rect, ScaleFilter, byte_len, surface_matches_len,
 };
@@ -196,31 +196,56 @@ pub fn blit_draw_image_filtered(
 
     let visible_width = (end_x - start_x) as u32;
     let visible_height = (end_y - start_y) as u32;
-    let Some(scaled) = scale_rgba8(
-        source,
-        source_width,
-        source_height,
-        blit,
-        start_x,
-        start_y,
-        visible_width,
-        visible_height,
-        filter,
-    ) else {
-        return;
+    let source_left = blit.source_x + (f64::from(start_x) - blit.dest_x);
+    let source_top = blit.source_y + (f64::from(start_y) - blit.dest_y);
+    let scaled;
+    let (source, source_stride, source_x, source_y) = if blit.source_width == blit.dest_width
+        && blit.source_height == blit.dest_height
+        && source_left.fract() == 0.0
+        && source_top.fract() == 0.0
+        && source_left >= 0.0
+        && source_top >= 0.0
+        && source_left + f64::from(visible_width) <= f64::from(source_width)
+        && source_top + f64::from(visible_height) <= f64::from(source_height)
+    {
+        // Pixel-aligned draws can read the original rows for either filter.
+        (
+            source,
+            source_width,
+            source_left as usize,
+            source_top as usize,
+        )
+    } else {
+        let Some(resampled) = scale_rgba8(
+            source,
+            source_width,
+            source_height,
+            blit,
+            start_x,
+            start_y,
+            visible_width,
+            visible_height,
+            filter,
+        ) else {
+            return;
+        };
+        scaled = resampled;
+        (scaled.as_slice(), visible_width, 0, 0)
     };
-    let Some(source_rect) = Rgba8Rect::new(0, 0, visible_width, visible_height) else {
-        return;
-    };
-    let _ = copy_rgba8_rect(
-        &scaled,
-        visible_width,
-        visible_height,
-        source_rect,
-        pixels,
-        canvas_width,
-        canvas_height,
-        start_x as u32,
-        start_y as u32,
-    );
+
+    let row_bytes = visible_width as usize * 4;
+    let source_offset = source_x * 4;
+    let dest_offset = start_x as usize * 4;
+    let source_rows = source
+        .chunks_exact(source_stride as usize * 4)
+        .skip(source_y);
+    let dest_rows = pixels
+        .chunks_exact_mut(canvas_width as usize * 4)
+        .skip(start_y as usize);
+    for (dest_row, source_row) in dest_rows.zip(source_rows).take(visible_height as usize) {
+        composite_rgba8_over(
+            &mut dest_row[dest_offset..dest_offset + row_bytes],
+            &source_row[source_offset..source_offset + row_bytes],
+        );
+    }
 }

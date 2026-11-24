@@ -20,8 +20,8 @@ use crate::webidl;
 use crate::webidl::dom_string_property_value as canvas_context_dom_string_value;
 use moli_canvas::{
     DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered, blit_image_data, byte_len,
-    data_image_rgba8_pixels, draw_text, extract_image_data, measure_text_width,
-    normalize_rect as canvas_normalize_rect, paint_rect,
+    composite_rgba8_over, data_image_rgba8_pixels, draw_text, extract_image_data,
+    measure_text_width, normalize_rect as canvas_normalize_rect, paint_rect,
 };
 use moli_layout::{
     PaintBrush, PaintColor, PaintFillRule, PaintFragment, PaintLineCap, PaintLineJoin, PaintShape,
@@ -1632,38 +1632,6 @@ fn canvas_raster_bounds(rect: moli_layout::PaintRect) -> kurbo::Rect {
         (f64::from(rect.x), f64::from(rect.y)),
         (f64::from(rect.width), f64::from(rect.height)),
     )
-}
-
-/// Composites straight-alpha RGBA8 source and destination using source-over.
-fn composite_rgba8_over(destination: &mut [u8], source: &[u8]) {
-    for (dst, src) in destination
-        .as_chunks_mut::<4>()
-        .0
-        .iter_mut()
-        .zip(source.as_chunks::<4>().0.iter())
-    {
-        let src_alpha = u32::from(src[3]);
-        if src_alpha == 0 {
-            continue;
-        }
-        let dst_alpha = u32::from(dst[3]);
-        if src_alpha == 255 {
-            dst.copy_from_slice(src);
-            continue;
-        }
-        let out_alpha = src_alpha + dst_alpha * (255 - src_alpha) / 255;
-        if out_alpha == 0 {
-            dst.copy_from_slice(&[0, 0, 0, 0]);
-            continue;
-        }
-        for channel in 0..3 {
-            let src_premultiplied = (u32::from(src[channel]) * src_alpha + 127) / 255;
-            let dst_premultiplied = u32::from(dst[channel]) * dst_alpha / 255;
-            let out_premultiplied = src_premultiplied + dst_premultiplied * (255 - src_alpha) / 255;
-            dst[channel] = ((out_premultiplied * 255 + out_alpha / 2) / out_alpha) as u8;
-        }
-        dst[3] = out_alpha as u8;
-    }
 }
 
 pub(crate) fn canvas_context_is_point_in_path_callback(

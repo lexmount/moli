@@ -88,6 +88,34 @@ pub fn copy_rgba8_rect(
     Some(())
 }
 
+/// Composites one row of straight-alpha RGBA8 pixels using source-over.
+pub fn composite_rgba8_over(destination: &mut [u8], source: &[u8]) {
+    for (dst, src) in destination
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(source.as_chunks::<4>().0)
+    {
+        if src[3] == 0 {
+            continue;
+        }
+        if src[3] == 255 || dst[3] == 0 {
+            dst.copy_from_slice(src);
+            continue;
+        }
+
+        let source_weight = u32::from(src[3]) * 255;
+        let dest_weight = u32::from(dst[3]) * (255 - u32::from(src[3]));
+        let alpha = source_weight + dest_weight;
+        for channel in 0..3 {
+            let color =
+                u32::from(src[channel]) * source_weight + u32::from(dst[channel]) * dest_weight;
+            dst[channel] = ((color + alpha / 2) / alpha) as u8;
+        }
+        dst[3] = ((alpha + 127) / 255) as u8;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn scale_rgba8_nearest(
     source: &[u8],
