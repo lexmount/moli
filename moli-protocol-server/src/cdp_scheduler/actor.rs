@@ -460,7 +460,6 @@ async fn run_cdp_scheduler_actor(
                         &session_id,
                         generation,
                         visual_state,
-                        TokioInstant::now(),
                     );
                 }
             }
