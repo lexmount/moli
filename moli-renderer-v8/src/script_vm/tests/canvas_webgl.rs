@@ -2449,6 +2449,42 @@ fn html_canvas_transform_methods_exist_and_draw_image_scales_canvas_sources() {
 }
 
 #[test]
+fn canvas_top_baseline_paints_labels_using_measured_glyph_height() {
+    let mut vm = new_storage_test_vm("https://canvas-text.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+    const strip = new OffscreenCanvas(1, 1);
+    const context = strip.getContext('2d');
+    context.font = '24px sans-serif';
+    const text = '60 fps';
+    const metrics = context.measureText(text);
+    const height = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+    if (!Number.isFinite(height) || height < 12) return 'invalid text bounds';
+    strip.width = Math.ceil(metrics.width);
+    strip.height = height + 3;
+    context.font = '24px sans-serif';
+    context.textBaseline = 'top';
+    context.textBaseline = 'invalid value';
+    if (context.textBaseline !== 'top') return 'invalid baseline';
+    context.fillText(text, 0, 0);
+    const pixels = context.getImageData(0, 0, strip.width, strip.height).data;
+    let paintedRows = 0;
+    for (let y = 0; y < strip.height; y++) {
+        const alpha = pixels.subarray(4 * y * strip.width, 4 * (y + 1) * strip.width);
+        if (alpha.some((value, i) => i % 4 === 3 && value > 0)) paintedRows++;
+    }
+    strip.height += 1;
+    return paintedRows > 10 && context.textBaseline === 'alphabetic' ? 'visible' : 'clipped';
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "visible");
+}
+
+#[test]
 fn html_canvas_draw_image_supports_nine_argument_source_cropping() {
     let mut vm = new_storage_test_vm("https://canvas-draw-image-crop.test/");
 

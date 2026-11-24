@@ -15,7 +15,10 @@ pub use pixel::{
     premultiply_rgba8_in_place, scale_rgba8, scale_rgba8_bilinear, scale_rgba8_nearest,
 };
 pub use rect::{css_named_color_rgb, normalize_rect, paint_rect, serialize_srgb_color};
-pub use text::{draw_text, measure_text_width};
+pub use text::{
+    TextBaseline, draw_text, draw_text_with_baseline, measure_text_vertical_bounds,
+    measure_text_width,
+};
 pub use types::{
     CanvasRect, DEFAULT_FONT, DrawImageBlit, ImageDataRect, MAX_RGBA8_BYTE_LENGTH, Rgba8Rect,
     ScaleFilter, byte_len,

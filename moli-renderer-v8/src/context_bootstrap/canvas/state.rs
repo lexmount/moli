@@ -3,6 +3,7 @@
 //! The isolate owns the table. Weak context handles remove entries on GC;
 //! dropping the isolate also drops every remaining entry without needing GC.
 
+use moli_canvas::TextBaseline;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use style::color::AbsoluteColor;
 
@@ -24,6 +25,7 @@ struct CanvasStateEntry {
     path: Rc<RefCell<Canvas2dPathState>>,
     fill: AbsoluteColor,
     stroke: AbsoluteColor,
+    text_baseline: TextBaseline,
 }
 
 impl CanvasStateEntry {
@@ -78,6 +80,7 @@ fn with_canvas_state<'s, T>(
                 path: Rc::new(RefCell::new(Canvas2dPathState::default())),
                 fill: AbsoluteColor::BLACK,
                 stroke: AbsoluteColor::BLACK,
+                text_baseline: TextBaseline::default(),
             },
         );
         let identity = v8::BigInt::new_from_u64(scope, id);
@@ -117,6 +120,21 @@ pub(super) fn set_canvas_color<'s>(
     with_canvas_state(scope, context, |state| *state.color(style) = color);
 }
 
+pub(super) fn canvas_text_baseline<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> TextBaseline {
+    with_canvas_state(scope, context, |state| state.text_baseline)
+}
+
+pub(super) fn set_canvas_text_baseline<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    baseline: TextBaseline,
+) {
+    with_canvas_state(scope, context, |state| state.text_baseline = baseline);
+}
+
 pub(super) fn reset_canvas_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
@@ -126,6 +144,7 @@ pub(super) fn reset_canvas_state<'s>(
             *state.path.borrow_mut() = Canvas2dPathState::default();
             state.fill = AbsoluteColor::BLACK;
             state.stroke = AbsoluteColor::BLACK;
+            state.text_baseline = TextBaseline::default();
         });
     }
 }
