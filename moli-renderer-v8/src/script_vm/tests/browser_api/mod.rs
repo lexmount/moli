@@ -53,6 +53,7 @@ mod message_port_events;
 mod message_port_lifecycle;
 mod midi_events;
 mod misc;
+mod native_hover_paths;
 mod native_owner_xhr;
 mod navigation;
 mod navigation_event_init;
