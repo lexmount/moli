@@ -7,13 +7,20 @@ use super::{
     cause::{PendingStyleInvalidationMergeClass, PendingStyleInvalidationWorkKind},
     target_queries::{
         PendingStyleInvalidationTargetQueries, PendingStyleInvalidationTargetSourceIdSink,
-        merge_pending_target_queries,
+        PendingTargetQueryIndices,
     },
 };
 
 #[derive(Default)]
 pub(super) struct PendingStyleInvalidations {
-    work_items: RefCell<Vec<PendingStyleInvalidationWork>>,
+    queue: RefCell<PendingStyleInvalidationQueue>,
+}
+
+#[derive(Default)]
+struct PendingStyleInvalidationQueue {
+    work_items: Vec<PendingStyleInvalidationWork>,
+    // Only the last work item can absorb more targets.
+    tail_target_indices: Option<PendingTargetQueryIndices>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,43 +76,49 @@ impl PendingStyleInvalidations {
         if work.target_queries.is_empty() {
             return;
         }
-        let mut work_items = self.work_items.borrow_mut();
-        if let Some(PendingStyleInvalidationWork {
-            merge_class: existing_merge_class,
-            target_queries: existing_target_queries,
-            ..
-        }) = work_items.last_mut()
-            && *existing_merge_class != PendingStyleInvalidationMergeClass::None
-            && *existing_merge_class == work.merge_class
+        let mut queue = self.queue.borrow_mut();
+        let PendingStyleInvalidationQueue {
+            work_items,
+            tail_target_indices,
+        } = &mut *queue;
+        if let Some(tail) = work_items.last_mut()
+            && tail.merge_class != PendingStyleInvalidationMergeClass::None
+            && tail.merge_class == work.merge_class
         {
-            merge_pending_target_queries(existing_target_queries, work.target_queries);
-            return;
+            tail_target_indices
+                .get_or_insert_with(|| PendingTargetQueryIndices::new(&tail.target_queries))
+                .merge_into(&mut tail.target_queries, work.target_queries);
+        } else {
+            *tail_target_indices = None;
+            work_items.push(work);
         }
-        work_items.push(work);
     }
 
     pub(super) fn take(&self) -> PendingStyleInvalidationBatch {
         PendingStyleInvalidationBatch {
-            work_items: self.work_items.take(),
+            work_items: self.queue.take().work_items,
         }
     }
 
     #[cfg(test)]
     pub(super) fn work_item_count_for_test(&self) -> usize {
-        self.work_items.borrow().len()
+        self.queue.borrow().work_items.len()
     }
 
     #[cfg(test)]
     pub(super) fn work_kind_names_for_test(&self) -> Vec<&'static str> {
-        self.work_items
+        self.queue
             .borrow()
+            .work_items
             .iter()
             .map(|work_item| work_item.kind.name_for_test())
             .collect()
     }
 
     pub(super) fn clear(&self) {
-        self.work_items.borrow_mut().clear();
+        let mut queue = self.queue.borrow_mut();
+        queue.work_items.clear();
+        queue.tail_target_indices = None;
     }
 }
 
@@ -128,5 +141,74 @@ impl PendingStyleInvalidationBatch {
 impl PendingStyleInvalidationTargetSourceIdSink for PendingStyleInvalidationBatchSourceIds {
     fn record_pending_target_stylesheet_source_id(&mut self, source_id: &StyleSourceId) {
         self.source_ids.insert(source_id.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::document_runtime::DomHandle;
+    use crate::style_engine::{StyleInvalidationSourceTarget, StyleScopeId};
+
+    use super::*;
+
+    #[test]
+    fn pending_target_index_follows_the_tail_across_merge_boundaries() {
+        let queue = PendingStyleInvalidations::new();
+        let document = DomHandle::new(1);
+        let [first, second, third] = [2, 3, 4].map(DomHandle::new);
+        let target = |root| StyleInvalidationSourceTarget::FallbackRoot {
+            scope_id: StyleScopeId::Document(document),
+            root,
+        };
+        let enqueue = |merge_class, roots: &[DomHandle]| {
+            queue.extend_work(PendingStyleInvalidationWork::new(
+                PendingStyleInvalidationWorkKind::Mutation,
+                roots
+                    .iter()
+                    .map(|&root| {
+                        PendingStyleInvalidationTargetQueries::fallback_roots_for_test(
+                            target(root),
+                            [root],
+                        )
+                    })
+                    .collect(),
+                merge_class,
+            ));
+        };
+        let take_targets = || {
+            queue
+                .take()
+                .work_items
+                .into_iter()
+                .map(|work| {
+                    work.target_queries
+                        .into_iter()
+                        .map(|query| query.target().clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let attributes = PendingStyleInvalidationMergeClass::AttributeMutation;
+        let structural = PendingStyleInvalidationMergeClass::ChildListStructuralMutation;
+        enqueue(attributes, &[first]);
+        enqueue(attributes, &[second]);
+        enqueue(attributes, &[second, third, first]);
+        enqueue(structural, &[third]);
+        enqueue(structural, &[second, third]);
+        assert_eq!(
+            take_targets(),
+            [
+                vec![target(first), target(second), target(third)],
+                vec![target(third), target(second)],
+            ]
+        );
+
+        enqueue(attributes, &[second]);
+        enqueue(attributes, &[first]);
+        queue.clear();
+        enqueue(attributes, &[first]);
+        enqueue(attributes, &[first, third]);
+        assert_eq!(take_targets(), [vec![target(first), target(third)]]);
     }
 }
