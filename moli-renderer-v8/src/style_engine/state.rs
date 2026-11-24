@@ -87,6 +87,12 @@ pub(crate) enum ScreenStyleInvalidation {
     Affected,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ScreenStyleCacheGenerations {
+    computed: u64,
+    retained_world: u64,
+}
+
 pub(super) struct StyleDocumentState {
     pub(super) retained_style_system: RefCell<Option<RetainedStyleSystem>>,
     selector_caches: RefCell<SelectorCaches>,
@@ -98,7 +104,7 @@ pub(super) struct StyleDocumentState {
     /// Source-side invalidation only. The target context also advances when
     /// derived styles are cleared, including temporary capture environments.
     visual_input_generation: Cell<u64>,
-    screen_cache_generation: Cell<Option<u64>>,
+    screen_cache_generations: Cell<Option<ScreenStyleCacheGenerations>>,
     pub(super) screen_style_invalidation: Cell<ScreenStyleInvalidation>,
     pub(super) lazy_invalidation_roots: LazyStyleInvalidationRoots,
     #[cfg(debug_assertions)]
@@ -126,7 +132,7 @@ impl StyleDocumentState {
             retained_style_system_generation: Cell::new(0),
             target_context_epoch: Cell::new(0),
             visual_input_generation: Cell::new(0),
-            screen_cache_generation: Cell::new(None),
+            screen_cache_generations: Cell::new(None),
             screen_style_invalidation: Cell::new(ScreenStyleInvalidation::Clean),
             lazy_invalidation_roots: LazyStyleInvalidationRoots::default(),
             #[cfg(debug_assertions)]
@@ -163,7 +169,7 @@ impl StyleDocumentState {
     }
 
     pub(super) fn note_screen_style_attribute_change(&self) {
-        if self.screen_cache_generation.get().is_some()
+        if self.screen_cache_generations.get().is_some()
             && self.screen_style_invalidation.get() == ScreenStyleInvalidation::Clean
         {
             self.screen_style_invalidation
@@ -180,12 +186,7 @@ impl StyleDocumentState {
 
     pub(super) fn finish_screen_style_invalidation(&self) {
         if self.screen_style_invalidation.get() == ScreenStyleInvalidation::Pending {
-            // Computed values and attr() dependencies must come from the
-            // screen's style context. Another observation can replace it.
-            let generation = self.computed_cache_generation();
-            let result = if generation != u64::MAX
-                && self.screen_cache_generation.get() == Some(generation)
-            {
+            let result = if self.screen_style_dependencies_are_current() {
                 ScreenStyleInvalidation::Clean
             } else {
                 ScreenStyleInvalidation::Affected
@@ -194,9 +195,25 @@ impl StyleDocumentState {
         }
     }
 
+    fn style_cache_generations(&self) -> ScreenStyleCacheGenerations {
+        ScreenStyleCacheGenerations {
+            computed: self.computed_cache_generation(),
+            retained_world: self.retained_style_system_generation.get(),
+        }
+    }
+
+    fn screen_style_dependencies_are_current(&self) -> bool {
+        // In-place media and viewport updates can replace cached attr()
+        // dependencies without advancing the computed-cache generation.
+        let current = self.style_cache_generations();
+        current.computed != u64::MAX
+            && current.retained_world != u64::MAX
+            && self.screen_cache_generations.get() == Some(current)
+    }
+
     pub(super) fn publish_screen_styles(&self) {
-        self.screen_cache_generation
-            .set(Some(self.computed_cache_generation()));
+        self.screen_cache_generations
+            .set(Some(self.style_cache_generations()));
         self.screen_style_invalidation
             .set(ScreenStyleInvalidation::Clean);
     }
