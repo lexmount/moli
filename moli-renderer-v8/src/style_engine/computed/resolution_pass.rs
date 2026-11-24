@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use moli_selector::{StyloDomHostBinding, StyloElement};
+use selectors::Element as _;
 use style::{
     Atom,
     animation::DocumentAnimationSet,
@@ -26,7 +27,7 @@ use super::{
     StyloAnonymousBoxKind, StyloComputedStyleSnapshot, clear_element_styles_for_resolution,
     document_quirks_mode, element_style_is_current, marker_style_decision,
     populate_inline_style_attribute_for_resolution, publish_resolved_element_styles,
-    resolve_with_root_font_size, style_validation_path_needs_resolution,
+    resolve_document_root_styles, style_validation_path_needs_resolution,
     stylo_pseudo_element_for_computed_style, with_cached_lazy_pseudo_style,
 };
 
@@ -336,12 +337,18 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                 );
                 clear_element_styles_for_resolution(world, element);
                 let styles = self.context.with_stylo(|context| {
-                    context
-                        .thread_local
-                        .bloom_filter
-                        .insert_parents_recovering(element, depth);
-                    context.thread_local.current_dom_depth = depth;
-                    let styles = resolve_with_root_font_size(context, |context| {
+                    let styles = if element.is_root() {
+                        resolve_document_root_styles(
+                            context,
+                            element,
+                            PseudoElementResolution::IfApplicable,
+                        )
+                    } else {
+                        context
+                            .thread_local
+                            .bloom_filter
+                            .insert_parents_recovering(element, depth);
+                        context.thread_local.current_dom_depth = depth;
                         StyleResolverForElement::new(
                             element,
                             context,
@@ -350,7 +357,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                         )
                         .resolve_style_with_default_parents()
                         .into()
-                    });
+                    };
                     context.thread_local.bloom_filter.push(element);
                     styles
                 });
