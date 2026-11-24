@@ -23,7 +23,7 @@ use super::{
     property_string_value,
     rendered_state::{
         ElementBoxState, ElementRenderedState, ElementRenderedStyle,
-        rendered_child_participates_in_flat_tree,
+        rendered_child_participates_in_flat_tree, rendered_element_ignores_dom_children,
     },
     styles::StyleObservation,
     trusted_types::{TrustedHtmlSink, trusted_html_sink_dom_string},
@@ -524,23 +524,6 @@ fn element_has_intrinsic_atomic_inline_box(element: &Element) -> bool {
         || element.is_html_element("object")
         || element.is_html_element("img")
         || element.is_html_element("embed")
-}
-
-fn rendered_element_ignores_dom_children(element: &Element) -> bool {
-    element.is_html_element("input")
-        || element.is_html_element("textarea")
-        || element.is_html_element("iframe")
-        || element.is_html_element("audio")
-        || element.is_html_element("video")
-        || element.is_html_element("canvas")
-        || element.is_html_element("object")
-        || element.is_html_element("img")
-        || element.is_html_element("embed")
-        // SVG stop elements do not establish a rendered text subtree. This
-        // mirrors their no-layout-object behavior without retaining layout
-        // state in Moli's DOM or innerText traversal.
-        || (element.namespace() == "http://www.w3.org/2000/svg"
-            && element.local_name() == "stop")
 }
 
 fn append_inner_text(

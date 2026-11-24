@@ -98,7 +98,7 @@ mod popover;
 mod query;
 mod reflection;
 mod rendered_state;
-pub(crate) use rendered_state::element_is_being_rendered;
+pub(crate) use rendered_state::{element_is_being_rendered, text_source_is_in_rendered_content};
 mod script_execution;
 mod shadow_dom;
 mod shared;

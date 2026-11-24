@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use crate::{
     document_runtime::DomHandle,
-    dom::native::Node,
+    dom::native::{Element, Node},
     native_bridge::PageScriptHost,
     style_engine::{
         ComputedDisplayKind, ComputedTextTransformKind, ComputedTextWrapModeKind,
@@ -163,6 +163,46 @@ pub(super) struct ElementRenderedState {
 
 pub(crate) fn element_is_being_rendered(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     ElementRenderedState::read(runtime, handle).box_state() == ElementBoxState::Box
+}
+
+pub(crate) fn text_source_is_in_rendered_content(
+    scope: &mut StyleObservation<'_>,
+    handle: DomHandle,
+) -> bool {
+    let state = ElementRenderedState::read_in_scope(scope, handle);
+    if state.box_state() == ElementBoxState::NoBox
+        || !state
+            .path
+            .iter()
+            .find_map(|entry| entry.style)
+            .is_some_and(|style| style.visibility_visible)
+    {
+        return false;
+    }
+    let runtime = scope.runtime();
+    let document = runtime.dom_host().owner_document_handle(handle);
+    let parents = std::iter::successors(rendered_tree_parent(runtime, handle), |parent| {
+        rendered_tree_parent(runtime, *parent)
+    });
+    parents
+        .take_while(|parent| Some(*parent) != document)
+        .filter_map(|parent| runtime.dom_host().node(parent)?.as_element())
+        .all(|element| !rendered_element_ignores_dom_children(element) && !element.is_html_select())
+}
+
+pub(super) fn rendered_element_ignores_dom_children(element: &Element) -> bool {
+    element.is_html_element("input")
+        || element.is_html_element("textarea")
+        || element.is_html_element("iframe")
+        || element.is_html_element("audio")
+        || element.is_html_element("video")
+        || element.is_html_element("canvas")
+        || element.is_html_element("object")
+        || element.is_html_element("img")
+        || element.is_html_element("embed")
+        // An SVG stop does not establish a rendered text subtree.
+        || (element.namespace() == "http://www.w3.org/2000/svg"
+            && element.local_name() == "stop")
 }
 
 impl ElementRenderedState {
