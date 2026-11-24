@@ -1746,16 +1746,36 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     let Ok(source) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
-    let Some((source_pixels, source_width, source_height)) =
-        html_image_pixels_copy(scope, source).or_else(|| canvas_like_pixels_copy(scope, source))
-    else {
+    let image = same_origin_html_image(scope, args.this(), source);
+    let owned_pixels;
+    let (source_pixels, source_width, source_height, density) =
+        if let Some((image, density)) = &image {
+            (image.rgba.as_slice(), image.width, image.height, *density)
+        } else {
+            let Some((pixels, width, height)) = html_image_pixels_copy(scope, source)
+                .or_else(|| canvas_like_pixels_copy(scope, source))
+            else {
+                return;
+            };
+            owned_pixels = pixels;
+            (owned_pixels.as_slice(), width, height, 1.0)
+        };
+    if !density.is_finite() {
+        return;
+    }
+    let Some(mut blit) = normalized_draw_image_args(
+        scope,
+        &args,
+        f64::from(source_width) / density,
+        f64::from(source_height) / density,
+    ) else {
         return;
     };
-    let Some(blit) =
-        normalized_draw_image_args(scope, &args, source_width as f64, source_height as f64)
-    else {
-        return;
-    };
+    // Script coordinates are in density-corrected image pixels.
+    blit.source_x *= density;
+    blit.source_y *= density;
+    blit.source_width *= density;
+    blit.source_height *= density;
 
     let filter = if context_bool_slot(
         scope,
@@ -1773,13 +1793,48 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
             pixels,
             width,
             height,
-            &source_pixels,
+            source_pixels,
             source_width,
             source_height,
             blit,
             filter,
         );
     });
+}
+
+fn same_origin_html_image<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<(std::sync::Arc<moli_image::RgbaImage>, f64)> {
+    if !web_api_interfaces::HTMLImageElement::is_instance(scope, source) {
+        return None;
+    }
+    let (host, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, source)
+            .ok()?;
+    let realm = canvas_context_relevant_context(scope, context)?;
+    let origin = canvas_window_origin(realm)?;
+    let caller = scope
+        .get_incumbent_context()
+        .unwrap_or_else(|| scope.get_current_context());
+    if caller != realm
+        && !canvas_window_origin(caller).is_some_and(|caller| caller.same_origin(&origin))
+    {
+        return None;
+    }
+    unsafe { &*host }.same_origin_canvas_image(handle, &origin)
+}
+
+fn canvas_window_origin(context: v8::Local<'_, v8::Context>) -> Option<moli_url::WebOrigin> {
+    let host = crate::util::context_host_ptr_from_context_slot(context)?;
+    let host = unsafe { &*host };
+    let identity = host.window_execution_context_identity_for_access_check(context)?;
+    if !host.window_execution_context_identity_is_current(identity) {
+        return None;
+    }
+    let origin = host.window_document_origin(identity.dispatch_scope())?;
+    Some(moli_url::WebOrigin::from_serialized(&origin))
 }
 
 fn html_image_pixels_copy<'s>(

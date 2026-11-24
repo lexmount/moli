@@ -32,6 +32,7 @@ pub(crate) struct ImageResponseDescriptor {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(super) decode_metadata: ImageDecodeMetadata,
+    pub(super) readable_from_request_origin: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,6 +56,7 @@ impl ImageResponseDescriptor {
             width: metadata.width,
             height: metadata.height,
             decode_metadata: ImageDecodeMetadata::Raster(metadata),
+            readable_from_request_origin: false,
         }
     }
 
@@ -64,7 +66,28 @@ impl ImageResponseDescriptor {
             width,
             height,
             decode_metadata: ImageDecodeMetadata::Svg(metadata),
+            readable_from_request_origin: false,
         })
+    }
+
+    pub(crate) fn with_canvas_readback(
+        mut self,
+        request_url: &url::Url,
+        response: &crate::protocol_types::NavigationResponse,
+        readable: bool,
+    ) -> Self {
+        // Canvas readback is currently supported for first-party raster
+        // images. The whole response must remain in the request's origin,
+        // including delivery through redirects or a service worker.
+        let origin = request_url.origin();
+        self.readable_from_request_origin = readable
+            && matches!(request_url.scheme(), "http" | "https")
+            && response.final_url.origin() == origin
+            && response
+                .redirect_chain
+                .iter()
+                .all(|hop| hop.from_url.origin() == origin && hop.to_url.origin() == origin);
+        self
     }
 }
 
@@ -340,6 +363,15 @@ impl super::PageScriptHost {
 
     pub(crate) fn image_resource_is_ready(&self, element: DomHandle) -> bool {
         self.image_resources.is_ready(element)
+    }
+
+    pub(crate) fn same_origin_canvas_image(
+        &self,
+        element: DomHandle,
+        origin: &moli_url::WebOrigin,
+    ) -> Option<(std::sync::Arc<moli_image::RgbaImage>, f64)> {
+        self.image_resources
+            .same_origin_canvas_image(element, origin)
     }
 
     pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {

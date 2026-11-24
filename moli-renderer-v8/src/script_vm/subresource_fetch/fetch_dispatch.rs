@@ -846,6 +846,8 @@ impl ScriptVm {
                                 ImageSubresourceTerminal::Response {
                                     response: &observable_response,
                                     encoded,
+                                    readable: metadata.response_type.is_readable()
+                                        && pending.request_origin.same_origin_url(&pending.info.url),
                                 },
                             )
                         }
@@ -894,7 +896,14 @@ impl ScriptVm {
                                             .expect("a CSS image response must be parkable");
                                         let descriptor = crate::network_host::image_response_descriptor_from_parkable(
                                             &observable_response, encoded,
-                                        );
+                                        ).map(|descriptor| {
+                                            descriptor.with_canvas_readback(
+                                                &pending.info.url,
+                                                &observable_response,
+                                                metadata.response_type.is_readable()
+                                                    && pending.request_origin.same_origin_url(&pending.info.url),
+                                            )
+                                        });
                                         let _ = context_host
                                             .borrow_mut()
                                             .complete_stylesheet_css_image_response(
