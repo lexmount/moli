@@ -1199,6 +1199,54 @@ async fn viewport_frames_follow_realtime_animation_and_document_replacement() ->
 }
 
 #[tokio::test]
+async fn viewport_committed_document_uses_its_own_cookie_site() -> Result<()> {
+    let server = moli_test_support::FixtureServer::spawn().await?;
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser.create_viewport_page(Default::default()).await?;
+    let mut states = page.subscribe_navigation_state().await?;
+    let pending = page.start_viewport_navigation(Some(server.url("/cookie-scope/check")))?;
+    assert!(page.finish_viewport_navigation(pending.wait().await?)?);
+    let first = page_state(&mut states, |state| {
+        state.navigation.url.path() == "/cookie-scope/check"
+    })
+    .await?;
+    browser
+        .wait_for_selector(&mut page, "main", Duration::from_secs(5))
+        .await?;
+    let response = page
+        .evaluate_runtime_expression_with_await_async(
+            r#"
+            new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open("GET", "/cookie-scope/set");
+                xhr.onload = () => resolve(xhr.status);
+                xhr.onerror = () => reject(new Error("cookie request failed"));
+                xhr.send();
+            })
+            "#,
+            true,
+        )
+        .await?;
+    assert_eq!(response["value"], 200);
+    page.evaluate_runtime_expression_async(
+        "history.replaceState(null, '', '?return=1#status'); location.reload();",
+    )
+    .await?;
+    let second = page_state(&mut states, |state| state.document != first.document).await?;
+    assert_eq!(second.navigation.url.query(), Some("return=1"));
+    assert_eq!(second.navigation.url.fragment(), Some("status"));
+    browser
+        .wait_for_selector(&mut page, "main", Duration::from_secs(5))
+        .await?;
+    let result = page
+        .evaluate_runtime_expression_async("document.querySelector('main').textContent")
+        .await?;
+    assert_eq!(result["value"], "scoped-cookie=seen");
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_history_survives_link_and_form_navigation() -> Result<()> {
     let server = moli_test_support::FixtureServer::spawn().await?;
     let destination = server.url("/net/echo");

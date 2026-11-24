@@ -252,7 +252,6 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
         .document_policy_container
         .document_referrer = loaded.document_referrer().to_owned();
     let local_executor_clone = local_executor.clone();
-    let loader_for_bootstrap = loader.clone();
     let (
         requested_url,
         navigation_redirected,
@@ -285,6 +284,13 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
             response,
             ..
         } => {
+            // The new top-level Document derives its cookie site from the
+            // final response URL and keeps the Page's network policy.
+            let loader_for_bootstrap =
+                ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
+                    loader.browser_resource_runtime(),
+                    loader.page_network_policy(),
+                );
             let navigation_redirected = response.redirected;
             let navigation_redirect_chain = response
                 .redirect_chain
@@ -349,7 +355,7 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
                         ConcurrentParseTimeRuntime::finish_creation_from_committed_external_raw_document_response(
                             page_id,
                             local_executor,
-                            &loader_for_bootstrap,
+                            &loader,
                             &env_for_bootstrap,
                             runtime_hooks,
                             stage,
@@ -365,7 +371,7 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
                         ConcurrentParseTimeRuntime::prepare_document_from_committed_external_raw_document_response(
                             page_id,
                             local_executor,
-                            &loader_for_bootstrap,
+                            &loader,
                             &env_for_bootstrap,
                             runtime_hooks,
                             stage,
