@@ -1628,7 +1628,6 @@ css/css-typed-om/the-stylepropertymap/properties/all.html
 css/css-typed-om/the-stylepropertymap/properties/backdrop-filter.html
 css/css-typed-om/the-stylepropertymap/properties/background-position.html
 css/css-typed-om/the-stylepropertymap/properties/background.html
-css/css-typed-om/the-stylepropertymap/properties/border-image-repeat.html
 css/css-typed-om/the-stylepropertymap/properties/break.html
 css/css-typed-om/the-stylepropertymap/properties/clip-path.html
 css/css-typed-om/the-stylepropertymap/properties/column-height.html

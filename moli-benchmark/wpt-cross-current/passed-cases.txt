@@ -3766,6 +3766,7 @@ css/css-typed-om/the-stylepropertymap/properties/block-size.html
 css/css-typed-om/the-stylepropertymap/properties/border-collapse.html
 css/css-typed-om/the-stylepropertymap/properties/border-color.html
 css/css-typed-om/the-stylepropertymap/properties/border-image-outset.html
+css/css-typed-om/the-stylepropertymap/properties/border-image-repeat.html
 css/css-typed-om/the-stylepropertymap/properties/border-image-slice.html
 css/css-typed-om/the-stylepropertymap/properties/border-image-source.html
 css/css-typed-om/the-stylepropertymap/properties/border-image-width.html
