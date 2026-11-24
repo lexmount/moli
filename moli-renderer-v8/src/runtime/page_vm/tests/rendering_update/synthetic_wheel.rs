@@ -236,6 +236,37 @@ fn synthetic_wheel_skips_resized_outside_updates_and_rejects_initial_outside_anc
 }
 
 #[test]
+fn synthetic_wheel_round_cannot_follow_a_replaced_document() {
+    run_page_vm_large_stack_async_test("synthetic-wheel-document-replacement", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/wheel").unwrap(),
+        );
+        install(&mut page);
+        let old_gesture = RendererSyntheticWheelGesture::default();
+        wheel(&mut page, &old_gesture, 40.0, 0.0, 50.0).unwrap();
+        assert_eq!(page.vm_mut().eval("String(a.scrollTop)").unwrap(), "50");
+
+        page.vm_mut()
+            .eval("document.open(); document.write('<body></body>'); document.close();")
+            .unwrap();
+        install(&mut page);
+        wheel(&mut page, &old_gesture.next_sequence(), 40.0, 0.0, 50.0).unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([a.scrollTop,events])")
+                .unwrap(),
+            "[0,[]]",
+        );
+
+        let new_gesture = RendererSyntheticWheelGesture::default();
+        wheel(&mut page, &new_gesture, 40.0, 0.0, 40.0).unwrap();
+        assert_eq!(page.vm_mut().eval("String(a.scrollTop)").unwrap(), "40");
+    });
+}
+
+#[test]
 fn synthetic_wheel_survives_unrelated_mutations() {
     run_page_vm_large_stack_async_test("synthetic-wheel-stable-box", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
@@ -431,6 +462,9 @@ fn synthetic_wheel_and_viewport_wheel_share_phases_and_coordinate_free_end() {
         page.update_viewport_frame();
         page.dispatch_viewport_wheel(input(RendererViewportWheelPhase::Moved, (550., 40.), 1))
             .unwrap();
+        // Wayland can include a final movement with End.
+        page.dispatch_viewport_wheel(input(RendererViewportWheelPhase::Ended, (550., 40.), 1))
+            .unwrap();
         page.dispatch_viewport_wheel(input(
             RendererViewportWheelPhase::Cancelled,
             (f64::NAN, f64::NAN),
@@ -443,13 +477,13 @@ fn synthetic_wheel_and_viewport_wheel_share_phases_and_coordinate_free_end() {
             page.vm_mut()
                 .eval("JSON.stringify(events.filter(Array.isArray))")
                 .unwrap(),
-            "[[true,false],[false,false],[false,false],[true,true]]"
+            "[[true,false],[false,false],[false,false],[false,false],[true,true]]"
         );
         assert_eq!(
             page.vm_mut()
                 .eval("JSON.stringify([scrollY,b.scrollTop])")
                 .unwrap(),
-            "[50,25]"
+            "[50,50]"
         );
     });
 }

@@ -52,7 +52,7 @@ impl PageVm {
         Ok(outcome)
     }
 
-    fn synthetic_wheel_anchor_in_bounds(&self, x: f64, y: f64) -> bool {
+    pub(in crate::runtime) fn wheel_position_in_bounds(&self, x: f64, y: f64) -> bool {
         let (width, height) = self
             .vm()
             .document_runtime
@@ -69,7 +69,7 @@ impl PageVm {
         gesture: &crate::runtime::RendererSyntheticWheelGesture,
     ) -> Result<RendererInputDispatchOutcome> {
         anyhow::ensure!(
-            self.synthetic_wheel_anchor_in_bounds(x, y),
+            self.wheel_position_in_bounds(x, y),
             "Position out of bounds"
         );
         gesture.validate_anchor(true);
@@ -98,7 +98,7 @@ impl PageVm {
         }
         // Aura filters producer samples (including End) before platform
         // phase inference. Native terminal phases bypass this producer filter.
-        if end && !self.synthetic_wheel_anchor_in_bounds(x, y) {
+        if end && !self.wheel_position_in_bounds(x, y) {
             return Ok(RendererInputDispatchOutcome::default());
         }
         if end {
@@ -120,7 +120,7 @@ impl PageVm {
             );
         }
         // Root widget coordinates are independent of capture scale.
-        let in_bounds = self.synthetic_wheel_anchor_in_bounds(x, y);
+        let in_bounds = self.wheel_position_in_bounds(x, y);
         anyhow::ensure!(gesture.validate_anchor(in_bounds), "Position out of bounds");
         if !in_bounds {
             // An invalid initial anchor is an error. An already-started

@@ -143,9 +143,13 @@ impl WheelInputController {
         &mut self,
         mut prepared: PreparedWheel,
         outcome: Option<RendererWheelDispatchOutcome>,
+        document: Option<WindowDocumentTaskTarget>,
     ) {
         if self.event_serial != prepared.event_serial {
             return;
+        }
+        if self.document != document {
+            self.retire_document();
         }
         let Some(outcome) = outcome else { return };
         let canceled = outcome == RendererWheelDispatchOutcome::Canceled;

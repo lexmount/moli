@@ -1,11 +1,11 @@
 use std::{ops::Range, sync::Arc};
 
 use gpui::{
-    App, BgraImage, Bounds, ClipboardItem, Context, CursorStyle, ElementInputHandler,
-    EntityInputHandler, ExternalPaths, FocusHandle, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    ScrollWheelEvent, Subscription, TouchPhase, UTF16Selection, Window, canvas, div, point,
-    prelude::*, px, rgb, size,
+    App, BgraImage, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase,
+    ElementInputHandler, EntityInputHandler, ExternalPaths, FocusHandle, KeyDownEvent, KeyUpEvent,
+    Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    Pixels, Point, ScrollWheelEvent, Subscription, TouchPhase, UTF16Selection, Window, canvas, div,
+    point, prelude::*, px, rgb, size,
 };
 use moli_core::{
     RendererDocumentLifecycleIdentity, RendererViewportCursorKind, RendererViewportEditAction,
@@ -18,6 +18,13 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::host::{KeyInput, TabCommand};
 use crate::text_input::MoliTextInputBridge;
+
+#[derive(Clone, Copy)]
+struct WheelRoute {
+    document: RendererDocumentLifecycleIdentity,
+    viewport_revision: u64,
+    phased: bool,
+}
 
 pub struct MoliSurface {
     pub focus: FocusHandle,
@@ -33,6 +40,7 @@ pub struct MoliSurface {
     image: Option<BgraImage>,
     document: Option<RendererDocumentLifecycleIdentity>,
     presented: Option<(RendererDocumentLifecycleIdentity, u64)>,
+    wheel_route: Option<WheelRoute>,
     text_input: MoliTextInputBridge,
     _subscriptions: Vec<Subscription>,
 }
@@ -43,6 +51,7 @@ impl MoliSurface {
         let activation = cx.observe_window_activation(window, |surface, window, _| {
             if !window.is_window_active() {
                 surface.finish_composition();
+                surface.cancel_wheel();
             }
             surface.sync_activity(window);
         });
@@ -67,6 +76,7 @@ impl MoliSurface {
             image: None,
             document: None,
             presented: None,
+            wheel_route: None,
             text_input: MoliTextInputBridge::default(),
             _subscriptions: vec![activation, focus_in, focus_out],
         }
@@ -99,6 +109,7 @@ impl MoliSurface {
 
     pub fn clear_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_pointer();
+        self.cancel_wheel();
         self.presented = None;
         self.drop_image(window);
         cx.notify();
@@ -401,37 +412,96 @@ impl MoliSurface {
     }
 
     fn wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let terminal = matches!(event.touch_phase, TouchPhase::Ended | TouchPhase::Cancelled);
-        let position = self.viewport_input_position(event.position).or_else(|| {
-            terminal
-                .then(|| self.document.map(|document| (document, (0., 0.))))
-                .flatten()
-        });
-        if let Some((document, position)) = position {
+        use RendererViewportWheelPhase as Phase;
+        let Some((document, position)) = self.viewport_input_position(event.position) else {
+            return;
+        };
+        let phase = match event.touch_phase {
+            TouchPhase::Started => Phase::Started,
+            TouchPhase::Moved
+                if self
+                    .wheel_route
+                    .is_some_and(|route| route.document == document && route.phased) =>
+            {
+                Phase::Moved
+            }
+            // GPUI also represents unphased mouse wheels as Moved.
+            TouchPhase::Moved => Phase::Unspecified,
+            TouchPhase::Ended | TouchPhase::Cancelled => return,
+        };
+        let route = WheelRoute {
+            document,
+            viewport_revision: self.revision,
+            phased: matches!(phase, Phase::Started | Phase::Moved),
+        };
+        self.wheel_route = Some(route);
+        self.send_wheel(route, Some(position), event, phase);
+        cx.stop_propagation();
+    }
+
+    fn finish_wheel(&mut self, event: &ScrollWheelEvent) {
+        use RendererViewportWheelPhase as Phase;
+        let phase = match event.touch_phase {
+            TouchPhase::Ended => Phase::Ended,
+            TouchPhase::Cancelled => Phase::Cancelled,
+            TouchPhase::Started | TouchPhase::Moved => return,
+        };
+        let Some(route) = self.wheel_route.take() else {
+            return;
+        };
+        let position = self
+            .viewport_input_position(event.position)
+            .filter(|(document, _)| {
+                *document == route.document
+                    && self.revision == route.viewport_revision
+                    && self
+                        .bounds
+                        .is_some_and(|bounds| bounds.contains(&event.position))
+            })
+            .map(|(_, position)| position);
+        self.send_wheel(route, position, event, phase);
+    }
+
+    fn send_wheel(
+        &self,
+        route: WheelRoute,
+        position: Option<(f64, f64)>,
+        event: &ScrollWheelEvent,
+        phase: RendererViewportWheelPhase,
+    ) {
+        let delta = if position.is_some() {
             let delta = event.delta.pixel_delta(px(40.));
+            (
+                -f64::from(f32::from(delta.x)) / self.zoom,
+                -f64::from(f32::from(delta.y)) / self.zoom,
+            )
+        } else {
+            (0., 0.)
+        };
+        self.send(TabCommand::Wheel(RendererViewportWheelInput {
+            document: route.document,
+            viewport_revision: route.viewport_revision,
+            position: position.unwrap_or_default(),
+            buttons: self.buttons,
+            delta,
+            modifiers: modifiers(event.modifiers),
+            phase,
+            precise: event.delta.precise(),
+        }));
+    }
+
+    fn cancel_wheel(&mut self) {
+        if let Some(route) = self.wheel_route.take() {
             self.send(TabCommand::Wheel(RendererViewportWheelInput {
-                document,
-                viewport_revision: self.revision,
-                position,
+                document: route.document,
+                viewport_revision: route.viewport_revision,
+                position: (0., 0.),
                 buttons: self.buttons,
-                delta: (
-                    -f64::from(f32::from(delta.x)) / self.zoom,
-                    -f64::from(f32::from(delta.y)) / self.zoom,
-                ),
-                modifiers: modifiers(event.modifiers),
-                phase: match event.touch_phase {
-                    TouchPhase::Started => RendererViewportWheelPhase::Started,
-                    // GPUI represents an unphased line wheel as Moved.
-                    TouchPhase::Moved if !event.delta.precise() => {
-                        RendererViewportWheelPhase::Unspecified
-                    }
-                    TouchPhase::Moved => RendererViewportWheelPhase::Moved,
-                    TouchPhase::Ended => RendererViewportWheelPhase::Ended,
-                    TouchPhase::Cancelled => RendererViewportWheelPhase::Cancelled,
-                },
-                precise: event.delta.precise(),
+                delta: (0., 0.),
+                modifiers: 0,
+                phase: RendererViewportWheelPhase::Cancelled,
+                precise: false,
             }));
-            cx.stop_propagation();
         }
     }
 
@@ -562,6 +632,20 @@ impl Render for MoliSurface {
             canvas(
                 |_, _, _| (),
                 move |bounds, (), window, cx| {
+                    let wheel_surface = surface.downgrade();
+                    // End and Cancel still belong to this viewport when the
+                    // pointer or the last painted frame leaves its hitbox.
+                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, cx| {
+                        if phase == DispatchPhase::Capture
+                            && matches!(
+                                event.touch_phase,
+                                TouchPhase::Ended | TouchPhase::Cancelled
+                            )
+                            && let Some(surface) = wheel_surface.upgrade()
+                        {
+                            surface.update(cx, |surface, _| surface.finish_wheel(event));
+                        }
+                    });
                     window.handle_input(
                         &focus,
                         ElementInputHandler::new(bounds, surface.clone()),

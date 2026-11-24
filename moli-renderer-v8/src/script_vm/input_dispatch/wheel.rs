@@ -63,23 +63,30 @@ impl ScriptVm {
             }
             return Ok(input_dispatch_outcome(false));
         }
-        let Some(document) = self
-            ._context_host
-            .borrow()
-            .input_owner_for_document(self.document_runtime.document_handle())
-        else {
+        let Some(document) = self.wheel_document_owner() else {
             return Ok(input_dispatch_outcome(false));
         };
         let mut prepared = self.wheel_input.borrow_mut().prepare(input, document);
-        let Some((hit, candidate)) = self.prepare_wheel_targets(
-            &mut prepared.targets,
-            input.position.0,
-            input.position.1,
-            input.delta.0,
-            input.delta.1,
-        )?
-        else {
-            return self.finish_input_event_dispatch_turn(Ok(input_dispatch_outcome(false)));
+        let (hit, scroll_target) = match input.source {
+            WheelSource::Direct => {
+                let hit =
+                    self.mouse_input_surface_hit(input.position.0, input.position.1, "wheel")?;
+                (hit, None)
+            }
+            WheelSource::Platform => {
+                let Some((hit, scroll_target)) = self.prepare_wheel_targets(
+                    &mut prepared.targets,
+                    input.position.0,
+                    input.position.1,
+                    input.delta.0,
+                    input.delta.1,
+                )?
+                else {
+                    return self
+                        .finish_input_event_dispatch_turn(Ok(input_dispatch_outcome(false)));
+                };
+                (hit, Some(scroll_target))
+            }
         };
         self.dispatch_mouse_input_to_target(
             input.position.0,
@@ -95,7 +102,7 @@ impl ScriptVm {
             intercept_drags,
             prepared.cancelable,
             completion,
-            Some((hit, candidate, prepared)),
+            Some((hit, scroll_target, prepared)),
         )
     }
 

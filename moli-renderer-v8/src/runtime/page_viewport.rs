@@ -124,6 +124,12 @@ pub enum RendererViewportWheelPhase {
     Cancelled,
 }
 
+impl RendererViewportWheelPhase {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Ended | Self::Cancelled)
+    }
+}
+
 /// A wheel event expressed in CSS pixels for a particular viewport revision.
 #[derive(Clone, Copy, Debug)]
 pub struct RendererViewportWheelInput {
@@ -384,13 +390,6 @@ impl PageVm {
         if input.document != self.document_lifecycle.identity() {
             return Ok(());
         }
-        let terminal = matches!(
-            input.phase,
-            RendererViewportWheelPhase::Ended | RendererViewportWheelPhase::Cancelled
-        );
-        if !terminal && !self.accepts_viewport_input(input.document, input.viewport_revision) {
-            return Ok(());
-        }
         let phase = match input.phase {
             RendererViewportWheelPhase::Ended => WheelPhase::Ended,
             RendererViewportWheelPhase::Cancelled => WheelPhase::Cancelled,
@@ -398,23 +397,49 @@ impl PageVm {
             RendererViewportWheelPhase::Started => WheelPhase::Began,
             RendererViewportWheelPhase::Moved => WheelPhase::Changed,
         };
-        let buttons = self.viewport_pressed_buttons();
-        let result = self.vm_mut().dispatch_wheel_input(
-            WheelInput {
-                position: input.position,
-                delta: input.delta,
-                modifiers: input.modifiers,
-                timestamp: std::time::Instant::now(),
-                phase,
-                source: WheelSource::Platform,
-            },
-            -1,
-            Some(buttons),
-            0,
-            super::RendererPointerEventProperties::default(),
-            false,
-            crate::script_vm::MouseDispatchCompletion::FinishTurn,
-        );
+        // Some platforms include the last movement with End. Forward that
+        // delta only with current geometry, and always finish the sequence.
+        let has_update = match phase {
+            WheelPhase::Ended => {
+                input.delta != (0., 0.)
+                    && self.wheel_position_in_bounds(input.position.0, input.position.1)
+            }
+            WheelPhase::Cancelled => false,
+            _ => true,
+        };
+        let result =
+            if has_update && self.accepts_viewport_input(input.document, input.viewport_revision) {
+                let buttons = self.viewport_pressed_buttons();
+                let result = self.vm_mut().dispatch_wheel_input(
+                    WheelInput {
+                        position: input.position,
+                        delta: input.delta,
+                        modifiers: input.modifiers,
+                        timestamp: std::time::Instant::now(),
+                        phase: if phase == WheelPhase::Ended {
+                            WheelPhase::Changed
+                        } else {
+                            phase
+                        },
+                        source: WheelSource::Platform,
+                    },
+                    -1,
+                    Some(buttons),
+                    0,
+                    super::RendererPointerEventProperties::default(),
+                    false,
+                    crate::script_vm::MouseDispatchCompletion::FinishTurn,
+                );
+                if result.is_ok() {
+                    self.update_viewport_pointer_position(Some(input.position));
+                }
+                result
+            } else {
+                Ok(RendererInputDispatchOutcome::default())
+            };
+        if input.phase.is_terminal() {
+            self.vm().wheel_input.borrow_mut().end_platform_sequence();
+        }
         if let Err(error) = &result {
             if error.downcast_ref::<moli_layout::LayoutError>()
                 == Some(&moli_layout::LayoutError::NoLayoutSnapshot)

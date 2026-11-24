@@ -975,6 +975,7 @@ mod tests {
             box_id,
             vec![FrozenLayoutBox {
                 display: crate::LayoutDisplay::Block,
+                list_marker_position: crate::LayoutListMarkerPosition::Outside,
                 geometry: LayoutBoxGeometry {
                     id: box_id,
                     effective_zoom: 1.0,

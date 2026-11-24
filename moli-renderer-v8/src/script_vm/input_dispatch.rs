@@ -1121,13 +1121,13 @@ impl ScriptVm {
         completion: MouseDispatchCompletion,
         wheel_targets: Option<(
             InputSurfaceHit,
-            WheelScrollTarget,
+            Option<WheelScrollTarget>,
             crate::wheel_input::PreparedWheel,
         )>,
     ) -> Result<RendererInputDispatchOutcome> {
         let (surface_hit, wheel_scroll_target, prepared_wheel) =
             if let Some((hit, target, prepared)) = wheel_targets {
-                (hit, Some(target), Some(prepared))
+                (hit, target, Some(prepared))
             } else {
                 (self.mouse_input_surface_hit(x, y, event_name)?, None, None)
             };
@@ -1196,9 +1196,10 @@ impl ScriptVm {
             ) {
                 prepared.targets.scroll_target = wheel_scroll_target;
             }
+            let document = self.wheel_document_owner();
             self.wheel_input
                 .borrow_mut()
-                .acknowledge(prepared, wheel_outcome);
+                .acknowledge(prepared, wheel_outcome, document);
         }
         result
     }

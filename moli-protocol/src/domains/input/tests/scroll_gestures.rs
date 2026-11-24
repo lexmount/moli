@@ -43,6 +43,20 @@ async fn snapshot(ctx: &mut TestContext) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn direct_wheel_chains_the_delta_remaining_at_a_nested_boundary() {
+    let mut ctx = fixture("document.getElementById('content').style.height = '150px';").await;
+    ctx.process_async(json!({
+        "id":35001,"method":"Input.dispatchMouseEvent",
+        "params":{"type":"mouseWheel","x":20,"y":20,"deltaX":0,"deltaY":100}
+    }))
+    .await;
+    ctx.expect_result(35001, json!({}), None);
+    let value = snapshot(&mut ctx).await;
+    assert_eq!(value["a"], 30, "{value}");
+    assert_eq!(value["page"], 70, "{value}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn scroll_gesture_delivers_complete_canceled_wheel_sequence() {
     let mut ctx=fixture("a.addEventListener('wheel',e=>{events.push(e.cancelable);total+=e.deltaY;e.preventDefault();},{passive:false});").await;
     gesture(&mut ctx, json!({})).await;
