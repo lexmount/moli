@@ -648,6 +648,84 @@ fn exec_command_insert_text_uses_the_document_range_without_focus() {
 }
 
 #[test]
+fn exec_command_insert_text_splits_lines_before_delivering_input_events() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-multiline-text.test/",
+        "<!doctype html><div id=editor contenteditable></div><div id=other contenteditable>other</div>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const editor = document.getElementById("editor");
+  const other = document.getElementById("other");
+  const selection = document.getSelection();
+  const inputs = [];
+  editor.addEventListener("input", e => inputs.push([e.inputType, e.data, editor.innerHTML]));
+  document.execCommand("defaultParagraphSeparator", false, "p");
+
+  function insert(html, text, start, end = start) {
+    editor.innerHTML = html;
+    editor.focus();
+    const node = editor.firstElementChild?.firstChild ?? editor.firstChild;
+    selection.setBaseAndExtent(node, start, node, end);
+    return document.execCommand("insertText", false, text);
+  }
+
+  const multiline = insert("foXbar", "abc\ndef\n\nend", 2, 3);
+  const firstHTML = editor.innerHTML;
+  const caret = [selection.anchorNode.data, selection.anchorOffset];
+  const firstInputs = inputs.splice(0).map(([type, data]) => [type, data]);
+
+  const afterBold = insert("<b>tail</b>", "\nnew", 4);
+  const secondHTML = editor.innerHTML;
+  const afterSpan = insert("<span>tail</span>", "\nnew", 4);
+  const plainSpanHTML = editor.innerHTML;
+  const afterStyledSpan = insert('<span style="color: red">tail</span>', "\nnew", 4);
+  const styledSpanHTML = editor.innerHTML;
+  inputs.length = 0;
+
+  editor.addEventListener("input", () => {
+    other.focus();
+    selection.collapse(other.firstChild, 1);
+  }, {once: true});
+  const redirected = insert("frontback", "x\ny", 5);
+  return JSON.stringify({
+    multiline, firstHTML, caret, firstInputs, afterBold, secondHTML,
+    afterSpan, plainSpanHTML, afterStyledSpan, styledSpanHTML, redirected, inputs,
+    other: other.textContent,
+  });
+})()
+"#,
+        )
+        .expect("multiline insertText should use the current editing selection");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let final_html = "<p>frontx</p><p>yback</p>";
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "multiline": true,
+            "firstHTML": "<p>foabc</p><p>def</p><p><br></p><p>endbar</p>",
+            "caret": ["endbar", 3],
+            "firstInputs": [
+                ["insertText", "abc"], ["insertText", null], ["insertText", "def"],
+                ["insertText", null], ["insertText", null], ["insertText", "end"],
+            ],
+            "afterBold": true,
+            "secondHTML": "<p><b>tail</b></p><p><b>new</b></p>",
+            "afterSpan": true,
+            "plainSpanHTML": "<p><span>tail</span></p><p>new</p>",
+            "afterStyledSpan": true,
+            "styledSpanHTML": "<p><span style=\"color: red\">tail</span></p><p><span style=\"color: red\">new</span></p>",
+            "redirected": true,
+            "inputs": [["insertText", "x", final_html], ["insertText", null, final_html],
+                       ["insertText", "y", final_html]],
+            "other": "other",
+        })
+    );
+}
+
+#[test]
 fn exec_command_insert_text_rejects_selections_outside_the_editing_host() {
     let mut vm = new_parsed_test_vm(
         "https://exec-command-insert-text.test/",

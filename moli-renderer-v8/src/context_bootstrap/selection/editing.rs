@@ -46,8 +46,8 @@ pub(crate) fn replace_editable_selection_text(
         (start, end)
     };
 
-    let replacement = DomStringValue::from(replacement);
-    let units = replacement.utf16_units();
+    let replacement_data = DomStringValue::from(replacement);
+    let units = replacement_data.utf16_units();
     let window = scope.get_current_context().global(scope);
     let selection = selection_value_for_window(scope, window)?;
 
@@ -68,12 +68,31 @@ pub(crate) fn replace_editable_selection_text(
     } else {
         let range = new_editing_range(scope, document, start, end)?;
         range_delete_contents(scope, range)?;
-        let start = range::native_range_boundary_handles(scope, range)?.start;
+        let mut start = range::native_range_boundary_handles(scope, range)?.start;
         let runtime = unsafe { &*runtime_ptr };
         // Removing selected elements can run their disconnected callbacks.
         if !insertion_point_is_editable(runtime, start.container) {
             return None;
         }
+        let dom = runtime.dom_host();
+        if replacement.chars().any(|ch| !ch.is_ascii_whitespace())
+            && let Some(placeholder) = lone_editor_break_with(dom, start.container, |_| false)
+            && dom
+                .child_index(start.container, placeholder)
+                .is_some_and(|index| start.offset as usize <= index)
+            && insertion_point_is_editable(runtime, placeholder)
+        {
+            // An empty paragraph uses a lone break to hold its line open.
+            // Once text fills the line, keeping the break adds a second line.
+            unsafe { &mut *runtime_ptr }
+                .remove_child(scope, runtime_ptr, start.container, placeholder)
+                .then_some(())?;
+            start = range::native_range_boundary_handles(scope, range)?.start;
+            if !insertion_point_is_editable(unsafe { &*runtime_ptr }, start.container) {
+                return None;
+            }
+        }
+        let runtime = unsafe { &*runtime_ptr };
         if units.is_empty() {
             (start.container, start.offset)
         } else if let Some((text, offset)) =
@@ -82,7 +101,7 @@ pub(crate) fn replace_editable_selection_text(
             replace_text_span(scope, runtime_ptr, text, offset..offset, &units)?
         } else {
             let text = unsafe { &mut *runtime_ptr }
-                .create_text_node_for_document(document, replacement.clone());
+                .create_text_node_for_document(document, replacement_data.clone());
             let start_node = node_wrapper_from_handle(scope, start.container)?;
             let text_node = node_wrapper_from_handle(scope, text)?;
             range_insert_node_at_boundary(scope, range, start_node, start.offset, text_node)?;

@@ -187,12 +187,12 @@ fn wrap_inline_run<'s>(
 ) -> Option<(DomHandle, SelectionBoundarySnapshot)> {
     let runtime = unsafe { &*runtime_ptr };
     let dom = runtime.dom_host();
-    let point = lift_split_point(dom, point, parent);
+    let lifted = lift_split_point(dom, point, parent);
     let children = dom.child_handles(parent).collect::<Vec<_>>();
-    let (before, after) = if point.container == parent {
-        (point.offset as usize, point.offset as usize)
+    let (before, after) = if lifted.container == parent {
+        (lifted.offset as usize, lifted.offset as usize)
     } else {
-        let child = std::iter::successors(Some(point.container), |&node| dom.parent_node(node))
+        let child = std::iter::successors(Some(lifted.container), |&node| dom.parent_node(node))
             .find(|&node| dom.parent_node(node) == Some(parent))?;
         let index = dom.child_index(parent, child)?;
         (index, index + 1)
@@ -248,13 +248,21 @@ fn wrap_inline_run<'s>(
     let block_node = node_wrapper_from_handle(scope, block)?;
     range_insert_node_at_boundary(scope, run, block_node, 0, content)?;
     insert_node(scope, insertion.edit.range, parent, start.offset, block)?;
-    let point = if point.container == parent {
+    // Keep the caret inside its original formatting when its node moved into
+    // the wrapped run. The lifted point only locates the run's boundaries.
+    let point = if unsafe { &*runtime_ptr }
+        .dom_host()
+        .dom()
+        .is_ancestor(block, point.container)
+    {
+        point
+    } else if lifted.container == parent {
         SelectionBoundarySnapshot {
             container: block,
-            offset: point.offset - first as u32,
+            offset: lifted.offset - first as u32,
         }
     } else {
-        point
+        lifted
     };
     Some((block, point))
 }
@@ -314,12 +322,15 @@ fn split_paragraph<'s>(
             .take_while(|&node| node != block)
         {
             let node = dom.node(handle)?;
-            if node.as_element().is_some_and(|element| {
-                element.is_html_element("a") && element.has_attribute("href")
-            }) {
+            let Some(element) = node.as_element() else {
+                continue;
+            };
+            if element.is_html_element("a") && element.has_attribute("href") {
                 // The new paragraph starts outside this link and its formatting.
                 formatting.clear();
-            } else if is_inline_formatting(node) {
+            } else if is_inline_formatting(node)
+                && (!element.is_html_element("span") || !element.attributes().is_empty())
+            {
                 formatting.push(handle);
             }
         }

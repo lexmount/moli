@@ -1,5 +1,9 @@
+use smallvec::SmallVec;
+
 use super::PageScriptHost;
-use crate::context_bootstrap::replace_editable_selection_text;
+use crate::context_bootstrap::{
+    replace_editable_selection_paragraph, replace_editable_selection_text,
+};
 use crate::document_runtime::DomHandle;
 use crate::dom::native::{ContentEditableState, NodeType};
 use crate::native_bridge::element::{
@@ -90,7 +94,6 @@ pub(super) fn exec_command_insert_text(
     };
     let scope = &mut v8::ContextScope::new(scope, context);
     let input_type = TextEditInputType::InsertText;
-    let data = input_type.data(replacement);
 
     if let EditingInsertionTarget::TextControl(_) = target {
         return replace_text_control_selection_with_input_event(
@@ -102,20 +105,67 @@ pub(super) fn exec_command_insert_text(
             None,
         );
     }
-    let Some(changed) = replace_editable_selection_text(
-        scope,
-        runtime_ptr,
-        document,
-        replacement,
-        |runtime, node| {
-            runtime.document_is_fully_active(document)
-                && editing_host_at_boundary(runtime, document, node) == Some(handle)
-        },
-    ) else {
-        return false;
+    let mut inputs = SmallVec::<[Option<&str>; 1]>::new();
+    let completed = 'edit: {
+        for (index, line) in replacement.split('\n').enumerate() {
+            if index != 0 {
+                let Some(inserted) = insert_text_step(scope, runtime_ptr, document, handle, None)
+                else {
+                    break 'edit false;
+                };
+                if inserted {
+                    inputs.push(None);
+                }
+            }
+            // An empty replacement on its own can delete selected text.
+            if !line.is_empty() || replacement.is_empty() {
+                let Some(inserted) =
+                    insert_text_step(scope, runtime_ptr, document, handle, Some(line))
+                else {
+                    break 'edit false;
+                };
+                if inserted {
+                    inputs.push(Some(line));
+                }
+            }
+        }
+        true
     };
-    if changed && let Some(event) = construct_input_event(scope, "input", input_type, data) {
-        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+    // Publish input events after editing so their listeners see the final DOM
+    // and cannot redirect the remaining segments to a different selection.
+    let applied = !inputs.is_empty();
+    for data in inputs {
+        if let Some(event) = construct_input_event(scope, "input", input_type, data) {
+            let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+        }
     }
-    true
+    completed || applied
+}
+
+fn insert_text_step(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    document: DomHandle,
+    host: DomHandle,
+    line: Option<&str>,
+) -> Option<bool> {
+    // Reactions to DOM mutations can move or retire the editing target.
+    if !matches!(
+        editing_insertion_target(unsafe { &*runtime_ptr }, document),
+        Some(EditingInsertionTarget::EditingHost(target)) if target == host
+    ) {
+        return None;
+    }
+    let is_editable = |runtime: &PageScriptHost, node| {
+        runtime.document_is_fully_active(document)
+            && editing_host_at_boundary(runtime, document, node) == Some(host)
+    };
+    match line {
+        Some(line) => {
+            replace_editable_selection_text(scope, runtime_ptr, document, line, is_editable)
+        }
+        None => {
+            replace_editable_selection_paragraph(scope, runtime_ptr, document, host, is_editable)
+        }
+    }
 }
