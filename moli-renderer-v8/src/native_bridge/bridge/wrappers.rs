@@ -206,6 +206,19 @@ impl NativeDomBridge {
         )
     }
 
+    pub(crate) fn wrap_blocking_list<'s, 'i>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, 'i>,
+        runtime_ptr: *mut PageScriptHost,
+        handle: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        self.wrap_bridge_handle(
+            scope,
+            runtime_ptr,
+            BridgeHandle::ClassList(handle, DomTokenListKind::Blocking),
+        )
+    }
+
     pub(crate) fn wrap_dataset<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,

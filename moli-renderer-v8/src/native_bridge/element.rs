@@ -710,8 +710,8 @@ pub(crate) use stylesheets::{
 };
 
 use stylesheets::{
-    link_disabled_getter_function, link_disabled_setter_function, style_blocking_getter_function,
-    style_blocking_setter_function, style_disabled_getter_function, style_disabled_setter_function,
+    link_disabled_getter_function, link_disabled_setter_function, style_disabled_getter_function,
+    style_disabled_setter_function,
 };
 pub(super) use template_install::{
     install_specialized_instance_properties, install_specialized_template,
