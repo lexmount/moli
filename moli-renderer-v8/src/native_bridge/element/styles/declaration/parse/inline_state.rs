@@ -102,24 +102,6 @@ pub(super) fn inline_style_declaration_state_from_css_text(
     inline_style_declaration_state_from_entries(&entries)
 }
 
-pub(super) fn inline_style_declaration_state_for_handle(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    base_url: Option<&url::Url>,
-) -> CssInlineStyleDeclarationState {
-    if runtime.element_inline_style_csp_state(handle)
-        == crate::style_engine::InlineStyleCspState::BlockedAttribute
-    {
-        return CssInlineStyleDeclarationState::default();
-    }
-    runtime
-        .element_inline_style_declaration_state(handle)
-        .cloned()
-        .unwrap_or_else(|| {
-            inline_style_declaration_state_from_css_text(&style_string(runtime, handle), base_url)
-        })
-}
-
 pub(super) fn inline_css_text_pdb_storage_state(
     css_text: &str,
 ) -> Option<CssInlineStyleDeclarationState> {

@@ -4,6 +4,7 @@
 //! the small set of string helpers around them.
 
 mod color;
+mod cssom_property;
 mod declaration;
 mod font_face;
 mod font_palette;
@@ -21,6 +22,7 @@ pub use color::{
     css_system_color_srgb, parse_absolute_css_color, parse_css_color_scheme_flags,
     parse_css_color_to_opaque_srgb_hex, parse_css_color_to_srgb_bytes,
 };
+pub use cssom_property::ParsedCssomProperty;
 pub use declaration::{CssDeclaration, DeclarationParseOptions, parse_declaration_list};
 pub use font_face::{
     CssFontFace, CssFontFamily, CssFontShorthand, CssFontSource, font_family_name_key,
