@@ -41,6 +41,7 @@ pub(crate) struct PreparedWorldLayout {
     positioned_static_sources: Vec<PositionedStaticSource>,
     numeric_unrounded_layouts: Vec<Layout>,
     numeric_viewport_layout: Layout,
+    numeric_fixed_viewport_layout: Option<Layout>,
     feedback_invalidation_marks: Vec<bool>,
     feedback_invalidation_worklist: Vec<LayoutBoxId>,
 }
@@ -63,6 +64,11 @@ impl PreparedWorldLayout {
             layout_box.unrounded_layout = layout;
         }
         world.viewport_layout.unrounded_layout = self.numeric_viewport_layout;
+        if let Some(layout) = world.fixed_viewport_layout.as_deref_mut() {
+            layout.unrounded_layout = self
+                .numeric_fixed_viewport_layout
+                .expect("prepared layout has a fixed viewport");
+        }
     }
 
     fn capture_numeric_geometry<N>(&mut self, world: &LayoutWorld<N>)
@@ -77,6 +83,10 @@ impl PreparedWorldLayout {
                 .map(|layout_box| layout_box.unrounded_layout),
         );
         self.numeric_viewport_layout = world.viewport_layout.unrounded_layout;
+        self.numeric_fixed_viewport_layout = world
+            .fixed_viewport_layout
+            .as_deref()
+            .map(|layout| layout.unrounded_layout);
     }
 
     /// Clears only the cache entries on changed scrollbar boxes and their
@@ -120,6 +130,9 @@ impl PreparedWorldLayout {
         }
         if viewport_changed || !changed_boxes.is_empty() {
             world.viewport_layout.cache.clear();
+            if let Some(layout) = world.fixed_viewport_layout.as_deref_mut() {
+                layout.cache.clear();
+            }
         }
         for id in invalidated.iter().copied() {
             self.feedback_invalidation_marks[id.index()] = false;
@@ -156,13 +169,17 @@ where
     world.viewport_layout.cache.clear();
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
-    update_viewport_layout_style(world, viewport);
-    let (positioned_static_sources, tables) = prepare_layout_tree(world);
+    world.fixed_viewport_layout = None;
+    let separate_fixed_viewport =
+        viewport.frame_size() != (viewport.css_width, viewport.css_height);
+    let (positioned_static_sources, tables) = prepare_layout_tree(world, separate_fixed_viewport);
+    update_viewport_layout_styles(world, viewport);
     prepare_tables(world, tables);
     let mut prepared = PreparedWorldLayout {
         positioned_static_sources,
         numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
         numeric_viewport_layout: Layout::with_order(0),
+        numeric_fixed_viewport_layout: None,
         feedback_invalidation_marks: vec![false; world.boxes.len()],
         feedback_invalidation_worklist: Vec::new(),
     };
@@ -170,39 +187,41 @@ where
     prepared
 }
 
-fn update_viewport_layout_style<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
+fn update_viewport_layout_styles<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let viewport_scrollbar_insets = world.viewport_scroll_policy.scrollbar_layout_insets();
-    world.viewport_layout.style = Style {
+    world.viewport_layout.style = viewport_layout_style(
+        (viewport.css_width, viewport.css_height),
+        world.viewport_scroll_policy.scrollbar_layout_insets(),
+    );
+    if let Some(layout) = world.fixed_viewport_layout.as_deref_mut() {
+        layout.style = viewport_layout_style(viewport.frame_size(), taffy::Rect::ZERO);
+    }
+}
+
+fn viewport_layout_style((width, height): (u32, u32), insets: taffy::Rect<f32>) -> Style<Atom> {
+    let size = Size {
+        width: Dimension::length(width as f32),
+        height: Dimension::length(height as f32),
+    };
+    Style {
         display: Display::Block,
         box_sizing: BoxSizing::BorderBox,
-        size: Size {
-            width: Dimension::length(viewport.css_width as f32),
-            height: Dimension::length(viewport.css_height as f32),
-        },
-        min_size: Size {
-            width: Dimension::length(viewport.css_width as f32).into(),
-            height: Dimension::length(viewport.css_height as f32).into(),
-        },
-        max_size: Size {
-            width: Dimension::length(viewport.css_width as f32).into(),
-            height: Dimension::length(viewport.css_height as f32).into(),
-        },
-        // The synthetic viewport is the initial containing block. Model UA
-        // scrollbar gutters as its non-painted border: in-flow root content
-        // and fixed-position descendants then share the same inner rectangle.
-        // Padding would be wrong here because an absolute/fixed containing
-        // block is its padding box and would still extend underneath the bars.
+        size,
+        min_size: size.map(Into::into),
+        max_size: size.map(Into::into),
+        // A non-painted border keeps both in-flow and positioned boxes inside
+        // the scrollbar gutters. Positioned boxes include padding in their
+        // containing block, so padding would extend them under the bars.
         border: taffy::Rect {
-            left: taffy::LengthPercentage::length(viewport_scrollbar_insets.left),
-            right: taffy::LengthPercentage::length(viewport_scrollbar_insets.right),
-            top: taffy::LengthPercentage::length(viewport_scrollbar_insets.top),
-            bottom: taffy::LengthPercentage::length(viewport_scrollbar_insets.bottom),
+            left: taffy::LengthPercentage::length(insets.left),
+            right: taffy::LengthPercentage::length(insets.right),
+            top: taffy::LengthPercentage::length(insets.top),
+            bottom: taffy::LengthPercentage::length(insets.bottom),
         },
         ..Style::default()
-    };
+    }
 }
 
 /// Computes one numeric scrollbar-feedback iteration over the prepared tree.
@@ -222,7 +241,7 @@ where
 {
     prepared.restore_numeric_geometry(world);
     world.begin_numeric_layout_tracking();
-    update_viewport_layout_style(world, viewport);
+    update_viewport_layout_styles(world, viewport);
 
     let root = world.viewport_taffy_node();
     compute_root_layout(
@@ -233,6 +252,21 @@ where
             height: AvailableSpace::Definite(viewport.css_height as f32),
         },
     );
+    let fixed_root = world
+        .fixed_viewport_layout
+        .is_some()
+        .then(|| world.fixed_viewport_taffy_node());
+    if let Some(fixed_root) = fixed_root {
+        let (width, height) = viewport.frame_size();
+        compute_root_layout(
+            world,
+            fixed_root,
+            Size {
+                width: AvailableSpace::Definite(width as f32),
+                height: AvailableSpace::Definite(height as f32),
+            },
+        );
+    }
     prepared.capture_numeric_geometry(world);
     physicalize_vertical_block_flow(world);
     finish_positioned_static_layout(world, viewport, &prepared.positioned_static_sources);
@@ -240,6 +274,9 @@ where
     finish_form_control_contents(world);
     finish_outside_list_markers(world);
     round_layout_to_css_subpixels(world, root);
+    if let Some(fixed_root) = fixed_root {
+        round_layout_to_css_subpixels(world, fixed_root);
+    }
     // Outside markers deliberately are not numeric children of the list item,
     // otherwise Taffy would allocate them a normal-flow row. Round each
     // detached numeric root explicitly so paint consumes the geometry written
@@ -443,6 +480,7 @@ fn scale_layout(layout: Layout, factor: f32) -> Layout {
 
 fn prepare_layout_tree<N>(
     world: &mut LayoutWorld<N>,
+    separate_fixed_viewport: bool,
 ) -> (Vec<PositionedStaticSource>, Vec<LayoutBoxId>)
 where
     N: Copy + Debug + Eq + Hash,
@@ -493,9 +531,9 @@ where
         };
         let inline_owner = layout_box.inline_context_owner;
         let is_flattened = layout_box.inline_flattened;
-        let is_positioned = world.boxes[id.index()].style.is_absolute_positioned()
-            || world.boxes[id.index()].style.is_fixed_positioned();
-        let positioned_containing_block = if world.boxes[id.index()].style.is_fixed_positioned() {
+        let is_fixed = layout_box.style.is_fixed_positioned();
+        let is_positioned = layout_box.style.is_absolute_positioned() || is_fixed;
+        let positioned_containing_block = if is_fixed {
             nearest_fixed_containing_block(world, Some(original_parent))
         } else if world.boxes[id.index()].style.is_absolute_positioned() {
             nearest_positioned_ancestor(world, Some(original_parent))
@@ -595,6 +633,12 @@ where
                     continue;
                 }
                 world.boxes[parent.index()].layout_children.push(id);
+            } else if is_fixed && separate_fixed_viewport {
+                world
+                    .fixed_viewport_layout
+                    .get_or_insert_with(Default::default)
+                    .children
+                    .push(id);
             } else {
                 world.viewport_layout.children.push(id);
             }
@@ -1149,11 +1193,16 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let Some(containing_block) = world.boxes[child.index()].positioned_containing_block else {
+        let (width, height) = if world.boxes[child.index()].style.is_fixed_positioned() {
+            viewport.frame_size()
+        } else {
+            (viewport.css_width, viewport.css_height)
+        };
         return PositionedContainingArea {
             origin: Point::ZERO,
             size: Size {
-                width: viewport.css_width as f32,
-                height: viewport.css_height as f32,
+                width: width as f32,
+                height: height as f32,
             },
             direction: world.boxes[world.root.index()].style.taffy.direction,
             writing_mode: world.boxes[world.root.index()].style.writing_mode(),
@@ -1546,8 +1595,8 @@ where
         Self: 'a;
 
     fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_> {
-        if self.is_viewport_taffy_node(parent_node_id) {
-            ChildIter(self.viewport_layout.children.iter())
+        if let Some(viewport) = self.viewport_layout_for_node(parent_node_id) {
+            ChildIter(viewport.children.iter())
         } else {
             ChildIter(
                 self.boxes[LayoutBoxId::from_taffy(parent_node_id).index()]
@@ -1558,8 +1607,8 @@ where
     }
 
     fn child_count(&self, parent_node_id: NodeId) -> usize {
-        if self.is_viewport_taffy_node(parent_node_id) {
-            self.viewport_layout.children.len()
+        if let Some(viewport) = self.viewport_layout_for_node(parent_node_id) {
+            viewport.children.len()
         } else {
             self.boxes[LayoutBoxId::from_taffy(parent_node_id).index()]
                 .layout_children
@@ -1568,8 +1617,8 @@ where
     }
 
     fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId {
-        if self.is_viewport_taffy_node(parent_node_id) {
-            self.viewport_layout.children[child_index].to_taffy()
+        if let Some(viewport) = self.viewport_layout_for_node(parent_node_id) {
+            viewport.children[child_index].to_taffy()
         } else {
             self.boxes[LayoutBoxId::from_taffy(parent_node_id).index()].layout_children[child_index]
                 .to_taffy()
@@ -1590,8 +1639,8 @@ where
     type CustomIdent = Atom;
 
     fn get_core_container_style(&self, node_id: NodeId) -> Self::CoreContainerStyle<'_> {
-        if self.is_viewport_taffy_node(node_id) {
-            &self.viewport_layout.style
+        if let Some(viewport) = self.viewport_layout_for_node(node_id) {
+            &viewport.style
         } else {
             &self.boxes[LayoutBoxId::from_taffy(node_id).index()]
                 .style
@@ -1638,9 +1687,9 @@ where
     }
 
     fn get_resolved_aspect_ratio(&self, node_id: NodeId) -> Option<taffy::ResolvedAspectRatio> {
-        if self.is_viewport_taffy_node(node_id) {
-            return self.viewport_layout.style.aspect_ratio.and_then(|ratio| {
-                taffy::ResolvedAspectRatio::new(ratio, self.viewport_layout.style.box_sizing)
+        if let Some(viewport) = self.viewport_layout_for_node(node_id) {
+            return viewport.style.aspect_ratio.and_then(|ratio| {
+                taffy::ResolvedAspectRatio::new(ratio, viewport.style.box_sizing)
             });
         }
         self.boxes[LayoutBoxId::from_taffy(node_id).index()].resolved_aspect_ratio()
@@ -1651,8 +1700,8 @@ where
     }
 
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
-        if self.is_viewport_taffy_node(node_id) {
-            self.viewport_layout.unrounded_layout = *layout;
+        if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
+            viewport.unrounded_layout = *layout;
         } else {
             let id = LayoutBoxId::from_taffy(node_id);
             if self.boxes[id.index()].unrounded_layout != *layout {
@@ -1747,8 +1796,8 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     fn cache_get(&mut self, node_id: NodeId, inputs: &LayoutInput) -> Option<LayoutOutput> {
-        if self.is_viewport_taffy_node(node_id) {
-            self.viewport_layout.cache.get(inputs)
+        if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
+            viewport.cache.get(inputs)
         } else {
             self.numeric_cache(LayoutBoxId::from_taffy(node_id))
                 .and_then(|cache| cache.get(inputs))
@@ -1760,8 +1809,8 @@ where
             // Taffy's store ignores this mode; avoid allocating an empty cache.
             return;
         }
-        if self.is_viewport_taffy_node(node_id) {
-            self.viewport_layout.cache.store(inputs, output);
+        if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
+            viewport.cache.store(inputs, output);
         } else {
             let id = LayoutBoxId::from_taffy(node_id);
             if inputs.run_mode == RunMode::PerformLayout {
@@ -1775,8 +1824,8 @@ where
     }
 
     fn cache_clear(&mut self, node_id: NodeId) {
-        if self.is_viewport_taffy_node(node_id) {
-            self.viewport_layout.cache.clear();
+        if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
+            viewport.cache.clear();
         } else {
             self.clear_layout_caches(LayoutBoxId::from_taffy(node_id));
         }
@@ -1941,16 +1990,16 @@ where
     }
 
     fn get_unrounded_layout(&self, node_id: NodeId) -> Layout {
-        if self.is_viewport_taffy_node(node_id) {
-            self.viewport_layout.unrounded_layout
+        if let Some(viewport) = self.viewport_layout_for_node(node_id) {
+            viewport.unrounded_layout
         } else {
             self.boxes[LayoutBoxId::from_taffy(node_id).index()].unrounded_layout
         }
     }
 
     fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout) {
-        if self.is_viewport_taffy_node(node_id) {
-            self.viewport_layout.final_layout = *layout;
+        if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
+            viewport.final_layout = *layout;
         } else {
             let id = LayoutBoxId::from_taffy(node_id);
             if self.boxes[id.index()].final_layout != *layout {

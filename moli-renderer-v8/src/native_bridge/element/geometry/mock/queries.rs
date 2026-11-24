@@ -289,7 +289,7 @@ fn mock_intersection_geometry(
     root: Option<DomHandle>,
 ) -> Option<LayoutIntersectionGeometry> {
     let target_rect = mock_layout_client_rect_for_node(runtime, target)?;
-    let viewport = runtime.layout_viewport_for_document(document);
+    let (width, height) = runtime.layout_viewport_for_document(document).frame_size();
     let root_rect = root
         .and_then(|root| mock_layout_client_rect_for_node(runtime, root))
         .map(quad_from_client_rect)
@@ -297,8 +297,8 @@ fn mock_intersection_geometry(
             moli_layout::LayoutTransform2D::IDENTITY.map_rect(moli_layout::LayoutRect::new(
                 0.0,
                 0.0,
-                viewport.css_width as f32,
-                viewport.css_height as f32,
+                width as f32,
+                height as f32,
             ))
         });
     let root_is_layout_ancestor = root.is_none_or(|root| {

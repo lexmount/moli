@@ -600,6 +600,115 @@ async fn websocket_mobile_root_scrolls_using_frame_size() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_mobile_fixed_layout_and_intersection_use_the_frame() {
+    let html = r#"<!doctype html>
+        <meta name="viewport" content="width=980, minimum-scale=1">
+        <style>
+        html,body { margin: 0; background: white; }
+        #flow { width: 100vw; height: 10px; }
+        #fixed { position: fixed; right: 0; bottom: 0; width: 20px; height: 20px; background: red; z-index: 1; }
+        #percent { position: fixed; right: 20%; width: 40%; height: 25%; }
+        #container { position: absolute; left: 50px; top: 120px; width: 200px; height: 100px; transform: translate(0); }
+        #nested { position: fixed; right: 0; bottom: 0; width: 20px; height: 20px; }
+        #absolute { position: absolute; right: 0; bottom: 0; width: 20px; height: 20px; }
+        #target { position: absolute; left: 500px; top: 10px; width: 50px; height: 20px; }
+        </style>
+        <div id="flow"></div><div id="percent"></div><div id="fixed"></div>
+        <div id="container"><div id="nested"></div></div>
+        <div id="absolute"></div><div id="target"></div>"#;
+    let url = format!(
+        "data:text/html,{}",
+        percent_encoding::utf8_percent_encode(html, percent_encoding::NON_ALPHANUMERIC),
+    );
+    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        let (addr, server) = spawn_test_protocol_server_with_layout_policy(policy).await;
+        let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+            .await
+            .unwrap();
+        let target = open_screenshot_target(&mut socket, &url).await;
+        let session = target.session_id.as_str();
+        let applied = send_cdp_command(
+            &mut socket,
+            7,
+            "Emulation.setDeviceMetricsOverride",
+            Some(session),
+            json!({"width":375,"height":667,"deviceScaleFactor":1,"mobile":true}),
+        )
+        .await;
+        assert_cdp_success(&applied, 7);
+        let before = capture_png(&mut socket, session, 8).await;
+        let (width, height, pixels) = decode_png(&before);
+        assert_eq!((width, height), (375, 667), "{policy:?}");
+        assert_eq!(
+            pixel(&pixels, width, 365, 657),
+            [255, 0, 0, 255],
+            "{policy:?}"
+        );
+
+        let measured = send_cdp_command(
+            &mut socket,
+            9,
+            "Runtime.evaluate",
+            Some(session),
+            json!({"returnByValue":true,"awaitPromise":true,"expression":r#"
+                (async () => {
+                    const rects = ['fixed', 'percent', 'nested', 'absolute', 'flow'].map(id => {
+                        const {x, y, width, height} = document.getElementById(id).getBoundingClientRect();
+                        return [x, y, width, height];
+                    });
+                    const intersections = await Promise.all(['0px', '0px 40% 0px 0px'].map(rootMargin =>
+                        new Promise(resolve => {
+                            new IntersectionObserver(([entry], observer) => {
+                                observer.disconnect();
+                                resolve([entry.rootBounds.width, entry.rootBounds.height,
+                                    entry.isIntersecting, entry.intersectionRatio]);
+                            }, {rootMargin}).observe(document.getElementById('target'));
+                        })
+                    ));
+                    return [rects, intersections];
+                })()
+            "#}),
+        )
+        .await;
+        assert_cdp_success(&measured, 9);
+        assert_eq!(
+            response_by_id(&measured, 9)["result"]["result"]["value"],
+            json!([
+                [
+                    [355, 647, 20, 20],
+                    [150, 10, 150, 166.75],
+                    [230, 200, 20, 20],
+                    [960, 1723, 20, 20],
+                    [0, 0, 980, 10]
+                ],
+                [[375, 667, false, 0], [525, 667, true, 0.5]],
+            ]),
+            "{policy:?}",
+        );
+
+        let scrolled = send_cdp_command(
+            &mut socket,
+            10,
+            "Runtime.evaluate",
+            Some(session),
+            json!({"expression":"window.scrollTo(605,1076)"}),
+        )
+        .await;
+        assert_cdp_success(&scrolled, 10);
+        let after = capture_png(&mut socket, session, 11).await;
+        let (width, height, pixels) = decode_png(&after);
+        assert_eq!((width, height), (375, 667), "{policy:?}");
+        assert_eq!(
+            pixel(&pixels, width, 365, 657),
+            [255, 0, 0, 255],
+            "{policy:?}"
+        );
+        let _ = socket.close(None).await;
+        abort_test_cdp_server(server).await;
+    }
+}
+
 #[tokio::test]
 async fn websocket_cdp_highlights_and_following_queries_complete_while_paused() {
     let (addr, server) = spawn_test_protocol_server().await;
