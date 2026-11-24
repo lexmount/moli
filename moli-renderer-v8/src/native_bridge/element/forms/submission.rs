@@ -1,6 +1,4 @@
 use super::*;
-use crate::dom::native::DocumentReadyState;
-use crate::frame_owner_model::MainDocumentLoadCompletionState;
 use crate::native_bridge::context_host::ChildBrowsingContextNavigationRequest;
 use crate::native_bridge::element::NodePublicEventDispatchOutcome;
 #[cfg(feature = "devtools")]
@@ -16,7 +14,6 @@ use moli_encoding::{
     encode_text_for_legacy_web, form_submission_encoding, form_urlencoded_serialize_pairs,
     is_charset_sentinel_name,
 };
-use moli_page_types::NavigationHistoryMutation;
 use url::Url;
 
 /// Runs the control's Enter default action, including its beforeinput gate.
@@ -737,30 +734,6 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     }
 }
 
-fn top_level_form_history_mutation(
-    runtime: &PageScriptHost,
-    form_document: DomHandle,
-    destination: &str,
-) -> NavigationHistoryMutation {
-    // The Complete ready state precedes delivery of the window load event.
-    let form_is_loading = form_document == runtime.document_handle()
-        && runtime.current_main_document_task_owner().map_or_else(
-            || runtime.host_document().ready_state() != DocumentReadyState::Complete,
-            |owner| {
-                runtime.current_main_document_load_completion_state(owner)
-                    != Some(MainDocumentLoadCompletionState::Completed)
-            },
-        );
-    if form_is_loading
-        || runtime.main_document_is_initial_empty()
-        || destination.starts_with("javascript:")
-    {
-        NavigationHistoryMutation::Replace
-    } else {
-        NavigationHistoryMutation::Push
-    }
-}
-
 fn submit_dialog_form(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -1046,6 +1019,7 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                     }),
                     None,
                 );
+                runtime.set_pending_location_navigation_history(navigation.mutation);
                 if navigation.related_source.is_none() {
                     crate::context_bootstrap::web_mcp::bind_root_navigation(
                         runtime,

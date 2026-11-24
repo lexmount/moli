@@ -34,8 +34,8 @@ use super::navigation_result::{
 use super::navigation_traversal_execution::queue_navigation_traversal_with_result;
 use super::navigation_traversal_plan::{
     HistoryDeltaTraversalPlan, JointTraversalPlan, NavigationTraversalPlan,
-    history_delta_traversal_target,
-    navigation_delta_traversal_plan, navigation_index_traversal_plan,
+    history_delta_traversal_target, navigation_delta_traversal_plan,
+    navigation_index_traversal_plan,
 };
 use super::navigation_window::{
     navigation_can_update_current_entry, navigation_document_is_live,
@@ -642,9 +642,9 @@ pub(crate) fn queue_viewport_history_traversal_by_delta(
         let Some(host) = context_host_ptr_from_global_bridge(scope) else {
             return false;
         };
-        unsafe { &mut *host }.record_pending_location_navigation(url, Some(seed));
+        unsafe { &mut *host }.record_pending_location_navigation(url, Some(seed), None);
     } else {
-        super::navigation_traversal_coordinator::queue_plan(scope, plan);
+        return queue_top_level_history_traversal_by_delta(scope, delta);
     }
     true
 }

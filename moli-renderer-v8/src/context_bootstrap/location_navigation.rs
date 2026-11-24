@@ -90,6 +90,7 @@ pub(crate) fn resolve_cross_window_location_target(
 }
 
 pub(crate) struct HyperlinkNavigationOptions {
+    pub(crate) kind: LocationNavigationKind,
     pub(crate) source_document: crate::document_runtime::DomHandle,
     pub(crate) user_initiated: bool,
     pub(crate) source_can_access_target: bool,
@@ -107,7 +108,7 @@ pub(crate) fn navigate_location_object_for_hyperlink<'s>(
     navigate_location_object_with_options(
         scope,
         location,
-        LocationNavigationKind::Assign,
+        options.kind,
         Some(href.to_owned()),
         LocationNavigationOptions {
             source_element: Some(source_element),
@@ -1217,7 +1218,8 @@ fn navigate_top_level_cross_document_location<'s>(
     } else {
         history_entry_seed_for_location_kind(scope, owner, &resolved, kind)
     };
-    unsafe { &mut *host_ptr }.record_pending_location_navigation_with_kind(
+    let host = unsafe { &mut *host_ptr };
+    host.record_pending_location_navigation_with_kind(
         resolved,
         entry_seed,
         if matches!(kind, LocationNavigationKind::Reload) {
@@ -1228,6 +1230,17 @@ fn navigate_top_level_cross_document_location<'s>(
         navigation_source,
         about_document_state,
     );
+    if browser_owned_hyperlink {
+        match kind {
+            LocationNavigationKind::Assign => {
+                host.set_pending_location_navigation_history(NavigationHistoryMutation::Push);
+            }
+            LocationNavigationKind::Replace => {
+                host.set_pending_location_navigation_history(NavigationHistoryMutation::Replace);
+            }
+            LocationNavigationKind::Reload => {}
+        }
+    }
 }
 
 /// Cross-origin Location functions are borrowable onto any concrete Location.
@@ -1568,15 +1581,18 @@ fn child_history_entry_seed_for_location(
     let mut seed = host
         .child_browsing_context_navigation_seed_snapshot(handle)?
         .committed_navigation_entry_seed;
+    let source = moli_page_types::NavigationSourceDocument::from_initial_empty(
+        host.child_current_document_is_initial_empty(handle),
+    );
     match kind {
         LocationNavigationKind::Assign => {
-            apply_child_browsing_context_navigation_to_entry_seed(&mut seed, destination);
+            apply_child_browsing_context_navigation_to_entry_seed(&mut seed, destination, source);
         }
         LocationNavigationKind::Replace => {
-            replace_child_browsing_context_navigation_in_entry_seed(&mut seed, destination);
+            replace_child_browsing_context_navigation_in_entry_seed(&mut seed, destination, source);
         }
         LocationNavigationKind::Reload => {
-            return reload_navigation_seed(seed.entries, seed.current_index);
+            return reload_navigation_seed(seed.entries, seed.current_index, source);
         }
     }
     Some(seed)

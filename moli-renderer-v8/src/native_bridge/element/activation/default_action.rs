@@ -25,7 +25,6 @@ use crate::{
     native_bridge::{CurrentInputEvent, InputNavigationPolicy, navigation_policy_from_event},
     runtime::RendererDocumentLifecycleIdentity,
 };
-use moli_page_types::NavigationHistoryMutation;
 
 use super::super::super::PageScriptHost;
 use super::super::details_dialog::{closed_details_child_participates, run_dialog_command_steps};

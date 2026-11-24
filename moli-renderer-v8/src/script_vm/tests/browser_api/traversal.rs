@@ -45,12 +45,28 @@ fn noop_history_traversal_preserves_pending_location_navigation() {
     }
 }
 
-#[test]
-fn top_level_history_back_delegates_to_the_browser_history_controller() {
+#[tokio::test]
+async fn top_level_history_back_delegates_to_the_browser_history_controller() {
     let url = "https://browser-owned-history.test/current";
-    let mut vm = new_storage_test_vm(url);
-    // Previous and next entries exist in joint history but have no local
-    // Document projection. They still require the browser's history controller.
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(url, &loader);
+
+    vm.eval("history.back(); 'queued'")
+        .expect("hidden renderer bookkeeping entry should delegate to the browser");
+    assert!(vm.take_pending_top_level_history_traversal().is_none());
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert!(!vm.has_pending_location_navigation());
+    assert_eq!(
+        vm.take_pending_top_level_history_traversal()
+            .expect("browser-owned back traversal request")
+            .delta,
+        -1
+    );
+
     vm.install_navigation_bootstrap_entry(Some(browser_owned_history_seed(url)));
     assert_eq!(
         vm.eval("String(history.length)")
@@ -59,6 +75,12 @@ fn top_level_history_back_delegates_to_the_browser_history_controller() {
     );
     vm.eval("history.back(); 'queued'")
         .expect("unknown browser-side back entry should queue");
+    assert!(vm.take_pending_top_level_history_traversal().is_none());
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
 
     assert!(!vm.has_pending_location_navigation());
     assert_eq!(
@@ -70,6 +92,12 @@ fn top_level_history_back_delegates_to_the_browser_history_controller() {
 
     vm.eval("history.forward(); 'queued'")
         .expect("unknown browser-side forward entry should queue");
+    assert!(vm.take_pending_top_level_history_traversal().is_none());
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
     assert_eq!(
         vm.take_pending_top_level_history_traversal()
             .expect("browser-owned forward traversal request")

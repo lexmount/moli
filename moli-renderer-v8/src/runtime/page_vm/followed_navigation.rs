@@ -1012,10 +1012,10 @@ impl PageVm {
         let request_body = pending.request_body.clone();
         let request_headers = pending.request_headers.clone();
         let browser_navigation_kind = pending.browser_navigation_kind;
-        let navigation_history = pending.entry_seed.as_ref().map(|seed| {
+        let navigation_history = navigation_bootstrap_entry.map(|seed| {
             self.vm()
                 .top_level_navigation_history()
-                .request(seed.clone())
+                .request(seed)
                 .with_about_document_state(pending.about_document_state.clone())
         });
         let about_document_state = navigation_history.as_ref().map_or_else(
@@ -1898,6 +1898,7 @@ mod tests {
             0,
             &requested,
             NavigationHistoryMutation::Push,
+            moli_page_types::NavigationSourceDocument::NonInitial,
         );
         let activation = seed.activation.as_ref().unwrap();
         let key = activation.entry.key.clone();

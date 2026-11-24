@@ -921,7 +921,7 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
     user_initiated: bool,
     popup_disposition: RendererPopupDisposition,
 ) -> bool {
-    use crate::native_bridge::OwnerDispatchScope;
+    use crate::{context_bootstrap::LocationNavigationKind, native_bridge::OwnerDispatchScope};
     if !element_javascript_url_allowed_by_csp(scope, runtime_ptr, source_handle, resolved_url) {
         return true;
     }
@@ -955,6 +955,27 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
     }
     let Some(document) = runtime.dom_host().owner_document_handle(source_handle) else {
         return false;
+    };
+    let kind = if matches!(
+        target,
+        ExistingHyperlinkTarget::Local(OwnerDispatchScope::Top)
+    ) && let Ok(destination) = url::Url::parse(resolved_url)
+    {
+        let target_document = runtime.document_handle();
+        let same_url_from_same_origin = &destination == runtime.document_url()
+            && (document == target_document
+                || runtime.document_security_origin(document)
+                    == runtime.document_security_origin(target_document));
+        if runtime.main_document_is_initial_empty()
+            || destination.scheme() == "javascript"
+            || same_url_from_same_origin
+        {
+            LocationNavigationKind::Replace
+        } else {
+            LocationNavigationKind::Assign
+        }
+    } else {
+        LocationNavigationKind::Assign
     };
     let initiator_url = runtime.document_url_for_handle(document);
     let Some(policy) = runtime.document_policy_container_for_inheritance(source) else {
@@ -1045,6 +1066,7 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
         resolved_url,
         source_element,
         crate::context_bootstrap::HyperlinkNavigationOptions {
+            kind,
             source_document: document,
             user_initiated,
             source_can_access_target: can_access,

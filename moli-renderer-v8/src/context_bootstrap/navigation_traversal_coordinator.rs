@@ -190,6 +190,7 @@ pub(super) fn execute<'s>(
             super::navigation_cancellation::clear_pending_cross_document_navigation_for_window(
                 scope,
                 target.owner,
+                false,
             );
         }
         if validate(scope, &admission).is_none() {

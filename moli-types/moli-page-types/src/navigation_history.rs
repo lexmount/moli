@@ -1081,8 +1081,13 @@ mod tests {
         )
         .expect("traversal candidate");
         assert_eq!(
-            candidate.current_url.as_str(),
-            "https://example.test/current"
+            candidate
+                .seed
+                .activation
+                .as_ref()
+                .and_then(|activation| activation.from.as_ref())
+                .map(|entry| entry.url.as_str()),
+            Some("https://example.test/current")
         );
         assert_eq!(candidate.target_url.as_str(), "https://example.test/target");
         assert_eq!(candidate.seed.current_index, 1);

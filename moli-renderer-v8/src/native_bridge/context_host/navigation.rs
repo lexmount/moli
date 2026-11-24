@@ -1,4 +1,5 @@
-use super::PageScriptHost;
+use super::{OwnerDispatchScope, PageScriptHost};
+use crate::document_runtime::DomHandle;
 use crate::page_task_queue::RendererTopLevelNavigationHandoff;
 use crate::runtime::{
     RendererBrowserContextRuntime, RendererDocumentLifecycleIdentity,
@@ -210,7 +211,10 @@ impl PageScriptHost {
         user_initiated: bool,
     ) -> NavigationHistoryMutation {
         let (target_document, replaces_initial) = match target_scope {
-            OwnerDispatchScope::Top => (Some(self.document_handle()), false),
+            OwnerDispatchScope::Top => (
+                Some(self.document_handle()),
+                self.main_document_is_initial_empty(),
+            ),
             OwnerDispatchScope::Child(handle) => (
                 self.frame_owner_current_child_snapshot(handle)
                     .map(|s| s.document_handle),
@@ -232,7 +236,8 @@ impl PageScriptHost {
             .and_then(|source| self.window_access_origin_for_dispatch_scope(source))
             .zip(self.window_access_origin_for_dispatch_scope(target_scope))
             .is_some_and(|(source, target)| source.has_same_origin(&target));
-        let replaces_same_url = !user_initiated
+        let replaces_same_url = target_scope != OwnerDispatchScope::Top
+            && !user_initiated
             && same_origin
             && target_document
                 .is_some_and(|document| self.document_url_for_handle(document) == *destination);
