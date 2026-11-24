@@ -124,7 +124,11 @@ pub(crate) use self::image::{
     start_scanned_image_preload,
 };
 pub(in crate::network_host) use self::js_values::defined_object_string_property;
-#[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+#[cfg(all(
+    feature = "video",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
 pub(crate) use self::media::is_mp4_video_response;
 pub(crate) use self::media::{
     MediaElementResourceFetchStart, media_response_status_is_successful,

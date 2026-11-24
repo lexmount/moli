@@ -72,7 +72,11 @@ pub(in crate::native_bridge) fn media_video_width_getter_function<'s>(
         return;
     };
     let width = 0;
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     let width = unsafe { &*_host }
         .video_dimensions(_handle)
         .map_or(width, |(width, _)| width);
@@ -89,7 +93,11 @@ pub(in crate::native_bridge) fn media_video_height_getter_function<'s>(
         return;
     };
     let height = 0;
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     let height = unsafe { &*_host }
         .video_dimensions(_handle)
         .map_or(height, |(_, height)| height);

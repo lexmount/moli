@@ -20,7 +20,7 @@ test-support = []
 # Keep disabled for normal browser builds so page scripts do not see this test surface.
 wpt-extensions = []
 
-[target.'cfg(all(target_os = "linux", target_pointer_width = "64"))'.dependencies]
+[target.'cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))'.dependencies]
 moli-video = { path = "../moli-video", optional = true }
 
 [dependencies]

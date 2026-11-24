@@ -174,7 +174,7 @@ impl BrowserHost {
                 tabs.block_on(&runtime, async move {
                     let mut resources =
                         OptionalResourceFetchMask::IMAGE | OptionalResourceFetchMask::FONT;
-                    if cfg!(all(target_os = "linux", target_pointer_width = "64")) {
+                    if cfg!(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64")) {
                         resources |= OptionalResourceFetchMask::VIDEO;
                     }
                     let mut config = BrowserConfig::default()
@@ -1270,7 +1270,10 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     #[tokio::test]
     async fn default_host_loads_h264_video_from_http() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;

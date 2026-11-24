@@ -7,12 +7,12 @@ license.workspace = true
 [features]
 video = ["dep:anyhow", "dep:bytes", "dep:moli-image", "dep:parking_lot", "dep:rsmpeg"]
 
-[target.'cfg(all(target_os = "linux", target_pointer_width = "64"))'.dependencies]
+[target.'cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))'.dependencies]
 anyhow = { version = "1.0.100", optional = true }
 bytes = { version = "1", optional = true }
 moli-image = { path = "../moli-image", optional = true }
 parking_lot = { version = "0.12", optional = true }
-rsmpeg = { git = "https://github.com/lexmount/rsmpeg", rev = "1af0bdc68d9fdea8a1bd82ea0aa593e2b7579825", default-features = false, features = ["bundled_h264"], optional = true }
+rsmpeg = { git = "https://github.com/lexmount/rsmpeg", rev = "a9fb542d8e2f0ca45e5d53ebe7a5033bb6487d2e", default-features = false, features = ["bundled_h264"], optional = true }
 
 [lints]
 workspace = true

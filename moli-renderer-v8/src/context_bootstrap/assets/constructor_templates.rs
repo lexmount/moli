@@ -810,11 +810,15 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             v8::FunctionTemplate::builder(illegal_constructor_callback).build(scope)
         }
         ConstructorKind::MediaSource => {
-            #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "video",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
             use crate::context_bootstrap::media_source_playback::media_source_constructor_callback;
             #[cfg(not(all(
                 feature = "video",
-                target_os = "linux",
+                any(target_os = "linux", target_os = "macos"),
                 target_pointer_width = "64"
             )))]
             use moli_webapi::media_source::media_source_constructor_callback;

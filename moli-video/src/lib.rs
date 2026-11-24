@@ -1,4 +1,8 @@
-#![cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+#![cfg(all(
+    feature = "video",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
 
 mod fragmented;
 mod h264;

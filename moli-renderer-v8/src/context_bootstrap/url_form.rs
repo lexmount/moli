@@ -28,7 +28,11 @@ fn url_create_object_url_callback<'s>(
         );
         return;
     };
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     if let Some(source) = super::media_source_playback::media_source_object(scope, object)
         && let Some(host) = context_host_ptr_from_global_bridge(scope)
         && let Some(url) =
@@ -101,7 +105,11 @@ fn url_revoke_object_url_callback<'s>(
     if parsed.url.starts_with("blob:")
         && let Some(storage_key) = current_object_url_storage_key(scope)
     {
-        #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+        #[cfg(all(
+            feature = "video",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
         if let Some(host) = context_host_ptr_from_global_bridge(scope) {
             unsafe { &mut *host }.revoke_media_source_url(&parsed.url, &storage_key);
         }

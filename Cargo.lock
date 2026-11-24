@@ -8271,7 +8271,7 @@ dependencies = [
 [[package]]
 name = "rsmpeg"
 version = "0.18.0+ffmpeg.8.0"
-source = "git+https://github.com/lexmount/rsmpeg?rev=1af0bdc68d9fdea8a1bd82ea0aa593e2b7579825#1af0bdc68d9fdea8a1bd82ea0aa593e2b7579825"
+source = "git+https://github.com/lexmount/rsmpeg?rev=a9fb542d8e2f0ca45e5d53ebe7a5033bb6487d2e#a9fb542d8e2f0ca45e5d53ebe7a5033bb6487d2e"
 dependencies = [
  "bon",
  "paste",
@@ -8429,7 +8429,7 @@ dependencies = [
 [[package]]
 name = "rusty_ffmpeg"
 version = "0.17.0+ffmpeg.8.1"
-source = "git+https://github.com/lexmount/rusty_ffmpeg?rev=3b3221af6cdf3fa58d54c4f3de0c578ed2f57ec2#3b3221af6cdf3fa58d54c4f3de0c578ed2f57ec2"
+source = "git+https://github.com/lexmount/rusty_ffmpeg?rev=375ec5897617ed8083afca9d57f634b62cda73fe#375ec5897617ed8083afca9d57f634b62cda73fe"
 dependencies = [
  "bindgen 0.72.1",
  "camino",

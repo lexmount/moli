@@ -221,7 +221,11 @@ pub(in crate::native_bridge) fn media_playback_rate_setter_function<'s>(
         return;
     };
     let _ = unsafe { &mut *runtime_ptr }.set_media_playback_rate(handle, number);
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     unsafe { &mut *runtime_ptr }.update_video_clock(scope, handle);
     rv.set_undefined();
 }
@@ -243,7 +247,11 @@ pub(in crate::native_bridge) fn media_current_time_getter_function<'s>(
         .and_then(Node::as_element)
         .map(Element::media_current_time)
         .unwrap_or(0.0);
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     let value = unsafe { &*runtime_ptr }
         .video_current_time(handle)
         .unwrap_or(value);
@@ -265,7 +273,11 @@ pub(in crate::native_bridge) fn media_current_time_setter_function<'s>(
         return;
     };
     let number = number.max(0.0);
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     let number = number.min(
         unsafe { &*runtime_ptr }
             .video_duration(handle)
@@ -299,7 +311,11 @@ fn schedule_media_seek_completion(
         let _ = unsafe { &mut *runtime_ptr }.set_media_seeking(handle, false);
         return;
     }
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     {
         let host = unsafe { &mut *runtime_ptr };
         let position = host
@@ -355,7 +371,11 @@ pub(crate) fn dispatch_media_seek_completion(
     {
         return false;
     }
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     {
         crate::native_bridge::start_video_if_playing(scope, runtime_ptr, handle);
     }
@@ -403,7 +423,11 @@ pub(in crate::native_bridge) fn media_duration_getter_function<'s>(
         return;
     };
     let duration = f64::NAN;
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     let duration = unsafe { &*_host }
         .video_duration(_handle)
         .unwrap_or(duration);
@@ -420,9 +444,17 @@ pub(in crate::native_bridge) fn media_ended_getter_function<'s>(
         rv.set_bool(false);
         return;
     };
-    #[cfg(not(all(feature = "video", target_os = "linux", target_pointer_width = "64")))]
+    #[cfg(not(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    )))]
     let ended = false;
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     let ended = unsafe { &*_host }.video_ended(_handle);
     rv.set_bool(ended);
 }

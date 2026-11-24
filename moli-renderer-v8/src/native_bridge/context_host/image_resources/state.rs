@@ -368,7 +368,11 @@ impl ImageResourceStore {
         self.visual_generation.current()
     }
 
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     pub(in crate::native_bridge::context_host) fn bump_visual_generation(&self) {
         self.visual_generation.bump();
     }

@@ -405,7 +405,11 @@ pub(super) fn install_constructor_template_bindings<'s>(
     }
     install_media_cue_template_bindings(scope, template, spec.interface.name());
     install_media_source_template_bindings(scope, template, spec.interface.name());
-    #[cfg(all(feature = "video", target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "video",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
     crate::context_bootstrap::media_source_playback::install(
         scope,
         template,
