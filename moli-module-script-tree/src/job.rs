@@ -296,7 +296,14 @@ impl ModuleScriptTreeJob {
     ) -> ModuleScriptTreePoll {
         let snapshot = match host.module_dependencies(entry) {
             Ok(snapshot) => snapshot,
-            Err(error) => return self.fail(error),
+            Err(error) => {
+                if error.exception_id.is_some()
+                    && let Some(key) = error.key.as_deref().cloned()
+                {
+                    return self.finish_module_load_error(host, key, error);
+                }
+                return self.fail(error);
+            }
         };
         let snapshot = self.dependency_snapshot_with_tree_context(snapshot);
         if snapshot.requested_modules.is_empty() {
@@ -311,7 +318,14 @@ impl ModuleScriptTreeJob {
         };
         let candidates = match self.collect_dependency_candidates(host, &snapshot) {
             Ok(candidates) => candidates,
-            Err(error) => return self.fail(error),
+            Err(error) => {
+                let Some(cached) = host.cache_module_request_error(snapshot.key.clone(), &error)
+                else {
+                    return self.fail(error);
+                };
+                self.record_creation_error(snapshot.key, cached);
+                return self.finish_after_creation_error(host);
+            }
         };
 
         for candidate in candidates {

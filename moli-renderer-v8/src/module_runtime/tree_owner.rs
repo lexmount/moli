@@ -103,6 +103,11 @@ pub(crate) trait NativeModuleTreeDocumentOwnerAdapter {
 
     fn mark_module_failed(&mut self, key: ModuleMapKey, error: ModuleLoadError) -> ModuleEntryId;
 
+    fn preserve_module_load_error(
+        &mut self,
+        error: ModuleLoadError,
+    ) -> std::result::Result<ModuleLoadError, ModuleLoadError>;
+
     fn record_runtime_warning(&mut self, message: fmt::Arguments<'_>);
 }
 
@@ -235,6 +240,13 @@ impl<T: NativeModuleTreeDocumentOwnerAdapter + ?Sized> NativeModuleTreeDocumentO
         (*self).mark_module_failed(key, error)
     }
 
+    fn preserve_module_load_error(
+        &mut self,
+        error: ModuleLoadError,
+    ) -> std::result::Result<ModuleLoadError, ModuleLoadError> {
+        (*self).preserve_module_load_error(error)
+    }
+
     fn record_runtime_warning(&mut self, message: fmt::Arguments<'_>) {
         (*self).record_runtime_warning(message);
     }
@@ -285,6 +297,14 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> 
             .document_runtime
             .module_fetch_csp_context(key.url(), key.kind(), metadata))
     }
+    fn preserve_module_load_error(
+        &mut self,
+        error: ModuleLoadError,
+    ) -> std::result::Result<ModuleLoadError, ModuleLoadError> {
+        self.vm
+            .preserve_native_module_load_error(self.compile_frame_realm, error)
+    }
+
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,
@@ -462,6 +482,14 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeFrameDocumentOwner
                 )
             })
     }
+    fn preserve_module_load_error(
+        &mut self,
+        error: ModuleLoadError,
+    ) -> std::result::Result<ModuleLoadError, ModuleLoadError> {
+        self.vm
+            .preserve_native_module_load_error(Some(self.realm_id), error)
+    }
+
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,
