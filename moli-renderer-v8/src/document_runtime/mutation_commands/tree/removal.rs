@@ -186,6 +186,11 @@ impl DocumentRuntime {
         source_profile: TreeMutationSourceProfile,
     ) -> bool {
         let started = dom_binding_timing_started();
+        let selectedness = if self.dom_host.is_html_element_named(child, "option") {
+            self.option_selectedness_before_insert(std::slice::from_ref(&child))
+        } else {
+            Vec::new()
+        };
         let removal_plan = self.tree_removal_plan(host_ptr, parent, child);
         let prepublished_removals =
             self.break_on_dom_debugger_before_tree_removal(host_ptr, parent, child);
@@ -199,6 +204,11 @@ impl DocumentRuntime {
             prepublished_removals,
         );
         if changed {
+            self.preserve_selectedness_for_options_removed_from_select(
+                scope,
+                host_ptr,
+                &selectedness,
+            );
             self.dispatch_tree_removal_side_effects_after_change(
                 scope,
                 host_ptr,
