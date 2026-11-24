@@ -47,6 +47,82 @@ fn important_style_entry(name: &str, value: &str) -> StyleEntry {
 }
 
 #[test]
+fn preparsed_pdb_property_preserves_replacement_order_priority_and_shorthand_resets() {
+    use super::pdb_compat::{
+        apply_preparsed_pdb_property, parse_style_property_entries_with_pdb_block,
+    };
+
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+    for seed in [
+        "",
+        "color: blue; margin-left: 9px !important; margin-right: 8px; width: 7px !important; --token: old !important; padding: 1px;",
+        "all: initial; border: 1px solid red; font: 16px serif; background: blue;",
+    ] {
+        for (name, value) in [
+            ("left", "3px"),
+            ("width", "calc(2px + 3px)"),
+            ("font-size", "72px"),
+            ("font-weight", "700"),
+            ("color", "rgb(1, 2, 3)"),
+            ("margin", "1px 2px"),
+            ("padding", "3px 4px"),
+            ("border-color", "green"),
+            ("border", "1px solid green"),
+            ("font", "italic 14px serif"),
+            ("background", "red"),
+            ("transform", "translateX(3px)"),
+            ("--token", "new"),
+        ] {
+            for priority in [false, true] {
+                let parsed = parse_style_property_entries_with_pdb_block(name, value, priority)
+                    .expect("ordinary property should parse");
+                let native = parsed
+                    .native_block
+                    .expect("ordinary property should retain typed declarations");
+                let mut expected = moli_css_parse::parse_declaration_block(seed);
+                assert_ne!(
+                    expected
+                        .set_property_with_projection(name, value, priority)
+                        .set_result,
+                    moli_css_parse::CssSetResult::ParseError
+                );
+                let mut actual = moli_css_parse::parse_declaration_block(seed);
+                apply_preparsed_pdb_property(&mut actual, native);
+                assert_eq!(
+                    actual.css_text(),
+                    expected.css_text(),
+                    "{seed}; {name}: {value}, important={priority}"
+                );
+                assert_eq!(
+                    actual.property_priority(name),
+                    expected.property_priority(name)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn preparsed_pdb_property_keeps_unresolved_and_compatibility_adapters() {
+    use super::pdb_compat::parse_style_property_entries_with_pdb_block;
+
+    for (name, value) in [
+        ("all", "initial"),
+        ("margin", "var(--gap)"),
+        ("width", "env(safe-area-inset-left)"),
+        ("--token", "var(--other)"),
+        ("overflow", "overlay"),
+    ] {
+        let parsed = parse_style_property_entries_with_pdb_block(name, value, false)
+            .expect("adapter value should remain accepted");
+        assert!(
+            parsed.native_block.is_none(),
+            "{name}: {value} needs the adapter write path"
+        );
+    }
+}
+
+#[test]
 fn css_math_properties_reject_invalid_values_with_stylo_parser() {
     for (property, value) in [
         ("transform", "rotate(calc((0.25turn error)))"),

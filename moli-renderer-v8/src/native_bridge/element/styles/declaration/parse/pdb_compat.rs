@@ -672,17 +672,38 @@ pub(crate) fn parse_style_property_entries_with_pdb(
     value: &str,
     priority: bool,
 ) -> Option<ParsedStylePropertyEntries> {
+    parse_style_property_entries_with_pdb_block(name, value, priority).map(|parsed| parsed.entries)
+}
+
+/// Retain Stylo's typed declarations for an ordinary inline-property write.
+/// Compatibility and unresolved-value adapters keep their existing write path.
+pub(super) struct ParsedPdbStyleProperty {
+    pub(super) entries: ParsedStylePropertyEntries,
+    pub(super) native_block: Option<moli_css_parse::CssDeclarationBlock>,
+}
+
+pub(super) fn parse_style_property_entries_with_pdb_block(
+    name: &str,
+    value: &str,
+    priority: bool,
+) -> Option<ParsedPdbStyleProperty> {
     crate::style_engine::ensure_stylo_browser_compat_prefs();
     let name = canonical_style_property_name(name);
     if let Some(parsed) = parse_preferred_pdb_supplemental_entries(&name, value, priority) {
-        return Some(parsed);
+        return Some(ParsedPdbStyleProperty {
+            entries: parsed,
+            native_block: None,
+        });
     }
-    if let Some(parsed) = stylo_pdb_entries_for_property(&name, value, priority)
-        && !parsed.entries.is_empty()
+    if let Some(parsed) = stylo_pdb_entries_with_block_for_property(&name, value, priority)
+        && !parsed.entries.entries.is_empty()
     {
         return Some(parsed);
     }
-    parse_pdb_supplemental_entries(&name, value, priority)
+    parse_pdb_supplemental_entries(&name, value, priority).map(|entries| ParsedPdbStyleProperty {
+        entries,
+        native_block: None,
+    })
 }
 
 pub(super) fn stylo_pdb_entries_for_property(
@@ -690,6 +711,14 @@ pub(super) fn stylo_pdb_entries_for_property(
     value: &str,
     priority: bool,
 ) -> Option<ParsedStylePropertyEntries> {
+    stylo_pdb_entries_with_block_for_property(name, value, priority).map(|parsed| parsed.entries)
+}
+
+fn stylo_pdb_entries_with_block_for_property(
+    name: &str,
+    value: &str,
+    priority: bool,
+) -> Option<ParsedPdbStyleProperty> {
     if moli_css_parse::escape_top_level_semicolons(value) != value
         || moli_css_parse::split_important_priority(value).1
     {
@@ -703,6 +732,9 @@ pub(super) fn stylo_pdb_entries_for_property(
     let mut accepted_names = projection.stored_names.clone();
     append_unique_name(&mut accepted_names, name);
     let affected_names = projection.affected_names.clone();
+    let can_reuse_native_block = name != "all"
+        && !projection.has_unresolved_value
+        && !css_value_uses_unresolved_cssom_storage(value);
     let block_entries =
         if projection.has_unresolved_value || css_value_uses_unresolved_cssom_storage(value) {
             if !block.property_is_declared(name) {
@@ -738,10 +770,37 @@ pub(super) fn stylo_pdb_entries_for_property(
             priority: entry.priority,
         });
     }
-    Some(ParsedStylePropertyEntries {
-        entries,
-        affected_names,
+    Some(ParsedPdbStyleProperty {
+        entries: ParsedStylePropertyEntries {
+            entries,
+            affected_names,
+        },
+        native_block: can_reuse_native_block.then_some(block),
     })
+}
+
+pub(super) fn apply_preparsed_pdb_property(
+    block: &mut moli_css_parse::CssDeclarationBlock,
+    parsed: moli_css_parse::CssDeclarationBlock,
+) {
+    let parsed = parsed.into_inner();
+    let mut target = std::mem::take(block).into_inner();
+    // CSSOM replaces even an existing !important value. Remove all incoming
+    // longhands first, as set_property_with_projection does for the shorthand,
+    // then append the already parsed declarations with their exact importance.
+    for (declaration, _) in parsed.declaration_importance_iter() {
+        let property = match declaration.id() {
+            PropertyDeclarationId::Longhand(id) => PropertyId::NonCustom(id.into()),
+            PropertyDeclarationId::Custom(name) => PropertyId::Custom(name.clone()),
+        };
+        if let Some(first) = target.first_declaration_to_remove(&property) {
+            target.remove_property(&property, first);
+        }
+    }
+    for (declaration, importance) in parsed.declaration_importance_iter() {
+        target.push(declaration.clone(), importance);
+    }
+    *block = moli_css_parse::CssDeclarationBlock::new(target);
 }
 
 pub(super) fn css_value_uses_unresolved_cssom_storage(value: &str) -> bool {

@@ -8,12 +8,13 @@ use super::inline_state::{
     style_entry_is_replaceable_by_pdb_property,
 };
 use super::pdb_compat::{
-    css_value_uses_unresolved_cssom_storage, cssom_empty_specified_placeholder_property,
+    ParsedPdbStyleProperty, apply_preparsed_pdb_property, css_value_uses_unresolved_cssom_storage,
+    cssom_empty_specified_placeholder_property,
     cssom_style_property_uses_preferred_pdb_supplemental_entries,
     cssom_style_property_write_uses_pdb, inline_style_property_write_can_use_pdb_storage,
-    parse_style_property_entries_with_pdb, set_pdb_block_property_collecting_entries,
-    style_entry_affects_property_query, style_entry_is_pdb_supplemental_side_entry,
-    style_property_mutation_affected_names_with_pdb,
+    parse_style_property_entries_with_pdb, parse_style_property_entries_with_pdb_block,
+    set_pdb_block_property_collecting_entries, style_entry_affects_property_query,
+    style_entry_is_pdb_supplemental_side_entry, style_property_mutation_affected_names_with_pdb,
     style_property_mutation_cleanup_names_with_pdb,
 };
 use super::*;
@@ -160,7 +161,10 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             (parsed.entries, Vec::new())
         }
     } else {
-        let parsed = parse_style_property_entries_with_pdb(name, value, priority)?;
+        let ParsedPdbStyleProperty {
+            entries: parsed,
+            native_block,
+        } = parse_style_property_entries_with_pdb_block(name, value, priority)?;
         if parsed
             .entries
             .iter()
@@ -179,14 +183,19 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                 .collect::<Vec<_>>();
             let uses_preferred_supplemental_entries =
                 cssom_style_property_uses_preferred_pdb_supplemental_entries(name, value, priority);
-            let mut entries = set_pdb_block_property_collecting_entries(
-                &mut state.block,
-                name,
-                value,
-                priority,
-                &parsed,
-                uses_preferred_supplemental_entries,
-            )?;
+            let mut entries = if let Some(native_block) = native_block {
+                apply_preparsed_pdb_property(&mut state.block, native_block);
+                parsed.entries.clone()
+            } else {
+                set_pdb_block_property_collecting_entries(
+                    &mut state.block,
+                    name,
+                    value,
+                    priority,
+                    &parsed,
+                    uses_preferred_supplemental_entries,
+                )?
+            };
             for affected in style_property_mutation_cleanup_names_with_pdb(name) {
                 let _ = state.block.remove_property(&affected);
             }
@@ -222,8 +231,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         new_entries,
         new_side_entries,
     );
-    let css_text = state.css_text();
-    let resolution_text = state.style_resolution_text();
+    let (css_text, resolution_text) = state.css_text_and_style_resolution_text();
     if update_inline_style_base && let Some(inline_base_url) = &inline_base_url {
         unsafe { &mut *runtime_ptr }
             .set_element_inline_style_base_url(handle, inline_base_url.clone());
@@ -262,8 +270,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_
         inline_style_declaration_state_from_css_text(css_text, Some(&base_url))
     };
     state.refresh_pdb_entries();
-    let css_text = state.css_text();
-    let resolution_text = state.style_resolution_text();
+    let (css_text, resolution_text) = state.css_text_and_style_resolution_text();
     set_reflected_style_attribute_with_inline_base_url(scope, runtime_ptr, handle, &css_text, None);
     let runtime = unsafe { &mut *runtime_ptr };
     runtime.set_element_inline_style_resolution_text(handle, resolution_text);
