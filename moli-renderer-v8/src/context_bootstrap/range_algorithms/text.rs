@@ -2,7 +2,7 @@ use super::ordering::point_order_handles;
 use super::*;
 use crate::native_bridge::document::XHTML_NS;
 use crate::native_bridge::element::{
-    StyleMode, observable_sources_with_fragments, style_property_value,
+    StyleMode, StyleObservation, rendered_text_sources, style_property_value,
 };
 use crate::util::string_from_utf16_units_lossy;
 use std::{cmp::Ordering, collections::HashSet};
@@ -87,19 +87,18 @@ pub(super) fn range_selection_string_contents_for_boundaries(
     let mut text_sources = Vec::new();
     collect_selection_text_sources(runtime, root, &mut text_sources);
     let document = runtime.layout_document_for_source(start)?;
-    let rendered_text_sources =
-        match observable_sources_with_fragments(runtime, document, &text_sources) {
-            Ok(rendered) => rendered,
-            Err(moli_layout::LayoutError::NoLayoutSnapshot) => return Some(String::new()),
-            Err(error) => {
-                let message = format!("Layout failed while serializing Selection: {error}");
-                if let Some(message) = crate::util::v8_string(scope, &message) {
-                    let exception = v8::Exception::error(scope, message);
-                    scope.throw_exception(exception);
-                }
-                return None;
+    let mut styles = StyleObservation::new(runtime);
+    let rendered_text_sources = match rendered_text_sources(&mut styles, document, &text_sources) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            let message = format!("Layout failed while serializing Selection: {error}");
+            if let Some(message) = crate::util::v8_string(scope, &message) {
+                let exception = v8::Exception::error(scope, message);
+                scope.throw_exception(exception);
             }
-        };
+            return None;
+        }
+    };
     let root_state = SelectionTextState {
         active_modal_dialog: selection_text_active_modal_dialog(runtime, document),
         ..Default::default()

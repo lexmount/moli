@@ -532,6 +532,38 @@ fn exec_command_select_all_targets_editing_host_and_skips_inert_text() {
         r#"{"hostReturned":true,"hostHasEditableText":true,"hostHasPrecedingText":false,"hostHasFollowingText":false,"hostRangeSpansHost":true}"#
     );
 }
+
+#[test]
+fn select_all_includes_current_rendered_text_after_dom_replacement() {
+    let mut vm = new_storage_html_test_vm("https://select-all-after-edit.test/");
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+        (function* () {
+          document.body.innerHTML = '<p>outside</p><div contenteditable id="editor">old text</div>';
+          const editor = document.getElementById("editor");
+          editor.focus();
+          yield;
+
+          editor.innerHTML = 'before <textarea>control value</textarea>' +
+            '<span style="display:none">hidden</span>' +
+            '<span style="visibility:hidden">invisible</span>after';
+          const selection = getSelection();
+          selection.collapse(editor.firstElementChild, 0);
+          document.execCommand("selectAll");
+          return JSON.stringify([
+            document.activeElement === editor,
+            selection.anchorNode === editor,
+            String(selection)
+          ]);
+        })()
+        "#,
+    )
+    .expect("selectAll should serialize the current editable content");
+
+    assert_eq!(result, r#"[true,true,"before after"]"#);
+}
+
 #[test]
 fn exec_command_select_all_respects_modal_dialog_inertness() {
     let mut vm = new_storage_test_vm("https://exec-command-select-all-modal-dialog.test/");

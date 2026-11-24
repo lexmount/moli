@@ -92,6 +92,7 @@ mod popover;
 mod query;
 mod reflection;
 mod rendered_state;
+pub(crate) use rendered_state::{rendered_text_sources, svg_local_name_is_non_rendered_container};
 mod script_execution;
 mod shadow_dom;
 mod shared;
@@ -486,8 +487,7 @@ pub(super) use geometry::{
 pub(crate) use geometry::{
     observable_caret_position, observable_document_metrics, observable_event_offset,
     observable_geometry_batch, observable_hit_test, observable_hit_test_all,
-    observable_sources_with_fragments, published_geometry_batch, queue_scroll_observable_effects,
-    scroll_node_into_view_at_start,
+    published_geometry_batch, queue_scroll_observable_effects, scroll_node_into_view_at_start,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::{observable_deep_hit_test, scroll_node_into_view_at_center};
