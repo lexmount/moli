@@ -110,9 +110,11 @@ impl PageVm {
                 .queue_top_level_history_traversal_by_delta(delta)
                 .map(RendererPageReply::Bool),
             #[cfg(feature = "molio")]
-            RendererPageCommand::TraverseViewportHistory(delta) => self
+            RendererPageCommand::TraverseViewportHistory { delta, cancellation } => self
                 .vm_mut()
-                .queue_viewport_history_traversal_by_delta(delta)
+                .queue_viewport_navigation(cancellation, |vm| {
+                    vm.queue_viewport_history_traversal_by_delta(delta)
+                })
                 .map(RendererPageReply::ViewportNavigation),
             RendererPageCommand::RunPageSurfaceOverrideScript { source } => {
                 self.run_page_surface_override_script(&source)?;
@@ -374,9 +376,9 @@ impl PageVm {
                 Ok(RendererPageReply::Unit)
             }
             #[cfg(feature = "molio")]
-            RendererPageCommand::NavigateViewport(target) => self
+            RendererPageCommand::NavigateViewport { target, cancellation } => self
                 .vm_mut()
-                .navigate_top_level_from_browser(target)
+                .queue_viewport_navigation(cancellation, |vm| vm.navigate_top_level_from_browser(target))
                 .map(RendererPageReply::ViewportNavigation),
             #[cfg(feature = "molio")]
             RendererPageCommand::ReadViewportEditor => Ok(RendererPageReply::ViewportEditor(self.read_viewport_editor())),

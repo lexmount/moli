@@ -2,6 +2,25 @@ use super::*;
 
 impl ScriptVm {
     #[cfg(feature = "molio")]
+    pub(crate) fn queue_viewport_navigation(
+        &mut self,
+        cancellation: moli_fetch::FetchCancelHandle,
+        queue: impl FnOnce(&mut Self) -> Result<bool>,
+    ) -> Result<bool> {
+        if cancellation.is_cancelled() {
+            return Ok(false);
+        }
+        let previous = self.pending_location_navigation_handoff();
+        let queued = queue(self)?;
+        if queued {
+            self._context_host
+                .borrow_mut()
+                .set_viewport_navigation_cancellation(previous, cancellation);
+        }
+        Ok(queued)
+    }
+
+    #[cfg(feature = "molio")]
     pub(crate) fn navigate_top_level_from_browser(
         &mut self,
         target: Option<String>,

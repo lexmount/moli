@@ -51,7 +51,7 @@ pub use devtools::{
 };
 pub use moli_renderer_v8::RendererPageRequestPolicyUpdate;
 #[cfg(feature = "molio")]
-pub use viewport::ViewportFrames;
+pub use viewport::{PendingViewportNavigation, ViewportFrames};
 #[cfg(feature = "molio")]
 pub use viewport_buffer::{
     BufferedViewportFrames, ViewportBuffers, ViewportFrameRef, ViewportOutput, ViewportState,

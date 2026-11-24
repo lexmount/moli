@@ -1,4 +1,5 @@
 use anyhow::Result;
+use moli_fetch::FetchCancelHandle;
 use moli_page_types::ViewportSurface;
 use moli_renderer_v8::{
     RendererDevToolsPageReply, RendererPageNavigationState, RendererViewportCursor,
@@ -17,6 +18,21 @@ pub struct ViewportFrames {
     pub updates: watch::Receiver<Option<RendererViewportFrame>>,
     pub cursor: watch::Receiver<Option<RendererViewportCursor>>,
     pub resource_wake: Arc<Notify>,
+}
+
+pub struct PendingViewportNavigation {
+    pending: PendingPageCommand,
+    cancellation: FetchCancelHandle,
+}
+
+impl PendingViewportNavigation {
+    pub fn cancellation(&self) -> FetchCancelHandle {
+        self.cancellation.clone()
+    }
+
+    pub async fn wait(self) -> Result<CompletedPageCommand> {
+        self.pending.wait().await
+    }
 }
 
 impl Page {
@@ -118,8 +134,19 @@ impl Page {
     }
 
     /// Navigate the existing browsing context. `None` reloads its current entry.
-    pub fn start_viewport_navigation(&self, target: Option<String>) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::NavigateViewport(target))
+    pub fn start_viewport_navigation(
+        &self,
+        target: Option<String>,
+    ) -> Result<PendingViewportNavigation> {
+        let cancellation = FetchCancelHandle::new();
+        let pending = self.start_page_command(RendererPageCommand::NavigateViewport {
+            target,
+            cancellation: cancellation.clone(),
+        })?;
+        Ok(PendingViewportNavigation {
+            pending,
+            cancellation,
+        })
     }
 
     pub fn finish_viewport_navigation(&mut self, completion: CompletedPageCommand) -> Result<bool> {
@@ -129,14 +156,24 @@ impl Page {
         }
     }
 
+    pub fn start_viewport_history_traversal(
+        &self,
+        delta: i64,
+    ) -> Result<PendingViewportNavigation> {
+        let cancellation = FetchCancelHandle::new();
+        let pending = self.start_page_command(RendererPageCommand::TraverseViewportHistory {
+            delta,
+            cancellation: cancellation.clone(),
+        })?;
+        Ok(PendingViewportNavigation {
+            pending,
+            cancellation,
+        })
+    }
+
     pub async fn traverse_viewport_history(&mut self, delta: i64) -> Result<bool> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::TraverseViewportHistory(delta))
-            .await?;
-        let RendererPageReply::ViewportNavigation(traversed) = reply else {
-            anyhow::bail!("unexpected viewport history traversal reply");
-        };
-        Ok(traversed)
+        let pending = self.start_viewport_history_traversal(delta)?;
+        self.finish_viewport_navigation(pending.wait().await?)
     }
 
     /// Watch committed navigation state across Document replacements and visibility changes.
