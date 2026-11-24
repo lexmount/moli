@@ -1119,18 +1119,16 @@ impl ScriptVm {
         intercept_drags: bool,
         wheel_cancelable: bool,
         completion: MouseDispatchCompletion,
-        wheel_targets: Option<(
-            InputSurfaceHit,
-            Option<WheelScrollTarget>,
-            crate::wheel_input::PreparedWheel,
-        )>,
+        wheel: Option<(InputSurfaceHit, crate::wheel_input::PreparedWheel)>,
     ) -> Result<RendererInputDispatchOutcome> {
-        let (surface_hit, wheel_scroll_target, prepared_wheel) =
-            if let Some((hit, target, prepared)) = wheel_targets {
-                (hit, target, Some(prepared))
-            } else {
-                (self.mouse_input_surface_hit(x, y, event_name)?, None, None)
-            };
+        let (surface_hit, prepared_wheel) = if let Some((hit, prepared)) = wheel {
+            (hit, Some(prepared))
+        } else {
+            (self.mouse_input_surface_hit(x, y, event_name)?, None)
+        };
+        let wheel_scroll_target = prepared_wheel
+            .as_ref()
+            .and_then(|wheel| wheel.scroll_target.as_ref());
         let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
         let is_release = event_name == "mouseup";
         let full_release = is_release && prepared.buttons == 0;
@@ -1170,7 +1168,7 @@ impl ScriptVm {
             modifiers,
             intercept_drags,
             wheel_cancelable,
-            wheel_scroll_target.as_ref(),
+            wheel_scroll_target,
         );
         if is_release {
             self.suppress_compat_mouse_events = false;
@@ -1186,16 +1184,7 @@ impl ScriptVm {
             MouseDispatchCompletion::FinishTurn => self.finish_input_event_dispatch_turn(result),
             MouseDispatchCompletion::DeferToBatch => result,
         };
-        if let Some(mut prepared) = prepared_wheel {
-            if matches!(
-                wheel_outcome,
-                Some(
-                    RendererWheelDispatchOutcome::Scrolled
-                        | RendererWheelDispatchOutcome::Unconsumed
-                )
-            ) {
-                prepared.targets.scroll_target = wheel_scroll_target;
-            }
+        if let Some(prepared) = prepared_wheel {
             let document = self.wheel_document_owner();
             self.wheel_input
                 .borrow_mut()
@@ -1935,7 +1924,9 @@ impl ScriptVm {
                         dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
                     if event_name == "wheel" {
                         let wheel = if dispatched.allows_default() {
-                            let scrolled = if let Some(scroll_target) = wheel_scroll_target {
+                            let scrolled = if delta_x == 0.0 && delta_y == 0.0 {
+                                false
+                            } else if let Some(scroll_target) = wheel_scroll_target {
                                 perform_latched_wheel_scroll_default_action(
                                     scope,
                                     runtime_ptr,

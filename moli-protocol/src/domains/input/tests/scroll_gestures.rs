@@ -526,16 +526,18 @@ async fn scroll_gestures_share_a_page_queue_and_repeats_give_up_the_turn() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn scroll_gesture_releases_document_work_before_its_response() {
-    for (action, messages) in [
+    for (action, messages, scroll_y) in [
         (
             r#"location.href = "javascript:void(console.log('wheel javascript'))";"#,
             &["wheel javascript"][..],
+            "0",
         ),
         (
             r#"document.open();
-               document.write("<script>addEventListener('DOMContentLoaded',()=>console.log('wheel DCL'));addEventListener('load',()=>console.log('wheel load'));<\/script>");
+               document.write("<body style='height:6000px;margin:0'><script>addEventListener('DOMContentLoaded',()=>console.log('wheel DCL'));addEventListener('load',()=>console.log('wheel load'));addEventListener('wheel',()=>console.log('wheel after replacement'));<\/script>");
                document.close();"#,
-            &["wheel DCL", "wheel load"][..],
+            &["wheel DCL", "wheel load", "wheel after replacement"][..],
+            "2",
         ),
     ] {
         let mut ctx = fixture(&format!(
@@ -565,6 +567,7 @@ async fn scroll_gesture_releases_document_work_before_its_response() {
         ctx.expect_result(35000, json!({}), None);
         ctx.finish_held_command_response_flush_for_test(response_flush)
             .await;
+        assert_eq!(evaluate_string(&mut ctx, "String(scrollY)").await, scroll_y);
     }
 }
 
@@ -834,6 +837,48 @@ async fn scroll_gesture_validates_anchor_before_waiting_in_page_queue() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_scroll_gesture_binds_to_the_document_when_admitted() {
+    let mut ctx = fixture("").await;
+    let blocker = ctx.with_fixture(|conn| {
+        let owner = CommandOwnerScope::capture(conn, None);
+        conn.synthetic_scroll_admissions_for_owner(&owner)
+            .unwrap()
+            .reserve()
+    });
+    let raw = json!({"id":35000,"method":"Input.synthesizeScrollGesture",
+        "params":{"x":20,"y":20,"yDistance":-40,"speed":800,"gestureSourceType":"mouse"}})
+    .to_string();
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
+
+    // The bounds check was queued on the old Document, before this command.
+    // The gesture itself is still waiting for the Page's FIFO admission.
+    assert!(
+        evaluate_bool(&mut ctx, r#"
+            document.open();
+            document.write('<body style="margin:0;height:2400px"><div id="newScroller" style="width:160px;height:120px;overflow:auto"><div style="height:1800px">new page</div></div>');
+            document.close();
+            window.delta = 0;
+            newScroller.addEventListener('wheel', event => delta += event.deltaY);
+            true
+        "#).await
+    );
+    drop(blocker);
+
+    let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
+    assert!(
+        messages.contains(&json!({"id":35000,"result":{}})),
+        "{messages:?}"
+    );
+    assert!(
+        evaluate_bool(
+            &mut ctx,
+            "Math.abs(delta - 40) < 0.001 && Math.abs(newScroller.scrollTop - 40) < 0.001"
+        )
+        .await
+    );
+}
+
 async fn raw_wheel_during_synthetic(cancel_raw: bool) {
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -936,4 +981,59 @@ async fn scroll_gesture_raw_canceled_began_restores_blocking_dispatch() {
 #[tokio::test(flavor = "multi_thread")]
 async fn scroll_gesture_raw_uncanceled_began_enables_nonblocking_dispatch() {
     raw_wheel_during_synthetic(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_raw_began_hit_tests_without_replacing_the_scroll_latch() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut ctx = fixture(r#"
+                b.style.left = '200px';
+                b.style.display = 'block';
+                window.firstScroll = new Promise(resolve =>
+                    a.addEventListener('scroll', resolve, {once: true}));
+                window.rawWheel = null;
+                b.addEventListener('wheel', event => rawWheel = [event.deltaY, event.cancelable]);
+            "#).await;
+            let raw = json!({"id":35000,"method":"Input.synthesizeScrollGesture",
+                "params":{"x":20,"y":20,"yDistance":-300,"speed":300,"gestureSourceType":"mouse"}})
+            .to_string();
+            let CdpCommandTaskStep::Pending(pending) =
+                ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+            else {
+                panic!("gesture must wait for its wheel events");
+            };
+            let running = tokio::task::spawn_local(pending.wait());
+            ctx.process_async(json!({
+                "id":35011,"method":"Runtime.evaluate",
+                "params":{"expression":"firstScroll.then(() => true)","awaitPromise":true,"returnByValue":true}
+            })).await;
+            let response = ctx
+                .wait_for_scheduler_message("first default scroll", |message| message["id"] == 35011)
+                .await;
+            assert_eq!(response["result"]["result"]["value"], true, "{response}");
+            ctx.process_async(json!({
+                "id":35012,"method":"Input.dispatchMouseEvent",
+                "params":{"type":"mouseWheel","x":220,"y":20,"deltaX":0,"deltaY":100}
+            })).await;
+            ctx.expect_result(35012, json!({}), None);
+
+            let completed = ctx.drive_owned_wait(running).await.unwrap();
+            let step = ctx.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(
+                    completed,
+                    &mut CommandDispatchContext::default(),
+                )
+            });
+            let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
+            assert!(messages.contains(&json!({"id":35000,"result":{}})), "{messages:?}");
+            assert_eq!(
+                evaluate_string(&mut ctx, "JSON.stringify(rawWheel)").await,
+                "[100,true]"
+            );
+            let value = snapshot(&mut ctx).await;
+            assert!((value["a"].as_f64().unwrap() - 400.0).abs() < 0.001, "{value}");
+            assert_eq!(value["b"], 0, "{value}");
+        })
+        .await;
 }

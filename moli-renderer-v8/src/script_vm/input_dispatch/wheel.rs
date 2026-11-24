@@ -1,6 +1,6 @@
 use super::*;
 use crate::native_bridge::element::select_wheel_scroll_target;
-use crate::wheel_input::{WheelInput, WheelPhase, WheelSource, WheelTargets};
+use crate::wheel_input::{WheelEventTarget, WheelInput, WheelPhase, WheelSource};
 
 impl ScriptVm {
     pub(crate) fn wheel_document_owner(&self) -> Option<WindowDocumentTaskTarget> {
@@ -67,25 +67,28 @@ impl ScriptVm {
             return Ok(input_dispatch_outcome(false));
         };
         let mut prepared = self.wheel_input.borrow_mut().prepare(input, document);
-        let (hit, scroll_target) = match input.source {
-            WheelSource::Direct => {
-                let hit =
-                    self.mouse_input_surface_hit(input.position.0, input.position.1, "wheel")?;
-                (hit, None)
-            }
+        let (x, y) = input.position;
+        let hit = match input.source {
+            WheelSource::Direct => self.mouse_input_surface_hit(x, y, "wheel")?,
             WheelSource::Platform => {
-                let Some((hit, scroll_target)) = self.prepare_wheel_targets(
-                    &mut prepared.targets,
-                    input.position.0,
-                    input.position.1,
-                    input.delta.0,
-                    input.delta.1,
-                )?
+                let Some(target) =
+                    self.prepare_wheel_event_target(&mut prepared.event_target, x, y)?
                 else {
                     return self
                         .finish_input_event_dispatch_turn(Ok(input_dispatch_outcome(false)));
                 };
-                (hit, Some(scroll_target))
+                if prepared.scroll_target.is_none() && input.delta != (0.0, 0.0) {
+                    prepared.scroll_target = Some(select_wheel_scroll_target(
+                        &self._context_host.borrow(),
+                        target,
+                        input.delta.0,
+                        input.delta.1,
+                    )?);
+                }
+                InputSurfaceHit {
+                    target: Some(target),
+                    ..Default::default()
+                }
             }
         };
         self.dispatch_mouse_input_to_target(
@@ -102,18 +105,16 @@ impl ScriptVm {
             intercept_drags,
             prepared.cancelable,
             completion,
-            Some((hit, scroll_target, prepared)),
+            Some((hit, prepared)),
         )
     }
 
-    fn prepare_wheel_targets(
+    fn prepare_wheel_event_target(
         &self,
-        targets: &mut WheelTargets,
+        event_target: &mut Option<WheelEventTarget>,
         x: f64,
         y: f64,
-        delta_x: f64,
-        delta_y: f64,
-    ) -> Result<Option<(InputSurfaceHit, WheelScrollTarget)>> {
+    ) -> Result<Option<DomHandle>> {
         let runtime = self._context_host.borrow();
         let ancestors = |target| {
             std::iter::successors(Some(target), |node| {
@@ -121,46 +122,36 @@ impl ScriptVm {
             })
             .collect::<Vec<_>>()
         };
-        let current = targets.wheel.filter(|&(node, owner)| {
+        if let Some(target) = event_target.as_ref().filter(|target| {
             runtime
-                .input_document_for_owner(owner)
+                .input_document_for_owner(target.owner)
                 .is_some_and(|document| {
-                    runtime.dom_host().is_connected(node)
-                        && runtime.dom_host().owner_document_handle(node) == Some(document)
-                        && ancestors(node) == targets.ancestors
+                    runtime.dom_host().is_connected(target.node)
+                        && runtime.dom_host().owner_document_handle(target.node) == Some(document)
+                        && ancestors(target.node) == target.ancestors
                 })
+        }) {
+            return Ok(Some(target.node));
+        }
+        let Some(node) = self
+            .mouse_input_surface_hit(x, y, "wheel")?
+            .target
+            .or_else(|| runtime.dom_host().document_element_handle())
+        else {
+            return Ok(None);
+        };
+        let Some(owner) = runtime
+            .dom_host()
+            .owner_document_handle(node)
+            .and_then(|document| runtime.input_owner_for_document(document))
+        else {
+            return Ok(None);
+        };
+        *event_target = Some(WheelEventTarget {
+            node,
+            owner,
+            ancestors: ancestors(node),
         });
-        let target = if let Some((node, _)) = current {
-            node
-        } else {
-            let Some(target) = self
-                .mouse_input_surface_hit(x, y, "wheel")?
-                .target
-                .or_else(|| runtime.dom_host().document_element_handle())
-            else {
-                return Ok(None);
-            };
-            let Some(owner) = runtime
-                .dom_host()
-                .owner_document_handle(target)
-                .and_then(|document| runtime.input_owner_for_document(document))
-            else {
-                return Ok(None);
-            };
-            targets.wheel = Some((target, owner));
-            targets.ancestors = ancestors(target);
-            target
-        };
-        let scroll_target = match targets.scroll_target.clone() {
-            Some(scroll_target) => scroll_target,
-            None => select_wheel_scroll_target(&runtime, target, delta_x, delta_y)?,
-        };
-        Ok(Some((
-            InputSurfaceHit {
-                target: Some(target),
-                ..Default::default()
-            },
-            scroll_target,
-        )))
+        Ok(Some(node))
     }
 }

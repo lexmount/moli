@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-/// Command validation shared by repeats; no input semantics live here.
+/// Bounds validation spans the command. A round binds its own Document on dispatch.
 #[derive(Clone, Debug, Default)]
 pub struct RendererSyntheticWheelGesture {
     anchor_validated: Arc<AtomicBool>,
@@ -14,7 +14,10 @@ pub struct RendererSyntheticWheelGesture {
 
 impl RendererSyntheticWheelGesture {
     pub fn next_sequence(&self) -> Self {
-        self.clone()
+        Self {
+            anchor_validated: Arc::clone(&self.anchor_validated),
+            document: Arc::default(),
+        }
     }
 
     pub(crate) fn validate_anchor(&self, in_bounds: bool) -> bool {
@@ -26,8 +29,15 @@ impl RendererSyntheticWheelGesture {
         }
     }
 
-    pub(crate) fn accepts_document(&self, document: WindowDocumentTaskTarget) -> bool {
+    pub(crate) fn accepts_document(
+        &self,
+        document: WindowDocumentTaskTarget,
+        bind_if_unset: bool,
+    ) -> bool {
         let mut owner = self.document.lock();
-        *owner.get_or_insert(document) == document
+        if bind_if_unset {
+            owner.get_or_insert(document);
+        }
+        *owner == Some(document)
     }
 }

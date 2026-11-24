@@ -252,7 +252,7 @@ fn synthetic_wheel_round_cannot_follow_a_replaced_document() {
             .eval("document.open(); document.write('<body></body>'); document.close();")
             .unwrap();
         install(&mut page);
-        wheel(&mut page, &old_gesture.next_sequence(), 40.0, 0.0, 50.0).unwrap();
+        wheel(&mut page, &old_gesture, 40.0, 0.0, 50.0).unwrap();
         assert_eq!(
             page.vm_mut()
                 .eval("JSON.stringify([a.scrollTop,events])")
@@ -260,8 +260,8 @@ fn synthetic_wheel_round_cannot_follow_a_replaced_document() {
             "[0,[]]",
         );
 
-        let new_gesture = RendererSyntheticWheelGesture::default();
-        wheel(&mut page, &new_gesture, 40.0, 0.0, 40.0).unwrap();
+        let next_round = old_gesture.next_sequence();
+        wheel(&mut page, &next_round, 40.0, 0.0, 40.0).unwrap();
         assert_eq!(page.vm_mut().eval("String(a.scrollTop)").unwrap(), "40");
     });
 }
