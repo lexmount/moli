@@ -340,17 +340,7 @@ where
     world.boxes[id.index()].layout_parent.or(Some(world.root))
 }
 
-pub(crate) fn project_box<N>(
-    world: &LayoutWorld<N>,
-    viewport: LayoutViewport,
-    id: LayoutBoxId,
-) -> OverflowBoxGeometry
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let layout_box = &world.boxes[id.index()];
-    let layout = layout_box.final_layout;
-    let is_root = id == world.root;
+fn local_box_rects(layout: taffy::Layout) -> (LayoutRect, LayoutRect, LayoutRect) {
     let border_box = LayoutRect::new(
         0.0,
         0.0,
@@ -364,22 +354,64 @@ where
         layout.border.bottom,
         layout.border.left,
     );
-    let vertical_gutter = scrollbar_gutter_thickness(world, id, LayoutScrollbarAxis::Vertical);
-    let vertical_leading_gutter =
-        scrollbar_leading_gutter_thickness(world, id, LayoutScrollbarAxis::Vertical);
-    let horizontal_gutter = scrollbar_gutter_thickness(world, id, LayoutScrollbarAxis::Horizontal);
-    let horizontal_leading_gutter =
-        scrollbar_leading_gutter_thickness(world, id, LayoutScrollbarAxis::Horizontal);
-    let mut content_box = inset_rect(
+    let content_box = inset_rect(
         padding_box,
         layout.padding.top,
         layout.padding.right,
         layout.padding.bottom,
         layout.padding.left,
     );
+    (border_box, padding_box, content_box)
+}
+
+fn content_size_after_gutters(
+    content_box: LayoutRect,
+    vertical_gutter: f32,
+    horizontal_gutter: f32,
+) -> LayoutSize {
+    LayoutSize::new(
+        (content_box.width - vertical_gutter).max(0.0),
+        (content_box.height - horizontal_gutter).max(0.0),
+    )
+}
+
+pub(crate) fn query_content_box_size<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> LayoutSize
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let (_, _, content_box) = local_box_rects(world.boxes[id.index()].final_layout);
+    if id == world.root {
+        return LayoutSize::new(content_box.width, content_box.height);
+    }
+    content_size_after_gutters(
+        content_box,
+        scrollbar_gutter_thickness(world, id, LayoutScrollbarAxis::Vertical),
+        scrollbar_gutter_thickness(world, id, LayoutScrollbarAxis::Horizontal),
+    )
+}
+
+pub(crate) fn project_box<N>(
+    world: &LayoutWorld<N>,
+    viewport: LayoutViewport,
+    id: LayoutBoxId,
+) -> OverflowBoxGeometry
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let layout_box = &world.boxes[id.index()];
+    let layout = layout_box.final_layout;
+    let is_root = id == world.root;
+    let (border_box, padding_box, mut content_box) = local_box_rects(layout);
+    let vertical_gutter = scrollbar_gutter_thickness(world, id, LayoutScrollbarAxis::Vertical);
+    let vertical_leading_gutter =
+        scrollbar_leading_gutter_thickness(world, id, LayoutScrollbarAxis::Vertical);
+    let horizontal_gutter = scrollbar_gutter_thickness(world, id, LayoutScrollbarAxis::Horizontal);
+    let horizontal_leading_gutter =
+        scrollbar_leading_gutter_thickness(world, id, LayoutScrollbarAxis::Horizontal);
     if !is_root {
-        content_box.width = (content_box.width - vertical_gutter).max(0.0);
-        content_box.height = (content_box.height - horizontal_gutter).max(0.0);
+        let size = content_size_after_gutters(content_box, vertical_gutter, horizontal_gutter);
+        content_box.width = size.width;
+        content_box.height = size.height;
         content_box.x += vertical_leading_gutter;
         content_box.y += horizontal_leading_gutter;
     }
