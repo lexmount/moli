@@ -414,16 +414,15 @@ where
             .filter_map(|(index, layout_box)| {
                 let source = layout_box.source()?;
                 let axes = layout_box.size_query_axes()?;
-                let geometry = crate::overflow::project_box(
+                let size = crate::overflow::query_content_box_size(
                     world,
-                    self.prepared.request.viewport,
                     crate::LayoutBoxId::from_index(index),
                 );
                 Some((
                     source,
                     [
-                        axes.width.then_some(geometry.content_box.width),
-                        axes.height.then_some(geometry.content_box.height),
+                        axes.width.then_some(size.width),
+                        axes.height.then_some(size.height),
                     ],
                 ))
             })
