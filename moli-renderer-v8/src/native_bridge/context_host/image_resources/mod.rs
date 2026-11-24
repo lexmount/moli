@@ -442,7 +442,7 @@ impl super::PageScriptHost {
             if let Some(identity) = self.image_resources.identity(element).cloned() {
                 let _ = self.image_resources.fail(&identity);
             }
-            let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+            let Some(pending) = self.pending_image_load_event_mut(element) else {
                 return ImageResponseCompletion::Ignored;
             };
             pending.network_state = super::PendingImageLoadNetworkState::Failed(source);
@@ -451,7 +451,7 @@ impl super::PageScriptHost {
             };
         };
         let Some(identity) = self.image_resources.identity(element).cloned() else {
-            let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+            let Some(pending) = self.pending_image_load_event_mut(element) else {
                 return ImageResponseCompletion::Ignored;
             };
             pending.network_state = super::PendingImageLoadNetworkState::Failed(source);
@@ -475,7 +475,7 @@ impl super::PageScriptHost {
                     .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Image)
             });
         if decode_enabled && self.image_resources.complete_shared_ready(&identity) {
-            let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+            let Some(pending) = self.pending_image_load_event_mut(element) else {
                 return ImageResponseCompletion::Ignored;
             };
             pending.network_state = super::PendingImageLoadNetworkState::Ready(source);
@@ -505,7 +505,7 @@ impl super::PageScriptHost {
                     )
                 });
             if submission.is_ok() {
-                let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+                let Some(pending) = self.pending_image_load_event_mut(element) else {
                     return ImageResponseCompletion::Ignored;
                 };
                 pending.network_state = super::PendingImageLoadNetworkState::DecodeQueued(source);
@@ -524,7 +524,7 @@ impl super::PageScriptHost {
                 "image decode queue rejected the resource"
             );
             let _ = self.image_resources.fail(&identity);
-            let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+            let Some(pending) = self.pending_image_load_event_mut(element) else {
                 return ImageResponseCompletion::Ignored;
             };
             pending.network_state = super::PendingImageLoadNetworkState::Failed(source);
@@ -539,7 +539,7 @@ impl super::PageScriptHost {
         {
             return ImageResponseCompletion::Ignored;
         }
-        let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+        let Some(pending) = self.pending_image_load_event_mut(element) else {
             return ImageResponseCompletion::Ignored;
         };
         pending.network_state = super::PendingImageLoadNetworkState::Ready(source);
@@ -634,7 +634,7 @@ impl super::PageScriptHost {
                 false
             }
         };
-        let Some(pending) = self.pending_image_load_events.get_mut(&task_id.element()) else {
+        let Some(pending) = self.pending_image_load_event_mut(task_id.element()) else {
             return false;
         };
         if pending.id != task_id.sequence() {

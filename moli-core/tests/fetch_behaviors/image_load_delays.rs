@@ -120,6 +120,14 @@ async fn loading_became_eager_before_image_update_delays_window_load() -> Result
           const detachedLoaded = makeImage('detached', false);
           const connectedLoaded = makeImage('connected', true);
 
+          const replacement = new Image(4, 4);
+          const replacementLoaded = trackLoad(replacement, 'replacement');
+          replacement.loading = 'lazy';
+          replacement.src = '/superseded.svg';
+          queueMicrotask(() => { replacement.loading = 'eager'; });
+          replacement.src = '/replacement.svg';
+          document.body.append(replacement);
+
           const resumed = new Image(4, 4);
           const resumedLoaded = trackLoad(resumed, 'resumed');
           resumed.style.marginTop = '8000px';
@@ -137,6 +145,7 @@ async fn loading_became_eager_before_image_update_delays_window_load() -> Result
             "/blocker.svg",
             "/detached.svg",
             "/connected.svg",
+            "/replacement.svg",
             "/resumed.svg",
         ])
         .await?;
@@ -152,9 +161,11 @@ async fn loading_became_eager_before_image_update_delays_window_load() -> Result
     assert_eq!(evaluate(&mut page, "detachedLoaded").await?, json!(true));
     finish_image(requests.remove("/connected.svg").unwrap(), true).await?;
     assert_eq!(evaluate(&mut page, "connectedLoaded").await?, json!(true));
+    finish_image(requests.remove("/replacement.svg").unwrap(), true).await?;
+    assert_eq!(evaluate(&mut page, "replacementLoaded").await?, json!(true));
     assert_eq!(
         evaluate(&mut page, "windowLoaded").await?,
-        json!(["blocker", "detached", "connected", "window"])
+        json!(["blocker", "detached", "connected", "replacement", "window"])
     );
 
     finish_image(requests.remove("/resumed.svg").unwrap(), true).await?;
