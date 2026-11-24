@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn cssom_preparsed_write_preserves_mutations_and_custom_element_observations() {
+    let mut vm = new_storage_test_vm("https://cssom-preparsed-write.test/");
+    assert_eq!(
+        vm.eval(include_str!("cssom_preparsed_write.js"))
+            .expect("CSSOM writes should preserve callback-visible state"),
+        "ok"
+    );
+}
+
+#[test]
 fn detached_css_style_css_text_parses_serializes_and_tracks_order() {
     let mut vm = new_storage_test_vm("https://detached-style-css-text.test/");
 

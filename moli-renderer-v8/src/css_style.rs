@@ -184,6 +184,17 @@ impl CssInlineStyleDeclarationState {
             .unwrap_or_else(|| serialize_css_style_entries(&self.entries()))
     }
 
+    pub(crate) fn css_text_and_style_resolution_text(&self) -> (String, String) {
+        let css_text = self.css_text();
+        if self.side_entries.is_empty()
+            && !css_style_entries_have_renderer_projection(&self.entries)
+        {
+            return (css_text.clone(), css_text);
+        }
+        let resolution_text = self.style_resolution_text();
+        (css_text, resolution_text)
+    }
+
     pub(crate) fn refresh_pdb_entries(&mut self) {
         if self.side_entries.is_empty()
             && !self.entries.iter().any(|entry| entry.name == "all")
