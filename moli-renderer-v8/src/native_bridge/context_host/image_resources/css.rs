@@ -133,7 +133,7 @@ impl CssImageResourceStore {
             },
         );
         if reused {
-            self.visual_generation.bump();
+            self.visual_generation.bump_css_images();
             CssImageResourceAdmission::Reused
         } else {
             CssImageResourceAdmission::Fetch(identity)
@@ -204,7 +204,7 @@ impl CssImageResourceStore {
         self.ready_by_request
             .insert(identity.request_key.clone(), &resource);
         slot.state = CssImageResourceState::Ready(resource);
-        self.visual_generation.bump();
+        self.visual_generation.bump_css_images();
         #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
@@ -222,7 +222,7 @@ impl CssImageResourceStore {
             return false;
         }
         slot.state = CssImageResourceState::Failed;
-        self.visual_generation.bump();
+        self.visual_generation.bump_css_images();
         #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
@@ -263,7 +263,7 @@ impl CssImageResourceStore {
             .retain(|key, _| key.document_handle != document_handle);
         let removed = before - inner.slots.len();
         if removed != 0 {
-            self.visual_generation.bump();
+            self.visual_generation.bump_css_images();
         }
         drop(inner);
         self.ready_by_request.prune_dead();

@@ -25,6 +25,15 @@ use crate::{
 };
 use style::values::generics::image::GenericImage;
 
+pub(crate) fn css_image_resource_url(image: &style::values::computed::Image) -> Option<&str> {
+    let GenericImage::Url(computed_url) = image else {
+        return None;
+    };
+    let url = computed_url.url()?;
+    (matches!(url.scheme(), "http" | "https" | "data" | "blob") && url.fragment().is_none())
+        .then_some(url.as_str())
+}
+
 /// Constructs a complete pass-local CSS box tree from a borrowed source view.
 pub fn build_layout_world<S, R>(
     source: &S,
@@ -761,14 +770,8 @@ where
         image: &style::values::computed::Image,
         purpose: crate::LayoutCssImagePurpose,
     ) -> Option<crate::LayoutImageResource> {
-        let GenericImage::Url(computed_url) = image else {
-            return None;
-        };
-        let url = computed_url.url()?;
-        if !matches!(url.scheme(), "http" | "https" | "data" | "blob") || url.fragment().is_some() {
-            return None;
-        }
-        let resolved_url = url.as_str().to_owned();
+        let url = css_image_resource_url(image)?;
+        let resolved_url = url.to_owned();
         if self
             .seen_css_images
             .insert((source, resolved_url.clone(), purpose))
@@ -780,7 +783,7 @@ where
                     resolved_url,
                 });
         }
-        self.source.css_image_resource(url.as_str())
+        self.source.css_image_resource(url)
     }
 
     fn normalize_flow_children(

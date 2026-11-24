@@ -52,7 +52,7 @@ impl Eq for RendererScreencastPaintSession {}
 
 pub(super) struct ScreenPaintEntry {
     pub(super) layout: Box<ScreenPaintLayout<DomHandle>>,
-    pub(super) resource_generation: u64,
+    pub(super) resource_generation: super::visual_resource_generation::VisualResourceRevisions,
     pub(super) css_images: Vec<LayoutCssImageReference<DomHandle>>,
 }
 
@@ -125,6 +125,7 @@ impl ScreencastPaintState {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn read<T>(&self, read: impl FnOnce(&ScreenPaintEntry) -> T) -> Option<T> {
         self.0.get()?.borrow().entry.as_ref().map(read)
     }

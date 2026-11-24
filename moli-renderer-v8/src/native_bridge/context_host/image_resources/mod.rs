@@ -18,6 +18,17 @@ pub(crate) use preload::{ScannedImagePreloadAdmission, SharedScannedImagePreload
 pub(super) use state::ImageResourceStore;
 pub(crate) use state::ReadyImageForLayout;
 
+impl From<ReadyImageForLayout> for moli_layout::LayoutImageResource {
+    fn from(ready: ReadyImageForLayout) -> Self {
+        Self {
+            intrinsic_width: ready.intrinsic_width,
+            intrinsic_height: ready.intrinsic_height,
+            pixels: ready.pixels,
+            svg: ready.svg,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ImageResourceRequestIdentity {
     pub(super) element: DomHandle,
@@ -146,6 +157,13 @@ impl super::PageScriptHost {
     #[cfg(feature = "devtools")]
     pub(in crate::native_bridge::context_host) fn visual_resource_generation(&self) -> u64 {
         self.image_resources.visual_generation()
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(super) fn visual_resource_revisions(
+        &self,
+    ) -> super::visual_resource_generation::VisualResourceRevisions {
+        self.image_resources.visual_revisions()
     }
 
     #[cfg(feature = "molio")]

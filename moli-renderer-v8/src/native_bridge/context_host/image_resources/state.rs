@@ -368,6 +368,13 @@ impl ImageResourceStore {
         self.visual_generation.current()
     }
 
+    #[cfg(feature = "devtools")]
+    pub(super) fn visual_revisions(
+        &self,
+    ) -> super::super::visual_resource_generation::VisualResourceRevisions {
+        self.visual_generation.revisions()
+    }
+
     #[cfg(all(
         feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),

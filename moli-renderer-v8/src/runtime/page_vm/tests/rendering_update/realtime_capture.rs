@@ -276,6 +276,69 @@ fn realtime_screencast_releases_paint_when_the_document_becomes_empty() {
 }
 
 #[test]
+fn realtime_screencast_refreshes_css_image_pixels_without_layout() {
+    run_page_vm_large_stack_async_test("realtime-css-image-paint", || async move {
+        use base64::Engine as _;
+
+        let image = moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 255]).unwrap();
+        let png = moli_image::encode_png(&image).unwrap();
+        let image_url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png.bytes),
+        );
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::IMAGE,
+        );
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut().eval(&format!(r#"
+document.body.style.margin = '0';
+document.body.innerHTML = '<div id="target" style="width:24px;height:20px;background:white url({image_url})"></div>';
+"#)).unwrap();
+
+        let session = RendererScreencastPaintSession::default();
+        let request = |known_visual_state| crate::runtime::RendererCaptureScreencastFrameRequest {
+            paint_session: Some(session.clone()),
+            ..viewport_screencast_request(known_visual_state)
+        };
+        let Reply::Captured(initial) = page.capture_screencast_frame(request(None)).unwrap() else {
+            panic!("initial capture");
+        };
+        let pixels = moli_image::decode_png(&initial.image.bytes).unwrap();
+        assert_eq!(&pixels.rgba[..4], &[255; 4]);
+        let builds = page.vm().layout_pass_observability_for_test().1;
+
+        let completion = page.vm().css_image_completion_notify_for_test();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let notified = completion.notified();
+                if page.vm().css_image_resource_is_ready_for_test(&image_url) {
+                    break;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let Reply::Captured(loaded) = page
+            .capture_screencast_frame(request(Some(initial.visual_state)))
+            .unwrap()
+        else {
+            panic!("decoded CSS images must produce a frame");
+        };
+        let pixels = moli_image::decode_png(&loaded.image.bytes).unwrap();
+        assert_eq!(&pixels.rgba[..4], &[255, 0, 0, 255]);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+    });
+}
+
+#[test]
 fn realtime_screencast_repaints_background_colors_without_layout() {
     run_page_vm_large_stack_async_test("realtime-background-color", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

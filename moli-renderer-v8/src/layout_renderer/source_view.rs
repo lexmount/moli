@@ -311,15 +311,9 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         if parsed.fragment().is_some() {
             return None;
         }
-        let ready = self
-            .runtime
-            .ready_css_image_for_layout(self.document?, parsed.as_str())?;
-        Some(LayoutImageResource {
-            intrinsic_width: ready.intrinsic_width,
-            intrinsic_height: ready.intrinsic_height,
-            pixels: ready.pixels,
-            svg: ready.svg,
-        })
+        self.runtime
+            .ready_css_image_for_layout(self.document?, parsed.as_str())
+            .map(Into::into)
     }
 
     fn svg_content(

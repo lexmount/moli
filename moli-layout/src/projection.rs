@@ -240,6 +240,41 @@ where
 }
 
 impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
+    /// Reloads pixel inputs for the background and mask layers already used
+    /// by this publication. Their placement is resolved during paint.
+    pub fn update_css_image_resources(
+        &mut self,
+        resolve: &mut impl FnMut(N, &str) -> Option<crate::LayoutImageResource>,
+    ) {
+        for layout_box in &mut self.world.boxes {
+            let Some(source) = layout_box.source.or(layout_box.owner) else {
+                continue;
+            };
+            let Some(computed) = layout_box.style.stylo_computed_values() else {
+                continue;
+            };
+            for (resources, images) in [
+                (
+                    &mut layout_box.css_images.background,
+                    computed.get_background().background_image.0.iter(),
+                ),
+                (
+                    &mut layout_box.css_images.mask,
+                    computed.get_svg().mask_image.0.iter(),
+                ),
+            ] {
+                for (resource, image) in resources.iter_mut().zip(images) {
+                    if let Some(url) = crate::builder::css_image_resource_url(image) {
+                        *resource = resolve(source, url);
+                    }
+                }
+            }
+        }
+        for (_, frame) in self.frames.values_mut() {
+            frame.update_css_image_resources(resolve);
+        }
+    }
+
     /// Updates colors that have already been checked against the screen's
     /// computed styles. Box placements and their numeric styles stay paired.
     pub fn update_background_colors(

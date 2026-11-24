@@ -13,6 +13,8 @@ use super::realtime_rendering::RealtimeFrameState;
 use super::screencast_paint::{
     RendererScreencastPaintSession, ScreenPaintEntry, ScreencastPaintState,
 };
+#[cfg(feature = "devtools")]
+use super::visual_resource_generation::VisualResourceRevisions;
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
@@ -30,13 +32,16 @@ pub(crate) enum LayoutPublicationRequest {
 
 pub(crate) struct PreparedLayoutPublication(LayoutPublication);
 
+#[cfg(not(feature = "devtools"))]
+type VisualResourceRevisions = ();
+
 enum LayoutPublication {
     LegacyLatest(DomHandle),
     CurrentScreen {
         document: DomHandle,
         inputs: ScreenLayoutInputs,
         source_dom_version: u64,
-        paint_generation: Option<u64>,
+        paint_generation: Option<VisualResourceRevisions>,
     },
     Transient,
 }
@@ -283,11 +288,14 @@ impl PageScriptHost {
         self.did_publish_realtime_font_layout();
     }
 
-    fn screen_paint_generation(&self, state: &RealtimeLayoutState) -> Option<u64> {
+    fn screen_paint_generation(
+        &self,
+        state: &RealtimeLayoutState,
+    ) -> Option<VisualResourceRevisions> {
         #[cfg(feature = "devtools")]
         if state.screencast_paint.is_active() {
-            let generation = self.visual_resource_generation();
-            return (generation != u64::MAX).then_some(generation);
+            let generation = self.visual_resource_revisions();
+            return (generation.generation() != u64::MAX).then_some(generation);
         }
         #[cfg(not(feature = "devtools"))]
         let _ = state;
@@ -327,12 +335,21 @@ impl PageScriptHost {
         let Some(tree) = layout.latest_layout(document) else {
             return Ok(None);
         };
-        let resource_generation = self.visual_resource_generation();
+        let resource_generation = self.visual_resource_revisions();
         state
             .screencast_paint
-            .read(|paint| {
-                if paint.resource_generation != resource_generation {
+            .update(|paint| {
+                if paint.resource_generation.other_pixels != resource_generation.other_pixels
+                    || resource_generation.generation() == u64::MAX
+                {
                     return Ok(None);
+                }
+                if paint.resource_generation.css_images != resource_generation.css_images {
+                    self.refresh_screen_css_images(paint);
+                    if self.visual_resource_revisions() != resource_generation {
+                        return Ok(None);
+                    }
+                    paint.resource_generation = resource_generation;
                 }
                 Ok(Some((
                     paint.layout.paint(tree, capture)?,
@@ -340,6 +357,28 @@ impl PageScriptHost {
                 )))
             })
             .unwrap_or(Ok(None))
+    }
+
+    #[cfg(feature = "devtools")]
+    fn refresh_screen_css_images(&self, paint: &mut ScreenPaintEntry) {
+        use std::collections::HashMap;
+
+        let mut images_by_document: HashMap<
+            DomHandle,
+            HashMap<String, Option<moli_layout::LayoutImageResource>>,
+        > = HashMap::new();
+        paint.layout.update_css_image_resources(&mut |source, url| {
+            let document = self.dom_host().owner_document_handle(source)?;
+            let images = images_by_document.entry(document).or_default();
+            if let Some(resource) = images.get(url) {
+                return resource.clone();
+            }
+            let resource = self
+                .ready_css_image_for_layout(document, url)
+                .map(Into::into);
+            images.insert(url.to_owned(), resource.clone());
+            resource
+        });
     }
 
     #[cfg(test)]
