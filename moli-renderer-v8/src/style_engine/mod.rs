@@ -83,7 +83,7 @@ mod source_scope_plan;
 mod state;
 #[cfg(debug_assertions)]
 pub(crate) use state::ComputedStyleObservationInputEpochs;
-pub(crate) use state::ScreenStyleInvalidation;
+use state::ScreenStyleInvalidation;
 mod stylesheet;
 mod stylesheet_resources;
 mod target_plan;
@@ -265,14 +265,30 @@ impl MoliStyleEngine {
             .computed_cache_generation
     }
 
-    pub(crate) fn screen_style_invalidation(
-        &self,
-        document: DomHandle,
-    ) -> state::ScreenStyleInvalidation {
+    pub(crate) fn has_screen_style_invalidation(&self, document: DomHandle) -> bool {
         self.document_worlds
             .active_world(document)
-            .map(|world| world.document_state.screen_style_invalidation.get())
-            .unwrap_or_default()
+            .is_some_and(|world| {
+                !matches!(
+                    *world.document_state.screen_style_invalidation.borrow(),
+                    ScreenStyleInvalidation::Clean
+                )
+            })
+    }
+
+    /// An absent result requires a complete layout. An empty list is clean.
+    pub(crate) fn affected_screen_style_roots(
+        &self,
+        document: DomHandle,
+    ) -> Option<Vec<DomHandle>> {
+        let Some(world) = self.document_worlds.active_world(document) else {
+            return Some(Vec::new());
+        };
+        match &*world.document_state.screen_style_invalidation.borrow() {
+            ScreenStyleInvalidation::Clean => Some(Vec::new()),
+            ScreenStyleInvalidation::Subtrees(roots) => Some(roots.iter().copied().collect()),
+            ScreenStyleInvalidation::Pending | ScreenStyleInvalidation::Full => None,
+        }
     }
 
     pub(crate) fn publish_screen_styles(&self, document: DomHandle) {

@@ -2696,10 +2696,13 @@ fn viewport_change_updates_the_persistent_style_world_in_place() {
     );
     let world = engine.world_for_document(document);
     world.document_state.note_screen_style_attribute_change();
+    world.document_state.note_affected_screen_styles([target]);
     world.document_state.finish_screen_style_invalidation();
-    assert_eq!(
-        engine.screen_style_invalidation(document),
-        ScreenStyleInvalidation::Affected,
+    assert!(
+        matches!(
+            *world.document_state.screen_style_invalidation.borrow(),
+            ScreenStyleInvalidation::Full
+        ),
         "attribute dependency coverage expires when the retained world is updated"
     );
 

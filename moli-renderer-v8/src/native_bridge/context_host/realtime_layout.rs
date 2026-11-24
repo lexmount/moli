@@ -16,8 +16,8 @@ use super::screencast_paint::{
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
-    layout_renderer::ContainerSizeFeedback,
-    style_engine::{ScreenStyleInvalidation, StyloStyleEnvironment},
+    layout_renderer::{LayoutPassFeedback, ScreenStyleBaseline, screen_styles_are_equivalent},
+    style_engine::StyloStyleEnvironment,
 };
 
 /// The consumer explicitly decides whether a pass may update screen geometry.
@@ -46,6 +46,10 @@ impl PreparedLayoutPublication {
         !matches!(self.0, LayoutPublication::Transient)
     }
 
+    pub(crate) fn publishes_current_screen(&self) -> bool {
+        matches!(self.0, LayoutPublication::CurrentScreen { .. })
+    }
+
     pub(crate) fn layout_request(&self, request: LayoutPassRequest) -> LayoutPassRequest {
         if let LayoutPublication::CurrentScreen {
             paint_generation, ..
@@ -67,6 +71,7 @@ pub(super) struct RealtimeLayoutState {
     non_dom_revision: Cell<Option<u64>>,
     scroll_projection_dirty: Cell<bool>,
     published: RefCell<Option<ScreenLayoutInputs>>,
+    screen_styles: RefCell<ScreenStyleBaseline>,
     #[cfg(feature = "devtools")]
     screencast_paint: ScreencastPaintState,
     pub(super) frame: RefCell<RealtimeFrameState>,
@@ -82,6 +87,7 @@ impl Default for RealtimeLayoutState {
             non_dom_revision: Cell::new(Some(0)),
             scroll_projection_dirty: Cell::new(false),
             published: RefCell::new(None),
+            screen_styles: RefCell::default(),
             #[cfg(feature = "devtools")]
             screencast_paint: ScreencastPaintState::default(),
             frame: RefCell::new(RealtimeFrameState::default()),
@@ -106,6 +112,7 @@ impl RealtimeLayoutState {
 
     pub(super) fn clear_publication(&self) {
         self.published.borrow_mut().take();
+        self.screen_styles.borrow_mut().clear();
         #[cfg(feature = "devtools")]
         self.screencast_paint.publish(None);
     }
@@ -193,7 +200,7 @@ impl PageScriptHost {
         &self,
         publication: PreparedLayoutPublication,
         pass: LayoutPassResult<DomHandle>,
-        feedback: ContainerSizeFeedback<'_>,
+        feedback: LayoutPassFeedback<'_>,
     ) -> Result<(), LayoutError> {
         match publication.0 {
             LayoutPublication::LegacyLatest(document) => {
@@ -235,7 +242,7 @@ impl PageScriptHost {
                 #[cfg(not(feature = "devtools"))]
                 let _ = paint_generation;
                 self.publish_layout_pass_for_document(document, pass);
-                feedback.commit();
+                *state.screen_styles.borrow_mut() = feedback.commit().unwrap_or_default();
                 #[cfg(feature = "devtools")]
                 state.screencast_paint.publish(paint);
                 self.did_publish_screen_layout(state, inputs);
@@ -248,6 +255,20 @@ impl PageScriptHost {
     fn did_publish_screen_layout(&self, state: &RealtimeLayoutState, inputs: ScreenLayoutInputs) {
         for document in &inputs.documents {
             self.style_engine.publish_screen_styles(document.document);
+        }
+        if moli_trace::cpu_profile_enabled() {
+            let baseline = state.screen_styles.borrow();
+            tracing::info!(
+                target: "moli_cpu_profile",
+                stage = "screen_style_baseline",
+                element_count = baseline.values().map(|styles| styles.len()).sum::<usize>(),
+                entry_storage_bytes = baseline.values().map(|styles| {
+                    styles.capacity() * std::mem::size_of::<(
+                        DomHandle,
+                        crate::style_engine::StyloComputedStyleSnapshot,
+                    )>()
+                }).sum::<usize>(),
+            );
         }
         // Attach the verified inputs after the geometry update retires the previous validity.
         *state.published.borrow_mut() = Some(inputs);
@@ -414,15 +435,12 @@ impl PageScriptHost {
             .expect("Realtime policy installs its document state");
         let inputs = self.screen_layout_inputs(state)?;
         let document = self.document_handle();
-        let resolve_style_changes = inputs.documents.iter().any(|document| {
-            self.style_engine
-                .screen_style_invalidation(document.document)
-                == ScreenStyleInvalidation::Pending
-        });
+        let resolve_style_changes = self.has_screen_style_invalidations(&inputs);
         if resolve_style_changes {
             self.prepare_current_screen_styles(&inputs);
         }
-        if self.can_reuse_screen_layout(state, &inputs)
+        if self.screen_layout_matches_inputs(state, &inputs)
+            && (!resolve_style_changes || self.reuse_equivalent_screen_styles(state, &inputs))
             && (inputs.documents[0].root.is_none()
                 || !state.scroll_projection_dirty.get()
                 || self.refresh_published_scroll_projection()?
@@ -444,7 +462,7 @@ impl PageScriptHost {
             .with_scroll_projection(true)
             .with_screen_paint(paint_generation.is_some());
         let Some((pass, feedback)) =
-            self.build_layout_pass_for_document_in_environment(document, request, None)?
+            self.build_layout_pass_for_document_in_environment(document, request, None, true)?
         else {
             if self.dom_host().dom_version() != source_dom_version
                 || self.screen_layout_inputs(state)? != inputs
@@ -493,28 +511,60 @@ impl PageScriptHost {
         {
             return false;
         }
-        self.screen_layout_inputs(state)
-            .is_ok_and(|inputs| self.can_reuse_screen_layout(state, &inputs))
+        self.screen_layout_inputs(state).is_ok_and(|inputs| {
+            self.screen_layout_matches_inputs(state, &inputs)
+                && !self.has_screen_style_invalidations(&inputs)
+        })
     }
 
-    fn can_reuse_screen_layout(
+    fn screen_layout_matches_inputs(
         &self,
         state: &RealtimeLayoutState,
         inputs: &ScreenLayoutInputs,
     ) -> bool {
         inputs.permits_reuse()
             && state.published.borrow().as_ref() == Some(inputs)
-            && inputs.documents.iter().all(|document| {
-                self.style_engine
-                    .screen_style_invalidation(document.document)
-                    == ScreenStyleInvalidation::Clean
-            })
             && (inputs.documents[0].root.is_none()
                 || self
                     .document_layout_state
                     .borrow()
                     .latest_layout(self.document_handle())
                     .is_some())
+    }
+
+    fn has_screen_style_invalidations(&self, inputs: &ScreenLayoutInputs) -> bool {
+        inputs.documents.iter().any(|document| {
+            self.style_engine
+                .has_screen_style_invalidation(document.document)
+        })
+    }
+
+    fn reuse_equivalent_screen_styles(
+        &self,
+        state: &RealtimeLayoutState,
+        inputs: &ScreenLayoutInputs,
+    ) -> bool {
+        let baseline = state.screen_styles.borrow();
+        let mut checked_documents = Vec::new();
+        for document in &inputs.documents {
+            let Some(roots) = self
+                .style_engine
+                .affected_screen_style_roots(document.document)
+            else {
+                return false;
+            };
+            if roots.is_empty() {
+                continue;
+            }
+            if !screen_styles_are_equivalent(self, document.document, roots, &baseline) {
+                return false;
+            }
+            checked_documents.push(document.document);
+        }
+        for document in checked_documents {
+            self.style_engine.publish_screen_styles(document);
+        }
+        true
     }
 
     fn prepare_current_screen_styles(&self, inputs: &ScreenLayoutInputs) {

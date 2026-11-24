@@ -9,7 +9,7 @@ use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 /// Bounds sparse invalidation-root history without requiring a scan of
 /// published element styles to retire individual generations.
-const MAX_RETAINED_INVALIDATION_ROOTS: usize = 1_024;
+pub(super) const MAX_RETAINED_INVALIDATION_ROOTS: usize = 1_024;
 
 /// One element on the style-parent path to a demanded target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

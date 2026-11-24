@@ -154,7 +154,7 @@ impl MoliStyleEngine {
         if world_has_style_state(self, world) {
             return false;
         }
-        world.document_state.note_affected_screen_styles();
+        world.document_state.note_full_screen_style_invalidation();
         if mutation_effects_have_source_scope(effects) {
             world.document_state.note_style_input_change();
         }
