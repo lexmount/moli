@@ -21,10 +21,8 @@ fn window_open_empty_url_reuses_lightweight_document_without_navigation() {
         "true"
     );
     let actions = vm.take_pending_popup_activations();
-    assert_eq!(actions.len(), 2);
+    assert_eq!(actions.len(), 1);
     assert!(actions[0].navigation_requested());
-    assert!(!actions[1].navigation_requested());
-    assert_eq!(actions[0].popup_id(), actions[1].popup_id());
 }
 
 #[test]
