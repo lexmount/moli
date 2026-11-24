@@ -68,6 +68,19 @@ pub(super) fn revealed_lazy_image_handles(
         .collect()
 }
 
+pub(super) fn lazy_image_is_revealed(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    handle: DomHandle,
+) -> bool {
+    is_unadmitted_lazy_image(runtime, document, handle)
+        && runtime
+            .with_latest_layout_tree_for_document(document, |tree| {
+                image_is_near_live_viewport(runtime, document, tree, handle)
+            })
+            .unwrap_or(false)
+}
+
 fn is_unadmitted_lazy_image(
     runtime: &PageScriptHost,
     document: DomHandle,

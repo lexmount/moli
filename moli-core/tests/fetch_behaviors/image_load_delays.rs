@@ -33,7 +33,7 @@ const LAZY_PAGE: &str = r#"<!doctype html>
 #[tokio::test]
 async fn lazy_images_keep_their_load_behavior_when_loading_changes() -> Result<()> {
     let mut server = ImageServer::spawn(LAZY_PAGE, "").await?;
-    let (_browser, mut page) = server.open_page().await?;
+    let (_browser, mut page) = server.open_page(moli_core::LayoutPolicy::Realtime).await?;
     page.publish_layout_async().await?;
     let paths = [
         "/blocker.svg",
@@ -131,7 +131,7 @@ async fn loading_became_eager_before_image_update_delays_window_load() -> Result
         "",
     )
     .await?;
-    let (_browser, mut page) = server.open_page().await?;
+    let (_browser, mut page) = server.open_page(moli_core::LayoutPolicy::Realtime).await?;
     let mut requests = server
         .wait_for_images(&[
             "/blocker.svg",
@@ -181,7 +181,7 @@ async fn script_disabled_document_load_waits_for_offscreen_lazy_image() -> Resul
         <img id="lazy" width="4" height="4" loading="lazy" src="/child.svg">"#,
     )
     .await?;
-    let (_browser, mut page) = server.open_page().await?;
+    let (_browser, mut page) = server.open_page(moli_core::LayoutPolicy::Realtime).await?;
     let mut requests = server.wait_for_images(&["/child.svg"]).await?;
 
     let before = evaluate(
@@ -201,6 +201,41 @@ async fn script_disabled_document_load_waits_for_offscreen_lazy_image() -> Resul
         evaluate(&mut page, "frameLoaded").await?,
         json!(["complete", true, 4])
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn scroll_into_view_during_image_update_starts_lazy_request() -> Result<()> {
+    let mut server = ImageServer::spawn(
+        r#"<!doctype html>
+        <div style="height:8000px"></div>
+        <img id="image" loading="lazy" width="4" height="4">
+        <div style="height:1000px"></div>"#,
+        "",
+    )
+    .await?;
+    let (_browser, mut page) = server.open_page(moli_core::LayoutPolicy::OnDemand).await?;
+    page.publish_layout_async().await?;
+
+    assert_eq!(
+        evaluate(
+            &mut page,
+            r#"
+            const lazyImage = document.getElementById('image');
+            const imageLoaded = new Promise(resolve => {
+              lazyImage.onload = () => resolve(lazyImage.naturalWidth);
+            });
+            lazyImage.src = '/revealed.svg';
+            lazyImage.scrollIntoView();
+            [scrollY > 0, lazyImage.loading]
+            "#,
+        )
+        .await?,
+        json!([true, "lazy"])
+    );
+    let mut requests = server.wait_for_images(&["/revealed.svg"]).await?;
+    finish_image(requests.remove("/revealed.svg").unwrap(), true).await?;
+    assert_eq!(evaluate(&mut page, "imageLoaded").await?, json!(4));
     Ok(())
 }
 
@@ -262,11 +297,11 @@ impl ImageServer {
         })
     }
 
-    async fn open_page(&self) -> Result<(Browser, Page)> {
+    async fn open_page(&self, layout_policy: moli_core::LayoutPolicy) -> Result<(Browser, Page)> {
         let browser = Browser::new(
             AppConfig::default()
                 .with_image_fetch_enabled(true)
-                .with_layout_policy(moli_core::LayoutPolicy::Realtime),
+                .with_layout_policy(layout_policy),
         )?;
         let page = browser
             .fetch_with_wait_until(
