@@ -12,7 +12,7 @@ pub(super) struct MouseInputState {
     press: Option<MousePress>,
     element_under_mouse: Option<DomHandle>,
     #[cfg(feature = "molio")]
-    compat_press_owner: Option<WindowDocumentTaskTarget>,
+    compat_press_owners: [Option<WindowDocumentTaskTarget>; 5],
 }
 
 pub(crate) enum MouseReleaseFollowUp {
@@ -45,13 +45,24 @@ impl PageScriptHost {
     }
 
     #[cfg(feature = "molio")]
-    pub(crate) fn set_compat_mouse_press_owner(&mut self, owner: Option<WindowDocumentTaskTarget>) {
-        self.mouse_input.compat_press_owner = owner;
+    pub(crate) fn set_compat_mouse_press_owner(
+        &mut self,
+        button: i32,
+        owner: Option<WindowDocumentTaskTarget>,
+    ) {
+        if let Some(slot) = usize::try_from(button)
+            .ok()
+            .and_then(|index| self.mouse_input.compat_press_owners.get_mut(index))
+        {
+            *slot = owner;
+        }
     }
 
     #[cfg(feature = "molio")]
-    pub(crate) fn take_compat_mouse_press_owner(&mut self) -> Option<WindowDocumentTaskTarget> {
-        self.mouse_input.compat_press_owner.take()
+    pub(crate) fn take_compat_mouse_press_owners(
+        &mut self,
+    ) -> [Option<WindowDocumentTaskTarget>; 5] {
+        std::mem::take(&mut self.mouse_input.compat_press_owners)
     }
 
     pub(crate) fn set_mouse_event_target(&mut self, target: Option<DomHandle>) {
