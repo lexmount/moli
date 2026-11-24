@@ -3761,6 +3761,7 @@ css/css-typed-om/the-stylepropertymap/properties/background-image.html
 css/css-typed-om/the-stylepropertymap/properties/background-origin.html
 css/css-typed-om/the-stylepropertymap/properties/background-repeat.html
 css/css-typed-om/the-stylepropertymap/properties/background-size.html
+css/css-typed-om/the-stylepropertymap/properties/background.html
 css/css-typed-om/the-stylepropertymap/properties/baseline-shift.html
 css/css-typed-om/the-stylepropertymap/properties/block-size.html
 css/css-typed-om/the-stylepropertymap/properties/border-collapse.html
@@ -3849,6 +3850,7 @@ css/css-typed-om/the-stylepropertymap/properties/line-break.html
 css/css-typed-om/the-stylepropertymap/properties/line-height.html
 css/css-typed-om/the-stylepropertymap/properties/list-style-image.html
 css/css-typed-om/the-stylepropertymap/properties/list-style-position.html
+css/css-typed-om/the-stylepropertymap/properties/margin.html
 css/css-typed-om/the-stylepropertymap/properties/marker.html
 css/css-typed-om/the-stylepropertymap/properties/mask-image.html
 css/css-typed-om/the-stylepropertymap/properties/mask-type.html

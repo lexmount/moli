@@ -1627,7 +1627,6 @@ css/css-typed-om/the-stylepropertymap/properties/alignment-baseline.html
 css/css-typed-om/the-stylepropertymap/properties/all.html
 css/css-typed-om/the-stylepropertymap/properties/backdrop-filter.html
 css/css-typed-om/the-stylepropertymap/properties/background-position.html
-css/css-typed-om/the-stylepropertymap/properties/background.html
 css/css-typed-om/the-stylepropertymap/properties/break.html
 css/css-typed-om/the-stylepropertymap/properties/clip-path.html
 css/css-typed-om/the-stylepropertymap/properties/column-height.html
@@ -1646,7 +1645,6 @@ css/css-typed-om/the-stylepropertymap/properties/grid.html
 css/css-typed-om/the-stylepropertymap/properties/image-rendering.html
 css/css-typed-om/the-stylepropertymap/properties/list-style-type.html
 css/css-typed-om/the-stylepropertymap/properties/logical.html
-css/css-typed-om/the-stylepropertymap/properties/margin.html
 css/css-typed-om/the-stylepropertymap/properties/object-position.html
 css/css-typed-om/the-stylepropertymap/properties/offset-anchor.html
 css/css-typed-om/the-stylepropertymap/properties/offset-position.html
