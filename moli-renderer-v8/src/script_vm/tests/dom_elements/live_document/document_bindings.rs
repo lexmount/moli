@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn document_default_view_is_null_after_main_context_teardown() {
+    let mut vm = new_storage_test_vm("https://document-default-view-teardown.test/");
+    vm.eval("globalThis.retainedDocument = document;").unwrap();
+    vm._context_host
+        .borrow_mut()
+        .close_page_context_resources_for_teardown();
+    assert_eq!(
+        vm.eval("String(retainedDocument.defaultView === null)")
+            .expect("retained Document should remain readable after context teardown"),
+        "true"
+    );
+}
+
+#[test]
 fn cross_realm_dom_bindings_reject_incompatible_receivers_in_their_own_realm() {
     let mut vm = new_storage_test_vm("https://cross-realm-dom-receivers.test/");
 
