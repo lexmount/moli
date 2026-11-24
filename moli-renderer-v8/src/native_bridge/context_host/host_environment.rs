@@ -2685,11 +2685,15 @@ impl PageScriptHost {
             .clear_inline_style_base_url_with_host(unsafe { &*dom_host }, handle);
     }
 
-    pub(crate) fn set_element_inline_style_resolution_text(
+    pub(crate) fn set_element_inline_style_resolution_override(
         &mut self,
         handle: DomHandle,
-        text: String,
+        override_text: Option<String>,
     ) {
+        let Some(text) = override_text else {
+            self.clear_element_inline_style_resolution_text(handle);
+            return;
+        };
         let dom_host = self.dom_host() as *const _;
         self.style_engine
             .set_inline_style_resolution_text_with_host(unsafe { &*dom_host }, handle, text);

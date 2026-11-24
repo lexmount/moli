@@ -3203,8 +3203,8 @@ fn inline_pdb_mutation_keeps_unresolved_shorthand_projection() {
         "padding-top: ; padding-right: ; padding-bottom: ; padding-left: calc(1px);"
     );
     assert_eq!(
-        state.style_resolution_text(),
-        "padding: var(--pad) var(--pad) var(--pad) calc(1px);"
+        state.css_text_and_style_resolution_override().1.as_deref(),
+        Some("padding: var(--pad) var(--pad) var(--pad) calc(1px);")
     );
 
     let affected_names = style_property_affected_names_with_pdb("padding-left").unwrap();
@@ -3253,7 +3253,10 @@ fn inline_pdb_mutation_materializes_existing_block_before_renderer_projection() 
         ..Default::default()
     };
     assert!(state.entries.is_empty());
-    assert_eq!(state.css_text(), "font-size: unset;");
+    assert_eq!(
+        state.css_text_and_style_resolution_override(),
+        ("font-size: unset;".to_owned(), None),
+    );
 
     let affected_names = style_property_affected_names_with_pdb("margin-bottom").unwrap();
     let parsed = parse_style_property_entries_with_pdb("margin-bottom", "var(--x)", false)
@@ -3292,8 +3295,11 @@ fn inline_pdb_mutation_materializes_existing_block_before_renderer_projection() 
         "font-size: unset; margin-bottom: var(--x);"
     );
     assert_eq!(
-        state.style_resolution_text(),
-        "font-size: unset; margin-bottom: var(--x);"
+        state.css_text_and_style_resolution_override(),
+        (
+            "font-size: unset; margin-bottom: var(--x);".to_owned(),
+            None
+        ),
     );
 }
 
