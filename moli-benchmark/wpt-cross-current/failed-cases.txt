@@ -2112,17 +2112,11 @@ html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-to-eager.
 html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_loading_lazy.htm
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
-html/semantics/embedded-content/the-img-element/image-loading-lazy-base-url-2.html
-html/semantics/embedded-content/the-img-element/image-loading-lazy-base-url.html
-html/semantics/embedded-content/the-img-element/image-loading-lazy-below-viewport-dynamic.html
-html/semantics/embedded-content/the-img-element/image-loading-lazy-in-viewport-dynamic.html
 html/semantics/embedded-content/the-img-element/naturalWidth-naturalHeight-width-height.html
 html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-dynamic-attributes.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
-html/semantics/embedded-content/the-img-element/update-the-image-data/lazy-out-of-band-load.html
-html/semantics/embedded-content/the-img-element/update-the-image-data/src-then-lazy-load.html
 html/semantics/embedded-content/the-img-element/usemap-casing.html
 html/semantics/embedded-content/the-object-element/object-in-display-none-load-event.html
 html/semantics/embedded-content/the-object-element/usemap-casing.html

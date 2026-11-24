@@ -7662,6 +7662,9 @@ html/semantics/embedded-content/the-img-element/empty-src-no-current-request.htm
 html/semantics/embedded-content/the-img-element/image-base-url.html
 html/semantics/embedded-content/the-img-element/image-loading-eager.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-available.html
+html/semantics/embedded-content/the-img-element/image-loading-lazy-base-url-2.html
+html/semantics/embedded-content/the-img-element/image-loading-lazy-base-url.html
+html/semantics/embedded-content/the-img-element/image-loading-lazy-below-viewport-dynamic.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-different-crossorigin.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-empty-src.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-script-disabled-iframe.html
@@ -7674,6 +7677,7 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller-n
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller-nested-5.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller-nested.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller.html
+html/semantics/embedded-content/the-img-element/image-loading-lazy-in-viewport-dynamic.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-move-document.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-script-disabled-iframe.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-multiple-times.html
@@ -7717,7 +7721,9 @@ html/semantics/embedded-content/the-img-element/update-src-complete.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask-002.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/fail-to-resolve.html
+html/semantics/embedded-content/the-img-element/update-the-image-data/lazy-out-of-band-load.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/not-broken-while-load-task-scheduled.html
+html/semantics/embedded-content/the-img-element/update-the-image-data/src-then-lazy-load.html
 html/semantics/embedded-content/the-img-element/update-the-source-set.html
 html/semantics/embedded-content/the-object-element/block-object-with-ruby-crash.html
 html/semantics/embedded-content/the-object-element/document-getters-return-null-for-cross-origin.html
