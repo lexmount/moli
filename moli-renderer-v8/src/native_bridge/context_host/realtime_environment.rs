@@ -16,7 +16,10 @@ struct RealtimeMediaQuery {
     target: WindowDocumentTaskTarget,
     media: String,
     matches: bool,
+    listening: bool,
     queued: bool,
+    // A frozen batch owns this entry until all its callbacks have completed.
+    notifying: bool,
     execution_context: WindowExecutionContextIdentity,
     list: Rc<v8::Weak<v8::Object>>,
 }
@@ -30,8 +33,9 @@ pub(crate) struct RealtimeMediaQueryNotification {
     pub(crate) list: Rc<v8::Weak<v8::Object>>,
 }
 
-/// Native sampling of subscribed media query lists. The realm-local listener
-/// registry roots active lists; this state holds weak handles to their wrappers.
+/// Native sampling of subscribed media query lists, plus pending notifications.
+/// The realm roots active/pending lists; a frozen batch also supplies temporary roots.
+/// This state holds only weak handles to their wrappers.
 #[derive(Default)]
 pub(super) struct RealtimeEnvironmentState {
     next_query: u64,
@@ -147,17 +151,25 @@ impl PageScriptHost {
         // Creating/upgrading V8 weak handles must not hold a state borrow.
         let list = Rc::new(v8::Weak::new(scope, list));
         let state = self.realtime_layout_state.as_ref().expect("Realtime MQL");
-        state.environment.borrow_mut().queries.insert(
-            id,
-            RealtimeMediaQuery {
+        state
+            .environment
+            .borrow_mut()
+            .queries
+            .entry(id)
+            .and_modify(|query| {
+                query.listening = true;
+                query.matches = matches;
+            })
+            .or_insert(RealtimeMediaQuery {
                 target,
                 media,
                 matches,
+                listening: true,
                 queued: false,
+                notifying: false,
                 execution_context,
                 list,
-            },
-        );
+            });
         Ok(())
     }
 
@@ -189,6 +201,40 @@ impl PageScriptHost {
             state.environment.borrow_mut().queries.remove(&id);
         }
         self.refresh_realtime_rendering_opportunity();
+    }
+
+    /// Stop sampling without cancelling an already queued or frozen event.
+    /// Keep the realm-local root until any frozen batch is dispatched too.
+    pub(crate) fn stop_realtime_media_query_listening(&self, id: u64) -> bool {
+        let retained = self.realtime_layout_state.as_ref().is_some_and(|state| {
+            let mut environment = state.environment.borrow_mut();
+            let Some(query) = environment.queries.get_mut(&id) else {
+                return false;
+            };
+            query.listening = false;
+            let retained = query.queued || query.notifying;
+            if !retained {
+                environment.queries.remove(&id);
+            }
+            retained
+        });
+        self.refresh_realtime_rendering_opportunity();
+        retained
+    }
+
+    pub(crate) fn finish_realtime_media_query_notification(&self, id: u64) -> bool {
+        self.realtime_layout_state.as_ref().is_some_and(|state| {
+            let mut environment = state.environment.borrow_mut();
+            let Some(query) = environment.queries.get_mut(&id) else {
+                return false;
+            };
+            query.notifying = false;
+            let retained = query.listening || query.queued;
+            if !retained {
+                environment.queries.remove(&id);
+            }
+            retained
+        })
     }
 
     pub(super) fn retire_realtime_media_query_owner(&self, owner: WindowExecutionContextOwner) {
@@ -223,7 +269,10 @@ impl PageScriptHost {
     pub(crate) fn realtime_media_query_matches(&self, id: u64) -> Option<bool> {
         let state = self.realtime_layout_state.as_ref()?;
         let environment = state.environment.borrow();
-        let query = environment.queries.get(&id)?;
+        let query = environment
+            .queries
+            .get(&id)
+            .filter(|query| query.listening)?;
         Some(
             self.window_document_owner_is_current_for_dispatch_scope(
                 query.target.owner(),
@@ -245,7 +294,9 @@ impl PageScriptHost {
             .borrow()
             .queries
             .iter()
-            .filter(|(_, query)| target.is_none_or(|target| target == query.target))
+            .filter(|(_, query)| {
+                query.listening && target.is_none_or(|target| target == query.target)
+            })
             .filter(|(_, query)| {
                 self.window_document_owner_is_current_for_dispatch_scope(
                     query.target.owner(),
@@ -380,6 +431,7 @@ impl PageScriptHost {
             .iter_mut()
             .filter_map(|(id, query)| {
                 if query.target == target && std::mem::take(&mut query.queued) {
+                    query.notifying = true;
                     Some(RealtimeMediaQueryNotification {
                         id: *id,
                         media: query.media.clone(),

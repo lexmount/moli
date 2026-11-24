@@ -98,6 +98,19 @@ fn media_query_list_attribute_getter_callback<'s>(
 const REALTIME_MEDIA_QUERY_ID_SLOT: &str = "__moliRealtimeMediaQueryId";
 const REALTIME_MEDIA_LISTENERS_SLOT: &str = "__moliRealtimeMediaListeners";
 
+fn remove_realtime_media_query_root<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+    id: u64,
+) {
+    if let Some(registry) = get_private_value(scope, global, REALTIME_MEDIA_LISTENERS_SLOT)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+    {
+        let key = v8::BigInt::new_from_u64(scope, id);
+        registry.delete(scope, key.into());
+    }
+}
+
 fn realtime_media_query_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     list: v8::Local<'s, v8::Object>,
@@ -168,13 +181,9 @@ pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
         return;
     }
     let global = context.global(scope);
-    let registry = get_private_value(scope, global, REALTIME_MEDIA_LISTENERS_SLOT)
-        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok());
-    let key = v8::BigInt::new_from_u64(scope, id);
     if !active {
-        host.retire_realtime_media_query(id);
-        if let Some(registry) = registry {
-            registry.delete(scope, key.into());
+        if !host.stop_realtime_media_query_listening(id) {
+            remove_realtime_media_query_root(scope, global, id);
         }
         return;
     }
@@ -194,18 +203,21 @@ pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
         crate::context_bootstrap::throw_error(scope, &error.to_string());
         return;
     }
-    // The realm roots only lists that can receive a change event. Read-only
-    // queries use the current environment in their matches getter.
-    let registry = registry.unwrap_or_else(|| {
-        let registry = v8::Map::new(scope);
-        set_private_value(
-            scope,
-            global,
-            REALTIME_MEDIA_LISTENERS_SLOT,
-            registry.into(),
-        );
-        registry
-    });
+    // Keep pending notifications alive even if their last listener is removed.
+    // Read-only queries use the current environment in their matches getter.
+    let registry = get_private_value(scope, global, REALTIME_MEDIA_LISTENERS_SLOT)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+        .unwrap_or_else(|| {
+            let registry = v8::Map::new(scope);
+            set_private_value(
+                scope,
+                global,
+                REALTIME_MEDIA_LISTENERS_SLOT,
+                registry.into(),
+            );
+            registry
+        });
+    let key = v8::BigInt::new_from_u64(scope, id);
     registry.set(scope, key.into(), list.into());
 }
 
@@ -229,6 +241,7 @@ pub(crate) fn take_realtime_media_query_events(
     let mut events = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         if !unsafe { &*host_ptr }.realtime_media_query_is_current(target, candidate.id) {
+            unsafe { &*host_ptr }.retire_realtime_media_query(candidate.id);
             continue;
         }
         // No Host/state borrow survives a weak upgrade or any V8 operation.
@@ -268,6 +281,24 @@ pub(crate) fn take_realtime_media_query_events(
         });
     }
     events
+}
+
+pub(crate) fn finish_realtime_media_query_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    events: &[PreparedRealtimeMediaQueryEvent],
+) {
+    for prepared in events {
+        if unsafe { &*host_ptr }.finish_realtime_media_query_notification(prepared.id) {
+            continue;
+        }
+        let list = v8::Local::new(scope, &prepared.list);
+        if let Some(context) = list.get_creation_context(scope) {
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let global = context.global(scope);
+            remove_realtime_media_query_root(scope, global, prepared.id);
+        }
+    }
 }
 
 pub(crate) fn dispatch_realtime_media_query_event<'s>(
