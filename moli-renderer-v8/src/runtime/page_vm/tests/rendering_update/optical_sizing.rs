@@ -70,7 +70,7 @@ document.body.innerHTML = `{content}`;
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(640, 640, 1.0))?

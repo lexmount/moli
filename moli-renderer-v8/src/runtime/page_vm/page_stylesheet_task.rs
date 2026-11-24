@@ -27,7 +27,7 @@ impl IntoPageTaskCompletion for PageStylesheetNetworkingTurnAction {
     fn into_page_task_completion(self) -> PageTaskCompletion {
         match self.target_effect {
             // A stylesheet fetch terminal is a real Networking task even
-            // though applying its CSS/state does not itself enter V8. The
+            // though publishing its CSS/state does not run page script. The
             // selected-task dispatcher therefore owns the ordinary task-end
             // checkpoint, but not callback-style runtime reconciliation. A
             // later link/style load or error event remains a separate task.
@@ -62,7 +62,7 @@ impl PageVm {
             // connected-style task boundary by admitting that follow-up only
             // after the callback checkpoint and runtime reconciliation.
             self.vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
         }
         Ok(())
     }

@@ -17,7 +17,7 @@ fn assert_anonymous_space_demand(display: &str, whitespace: &str, setup: &str, e
         document.body.replaceChildren(container);
         {setup}
     "#)).unwrap();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     run_font_tasks(&mut vm);
     assert_eq!(
         vm.eval("face.status").unwrap(),
@@ -271,7 +271,7 @@ async fn automatic_fonts_discarded_anonymous_spaces_do_not_request_or_delay_read
                         document.fonts.addEventListener(type, () => events.push(type));
                     }}
                 "#)).unwrap();
-                vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                vm.prime_document_lifecycle_and_publish_stylesheets();
                 run_font_tasks(&mut vm);
                 assert_eq!(
                     vm.eval("face.status").unwrap(),
@@ -301,7 +301,7 @@ async fn automatic_fonts_discarded_anonymous_spaces_do_not_request_or_delay_read
                 // Adding non-whitespace retains the whole anonymous item,
                 // including its spaces, and must start the previously unused face.
                 vm.eval("text.append('A')").unwrap();
-                vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                vm.prime_document_lifecycle_and_publish_stylesheets();
                 run_font_tasks(&mut vm);
                 assert_eq!(vm.eval("face.status").unwrap(), "loading");
                 let request = tokio::time::timeout(Duration::from_secs(2), request_rx)

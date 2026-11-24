@@ -4,7 +4,7 @@
 //! module coordinates it with renderer network observations and connected
 //! load/error delivery without owning a second blocking state machine.
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use super::super::{ConnectedLoadNetworkResult, DocumentRuntime, DomHandle};
 use crate::dom::NodeId;
@@ -280,33 +280,21 @@ impl DocumentRuntime {
     /// Whether a parser-owned script must still wait for one of the blocking
     /// stylesheet operations captured before it.
     ///
-    /// Resource and `@import` completion release this gate. The later
+    /// The script entry point publishes admitted completions before this
+    /// read. Resource and `@import` completion release the gate. The later
     /// `<link>` load/error task remains observable and keeps its Document-load
     /// delay, but does not block parser-owned script execution.
-    pub(crate) fn has_pending_parser_script_blocking_stylesheet_signatures<'a>(
-        &mut self,
-        signatures: impl IntoIterator<Item = &'a DocumentBlockingStylesheetSignature>,
+    pub(crate) fn has_pending_parser_script_blocking_stylesheet_signatures(
+        &self,
+        signatures: &HashSet<DocumentBlockingStylesheetSignature>,
     ) -> bool {
-        let signatures = signatures
-            .into_iter()
-            .cloned()
-            .collect::<std::collections::HashSet<_>>();
         if signatures.is_empty() {
             return false;
         }
-        self.drain_blocking_stylesheet_completions();
         self.stylesheet_lifecycle
             .fetches
             .blocks_on_signatures(signatures.iter())
-            || self.has_unsettled_parser_script_blocking_link_for_signature_set(&signatures)
-    }
-
-    fn has_unsettled_parser_script_blocking_link_for_signature_set(
-        &self,
-        signatures: &std::collections::HashSet<DocumentBlockingStylesheetSignature>,
-    ) -> bool {
-        !signatures.is_empty()
-            && self
+            || self
                 .stylesheet_lifecycle
                 .owner_states
                 .link_states()
@@ -401,10 +389,9 @@ impl DocumentRuntime {
         }
     }
 
-    pub(crate) fn take_ready_stylesheet_network_results(
+    pub(in crate::document_runtime) fn take_ready_stylesheet_network_results(
         &mut self,
     ) -> Vec<ConnectedLoadNetworkResult> {
-        self.drain_blocking_stylesheet_completions();
         let mut results = self
             .stylesheet_lifecycle
             .fetches
@@ -450,10 +437,9 @@ impl DocumentRuntime {
             .collect()
     }
 
-    pub(crate) fn take_ready_stylesheet_link_client_terminals(
+    pub(in crate::document_runtime) fn take_ready_stylesheet_link_client_terminals(
         &mut self,
     ) -> Vec<super::StylesheetLinkClientTerminal> {
-        self.drain_blocking_stylesheet_completions();
         self.stylesheet_lifecycle
             .ready_stylesheet_link_client_terminals
             .drain(..)
