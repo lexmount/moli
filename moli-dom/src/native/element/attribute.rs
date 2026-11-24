@@ -7,7 +7,7 @@ pub struct Attribute {
     pub(super) local_name: LocalName,
     pub(super) namespace: Namespace,
     pub(super) prefix: Option<Prefix>,
-    pub(super) value: Box<str>,
+    value: Box<str>,
 }
 
 impl Attribute {
@@ -80,6 +80,10 @@ impl Attribute {
 
     pub fn value(&self) -> &str {
         self.value.as_ref()
+    }
+
+    pub(super) fn set_value(&mut self, value: String) {
+        self.value = value.into_boxed_str();
     }
 }
 

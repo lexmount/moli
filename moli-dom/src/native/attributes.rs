@@ -1,13 +1,31 @@
-use super::NativeDom;
 use super::node::{NativeNodeId, Node};
+use super::{Attribute, NativeDom};
 
 impl NativeDom {
-    pub fn get_attribute(&self, node_id: NativeNodeId, name: &str) -> Option<String> {
-        let normalized_name = self.normalized_attribute_name(node_id, name)?;
+    pub fn find_attribute(&self, node_id: NativeNodeId, name: &str) -> Option<&Attribute> {
+        let element = self.node(node_id).and_then(Node::as_element)?;
+        if name.bytes().any(|byte| byte.is_ascii_uppercase())
+            && self.should_lowercase_attribute_name(node_id)?
+        {
+            return element.find_attribute(&name.to_ascii_lowercase());
+        }
+        element.find_attribute(name)
+    }
+
+    pub fn find_attribute_ns(
+        &self,
+        node_id: NativeNodeId,
+        namespace: Option<&str>,
+        local_name: &str,
+    ) -> Option<&Attribute> {
         self.node(node_id)
-            .and_then(Node::as_element)
-            .and_then(|element| element.attribute(&normalized_name))
-            .map(str::to_owned)
+            .and_then(Node::as_element)?
+            .find_attribute_ns(namespace.unwrap_or_default(), local_name)
+    }
+
+    pub fn get_attribute(&self, node_id: NativeNodeId, name: &str) -> Option<String> {
+        self.find_attribute(node_id, name)
+            .map(|attribute| attribute.value().to_owned())
     }
 
     pub fn get_attribute_ns(
@@ -16,11 +34,8 @@ impl NativeDom {
         namespace: Option<&str>,
         local_name: &str,
     ) -> Option<String> {
-        let namespace = namespace.unwrap_or_default();
-        self.node(node_id)
-            .and_then(Node::as_element)
-            .and_then(|element| element.attribute_ns(namespace, local_name))
-            .map(str::to_owned)
+        self.find_attribute_ns(node_id, namespace, local_name)
+            .map(|attribute| attribute.value().to_owned())
     }
 
     pub fn get_attribute_names(&self, node_id: NativeNodeId) -> Option<Vec<String>> {
@@ -29,12 +44,7 @@ impl NativeDom {
     }
 
     pub fn has_attribute(&self, node_id: NativeNodeId, name: &str) -> bool {
-        let Some(normalized_name) = self.normalized_attribute_name(node_id, name) else {
-            return false;
-        };
-        self.node(node_id)
-            .and_then(Node::as_element)
-            .is_some_and(|element| element.has_attribute(&normalized_name))
+        self.find_attribute(node_id, name).is_some()
     }
 
     pub fn has_attribute_ns(
@@ -43,10 +53,8 @@ impl NativeDom {
         namespace: Option<&str>,
         local_name: &str,
     ) -> bool {
-        let namespace = namespace.unwrap_or_default();
-        self.node(node_id)
-            .and_then(Node::as_element)
-            .is_some_and(|element| element.has_attribute_ns(namespace, local_name))
+        self.find_attribute_ns(node_id, namespace, local_name)
+            .is_some()
     }
 
     pub fn has_attributes(&self, node_id: NativeNodeId) -> bool {

@@ -584,7 +584,9 @@ impl SelectorsElement for QueryElement<'_> {
                     attribute.namespace() == AsRef::<str>::as_ref(&namespace.0)
                 }
             };
-            namespace_matches && operation.eval_str(attribute.value())
+            namespace_matches
+                && (matches!(operation, AttrSelectorOperation::Exists)
+                    || operation.eval_str(attribute.value()))
         })
     }
 
