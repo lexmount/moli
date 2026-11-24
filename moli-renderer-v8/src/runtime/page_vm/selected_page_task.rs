@@ -119,7 +119,7 @@ impl PageVm {
                 .await?;
                 #[cfg(feature = "molio")]
                 if viewport_frame {
-                    self.publish_viewport_frame();
+                    self.update_viewport_frame();
                 }
                 Ok(())
             }
