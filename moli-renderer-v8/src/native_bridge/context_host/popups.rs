@@ -528,6 +528,35 @@ impl PageScriptHost {
         self.lightweight_popup_browsing_contexts.get_mut(&popup_id)
     }
 
+    pub(crate) fn initialize_lightweight_popup_screen_position<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        window: v8::Local<'s, v8::Object>,
+        requested: (Option<i32>, Option<i32>),
+    ) {
+        let (left, top) = requested;
+        if left.is_none() && top.is_none() {
+            return;
+        }
+        let surface = self.viewport_surface().unwrap_or_default();
+        let position = |requested: i32, available: u32, extent: u32| {
+            let limit = available.saturating_sub(extent).min(i32::MAX as u32) as i32;
+            requested.clamp(0, limit)
+        };
+        let left = left.map_or(surface.window_x, |left| {
+            position(left, surface.screen_avail_width, surface.outer_width)
+        });
+        let top = top.map_or(surface.window_y, |top| {
+            position(top, surface.screen_avail_height, surface.outer_height)
+        });
+        let x = v8::Integer::new(scope, left);
+        set_object_slot(scope, window, "screenX", x.into());
+        set_object_slot(scope, window, "screenLeft", x.into());
+        let y = v8::Integer::new(scope, top);
+        set_object_slot(scope, window, "screenY", y.into());
+        set_object_slot(scope, window, "screenTop", y.into());
+    }
+
     fn lightweight_popup_document_record(
         &self,
         popup_id: u64,
