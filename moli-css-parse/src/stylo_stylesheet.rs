@@ -495,13 +495,31 @@ pub fn container_conditions_from_native(
 pub fn parse_container_conditions_with_stylo(
     css_text: &str,
 ) -> Option<Vec<CssContainerConditionView>> {
+    parse_container_rule_with_stylo(css_text, container_conditions_from_native)
+}
+
+pub fn parse_container_rule_condition_snapshot_with_stylo(
+    css_text: &str,
+) -> Option<(String, Vec<CssContainerConditionView>)> {
+    parse_container_rule_with_stylo(css_text, |conditions| {
+        (
+            style_traits::ToCss::to_css_string(conditions),
+            container_conditions_from_native(conditions),
+        )
+    })
+}
+
+fn parse_container_rule_with_stylo<T>(
+    css_text: &str,
+    read: impl FnOnce(&style::stylesheets::container_rule::ContainerConditions) -> T,
+) -> Option<T> {
     let tree = style::moli_rule_tree::parse_stylesheet_rule_tree(css_text);
     let guard = tree.shared_lock.read();
     let rules = tree.contents.read_with(&guard).rules.read_with(&guard);
     let [style::stylesheets::CssRule::Container(rule)] = rules.0.as_slice() else {
         return None;
     };
-    Some(container_conditions_from_native(&rule.conditions))
+    Some(read(&rule.conditions))
 }
 
 #[cfg(test)]
