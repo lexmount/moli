@@ -379,6 +379,31 @@ fn primary_snapshot_carries_applicable_eager_pseudos_without_forcing_absent_ones
         before + 1,
         "observing absent eager pseudos must not force two extra resolutions"
     );
+
+    let world = engine.world_for_document(document);
+    let writes = world.pseudo_style_cache.write_generation();
+    crate::style_engine::take_style_resolution_context_count_for_test();
+    for (pseudo, content) in [("before", "\"before\""), ("after", "\"after\"")] {
+        assert_eq!(
+            engine
+                .computed_style_property_value(
+                    &host,
+                    &document_url,
+                    generated,
+                    "content",
+                    Some(pseudo),
+                    &inputs,
+                    None,
+                )
+                .as_deref(),
+            Some(content)
+        );
+    }
+    assert_eq!(world.pseudo_style_cache.write_generation(), writes);
+    assert_eq!(
+        crate::style_engine::take_style_resolution_context_count_for_test(),
+        0
+    );
 }
 
 #[test]
