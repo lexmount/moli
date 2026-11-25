@@ -142,8 +142,9 @@ pub(super) struct StyleInvalidationCleanupApplication {
 }
 
 pub(super) struct StyleInvalidationCleanupApplicationSubtrees {
-    affected_roots: IndexSet<DomHandle>,
-    shadow_cascade_roots: IndexSet<DomHandle>,
+    pub(super) exact_nodes: IndexSet<DomHandle>,
+    pub(super) subtree_roots: IndexSet<DomHandle>,
+    pub(super) shadow_cascade_roots: Vec<DomHandle>,
 }
 
 pub(super) struct StyleInvalidationCleanupApplicationContext {
@@ -455,33 +456,37 @@ impl StyleInvalidationCleanupApplication {
 }
 
 impl StyleInvalidationCleanupApplicationSubtrees {
-    fn new(affected_roots: IndexSet<DomHandle>, shadow_cascade_roots: IndexSet<DomHandle>) -> Self {
+    fn from_exact_nodes(exact_nodes: IndexSet<DomHandle>) -> Self {
         Self {
-            affected_roots,
-            shadow_cascade_roots,
+            exact_nodes,
+            subtree_roots: IndexSet::new(),
+            shadow_cascade_roots: Vec::new(),
         }
     }
 
-    fn from_affected_roots(affected_roots: IndexSet<DomHandle>) -> Self {
+    fn from_subtree_roots(subtree_roots: IndexSet<DomHandle>) -> Self {
         Self {
-            affected_roots,
-            shadow_cascade_roots: IndexSet::new(),
+            exact_nodes: IndexSet::new(),
+            subtree_roots,
+            shadow_cascade_roots: Vec::new(),
         }
     }
 
     fn from_source_fallback_roots(roots: IndexSet<DomHandle>) -> Self {
+        let shadow_cascade_roots = roots.iter().copied().collect();
         Self {
-            affected_roots: roots.clone(),
-            shadow_cascade_roots: roots,
+            exact_nodes: IndexSet::new(),
+            subtree_roots: roots,
+            shadow_cascade_roots,
         }
-    }
-
-    pub(super) fn into_root_sets(self) -> (IndexSet<DomHandle>, IndexSet<DomHandle>) {
-        (self.affected_roots, self.shadow_cascade_roots)
     }
 }
 
 impl StyleInvalidationCleanupApplicationContext {
+    pub(super) fn has_complete_selector_targets(&self) -> bool {
+        self.class == StyleInvalidationCleanupClass::DescendantInherited
+    }
+
     pub(super) fn clear_all_reasons(
         &self,
     ) -> Option<&IndexSet<StyloSourceInvalidationFallbackReason>> {
@@ -858,10 +863,15 @@ impl StyleInvalidationCleanupTarget {
                 StyleInvalidationCleanupApplicationTarget::ClearAll,
                 Some(reasons),
             ),
-            Self::ExactAffectedSubtreeRoots(roots)
-            | Self::StructuralBoundarySubtreeRoots(roots) => (
+            Self::ExactAffectedSubtreeRoots(roots) => (
                 StyleInvalidationCleanupApplicationTarget::SubtreeRoots(
-                    StyleInvalidationCleanupApplicationSubtrees::from_affected_roots(roots),
+                    StyleInvalidationCleanupApplicationSubtrees::from_exact_nodes(roots),
+                ),
+                None,
+            ),
+            Self::StructuralBoundarySubtreeRoots(roots) => (
+                StyleInvalidationCleanupApplicationTarget::SubtreeRoots(
+                    StyleInvalidationCleanupApplicationSubtrees::from_subtree_roots(roots),
                 ),
                 None,
             ),
@@ -1034,19 +1044,15 @@ impl StyleInvalidationCleanupRootGroups {
         roots
     }
 
-    pub(super) fn into_all_roots(self) -> IndexSet<DomHandle> {
-        let mut roots = self.exact_affected_roots;
-        roots.extend(self.source_fallback_roots);
-        roots.extend(self.structural_boundary_roots);
-        roots
-    }
-
     fn into_application_subtrees(self) -> StyleInvalidationCleanupApplicationSubtrees {
-        let shadow_cascade_roots = self.source_fallback_roots.clone();
-        StyleInvalidationCleanupApplicationSubtrees::new(
-            self.into_all_roots(),
+        let shadow_cascade_roots = self.source_fallback_roots.iter().copied().collect();
+        let mut subtree_roots = self.source_fallback_roots;
+        subtree_roots.extend(self.structural_boundary_roots);
+        StyleInvalidationCleanupApplicationSubtrees {
+            exact_nodes: self.exact_affected_roots,
+            subtree_roots,
             shadow_cascade_roots,
-        )
+        }
     }
 
     fn has_any_root(&self) -> bool {

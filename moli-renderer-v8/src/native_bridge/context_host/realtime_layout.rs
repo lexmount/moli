@@ -537,6 +537,21 @@ impl PageScriptHost {
             .observed_damage
     }
 
+    #[cfg(test)]
+    pub(crate) fn screen_style_damage_for_node_for_test(
+        &self,
+        handle: DomHandle,
+    ) -> Option<ServoRestyleDamage> {
+        self.style_engine
+            .screen_style_damage_for_node_for_test(self.document_handle(), handle)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn element_style_resolutions_for_test(&self) -> u64 {
+        self.style_engine
+            .element_style_resolution_count_for_document_for_test(self.document_handle())
+    }
+
     fn screen_layout_matches_inputs(
         &self,
         state: &RealtimeLayoutState,
@@ -574,17 +589,29 @@ impl PageScriptHost {
             if !SUPPORTED_DAMAGE.contains(changes.observed_damage) {
                 return None;
             }
-            if changes.roots.is_empty() {
+            if changes.targets.is_empty() {
                 continue;
             }
             let damage = screen_styles_damage(
                 self,
                 document.document,
-                changes.roots,
+                changes.targets,
                 &baseline,
                 SUPPORTED_DAMAGE,
+                |handle, damage| {
+                    self.style_engine.record_compared_screen_style_damage(
+                        document.document,
+                        handle,
+                        damage,
+                    );
+                },
             );
-            if !SUPPORTED_DAMAGE.contains(damage) {
+            // Resolving a target can also publish damage on its ancestors.
+            if !SUPPORTED_DAMAGE.contains(damage)
+                || !self
+                    .style_engine
+                    .has_supported_screen_style_damage(document.document, SUPPORTED_DAMAGE)
+            {
                 return None;
             }
             checked_documents.push(document.document);

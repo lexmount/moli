@@ -529,7 +529,8 @@ document.body.innerHTML = `
   </style>
   <div id="probe" class="sameA">
     <div style="display:contents"><div style="height:10px"></div></div>
-  </div>`;
+  </div>
+  <div id="neighbor" class="sameA"></div>`;
 "#,
             )
             .unwrap();
@@ -547,6 +548,16 @@ document.body.innerHTML = `
         );
         assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
         let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let probe = page
+            .vm()
+            .document_runtime
+            .get_element_by_id("probe")
+            .unwrap();
+        let neighbor = page
+            .vm()
+            .document_runtime
+            .get_element_by_id("neighbor")
+            .unwrap();
 
         assert_eq!(
             page.vm_mut()
@@ -571,12 +582,21 @@ document.body.innerHTML = `
         );
 
         page.vm_mut()
-            .eval("probe.className = 'grow'; getComputedStyle(probe).color")
+            .eval(
+                "probe.className = 'grow'; neighbor.className = 'repaint'; \
+                 getComputedStyle(probe).color; getComputedStyle(neighbor).color",
+            )
             .unwrap();
         assert!(
             host.borrow()
-                .observed_screen_style_damage_for_test()
+                .screen_style_damage_for_node_for_test(probe)
+                .unwrap()
                 .contains(ServoRestyleDamage::RELAYOUT)
+        );
+        assert_eq!(
+            host.borrow()
+                .screen_style_damage_for_node_for_test(neighbor),
+            Some(ServoRestyleDamage::REPAINT),
         );
         assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
         assert_eq!(
@@ -584,6 +604,15 @@ document.body.innerHTML = `
             "200",
         );
         assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
+        assert_eq!(
+            host.borrow().screen_style_damage_for_node_for_test(probe),
+            None
+        );
+        assert_eq!(
+            host.borrow()
+                .screen_style_damage_for_node_for_test(neighbor),
+            None
+        );
 
         page.vm_mut()
             .eval("probe.className = 'pseudo'; getComputedStyle(probe).color")
@@ -597,6 +626,69 @@ document.body.innerHTML = `
             "34",
         );
         assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 3);
+    });
+}
+
+#[test]
+fn realtime_equivalent_parent_styles_only_resolve_affected_elements() {
+    run_page_vm_large_stack_async_test("realtime-exact-style-targets", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.vm_mut()
+            .eval(
+                r#"
+document.body.innerHTML = `
+  <style>
+    #parent.sameA, #parent.sameB { width: 120px; font-size: 10px }
+    #parent.inherit { font-size: 20px }
+    #parent .item { width: 2em; height: 1px }
+    #parent.wide #child { width: 60px }
+  </style>
+  <div id="parent" class="sameA"><div id="child" class="item"></div></div>`;
+const probe = document.getElementById('parent');
+probe.insertAdjacentHTML('beforeend', '<div class="item"></div>'.repeat(799));
+"#,
+            )
+            .unwrap();
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        assert_eq!(
+            page.vm_mut().eval("String(child.offsetWidth)").unwrap(),
+            "20"
+        );
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let resolutions = host.borrow().element_style_resolutions_for_test();
+        assert_eq!(
+            page.vm_mut()
+                .eval("probe.className = 'sameB'; String(child.offsetWidth)")
+                .unwrap(),
+            "20",
+        );
+        assert_eq!(
+            host.borrow().element_style_resolutions_for_test(),
+            resolutions + 1
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+
+        assert_eq!(
+            page.vm_mut()
+                .eval("probe.className = 'sameB wide'; String(child.offsetWidth)")
+                .unwrap(),
+            "60",
+        );
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    "probe.className = 'sameB wide inherit'; \
+                     getComputedStyle(probe).fontSize; String(child.nextElementSibling.offsetWidth)",
+                )
+                .unwrap(),
+            "40",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
     });
 }
 

@@ -183,6 +183,14 @@ impl StyloComputedStyleSnapshot {
             | computed_style_damage::<StyloElement<'_>>(self.after.as_ref(), current.after.as_ref())
     }
 
+    pub(crate) fn descendant_inputs_changed(&self, current: &Self) -> bool {
+        // Stylo can request a child cascade even when the parent's rendered
+        // values have no damage.
+        self.primary.flags.maybe_inherited() != current.primary.flags.maybe_inherited()
+            || self.primary.clone_container_name() != current.primary.clone_container_name()
+            || self.primary.clone_container_type() != current.primary.clone_container_type()
+    }
+
     fn from_primary(primary: ServoArc<ComputedValues>) -> Self {
         Self {
             primary,
@@ -941,7 +949,8 @@ fn publish_resolved_element_styles<E: TElement>(
     styles: ElementStyles,
     required_generation: u64,
 ) {
-    world.document_state.record_screen_style_damage(|| {
+    let handle = DomHandle::new(element.as_node().debug_id());
+    world.document_state.record_screen_style_damage(handle, || {
         if !element.as_node().is_in_document() {
             return ServoRestyleDamage::empty();
         }
@@ -964,10 +973,7 @@ fn publish_resolved_element_styles<E: TElement>(
     world
         .document_state
         .lazy_invalidation_roots
-        .mark_element_current(
-            DomHandle::new(element.as_node().debug_id()),
-            required_generation,
-        );
+        .mark_element_current(handle, required_generation);
 }
 
 fn element_style_is_current<E: TElement>(
