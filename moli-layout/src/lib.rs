@@ -74,10 +74,10 @@ pub use normalize_source::{
 };
 pub use pass::{
     AutoScrollbars, EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutFrameCoverage,
-    LayoutPassRequest, MeasuredLayoutPass, PreparedLayoutPass, ScreenshotLayoutRequest,
-    build_layout_pass, build_layout_pass_with_embedded_frames, build_screenshot_snapshot,
-    finish_measured_layout_pass, finish_prepared_layout_pass, measure_prepared_layout_pass,
-    prepare_layout_pass,
+    LayoutPassRequest, MeasuredLayoutPass, PreparedLayoutPass, RetainedLayoutWorld,
+    ScreenshotLayoutRequest, build_layout_pass, build_layout_pass_with_embedded_frames,
+    build_screenshot_snapshot, finish_measured_layout_pass, finish_prepared_layout_pass,
+    measure_prepared_layout_pass, prepare_layout_pass, prepare_layout_pass_reusing,
 };
 pub use projection::ScreenPaintLayout;
 pub use scrollbar::{

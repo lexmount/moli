@@ -338,6 +338,10 @@ impl Default for ViewportScrollPolicy {
 }
 
 impl ViewportScrollPolicy {
+    pub(crate) const fn disables_user_scrolling(self) -> bool {
+        !self.embedder_allows_user_scroll
+    }
+
     pub(crate) const fn new(
         defining_box: ViewportDefiningBox,
         effective_overflow: [LayoutOverflowMode; 2],
@@ -735,6 +739,24 @@ where
         if let Some(cache) = &mut layout_box.table_measure_cache {
             cache.clear();
         }
+    }
+
+    pub(crate) fn release_numeric_cache_storage(&mut self) {
+        self.box_caches = Vec::new();
+        for layout_box in &mut self.boxes {
+            layout_box.cache_slot = None;
+        }
+    }
+
+    pub(crate) fn replace_retained_leaf(&mut self, id: LayoutBoxId, source: N) {
+        let mut replacement = self.boxes.pop().expect("the new leaf was appended");
+        self.clear_layout_caches(id);
+        let old = &self.boxes[id.index()];
+        replacement.structural_parent = old.structural_parent;
+        replacement.parent = old.parent;
+        replacement.cache_slot = old.cache_slot;
+        self.boxes[id.index()] = replacement;
+        self.source_mapping.insert(source, id);
     }
 
     pub(crate) fn numeric_cache(&mut self, id: LayoutBoxId) -> Option<&mut Cache> {
