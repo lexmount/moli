@@ -8,6 +8,7 @@ use style::invalidation::element::restyle_hints::RestyleHint;
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 pub(super) const MAX_RETAINED_INVALIDATION_ROOTS: usize = 1_024;
+pub(super) const MAX_RETAINED_DESCENDANT_RESTYLES: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum StyleInvalidationScope {
@@ -84,11 +85,11 @@ impl LazyStyleInvalidationRoots {
                 StyleInvalidationScope::Element => entry.element = generation,
                 StyleInvalidationScope::Subtree => entry.subtree = generation,
             }
-        }
-        if retained.len() > MAX_RETAINED_INVALIDATION_ROOTS {
-            self.document_floor_generation.set(generation);
-            retained.clear();
-            self.descendant_restyles.borrow_mut().clear();
+            if retained.len() > MAX_RETAINED_INVALIDATION_ROOTS {
+                drop(retained);
+                self.coalesce_invalidation_history();
+                return;
+            }
         }
     }
 
@@ -104,7 +105,7 @@ impl LazyStyleInvalidationRoots {
         &self,
         generation: u64,
     ) -> Option<Vec<(DomHandle, StyleInvalidationScope)>> {
-        if generation < self.document_floor_generation.get() || generation > self.generation() {
+        if !self.can_replay_after(generation) {
             return None;
         }
         Some(
@@ -123,6 +124,10 @@ impl LazyStyleInvalidationRoots {
                 })
                 .collect(),
         )
+    }
+
+    pub(super) fn can_replay_after(&self, generation: u64) -> bool {
+        (self.document_floor_generation.get()..=self.generation()).contains(&generation)
     }
 
     pub(super) fn record_descendant_restyle(
@@ -145,6 +150,22 @@ impl LazyStyleInvalidationRoots {
             debug_assert!(hint.contains(RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE));
             entry.inheriting_reset = entry.inheriting_reset.max(generation);
         }
+        if restyles.len() > MAX_RETAINED_DESCENDANT_RESTYLES {
+            drop(restyles);
+            self.coalesce_invalidation_history();
+        }
+    }
+
+    fn coalesce_invalidation_history(&self) {
+        // A cascade can reach the limit midway through an observation. The
+        // floor covers every discarded entry, including newer selector targets.
+        self.document_floor_generation.set(self.generation());
+        self.roots.borrow_mut().clear();
+        self.descendant_restyles.borrow_mut().clear();
+    }
+
+    pub(super) fn descendant_restyle_count(&self) -> usize {
+        self.descendant_restyles.borrow().len()
     }
 
     pub(super) fn descendant_restyles(&self, handle: DomHandle) -> DescendantRestyles {
@@ -175,7 +196,10 @@ impl LazyStyleInvalidationRoots {
             .borrow()
             .get(&handle)
             .copied()
-            .filter(|stamp| stamp.registry_generation == self.generation())
+            .filter(|stamp| {
+                stamp.registry_generation == self.generation()
+                    && stamp.resolved_generation >= self.document_floor_generation.get()
+            })
     }
 
     pub(super) fn element_is_current(&self, element: DomHandle, required_generation: u64) -> bool {

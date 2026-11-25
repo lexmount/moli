@@ -823,6 +823,72 @@ fn lazy_child_restyle_keeps_earlier_inheritance_and_stops_at_an_override() {
 }
 
 #[test]
+fn descendant_restyle_history_limit_preserves_deferred_inheritance() {
+    use crate::style_engine::lazy_invalidation::MAX_RETAINED_DESCENDANT_RESTYLES;
+
+    let mut host = test_host();
+    let document = host.document_handle();
+    let parent = host.create_element("section");
+    let unrelated = host.create_element("aside");
+    assert!(host.append_child(document, parent));
+    assert!(host.append_child(document, unrelated));
+    let branches = (0..MAX_RETAINED_DESCENDANT_RESTYLES + 1)
+        .map(|_| {
+            let handle = host.create_element("div");
+            assert!(host.append_child(parent, handle));
+            handle
+        })
+        .collect::<Vec<_>>();
+    let deferred = host.create_element("span");
+    assert!(host.append_child(branches[0], deferred));
+
+    let engine = MoliStyleEngine::new();
+    let url = url::Url::parse("https://example.test/").unwrap();
+    let inputs = FullStyleWorldSnapshot {
+        document_stylesheet_sources: vec![StyloStylesheetSource::new(
+            "section { color: red; } section.blue { color: blue; } aside { color: green; }".into(),
+            url.clone(),
+        )],
+        ..Default::default()
+    };
+    let color = |host: &DomHost, handle| {
+        engine.computed_style_property_value(host, &url, handle, "color", None, &inputs, None)
+    };
+    let red = Some("rgb(255, 0, 0)");
+    let blue = Some("rgb(0, 0, 255)");
+    let green = Some("rgb(0, 128, 0)");
+    assert_eq!(color(&host, deferred).as_deref(), red);
+    assert_eq!(color(&host, unrelated).as_deref(), green);
+    for &branch in &branches {
+        assert_eq!(color(&host, branch).as_deref(), red);
+    }
+
+    let world = engine.world_for_document(document);
+    let invalidation = &world.document_state.lazy_invalidation_roots;
+    let before = invalidation.generation();
+    assert!(host.set_attribute(parent, "class", "blue"));
+    invalidation.record_targets(&host, document, [(parent, StyleInvalidationScope::Element)]);
+    assert_eq!(color(&host, unrelated).as_deref(), green);
+    assert!(invalidation.checked_path(unrelated).is_some());
+    assert_eq!(
+        invalidation.targets_after(before),
+        Some(vec![(parent, StyleInvalidationScope::Element)])
+    );
+
+    let mut peak = 0;
+    for branch in branches {
+        assert_eq!(color(&host, branch).as_deref(), blue);
+        peak = peak.max(invalidation.descendant_restyle_count());
+        assert!(peak <= MAX_RETAINED_DESCENDANT_RESTYLES);
+    }
+    assert_eq!(peak, MAX_RETAINED_DESCENDANT_RESTYLES);
+    assert!(invalidation.targets_after(before).is_none());
+    assert!(invalidation.checked_path(unrelated).is_none());
+    assert_eq!(color(&host, deferred).as_deref(), blue);
+    assert_eq!(color(&host, unrelated).as_deref(), green);
+}
+
+#[test]
 fn shadow_host_inherited_change_lazily_refreshes_shadow_descendant() {
     let mut host = test_host();
     let document = host.document_handle();
