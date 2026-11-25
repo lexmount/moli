@@ -1,5 +1,8 @@
 use super::super::*;
-use crate::native_bridge::document::{CreateElementOptions, flatten_create_element_options};
+use crate::native_bridge::document::{
+    CreateElementOptions, construction::validate_processing_instruction,
+    flatten_create_element_options,
+};
 use crate::webidl;
 
 #[derive(webidl::WebIdlArgs)]
@@ -19,8 +22,8 @@ struct DetachedDocumentCreateCommentArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createProcessingInstruction")]
 struct DetachedDocumentCreateProcessingInstructionArgs {
-    #[webidl(index = 1, required)]
-    target: String,
+    #[webidl(index = 1, required, converter = "raw")]
+    target: webidl::DomString16,
     #[webidl(index = 2, required)]
     data: String,
 }
@@ -105,30 +108,11 @@ pub(in crate::native_bridge) fn bridge_detached_create_processing_instruction_ca
     else {
         return;
     };
-    if !is_valid_pi_target(&parsed.target) {
-        throw_dom_exception(
-            scope,
-            "InvalidCharacterError",
-            5,
-            "String contains an invalid character",
-        );
+    let Some(target) = validate_processing_instruction(scope, &parsed.target.0, &parsed.data)
+    else {
         return;
-    }
-    if parsed.data.contains("?>") {
-        throw_dom_exception(
-            scope,
-            "InvalidCharacterError",
-            5,
-            "String contains an invalid character",
-        );
-        return;
-    }
-    match build_detached_processing_instruction_object(
-        scope,
-        document,
-        &parsed.target,
-        &parsed.data,
-    ) {
+    };
+    match build_detached_processing_instruction_object(scope, document, &target, &parsed.data) {
         Some(node) => rv.set(node.into()),
         None => rv.set_null(),
     }

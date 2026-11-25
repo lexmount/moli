@@ -208,24 +208,10 @@ pub(in crate::native_bridge) fn bridge_create_processing_instruction_callback<'s
     else {
         return;
     };
-    if !is_valid_pi_target(&parsed.target) {
-        throw_dom_exception(
-            scope,
-            "InvalidCharacterError",
-            5,
-            "String contains an invalid character",
-        );
+    let Some(target) = validate_processing_instruction(scope, &parsed.target.0, &parsed.data)
+    else {
         return;
-    }
-    if parsed.data.contains("?>") {
-        throw_dom_exception(
-            scope,
-            "InvalidCharacterError",
-            5,
-            "String contains an invalid character",
-        );
-        return;
-    }
+    };
     let bridge = args.this();
     let Ok((runtime_ptr, document_handle)) = node_runtime_and_handle_from_object(scope, bridge)
     else {
@@ -233,11 +219,8 @@ pub(in crate::native_bridge) fn bridge_create_processing_instruction_callback<'s
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let handle = runtime.create_processing_instruction_for_document(
-        document_handle,
-        &parsed.target,
-        &parsed.data,
-    );
+    let handle =
+        runtime.create_processing_instruction_for_document(document_handle, &target, &parsed.data);
     runtime.capture_node_creation_stack_trace(scope, handle);
     match runtime.native_bridge_mut().wrap_handle_for_receiver(
         scope,
