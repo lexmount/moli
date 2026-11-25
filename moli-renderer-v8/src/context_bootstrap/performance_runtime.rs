@@ -195,6 +195,10 @@ pub(crate) struct ResourcePerformanceEntry {
 }
 
 impl ResourcePerformanceEntry {
+    pub(crate) fn mark_render_blocking(&mut self) {
+        "blocking".clone_into(&mut self.render_blocking_status);
+    }
+
     pub(crate) fn from_network_result(
         name: impl Into<String>,
         initiator_type: &'static str,

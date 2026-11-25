@@ -119,12 +119,19 @@ impl DocumentRuntime {
             } else {
                 !source_owners.is_empty()
             };
-            performance_entries.push(ResourcePerformanceEntry::from_network_result(
+            let mut entry = ResourcePerformanceEntry::from_network_result(
                 request_url.as_str(),
                 resource_timing_initiator_type,
                 start_unix_millis,
                 &result,
-            ));
+            );
+            if stylesheet_fetch
+                .as_ref()
+                .is_some_and(|fetch| fetch.render_blocking())
+            {
+                entry.mark_render_blocking();
+            }
+            performance_entries.push(entry);
             if resource_type == SubresourceResourceType::Stylesheet && stylesheet_fetch.is_none() {
                 let validated_response = result
                     .as_ref()
