@@ -626,6 +626,69 @@ async fn viewport_pointer_requires_a_current_rendered_document() -> Result<()> {
 }
 
 #[tokio::test]
+async fn viewport_pointer_events_all_restores_link_targeting() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser
+        .fetch(&html_url(
+            r##"<!doctype html><style>
+                body { margin: 0; }
+                #background, #sidebar { position: absolute; inset: 0; }
+                #sidebar { pointer-events: none; }
+                #next { display: block; width: 80px; height: 40px; pointer-events: all; }
+                #title { display: block; height: 100%; }
+            </style>
+            <div id="background"></div>
+            <div id="sidebar"><a id="next" href="#related"><span id="title">Next video</span></a></div>
+            <div id="related"></div>
+            <script>
+                document.addEventListener('click', event => {
+                    window.clicked = [event.target.id, event.isTrusted];
+                });
+            </script>"##,
+        ))
+        .await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let current = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+
+    let hit = page
+        .evaluate_runtime_expression_async(
+            r#"[
+                CSS.supports('pointer-events', 'all'),
+                getComputedStyle(document.getElementById('title')).pointerEvents,
+                document.elementFromPoint(12, 12).id,
+                document.elementFromPoint(120, 12).id
+            ].join('|')"#,
+        )
+        .await?;
+    assert_eq!(hit["value"], "true|all|title|background");
+
+    for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+        assert!(
+            page.dispatch_viewport_pointer(RendererViewportPointerInput {
+                document: current.document,
+                viewport_revision: current.viewport_revision,
+                position: (12., 12.),
+                event,
+                button: 0,
+                buttons,
+                click_count: 1,
+                modifiers: 0,
+            })
+            .await?
+            .is_some()
+        );
+    }
+    let result = page
+        .evaluate_runtime_expression_async("JSON.stringify([window.clicked, location.hash])")
+        .await?;
+    assert_eq!(result["value"], r##"[["title",true],"#related"]"##);
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_wheel_preserves_the_accepted_buttons_and_iframe_drag_route() -> Result<()> {
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
