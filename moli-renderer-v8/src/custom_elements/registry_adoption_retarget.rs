@@ -8,6 +8,28 @@ use crate::{
     native_bridge::PageScriptHost,
 };
 
+pub(crate) fn same_document_adoption_needs_registry_retargets(
+    host: &PageScriptHost,
+    roots: &[DomHandle],
+) -> bool {
+    // Same-document adoption keeps the root's inherited registry and any
+    // explicit associations in its shadow-including subtree.
+    if !host.has_explicit_custom_element_registry_associations() {
+        return false;
+    }
+    if roots
+        .iter()
+        .any(|&root| should_preserve_same_document_registry_association(host, root))
+    {
+        return true;
+    }
+    roots.iter().any(|&root| {
+        host.dom_host()
+            .shadow_including_subtree(root)
+            .any(|handle| host.custom_element_registry_association(handle).is_some())
+    })
+}
+
 pub(crate) fn adoption_plan_before_adoption(
     host_ptr: *mut PageScriptHost,
     adoption_targets: &[DomAdoptionTarget],
@@ -26,7 +48,7 @@ pub(crate) fn adoption_plan_before_adoption(
             .map(|parent| descendant_policies[parent])
             .unwrap_or_else(|| {
                 (
-                    should_preserve_same_document_registry_association(host_ptr, handle),
+                    should_preserve_same_document_registry_association(host, handle),
                     false,
                 )
             });
@@ -77,10 +99,10 @@ pub(crate) fn adoption_plan_before_adoption(
 }
 
 fn should_preserve_same_document_registry_association(
-    host_ptr: *mut PageScriptHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
 ) -> bool {
-    let host = unsafe { &*host_ptr }.dom_host();
+    let host = runtime.dom_host();
     host.node(root)
         .and_then(Node::parent_node)
         .is_some_and(|parent| {
