@@ -4,7 +4,6 @@ use std::{
 };
 
 use indexmap::{IndexMap, IndexSet};
-use moli_selector::StyloSourceInvalidationFallbackReason;
 use selectors::context::SelectorCaches;
 use style::{
     servo::restyle_damage::ServoRestyleDamage,
@@ -463,7 +462,6 @@ impl StyleDocumentState {
         self.retained_style_system.borrow_mut().take();
         self.style_paths.clear();
         self.clear_source_dirty_scopes();
-        self.clear_invalidation_clear_all_fallback_reasons();
         self.clear_selector_caches();
     }
 
@@ -496,27 +494,6 @@ impl StyleDocumentState {
 
     pub(super) fn clear_source_dirty_scopes(&self) {
         self.source_dirty_scopes.clear();
-    }
-
-    pub(super) fn record_invalidation_clear_all_fallback_reasons(
-        &self,
-        reasons: impl IntoIterator<Item = StyloSourceInvalidationFallbackReason>,
-    ) {
-        self.source_dirty_scopes
-            .record_invalidation_clear_all_fallback_reasons(reasons);
-    }
-
-    pub(super) fn clear_invalidation_clear_all_fallback_reasons(&self) {
-        self.source_dirty_scopes
-            .clear_invalidation_clear_all_fallback_reasons();
-    }
-
-    #[cfg(test)]
-    pub(super) fn invalidation_clear_all_fallback_reasons_for_test(
-        &self,
-    ) -> Vec<StyloSourceInvalidationFallbackReason> {
-        self.source_dirty_scope_snapshot()
-            .invalidation_clear_all_fallback_reasons_vec()
     }
 
     #[cfg(test)]

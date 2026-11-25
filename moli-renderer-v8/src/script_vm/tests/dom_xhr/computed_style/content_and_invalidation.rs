@@ -572,7 +572,11 @@ fn modal_dialog_user_agent_visibility_overrides_inheritance() {
     let mut vm = new_parsed_test_vm(
         "https://modal-dialog-user-agent-visibility.test/",
         r#"<!doctype html>
-<div style="visibility: hidden"><dialog id="target">Dialog</dialog></div>"#,
+<style>
+span { color: rgb(1, 2, 3); }
+dialog:modal + span { color: rgb(4, 5, 6); }
+</style>
+<div style="visibility: hidden"><dialog id="target">Dialog</dialog><span></span></div>"#,
     );
 
     let result = vm
@@ -580,24 +584,32 @@ fn modal_dialog_user_agent_visibility_overrides_inheritance() {
             r#"
 (() => {
   const dialog = document.getElementById('target');
+  const sibling = dialog.nextElementSibling;
+  const read = () => getComputedStyle(dialog).visibility + ',' + getComputedStyle(sibling).color;
   dialog.show();
-  const values = [getComputedStyle(dialog).visibility];
+  const values = [read()];
   dialog.close();
 
   dialog.showModal();
-  values.push(getComputedStyle(dialog).visibility);
+  values.push(read());
   dialog.close();
+  values.push(read());
 
   dialog.style.visibility = 'hidden';
   dialog.showModal();
-  values.push(getComputedStyle(dialog).visibility);
+  values.push(read());
+  dialog.removeAttribute('open');
+  values.push(read());
   return values.join('|');
 })()
 "#,
         )
         .expect("modal dialog user-agent visibility should evaluate");
 
-    assert_eq!(result, "hidden|visible|hidden");
+    assert_eq!(
+        result,
+        "hidden,rgb(1, 2, 3)|visible,rgb(4, 5, 6)|hidden,rgb(1, 2, 3)|hidden,rgb(4, 5, 6)|hidden,rgb(1, 2, 3)"
+    );
 }
 
 #[test]

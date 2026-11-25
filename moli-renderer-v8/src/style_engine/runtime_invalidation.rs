@@ -1,38 +1,22 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use dom::ElementState as StyloElementState;
-use moli_selector::{
-    CssDirection, StyloStyleSourceScope as StyleSourceScope, html_auto_directionality_root,
-    html_directionality,
-};
+use moli_selector::{CssDirection, html_auto_directionality_root, html_directionality};
 use smallvec::SmallVec;
 
-use crate::{
-    document_runtime::DomHandle, dom::native::DomHost, protocol_types::EmulatedMediaOverrides,
-};
+#[cfg(test)]
+use crate::protocol_types::EmulatedMediaOverrides;
+use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
-#[cfg(test)]
-use super::pending_invalidation::PendingStyleInvalidationWork;
-#[cfg(test)]
-use super::schedule::queue_style_invalidation_targets;
-#[cfg(test)]
-use super::target_queries::PendingStyleInvalidationTargetQueries;
 use super::{
-    MoliStyleEngine, StyleMutationEffect, StyleViewport,
+    MoliStyleEngine, StyleMutationEffect,
     cause::PendingStyleInvalidationCause,
     document_world::DocumentStyleWorld,
-    eligibility::child_list_effects_have_current_topology,
     mutation_effect::{
         detached_style_subtree_roots_for_mutations, retain_live_structural_mutation_effects,
     },
-    schedule::queue_style_invalidation_for_scope,
-    scope::{
-        mutation_effects_have_source_scope, source_scope_for_custom_state_change,
-        source_scope_for_element_state_change, source_scope_for_mutations,
-    },
+    snapshot::snapshot_state_change,
 };
-
-const IMMEDIATE_STRUCTURAL_MUTATION_EFFECT_LIMIT: usize = 256;
 
 type StyleMutationGroups<'a> = SmallVec<[(DomHandle, Cow<'a, [StyleMutationEffect]>); 1]>;
 
@@ -49,170 +33,43 @@ impl MoliStyleEngine {
         &mut self,
         host: &DomHost,
         effects: &[StyleMutationEffect],
-        emulated_media: &EmulatedMediaOverrides,
+        _emulated_media: &EmulatedMediaOverrides,
     ) {
-        self.invalidate_for_mutations_with_viewport(
-            host,
-            effects,
-            emulated_media,
-            StyleViewport::default(),
-        );
+        self.invalidate_dom_mutations(host, effects);
     }
 
-    pub(crate) fn invalidate_for_mutations_with_viewport(
+    pub(crate) fn invalidate_dom_mutations(
         &mut self,
         host: &DomHost,
         effects: &[StyleMutationEffect],
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
     ) {
-        let profile_enabled = moli_trace::cpu_profile_enabled();
-        let total_started = profile_enabled.then(std::time::Instant::now);
-        let grouping_started = profile_enabled.then(std::time::Instant::now);
-        let grouped_effects = style_mutation_effects_by_owner_document(host, effects);
-        let document_count = grouped_effects.len();
-        let grouping_us = grouping_started
-            .map(|started| started.elapsed().as_micros())
-            .unwrap_or_default();
-        let mut no_cached_style_us = 0u128;
-        let mut deferred_us = 0u128;
-        let mut detached_cleanup_us = 0u128;
-        let mut queue_us = 0u128;
-        for (document, document_effects) in &grouped_effects {
-            let document = *document;
-            let document_effects = document_effects.as_ref();
+        for (document, effects) in style_mutation_effects_by_owner_document(host, effects) {
             let world = self.world_for_document(document);
-            world.document_state.note_screen_style_attribute_changes(
-                document_effects.iter().filter_map(|effect| {
+            world
+                .document_state
+                .note_screen_style_attribute_changes(effects.iter().filter_map(|effect| {
                     let StyleMutationEffect::Attribute { element, name, .. } = effect else {
                         return None;
                     };
                     (!DomHost::attribute_affects_native_layout(name) && host.is_connected(*element))
                         .then_some(*element)
-                }),
-            );
-            let no_cached_style_started = profile_enabled.then(std::time::Instant::now);
-            if self.style_invalidation_without_cached_styles_is_complete(document_effects, &world) {
-                no_cached_style_us += no_cached_style_started
-                    .map(|started| started.elapsed().as_micros())
-                    .unwrap_or_default();
-                continue;
-            }
-            no_cached_style_us += no_cached_style_started
-                .map(|started| started.elapsed().as_micros())
-                .unwrap_or_default();
-            if should_defer_structural_mutations(document_effects) {
-                let deferred_started = profile_enabled.then(std::time::Instant::now);
+                }));
+            if !world_has_style_state(self, &world) {
+                world.document_state.note_full_screen_style_invalidation();
                 world.document_state.note_style_input_change();
-                world
-                    .pending_structural_mutations
-                    .push(document_effects, emulated_media, viewport);
-                deferred_us += deferred_started
-                    .map(|started| started.elapsed().as_micros())
-                    .unwrap_or_default();
                 continue;
             }
-            self.invalidate_mutation_dependent_subtrees(&world, host, document_effects);
-            let detached_cleanup_started = profile_enabled.then(std::time::Instant::now);
-            self.invalidate_detached_style_subtrees_for_mutations(host, document_effects);
-            detached_cleanup_us += detached_cleanup_started
-                .map(|started| started.elapsed().as_micros())
-                .unwrap_or_default();
-            let queue_started = profile_enabled.then(std::time::Instant::now);
-            self.queue_style_invalidation_for_mutations(
-                &world,
-                host,
-                document_effects,
-                emulated_media,
-                viewport,
-            );
-            queue_us += queue_started
-                .map(|started| started.elapsed().as_micros())
-                .unwrap_or_default();
-        }
-        if let Some(started) = total_started {
-            let total_us = started.elapsed().as_micros();
-            if total_us >= 500 {
-                tracing::info!(
-                    target: "moli_cpu_profile",
-                    stage = "style_invalidate_mutations",
-                    effect_count = effects.len(),
-                    document_count,
-                    grouping_us,
-                    no_cached_style_us,
-                    deferred_us,
-                    detached_cleanup_us,
-                    queue_us,
-                    total_us,
-                );
-            }
-        }
-    }
-
-    fn style_invalidation_without_cached_styles_is_complete(
-        &self,
-        effects: &[StyleMutationEffect],
-        world: &DocumentStyleWorld,
-    ) -> bool {
-        if world_has_style_state(self, world) {
-            return false;
-        }
-        world.document_state.note_full_screen_style_invalidation();
-        if mutation_effects_have_source_scope(effects) {
             world.document_state.note_style_input_change();
-        }
-        true
-    }
-
-    fn queue_style_invalidation_for_mutations(
-        &self,
-        world: &DocumentStyleWorld,
-        host: &DomHost,
-        effects: &[StyleMutationEffect],
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
-    ) {
-        let profile_enabled = moli_trace::cpu_profile_enabled();
-        let total_started = profile_enabled.then(std::time::Instant::now);
-        let source_scope_started = profile_enabled.then(std::time::Instant::now);
-        let source_scope = source_scope_for_mutations(host, effects);
-        let source_scope_us = source_scope_started
-            .map(|started| started.elapsed().as_micros())
-            .unwrap_or_default();
-        let pending_effects_started = profile_enabled.then(std::time::Instant::now);
-        let pending_effects = effects
-            .iter()
-            .filter(|effect| !matches!(effect, StyleMutationEffect::DisconnectedSubtrees { .. }))
-            .cloned()
-            .collect();
-        let pending_effects_us = pending_effects_started
-            .map(|started| started.elapsed().as_micros())
-            .unwrap_or_default();
-        let queue_scope_started = profile_enabled.then(std::time::Instant::now);
-        self.queue_style_invalidation_scope(
-            world.document,
-            world,
-            host,
-            emulated_media,
-            viewport,
-            source_scope,
-            PendingStyleInvalidationCause::Mutation(pending_effects),
-        );
-        if let Some(started) = total_started {
-            let total_us = started.elapsed().as_micros();
-            if total_us >= 500 {
-                tracing::info!(
-                    target: "moli_cpu_profile",
-                    stage = "queue_style_invalidation_for_mutations",
-                    effect_count = effects.len(),
-                    source_scope_us,
-                    pending_effects_us,
-                    queue_scope_us = queue_scope_started
-                        .map(|started| started.elapsed().as_micros())
-                        .unwrap_or_default(),
-                    total_us,
-                );
+            if should_defer_structural_mutations(&effects) {
+                world.pending_structural_mutations.push(&effects);
+                continue;
             }
+            self.invalidate_mutation_dependent_subtrees(&world, host, &effects);
+            self.invalidate_detached_style_subtrees_for_mutations(host, &effects);
+            world
+                .pending_invalidations
+                .borrow_mut()
+                .record_mutations(&world, host, &effects);
         }
     }
 
@@ -220,50 +77,17 @@ impl MoliStyleEngine {
         &self,
         host: &DomHost,
         world: &DocumentStyleWorld,
-    ) -> bool {
-        let groups = world.pending_structural_mutations.take();
-        let had_structural_mutations = !groups.is_empty();
-        for group in groups {
-            let (mut effects, input_count) = group.effects.into_effects();
-            // Exhausted fragments can still contribute detached roots and source
-            // ownership. Resolve these against the full history before pruning.
-            self.invalidate_detached_style_subtrees_for_mutations(host, &effects);
-            self.invalidate_mutation_dependent_subtrees(world, host, &effects);
-            let source_scope = source_scope_for_mutations(host, &effects);
-            let merged_count = effects.len();
-            retain_live_structural_mutation_effects(host, &mut effects);
-            if !mutation_effects_have_source_scope(&effects) {
-                continue;
-            }
-
-            // Keep the original cutoff for batches with no exhausted fragment
-            // history. Otherwise count only the work left after pruning.
-            let effect_count = if effects.len() == merged_count {
-                input_count
-            } else {
-                effects.len()
-            };
-            let pending_effects = if effect_count <= IMMEDIATE_STRUCTURAL_MUTATION_EFFECT_LIMIT
-                && child_list_effects_have_current_topology(host, &effects)
-            {
-                effects.retain(|effect| {
-                    !matches!(effect, StyleMutationEffect::DisconnectedSubtrees { .. })
-                });
-                effects
-            } else {
-                Vec::new()
-            };
-            self.queue_style_invalidation_scope(
-                world.document,
-                world,
-                host,
-                &group.emulated_media,
-                group.viewport,
-                source_scope,
-                PendingStyleInvalidationCause::Mutation(pending_effects),
-            );
-        }
-        had_structural_mutations
+    ) {
+        let Some(mut effects) = world.pending_structural_mutations.take() else {
+            return;
+        };
+        self.invalidate_detached_style_subtrees_for_mutations(host, &effects);
+        self.invalidate_mutation_dependent_subtrees(world, host, &effects);
+        retain_live_structural_mutation_effects(host, &mut effects);
+        world
+            .pending_invalidations
+            .borrow_mut()
+            .record_mutations(world, host, &effects);
     }
 
     fn invalidate_mutation_dependent_subtrees(
@@ -336,65 +160,38 @@ impl MoliStyleEngine {
         host: &DomHost,
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
-        emulated_media: &EmulatedMediaOverrides,
+        _emulated_media: &EmulatedMediaOverrides,
     ) {
-        self.invalidate_for_focus_change_with_viewport(
-            host,
-            previous,
-            next,
-            emulated_media,
-            StyleViewport::default(),
-        );
+        self.invalidate_focus_change(host, previous, next);
     }
 
-    pub(crate) fn invalidate_for_focus_change_with_viewport(
+    pub(crate) fn invalidate_focus_change(
         &mut self,
         host: &DomHost,
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
     ) {
-        self.invalidate_for_focus_change_with_previous_focus_within_and_viewport(
-            host,
-            previous,
-            next,
-            None,
-            emulated_media,
-            viewport,
-        );
+        self.invalidate_focus_change_with_previous_focus_within(host, previous, next, None);
     }
 
-    pub(crate) fn invalidate_for_focus_change_with_previous_focus_within_and_viewport(
+    pub(crate) fn invalidate_focus_change_with_previous_focus_within(
         &mut self,
         host: &DomHost,
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
         previous_focus_within: Option<Vec<DomHandle>>,
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
     ) {
         let document_scopes =
             focus_change_document_scopes(host, previous, next, previous_focus_within.as_deref());
-        if document_scopes.is_empty() {
-            return;
-        }
-        for document_scope in document_scopes {
-            let world = self.world_for_document(document_scope.document);
-            self.queue_style_invalidation_scope(
-                document_scope.document,
+        for scope in document_scopes {
+            let world = self.world_for_document(scope.document);
+            self.queue_state_snapshot(
                 &world,
                 host,
-                emulated_media,
-                viewport,
-                Some(StyleSourceScope::for_handles(
-                    host,
-                    document_scope.source_handles.iter().copied(),
-                )),
                 PendingStyleInvalidationCause::FocusChange {
-                    previous: document_scope.previous,
-                    next: document_scope.next,
-                    previous_focus_within: non_empty_vec(document_scope.previous_focus_within),
+                    previous: scope.previous,
+                    next: scope.next,
+                    previous_focus_within: scope.previous_focus_within,
                 },
             );
         }
@@ -407,31 +204,21 @@ impl MoliStyleEngine {
         element: DomHandle,
         state: StyloElementState,
         old_state: Option<StyloElementState>,
-        emulated_media: &EmulatedMediaOverrides,
+        _emulated_media: &EmulatedMediaOverrides,
     ) {
-        self.invalidate_for_element_state_change_with_old_state_and_viewport(
-            host,
-            element,
-            state,
-            old_state,
-            emulated_media,
-            StyleViewport::default(),
-        );
+        self.invalidate_element_state_change(host, element, state, old_state);
     }
 
-    pub(crate) fn invalidate_for_element_state_change_with_old_state_and_viewport(
+    pub(crate) fn invalidate_element_state_change(
         &mut self,
         host: &DomHost,
         element: DomHandle,
         state: StyloElementState,
         old_state: Option<StyloElementState>,
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
     ) {
         let Some(document) = owner_document_for_handle(host, element) else {
             return;
         };
-        let source_scope = source_scope_for_element_state_change(host, element, state);
         let world = self.world_for_document(document);
         if state.intersects(StyloElementState::LTR | StyloElementState::RTL)
             && html_auto_directionality_root(host, element) == Some(element)
@@ -443,13 +230,9 @@ impl MoliStyleEngine {
             self.invalidation_cleanup_for_world(&world)
                 .invalidate_subtrees(host, [element]);
         }
-        self.queue_style_invalidation_scope(
-            document,
+        self.queue_state_snapshot(
             &world,
             host,
-            emulated_media,
-            viewport,
-            source_scope,
             PendingStyleInvalidationCause::StateChange {
                 element,
                 state,
@@ -465,42 +248,30 @@ impl MoliStyleEngine {
         element: DomHandle,
         state_names: Vec<String>,
         old_custom_states: Vec<String>,
-        emulated_media: &EmulatedMediaOverrides,
+        _emulated_media: &EmulatedMediaOverrides,
     ) {
-        self.invalidate_for_custom_state_change_with_viewport(
-            host,
-            element,
-            state_names,
-            old_custom_states,
-            emulated_media,
-            StyleViewport::default(),
-        );
+        self.invalidate_custom_state_change(host, element, state_names, old_custom_states);
     }
 
-    pub(crate) fn invalidate_for_custom_state_change_with_viewport(
+    pub(crate) fn invalidate_custom_state_change(
         &mut self,
         host: &DomHost,
         element: DomHandle,
         state_names: Vec<String>,
         old_custom_states: Vec<String>,
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
     ) {
         let Some(document) = owner_document_for_handle(host, element) else {
             return;
         };
-        let source_scope = source_scope_for_custom_state_change(host, element, &state_names);
+        if state_names.is_empty() {
+            return;
+        }
         let world = self.world_for_document(document);
-        self.queue_style_invalidation_scope(
-            document,
+        self.queue_state_snapshot(
             &world,
             host,
-            emulated_media,
-            viewport,
-            source_scope,
             PendingStyleInvalidationCause::CustomStateChange {
                 element,
-                state_names,
                 old_custom_states,
             },
         );
@@ -512,44 +283,26 @@ impl MoliStyleEngine {
         host: &DomHost,
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
-        emulated_media: &EmulatedMediaOverrides,
+        _emulated_media: &EmulatedMediaOverrides,
     ) {
-        self.invalidate_for_target_change_with_viewport(
-            host,
-            previous,
-            next,
-            emulated_media,
-            StyleViewport::default(),
-        );
+        self.invalidate_target_change(host, previous, next);
     }
 
-    pub(crate) fn invalidate_for_target_change_with_viewport(
+    pub(crate) fn invalidate_target_change(
         &mut self,
         host: &DomHost,
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
     ) {
         let document_scopes = target_change_document_scopes(host, previous, next);
-        if document_scopes.is_empty() {
-            return;
-        }
-        for document_scope in document_scopes {
-            let world = self.world_for_document(document_scope.document);
-            self.queue_style_invalidation_scope(
-                document_scope.document,
+        for scope in document_scopes {
+            let world = self.world_for_document(scope.document);
+            self.queue_state_snapshot(
                 &world,
                 host,
-                emulated_media,
-                viewport,
-                Some(StyleSourceScope::for_handles(
-                    host,
-                    document_scope.source_handles.iter().copied(),
-                )),
                 PendingStyleInvalidationCause::TargetChange {
-                    previous: document_scope.previous,
-                    next: document_scope.next,
+                    previous: scope.previous,
+                    next: scope.next,
                 },
             );
         }
@@ -581,74 +334,49 @@ impl MoliStyleEngine {
             .invalidate_subtrees_and_shadow_cascade_data(host, [root]);
     }
 
-    fn queue_style_invalidation_scope(
+    fn queue_state_snapshot(
         &self,
-        document: DomHandle,
         world: &DocumentStyleWorld,
         host: &DomHost,
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
-        source_scope: Option<StyleSourceScope>,
         cause: PendingStyleInvalidationCause,
     ) {
-        let Some(source_scope) = source_scope else {
-            return;
-        };
+        world.document_state.note_style_input_change();
         if !world_has_style_state(self, world) {
-            world.document_state.note_style_input_change();
             return;
         }
-        if let Some(snapshots) = super::native_invalidation::snapshots_for_native_invalidation(
-            &self.dom_adapter,
-            world,
-            host,
-            &cause,
-            emulated_media,
-            viewport,
-        ) {
-            world.document_state.note_style_input_change();
-            if !snapshots.snapshots.is_empty() {
-                world.pending_invalidations.extend_work(
-                    super::pending_invalidation::PendingStyleInvalidationWork::with_native_snapshots(
-                        cause.work_kind(),
-                        snapshots,
-                        cause.pending_merge_class(),
-                    ),
-                );
+        let mut pending = world.pending_invalidations.borrow_mut();
+        if let PendingStyleInvalidationCause::StateChange {
+            element,
+            state,
+            old_state: None,
+        } = cause
+        {
+            // Some host state changes report what could have changed without
+            // the old bits. Invalidate their scope only if such selectors exist.
+            if world
+                .document_state
+                .try_with_retained_style_system(|retained| {
+                    host.has_shadow_roots()
+                        || retained
+                            .stylist
+                            .iter_origins()
+                            .any(|(data, _)| data.has_state_dependency(state))
+                })
+                != Some(false)
+            {
+                pending.invalidate_subtrees([host.parent_node(element).unwrap_or(element)]);
             }
             return;
         }
-        let source_stores = world.borrow_source_stores();
-        queue_style_invalidation_for_scope(
-            &world.pending_invalidations,
-            &world.document_state,
-            &source_stores,
-            &self.dom_adapter,
+        let mut snapshots = moli_selector::StyleMutationSnapshots::default();
+        snapshot_state_change(
             host,
-            document,
-            emulated_media,
-            viewport,
-            Some(source_scope),
+            &self.dom_adapter,
+            world.document,
+            &mut snapshots,
             cause,
         );
-    }
-
-    #[cfg(test)]
-    pub(super) fn queue_style_invalidation_targets_for_document_for_test(
-        &self,
-        document: DomHandle,
-        cause: PendingStyleInvalidationCause,
-        target_queries: Vec<PendingStyleInvalidationTargetQueries>,
-    ) {
-        let world = self.world_for_document(document);
-        queue_style_invalidation_targets(
-            &world.pending_invalidations,
-            PendingStyleInvalidationWork::new(
-                cause.work_kind(),
-                target_queries,
-                cause.pending_merge_class(),
-            ),
-        );
+        pending.extend_snapshots(host, snapshots);
     }
 
     #[cfg(test)]
@@ -816,14 +544,12 @@ struct FocusChangeDocumentScope {
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
     previous_focus_within: Vec<DomHandle>,
-    source_handles: Vec<DomHandle>,
 }
 
 struct TargetChangeDocumentScope {
     document: DomHandle,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
-    source_handles: Vec<DomHandle>,
 }
 
 fn focus_change_document_scopes(
@@ -839,7 +565,6 @@ fn focus_change_document_scopes(
         };
         let scope = focus_change_scope_for_document(&mut scopes, document);
         scope.previous = Some(previous);
-        push_unique_handle(&mut scope.source_handles, previous);
     }
     if let Some(next) = next {
         let Some(document) = owner_document_for_handle(host, next) else {
@@ -847,7 +572,6 @@ fn focus_change_document_scopes(
         };
         let scope = focus_change_scope_for_document(&mut scopes, document);
         scope.next = Some(next);
-        push_unique_handle(&mut scope.source_handles, next);
     }
     for handle in previous_focus_within.into_iter().flatten().copied() {
         let Some(document) = owner_document_for_handle(host, handle) else {
@@ -855,7 +579,6 @@ fn focus_change_document_scopes(
         };
         let scope = focus_change_scope_for_document(&mut scopes, document);
         push_unique_handle(&mut scope.previous_focus_within, handle);
-        push_unique_handle(&mut scope.source_handles, handle);
     }
     scopes
 }
@@ -872,7 +595,6 @@ fn target_change_document_scopes(
         };
         let scope = target_change_scope_for_document(&mut scopes, document);
         scope.previous = Some(previous);
-        push_unique_handle(&mut scope.source_handles, previous);
     }
     if let Some(next) = next {
         let Some(document) = owner_document_for_handle(host, next) else {
@@ -880,7 +602,6 @@ fn target_change_document_scopes(
         };
         let scope = target_change_scope_for_document(&mut scopes, document);
         scope.next = Some(next);
-        push_unique_handle(&mut scope.source_handles, next);
     }
     scopes
 }
@@ -897,7 +618,6 @@ fn focus_change_scope_for_document(
         previous: None,
         next: None,
         previous_focus_within: Vec::new(),
-        source_handles: Vec::new(),
     });
     scopes
         .last_mut()
@@ -915,7 +635,6 @@ fn target_change_scope_for_document(
         document,
         previous: None,
         next: None,
-        source_handles: Vec::new(),
     });
     scopes
         .last_mut()
@@ -925,14 +644,6 @@ fn target_change_scope_for_document(
 fn push_unique_handle(handles: &mut Vec<DomHandle>, handle: DomHandle) {
     if !handles.contains(&handle) {
         handles.push(handle);
-    }
-}
-
-fn non_empty_vec(handles: Vec<DomHandle>) -> Option<Vec<DomHandle>> {
-    if handles.is_empty() {
-        None
-    } else {
-        Some(handles)
     }
 }
 

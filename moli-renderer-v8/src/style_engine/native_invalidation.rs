@@ -1,213 +1,567 @@
-use dom::ElementState;
 use indexmap::IndexSet;
-use moli_selector::{MoliStyleMutationSnapshot, StyloDomStyleAdapter};
+use moli_selector::{
+    StyleMutationSnapshots, StyloDomHostBinding, StyloDomStyleAdapter, StyloElement,
+};
+use selectors::{Element, matching::ElementSelectorFlags};
 use style::{
-    LocalName, data::ElementData, dom::TElement, invalidation::element::restyle_hints::RestyleHint,
+    LocalName,
+    data::ElementData,
+    dom::{TElement, TNode},
+    invalidation::element::{
+        invalidator::SiblingTraversalMap,
+        relative_selector::{DomMutationOperation, RelativeSelectorInvalidator},
+        state_and_attributes::invalidate_snapshot_dependencies,
+    },
 };
 
 use crate::{
-    document_runtime::DomHandle, dom::native::DomHost, protocol_types::EmulatedMediaOverrides,
+    document_runtime::DomHandle,
+    dom::native::{DomHost, Node},
 };
 
 use super::{
-    StyleMutationEffect, StyleTreeScopeVersions, StyleViewport, StyloStyleEnvironment,
-    cause::PendingStyleInvalidationCause,
-    computed::{document_quirks_mode, with_resolution_context_and_snapshots},
-    document_world::DocumentStyleWorld,
-    snapshot::moli_style_mutation_snapshot_for_pending_cause,
+    StyleMutationEffect, cleanup::StyleInvalidationCleanup,
+    computed::with_resolution_context_and_snapshots, document_world::DocumentStyleWorld,
 };
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct NativeSnapshotBatch {
-    pub(super) snapshots: MoliStyleMutationSnapshot,
-    former_parents: IndexSet<DomHandle>,
+#[derive(Default)]
+pub(super) struct PendingNativeInvalidation {
+    pub(super) snapshots: StyleMutationSnapshots,
+    original_parents: IndexSet<DomHandle>,
+    structures: Vec<StyleMutationEffect>,
+    subtrees: IndexSet<DomHandle>,
 }
 
-impl NativeSnapshotBatch {
-    pub(super) fn merge_from(&mut self, incoming: Self) {
-        self.snapshots.merge_from(incoming.snapshots);
-        self.former_parents.extend(incoming.former_parents);
+impl PendingNativeInvalidation {
+    pub(super) fn extend_snapshots(&mut self, host: &DomHost, snapshots: StyleMutationSnapshots) {
+        self.original_parents.extend(
+            snapshots
+                .handles()
+                .map(|handle| host.parent_node(handle).unwrap_or(handle)),
+        );
+        self.snapshots.merge(snapshots);
     }
 
-    pub(super) fn fallback_roots(
-        &self,
+    pub(super) fn record_mutations(
+        &mut self,
         world: &DocumentStyleWorld,
         host: &DomHost,
-    ) -> Vec<DomHandle> {
-        if !can_invalidate_native_snapshots_in_current_world(world, host)
-            || self.former_parents.iter().any(|&parent| {
-                parent != world.document
-                    && host.owner_document_handle(parent) != Some(world.document)
-            })
-        {
-            return vec![world.document];
+        effects: &[StyleMutationEffect],
+    ) {
+        let mut snapshots = StyleMutationSnapshots::default();
+        for effect in effects {
+            match effect {
+                StyleMutationEffect::Attribute {
+                    element,
+                    namespace,
+                    name,
+                    old_value,
+                    new_value,
+                } => {
+                    if old_value == new_value {
+                        continue;
+                    }
+                    let style_changes =
+                        namespace.is_none() && attribute_can_change_presentational_style(name);
+                    if style_changes {
+                        self.subtrees.insert(*element);
+                    }
+                    if style_changes
+                        || matches!(name.as_str(), "class" | "id" | "href")
+                        || host.has_shadow_roots()
+                        || world
+                            .document_state
+                            .source_dirty_scope_snapshot()
+                            .requires_retained_style_update()
+                        || world
+                            .document_state
+                            .try_with_retained_style_system(|retained| {
+                                let name = LocalName::from(name.as_str());
+                                retained
+                                    .stylist
+                                    .iter_origins()
+                                    .any(|(data, _)| data.might_have_attribute_dependency(&name))
+                            })
+                            != Some(false)
+                    {
+                        snapshots.record_attribute(
+                            *element,
+                            namespace.as_deref(),
+                            name,
+                            old_value.clone(),
+                        );
+                    }
+                }
+                StyleMutationEffect::DisconnectedSubtrees { .. } => {}
+                effect => self.structures.push(effect.clone()),
+            }
         }
-        // The supported dependencies can affect the source, its descendants,
-        // and later siblings (including their descendants). Keep the former
-        // parent so removing or reparenting the source doesn't miss those
-        // siblings. Structural invalidation handles moved target subtrees.
-        self.former_parents
-            .iter()
-            .copied()
-            .chain(
-                self.snapshots
-                    .element_handles()
-                    .filter(|&handle| host.owner_document_handle(handle) == Some(world.document))
-                    .map(|handle| host.parent_node(handle).unwrap_or(handle)),
-            )
-            .collect()
+        self.extend_snapshots(host, snapshots);
     }
-}
 
-pub(super) fn snapshots_for_native_invalidation(
-    dom_adapter: &StyloDomStyleAdapter,
-    world: &DocumentStyleWorld,
-    host: &DomHost,
-    cause: &PendingStyleInvalidationCause,
-    emulated_media: &EmulatedMediaOverrides,
-    viewport: StyleViewport,
-) -> Option<NativeSnapshotBatch> {
-    let snapshot_cause = match cause {
-        PendingStyleInvalidationCause::Mutation(effects) => {
-            !effects.is_empty()
-                && effects.iter().all(|effect| {
-                    matches!(effect, StyleMutationEffect::Attribute { name, namespace: None, .. }
-                    if name == "id" || name == "class"
-                        || name.starts_with("aria-") || name.starts_with("data-"))
-                })
-        }
-        // Selection and checkedness can also change an owning control or
-        // container's validity. These setters currently snapshot only the
-        // elements whose selectedness or checkedness changed.
-        PendingStyleInvalidationCause::StateChange { state, .. } => {
-            !(state.contains(ElementState::CHECKED)
-                && state.intersects(ElementState::VALIDITY_STATES))
-        }
-        PendingStyleInvalidationCause::CustomStateChange { .. }
-        | PendingStyleInvalidationCause::FocusChange { .. }
-        | PendingStyleInvalidationCause::TargetChange { .. } => true,
-    };
-    if !snapshot_cause
-        || !supports_native_snapshots(world, host)
-        || !world
-            .document_state
-            .retained_style_system_is_current_for_observation(
-                viewport,
-                StyloStyleEnvironment::from_emulated_media(emulated_media),
-                document_quirks_mode(host, world.document),
-                StyleTreeScopeVersions::current(host, Some(world.document)),
-            )
-    {
-        return None;
+    pub(super) fn invalidate_subtrees(&mut self, roots: impl IntoIterator<Item = DomHandle>) {
+        self.subtrees.extend(roots);
     }
-    if let PendingStyleInvalidationCause::Mutation(effects) = cause
-        && world
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.snapshots.is_empty() && self.structures.is_empty() && self.subtrees.is_empty()
+    }
+
+    pub(super) fn drain(
+        self,
+        dom_adapter: &StyloDomStyleAdapter,
+        world: &DocumentStyleWorld,
+        cleanup: StyleInvalidationCleanup<'_>,
+        host: &DomHost,
+    ) {
+        if self.is_empty() {
+            return;
+        }
+
+        let mut subtrees = self.subtrees;
+        let has_relative_selectors =
+            |data: &style::stylist::CascadeData| data.relative_invalidation_map_attributes().used;
+        let Some((relative_selectors, extra_snapshot_dependencies)) = world
             .document_state
             .try_with_retained_style_system(|retained| {
-                effects.iter().all(|effect| {
-                    let StyleMutationEffect::Attribute { name, .. } = effect else {
-                        return false;
-                    };
-                    if matches!(name.as_str(), "id" | "class") {
-                        return false;
-                    }
-                    let name = LocalName::from(name.as_str());
-                    !retained
+                let relative = retained
+                    .stylist
+                    .iter_origins()
+                    .any(|(data, _)| has_relative_selectors(data))
+                    || retained
+                        .shadow_cascade_data
+                        .iter()
+                        .any(|(_, data)| has_relative_selectors(data));
+                let snapshots = relative
+                    || !retained.shadow_cascade_data.is_empty()
+                    || retained
                         .stylist
                         .iter_origins()
-                        .any(|(cascade, _)| cascade.might_have_attribute_dependency(&name))
-                })
+                        .any(|(data, _)| data.has_nth_of_dependencies());
+                (relative, snapshots)
             })
-            == Some(true)
-    {
-        // Non-selector attr() dependencies were already handled by the host.
-        return Some(NativeSnapshotBatch::default());
-    }
-    let snapshots = moli_style_mutation_snapshot_for_pending_cause(host, dom_adapter, cause)?;
-    if !snapshot_roots_are_current(world, host, &snapshots) {
-        return None;
-    }
-    let former_parents = snapshots
-        .element_handles()
-        .map(|handle| host.parent_node(handle).unwrap_or(handle))
-        .collect();
-    Some(NativeSnapshotBatch {
-        snapshots,
-        former_parents,
-    })
-}
+        else {
+            subtrees.extend(self.original_parents);
+            subtrees.extend(self.structures.iter().filter_map(mutation_root));
+            cleanup.invalidate_subtrees(host, subtrees);
+            return;
+        };
 
-fn snapshot_roots_are_current(
-    world: &DocumentStyleWorld,
-    host: &DomHost,
-    snapshots: &MoliStyleMutationSnapshot,
-) -> bool {
-    snapshots.element_handles().all(|handle| {
-        host.owner_document_handle(handle) == Some(world.document) && host.is_connected(handle)
-    })
-}
+        let replay_removal = self.snapshots.is_empty()
+            && self
+                .structures
+                .iter()
+                .filter(|effect| matches!(effect, StyleMutationEffect::ChildList { .. }))
+                .take(2)
+                .count()
+                == 1;
 
-fn supports_native_snapshots(world: &DocumentStyleWorld, host: &DomHost) -> bool {
-    // Document rules can reach shadow content through ::part even when there
-    // are no author stylesheets attached to a shadow root.
-    !host.has_shadow_roots()
-        && world
-            .document_state
-            .try_with_retained_style_system(|retained| {
-                // Relative selectors, nth-child(of S), and shadow boundaries have
-                // extra host invalidation steps beyond StateAndAttr.
-                retained.stylist.iter_origins().all(|(cascade, _)| {
-                    !cascade.relative_invalidation_map_attributes().used
-                        && !cascade.has_nth_of_dependencies()
-                })
-            })
-            .unwrap_or(false)
-}
+        let targets = dom_adapter.with_bound_host(host, |adapter| {
+            adapter.with_mutation_snapshots(host, &self.snapshots, |map, handles| {
+                with_resolution_context_and_snapshots(world, adapter, map, |mut resolution| {
+                    resolution.with_stylo(|context| {
+                        let stylist = context.shared.stylist;
+                        for &handle in handles {
+                            if host.owner_document_handle(handle) != Some(world.document) {
+                                continue;
+                            }
+                            let Some(element) = adapter.element(host, handle) else {
+                                continue;
+                            };
+                            if extra_snapshot_dependencies {
+                                invalidate_snapshot_dependencies(stylist, map, element);
+                            }
+                            // An unstyled source can still affect a retained sibling.
+                            let mut scratch = ElementData::default();
+                            let mut data = element.mutate_data();
+                            data.as_deref_mut()
+                                .unwrap_or(&mut scratch)
+                                .invalidate_style_if_needed(
+                                    element,
+                                    context.shared,
+                                    Some(&context.thread_local.stack_limit_checker),
+                                    &mut context.thread_local.selector_caches,
+                                );
+                        }
 
-fn can_invalidate_native_snapshots_in_current_world(
-    world: &DocumentStyleWorld,
-    host: &DomHost,
-) -> bool {
-    !world
-        .document_state
-        .source_dirty_scope_snapshot()
-        .requires_retained_style_update()
-        && supports_native_snapshots(world, host)
-}
-
-pub(super) fn native_snapshot_invalidation_targets(
-    dom_adapter: &StyloDomStyleAdapter,
-    world: &DocumentStyleWorld,
-    host: &DomHost,
-    snapshots: &MoliStyleMutationSnapshot,
-) -> Option<Vec<(DomHandle, RestyleHint)>> {
-    if !can_invalidate_native_snapshots_in_current_world(world, host)
-        || !snapshot_roots_are_current(world, host, snapshots)
-    {
-        return None;
-    }
-
-    dom_adapter.with_bound_host(host, |adapter| {
-        adapter.collect_snapshot_invalidations(host, snapshots, |map, handles| {
-            with_resolution_context_and_snapshots(world, adapter, map, |mut resolution| {
-                resolution.with_stylo(|context| {
-                    for &handle in handles {
-                        let element = adapter.element(host, handle).expect("snapshot element");
-                        // An unstyled source can affect styled siblings. The
-                        // native processor only needs local scratch data here.
-                        let mut scratch = ElementData::default();
-                        let mut data = element.mutate_data();
-                        data.as_deref_mut()
-                            .unwrap_or(&mut scratch)
-                            .invalidate_style_if_needed(
-                                element,
-                                context.shared,
-                                Some(&context.thread_local.stack_limit_checker),
-                                &mut context.thread_local.selector_caches,
+                        for mutation in &self.structures {
+                            invalidate_structure(
+                                host,
+                                adapter,
+                                relative_selectors.then_some(stylist),
+                                replay_removal,
+                                mutation,
+                                &mut subtrees,
                             );
-                    }
+                        }
+                    });
                 });
-            });
-        })
-    })
+            })
+        });
+        cleanup.retain_native_invalidation_targets(host, targets);
+        cleanup.invalidate_subtrees(host, subtrees);
+    }
+}
+
+fn mutation_root(effect: &StyleMutationEffect) -> Option<DomHandle> {
+    match effect {
+        StyleMutationEffect::ChildList { parent, .. } => Some(*parent),
+        StyleMutationEffect::SlotAssignment { slot, .. } => Some(*slot),
+        _ => None,
+    }
+}
+
+fn attribute_can_change_presentational_style(name: &str) -> bool {
+    // Values read by the style adapter's HTML and SVG presentational hints,
+    // or by inherited HTML language/direction and inline style matching.
+    matches!(
+        name,
+        "align"
+            | "bgcolor"
+            | "border"
+            | "cellpadding"
+            | "cellspacing"
+            | "color"
+            | "cols"
+            | "dir"
+            | "face"
+            | "frameborder"
+            | "height"
+            | "hidden"
+            | "lang"
+            | "nowrap"
+            | "rows"
+            | "size"
+            | "style"
+            | "text"
+            | "type"
+            | "valign"
+            | "width"
+    ) || moli_selector::is_svg_presentation_attribute_name(name)
+}
+
+fn invalidate_structure(
+    host: &DomHost,
+    adapter: &StyloDomHostBinding<'_>,
+    stylist: Option<&style::stylist::Stylist>,
+    replay_removal: bool,
+    mutation: &StyleMutationEffect,
+    subtrees: &mut IndexSet<DomHandle>,
+) {
+    use ElementSelectorFlags as Flags;
+
+    match mutation {
+        StyleMutationEffect::ChildList {
+            parent,
+            added_nodes,
+            removed_nodes,
+            previous_sibling,
+            next_sibling,
+        } => {
+            let flags = adapter.selector_flags(host, *parent);
+            if flags.contains(Flags::HAS_EMPTY_SELECTOR) {
+                subtrees.insert(*parent);
+                subtrees.extend(following_sibling_subtrees(host, *parent));
+                invalidate_relative_boundaries(host, adapter, *parent, subtrees);
+            }
+            if added_nodes
+                .iter()
+                .chain(removed_nodes)
+                .any(|&node| host.node(node).is_some_and(Node::is_element))
+            {
+                invalidate_child_positions(
+                    host,
+                    *parent,
+                    flags,
+                    *previous_sibling,
+                    *next_sibling,
+                    subtrees,
+                );
+            }
+            let Some(stylist) = stylist else {
+                return;
+            };
+            for &node in added_nodes {
+                if host.parent_node(node) == Some(*parent)
+                    && let Some(element) = adapter.element(host, node)
+                {
+                    let operation = if next_sibling.is_none() {
+                        DomMutationOperation::Append
+                    } else {
+                        DomMutationOperation::Insert
+                    };
+                    invalidate_relative_splice(stylist, element, operation);
+                }
+            }
+
+            if !removed_nodes.is_empty() {
+                let previous = adjacent_element(host, *previous_sibling, |host, node| {
+                    host.node(node).and_then(Node::prev_sibling)
+                });
+                let next = adjacent_element(host, *next_sibling, DomHost::next_sibling);
+                // A single detached node still carries the old subtree and
+                // the splice supplies its former DOM position.
+                let replayed_removal = if replay_removal
+                    && let [removed] = removed_nodes.as_slice()
+                    && added_nodes.is_empty()
+                    && previous.map_or_else(
+                        || {
+                            host.node(*parent)
+                                .and_then(Node::first_child)
+                                .and_then(|child| {
+                                    adjacent_element(host, Some(child), DomHost::next_sibling)
+                                })
+                        },
+                        |previous| {
+                            adjacent_element(
+                                host,
+                                host.next_sibling(previous),
+                                DomHost::next_sibling,
+                            )
+                        },
+                    ) == next
+                {
+                    adapter
+                        .with_removed_element_position(
+                            host,
+                            *removed,
+                            *parent,
+                            previous,
+                            next,
+                            |element| {
+                                invalidate_relative_splice(
+                                    stylist,
+                                    element,
+                                    DomMutationOperation::Remove,
+                                );
+                            },
+                        )
+                        .is_some()
+                } else {
+                    false
+                };
+                if !replayed_removal {
+                    // A coalesced replacement can omit the old intermediate
+                    // adjacency. Cover its affected siblings and
+                    // any observed relative anchors outside the splice.
+                    subtrees.insert(*parent);
+                    invalidate_relative_boundaries(host, adapter, *parent, subtrees);
+                }
+            }
+        }
+        StyleMutationEffect::CharacterData { node } => {
+            let Some(parent) = host.parent_node(*node) else {
+                return;
+            };
+            if adapter
+                .element(host, parent)
+                .is_some_and(|element| element.has_selector_flags(Flags::HAS_EMPTY_SELECTOR))
+            {
+                subtrees.insert(parent);
+                subtrees.extend(following_sibling_subtrees(host, parent));
+                invalidate_relative_boundaries(host, adapter, parent, subtrees);
+            }
+        }
+        StyleMutationEffect::SlotAssignment {
+            slot,
+            previous_assigned_nodes,
+            assigned_nodes,
+        } => {
+            if let (Some(previous), Some(current)) = (previous_assigned_nodes, assigned_nodes) {
+                if previous != current {
+                    subtrees.extend(previous.iter().chain(current).copied());
+                    subtrees.insert(*slot);
+                }
+            } else if let Some(host_element) = host
+                .containing_shadow_root(*slot)
+                .and_then(|root| host.shadow_root_host(root))
+            {
+                subtrees.insert(host_element);
+            }
+        }
+        StyleMutationEffect::ConnectedSubtrees { roots } => subtrees.extend(roots.iter().copied()),
+        _ => {}
+    }
+}
+
+fn invalidate_child_positions(
+    host: &DomHost,
+    parent: DomHandle,
+    flags: ElementSelectorFlags,
+    previous: Option<DomHandle>,
+    next: Option<DomHandle>,
+    subtrees: &mut IndexSet<DomHandle>,
+) {
+    use ElementSelectorFlags as Flags;
+    let previous = adjacent_element(host, previous, |host, node| {
+        host.node(node).and_then(Node::prev_sibling)
+    });
+    let next = adjacent_element(host, next, DomHost::next_sibling);
+    if flags.intersects(Flags::HAS_SLOW_SELECTOR | Flags::MAY_HAVE_TREE_COUNTING_FUNCTION) {
+        // nth-last-child and sibling-count() can reach earlier children.
+        subtrees.insert(parent);
+        subtrees.extend(previous);
+        subtrees.extend(next);
+    } else if flags.intersects(Flags::HAS_SLOW_SELECTOR_NTH | Flags::HAS_SLOW_SELECTOR_NTH_OF) {
+        if let Some(next) = next {
+            subtrees.insert(next);
+            subtrees.extend(following_sibling_subtrees(host, next));
+        }
+    } else if flags.contains(Flags::HAS_SLOW_SELECTOR_LATER_SIBLINGS) {
+        // Always dirty the immediate splice boundary. A sibling chain can
+        // also affect later targets, so cover the rest lazily.
+        if let Some(next) = next {
+            subtrees.insert(next);
+        }
+        if next.is_some_and(|next| host.next_sibling(next).is_some()) {
+            subtrees.insert(parent);
+        }
+    }
+
+    if flags.contains(Flags::HAS_EDGE_CHILD_SELECTOR) {
+        if previous.is_none() {
+            subtrees.extend(next);
+        }
+        if next.is_none() {
+            subtrees.extend(previous);
+        }
+    }
+}
+
+fn adjacent_element(
+    host: &DomHost,
+    start: Option<DomHandle>,
+    step: impl Fn(&DomHost, DomHandle) -> Option<DomHandle>,
+) -> Option<DomHandle> {
+    std::iter::successors(start, |&handle| step(host, handle))
+        .find(|&node| host.node(node).is_some_and(Node::is_element))
+}
+
+fn invalidate_relative_splice(
+    stylist: &style::stylist::Stylist,
+    element: StyloElement<'_>,
+    operation: DomMutationOperation,
+) {
+    let inherited = inherited_search_direction(element);
+    if inherited.is_empty() {
+        return;
+    }
+    let previous = element.prev_sibling_element();
+    let next = element.next_sibling_element();
+    let invalidate = |element, subtree, operation, sibling_traversal_map| {
+        RelativeSelectorInvalidator {
+            element,
+            quirks_mode: stylist.quirks_mode(),
+            snapshot_table: None,
+            invalidated: |_, _| {},
+            affected: None,
+            sibling_traversal_map,
+            _marker: std::marker::PhantomData,
+        }
+        .invalidate_relative_selectors_for_dom_mutation(subtree, stylist, inherited, operation);
+    };
+
+    // The adjacent pair can gain or lose a match independently of the
+    // inserted/removed element. Compare it with the splice node absent.
+    if !matches!(operation, DomMutationOperation::Append)
+        && let (Some(previous), Some(next)) = (previous, next)
+    {
+        invalidate(
+            previous,
+            false,
+            DomMutationOperation::SideEffectPrevSibling,
+            SiblingTraversalMap::new(previous, previous.prev_sibling_element(), Some(next)),
+        );
+        invalidate(
+            next,
+            false,
+            DomMutationOperation::SideEffectNextSibling,
+            SiblingTraversalMap::new(next, Some(previous), next.next_sibling_element()),
+        );
+    }
+    invalidate(element, true, operation, SiblingTraversalMap::default());
+}
+
+fn inherited_search_direction(element: StyloElement<'_>) -> ElementSelectorFlags {
+    use ElementSelectorFlags as Flags;
+    let mut direction = Flags::empty();
+    let mut parent = element.as_node().parent_element_or_host();
+    while let Some(ancestor) = parent {
+        if has_any_flags(
+            ancestor,
+            Flags::ANCHORS_RELATIVE_SELECTOR | Flags::ANCHORS_RELATIVE_SELECTOR_NON_SUBJECT,
+        ) {
+            direction.insert(Flags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR);
+        }
+        direction |= ancestor.relative_selector_search_direction();
+        if !direction.is_empty() {
+            break;
+        }
+        parent = ancestor.as_node().parent_element_or_host();
+    }
+    if let Some(previous) = element.prev_sibling_element() {
+        if has_any_flags(
+            previous,
+            Flags::ANCHORS_RELATIVE_SELECTOR | Flags::ANCHORS_RELATIVE_SELECTOR_NON_SUBJECT,
+        ) {
+            direction.insert(Flags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING);
+        }
+        direction |= previous.relative_selector_search_direction()
+            & Flags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING;
+    }
+    direction
+}
+
+fn invalidate_relative_boundaries(
+    host: &DomHost,
+    adapter: &StyloDomHostBinding<'_>,
+    parent: DomHandle,
+    subtrees: &mut IndexSet<DomHandle>,
+) {
+    use ElementSelectorFlags as Flags;
+
+    let mut current = Some(parent);
+    while let Some(handle) = current {
+        if let Some(element) = adapter.element(host, handle) {
+            let reaches_other_subjects =
+                element.has_selector_flags(Flags::ANCHORS_RELATIVE_SELECTOR_NON_SUBJECT);
+            if reaches_other_subjects
+                || element.has_selector_flags(Flags::ANCHORS_RELATIVE_SELECTOR)
+            {
+                subtrees.insert(handle);
+            }
+            if reaches_other_subjects {
+                subtrees.extend(following_sibling_subtrees(host, handle));
+            }
+            if element
+                .relative_selector_search_direction()
+                .contains(Flags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING)
+                && let Some(parent) = host.parent_node(handle)
+            {
+                subtrees.insert(parent);
+            }
+        }
+        current = host
+            .parent_node(handle)
+            .or_else(|| host.shadow_root_host(handle));
+    }
+}
+
+fn following_sibling_subtrees(
+    host: &DomHost,
+    element: DomHandle,
+) -> impl Iterator<Item = DomHandle> + '_ {
+    std::iter::successors(host.next_sibling(element), |&node| host.next_sibling(node))
+        .filter(|&node| host.node(node).is_some_and(Node::is_element))
+}
+
+pub(super) fn style_attribute_in_selector(stylist: &style::stylist::Stylist) -> bool {
+    let style = LocalName::from("style");
+    stylist
+        .iter_origins()
+        .any(|(data, _)| data.might_have_attribute_dependency(&style))
+}
+
+fn has_any_flags(element: StyloElement<'_>, flags: ElementSelectorFlags) -> bool {
+    flags.iter().any(|flag| element.has_selector_flags(flag))
 }

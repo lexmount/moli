@@ -1,19 +1,15 @@
 use std::{cell::Ref, ops::Deref};
 
-use moli_selector::StyloStyleSourceScope as StyleSourceScope;
-
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::{
-    StyleSourceId, StyleViewport,
+    StyleSourceId,
     document_world::DocumentStyleWorld,
-    request::RetainedSourceDependencyRequestPlan,
     source::adopted::AdoptedStyleSheetSources,
     source::linked::LinkedStylesheetSources,
     source_lifecycle::{StyleSourceDocumentContext, StyleSourceLifecycleReport},
     source_owner_text::OwnerStyleSheetSources,
-    source_record::{MatchingStyleDependencySource, RetainedStylesheetSourceRecord},
-    stylesheet::moli_user_agent_source_dependency_summary,
+    source_record::RetainedStylesheetSourceRecord,
 };
 
 pub(super) struct DocumentStyleSourceStores<'a> {
@@ -76,42 +72,8 @@ impl<'a> DocumentStyleSourceStores<'a> {
         }
     }
 
-    pub(super) fn document(&self) -> DomHandle {
-        self.document
-    }
-
     pub(super) fn adopted_sources(&self) -> &AdoptedStyleSheetSources {
         &self.adopted_style_sheet_sources
-    }
-
-    pub(super) fn has_document_retained_sources(&self, host: &DomHost) -> bool {
-        self.linked_stylesheet_sources.has_retained_sources(host)
-            || self
-                .owner_style_sheet_sources
-                .has_document_retained_sources_for_document(host, self.document)
-            || self
-                .adopted_sources()
-                .has_document_retained_sources(host, self.document)
-    }
-
-    pub(super) fn has_dependency_match_for_request_plan(
-        &self,
-        host: &DomHost,
-        request_plan: &RetainedSourceDependencyRequestPlan,
-    ) -> bool {
-        request_plan
-            .matches_dependency_summary(moli_user_agent_source_dependency_summary().as_ref())
-            || self
-                .linked_stylesheet_sources
-                .has_dependency_match_for_store(host, request_plan)
-            || self
-                .owner_style_sheet_sources
-                .has_dependency_match_for_document(host, self.document, request_plan)
-            || self.adopted_sources().has_dependency_match_for_document(
-                host,
-                self.document,
-                request_plan,
-            )
     }
 
     pub(super) fn source_lifecycle_report(
@@ -154,53 +116,6 @@ impl<'a> DocumentStyleSourceStores<'a> {
                 .tracked_lifecycle_entries_for_source_ids(host, source_ids.iter().cloned()),
         );
         StyleSourceLifecycleReport::from_tracked_entries(host, document_context, entries)
-    }
-
-    pub(super) fn matching_dependency_sources(
-        &self,
-        host: &DomHost,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-        viewport: StyleViewport,
-    ) -> Vec<MatchingStyleDependencySource> {
-        let mut sources = MatchingStyleDependencySource::user_agent(
-            host,
-            self.document,
-            moli_user_agent_source_dependency_summary(),
-            source_scope,
-        )
-        .into_iter()
-        .collect::<Vec<_>>();
-        sources.extend(
-            self.linked_stylesheet_sources
-                .matching_dependency_sources_for_store(
-                    host,
-                    source_scope,
-                    emulated_media,
-                    viewport,
-                ),
-        );
-        sources.extend(
-            self.owner_style_sheet_sources
-                .matching_dependency_sources_for_document(
-                    host,
-                    self.document,
-                    source_scope,
-                    emulated_media,
-                    viewport,
-                ),
-        );
-        sources.extend(
-            self.adopted_sources()
-                .matching_dependency_sources_for_document(
-                    host,
-                    self.document,
-                    source_scope,
-                    emulated_media,
-                    viewport,
-                ),
-        );
-        sources
     }
 
     pub(super) fn retained_source_records_for_lifecycle(

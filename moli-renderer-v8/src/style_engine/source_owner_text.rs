@@ -6,8 +6,7 @@ use std::{
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::{
-    StyleSourceId, StyleViewport,
-    request::RetainedSourceDependencyRequestPlan,
+    StyleSourceId,
     source::store::{OwnerStyleSheetSource, StyloStylesheetSource},
     source_id::{StyleScopeId, StyleSourceKind},
     source_lifecycle::{
@@ -16,7 +15,7 @@ use super::{
         StyleSourceLifecycleWithoutSourceReason, TrackedStyleSourceIds,
         TrackedStyleSourceLifecycleEntry,
     },
-    source_record::{MatchingStyleDependencySource, RetainedStylesheetSourceRecord},
+    source_record::RetainedStylesheetSourceRecord,
 };
 
 #[derive(Debug)]
@@ -65,22 +64,6 @@ pub(super) struct OwnerStyleSheetSources {
 }
 
 impl OwnerStyleSheetSources {
-    pub(super) fn has_document_retained_sources_for_document(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-    ) -> bool {
-        self.tracked_owners_for_document(host, document)
-            .any(|owner| {
-                if !self.owner_has_retained_source(host, owner) {
-                    return false;
-                }
-                StyleSourceId::owner_style_sheet(host, owner).is_some_and(|source_id| {
-                    matches!(source_id.scope_id, StyleScopeId::Document(_))
-                })
-            })
-    }
-
     pub(super) fn clear_all(&mut self) {
         self.sources_by_owner.clear();
         self.csp_suppressed_owners.clear();
@@ -216,63 +199,6 @@ impl OwnerStyleSheetSources {
         Some(RetainedStylesheetSourceRecord::owner_style_sheet(
             source_id, source,
         ))
-    }
-
-    pub(super) fn for_each_retained_source_record_for_document<'a>(
-        &'a self,
-        host: &DomHost,
-        document: DomHandle,
-        mut callback: impl FnMut(RetainedStylesheetSourceRecord<'a>),
-    ) {
-        for owner in self.tracked_owners_for_document(host, document) {
-            let Some(source_id) = StyleSourceId::owner_style_sheet(host, owner) else {
-                continue;
-            };
-            if let Some(record) = self.retained_source_record(host, source_id, owner) {
-                callback(record);
-            }
-        }
-    }
-
-    pub(super) fn matching_dependency_sources_for_document(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        source_scope: &moli_selector::StyloStyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-        viewport: StyleViewport,
-    ) -> Vec<MatchingStyleDependencySource> {
-        let mut sources = Vec::new();
-        self.for_each_retained_source_record_for_document(host, document, |record| {
-            if let Some(source) =
-                record.matching_dependency_source(host, source_scope, emulated_media, viewport)
-            {
-                sources.push(source);
-            }
-        });
-        sources
-    }
-
-    pub(super) fn has_dependency_match_for_document(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        request_plan: &RetainedSourceDependencyRequestPlan,
-    ) -> bool {
-        self.tracked_owners_for_document(host, document)
-            .any(|owner| {
-                if !self.owner_has_retained_source(host, owner) {
-                    return false;
-                }
-                self.sources_by_owner.get(&owner).is_some_and(|installed| {
-                    request_plan.matches_dependency_summary(
-                        installed
-                            .cascade_source
-                            .source_dependency_summary()
-                            .as_ref(),
-                    )
-                })
-            })
     }
 
     pub(super) fn tracked_owners(&self) -> impl Iterator<Item = DomHandle> + '_ {

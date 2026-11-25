@@ -1681,17 +1681,7 @@ impl DocumentRuntime {
         handle: DomHandle,
         selected: bool,
     ) -> bool {
-        let _ = scope;
-        let old_state = unsafe { &*host_ptr }.retained_current_element_state(handle);
-        let changed = self.dom_host.set_selected_state(handle, selected);
-        if changed {
-            unsafe { &mut *host_ptr }.note_element_state_style_activity_with_old_state(
-                handle,
-                StyloElementState::CHECKED | StyloElementState::VALIDITY_STATES,
-                old_state,
-            );
-        }
-        changed
+        self.set_selected_state_with_dirty(scope, host_ptr, handle, selected, true)
     }
 
     pub(crate) fn set_selected_state_with_dirty(
@@ -1703,12 +1693,22 @@ impl DocumentRuntime {
         dirty: bool,
     ) -> bool {
         let _ = scope;
-        let old_state = unsafe { &*host_ptr }.retained_current_element_state(handle);
+        let runtime = unsafe { &*host_ptr };
+        let old_state = runtime.retained_current_element_state(handle);
+        let validity = self
+            .dom_host
+            .node(handle)
+            .and_then(Node::as_element)
+            .filter(|option| option.selected() != selected)
+            .and_then(|_| self.dom_host.option_nearest_ancestor_select(handle))
+            .map(|select| runtime.snapshot_select_validity(select));
         let changed = self
             .dom_host
             .set_selected_state_with_dirty(handle, selected, dirty);
         if changed {
-            unsafe { &mut *host_ptr }.note_element_state_style_activity_with_old_state(
+            let runtime = unsafe { &mut *host_ptr };
+            runtime.invalidate_validity_snapshots(validity.into_iter().flatten());
+            runtime.note_element_state_style_activity_with_old_state(
                 handle,
                 StyloElementState::CHECKED | StyloElementState::VALIDITY_STATES,
                 old_state,
@@ -1739,12 +1739,18 @@ impl DocumentRuntime {
     pub(crate) fn set_select_explicit_none(
         &mut self,
         _scope: &mut v8::PinScope<'_, '_>,
-        _host_ptr: *mut PageScriptHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         explicit_none: bool,
     ) -> bool {
-        self.dom_host
-            .set_select_explicit_none_state(handle, explicit_none)
+        let validity = unsafe { &*host_ptr }.snapshot_select_validity(handle);
+        let changed = self
+            .dom_host
+            .set_select_explicit_none_state(handle, explicit_none);
+        if changed {
+            unsafe { &mut *host_ptr }.invalidate_validity_snapshots(validity);
+        }
+        changed
     }
 
     pub(crate) fn set_select_value(&mut self, handle: DomHandle, value: &str) -> bool {
@@ -2268,12 +2274,14 @@ fn style_state_impact_for_attribute_mutation(
     namespace: Option<&str>,
     name: &str,
 ) -> StyloElementState {
-    namespace
-        .is_none()
-        .then(|| style_engine::normalized_style_attribute_name(host, handle, name))
-        .as_deref()
-        .map(style_state_impact_for_attribute)
-        .unwrap_or_else(StyloElementState::empty)
+    if namespace.is_some() {
+        return StyloElementState::empty();
+    }
+    let name = style_engine::normalized_style_attribute_name(host, handle, name);
+    if name == "open" && host.is_html_element_named(handle, "dialog") {
+        return StyloElementState::MODAL;
+    }
+    style_state_impact_for_attribute(&name)
 }
 
 fn style_state_impact_for_attribute(name: &str) -> StyloElementState {

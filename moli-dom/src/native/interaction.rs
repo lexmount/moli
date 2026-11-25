@@ -42,11 +42,14 @@ impl Element {
     /// The raw target of a navigable HTML or SVG hyperlink, including an empty
     /// target. URL resolution uses the element's owner document.
     pub fn hyperlink_href(&self) -> Option<&str> {
+        self.hyperlink_href_from(|namespace| self.attribute_ns(namespace, "href"))
+    }
+
+    /// Resolve a hyperlink using the caller's view of its href attributes.
+    pub fn hyperlink_href_from<T>(&self, mut href: impl FnMut(&str) -> Option<T>) -> Option<T> {
         match (self.namespace(), self.local_name()) {
-            (HTML_NS, "a" | "area") => self.attribute_ns("", "href"),
-            (SVG_NS, "a") => self
-                .attribute_ns("", "href")
-                .or_else(|| self.attribute_ns(XLINK_NS, "href")),
+            (HTML_NS, "a" | "area") => href(""),
+            (SVG_NS, "a") => href("").or_else(|| href(XLINK_NS)),
             _ => None,
         }
     }

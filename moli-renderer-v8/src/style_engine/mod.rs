@@ -5,19 +5,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use dom::ElementState as StyloElementState;
-use indexmap::IndexSet;
-use moli_selector::StyloRetainedStyleInvalidationQuery as RetainedStyleInvalidationQuery;
-#[cfg(test)]
-use moli_selector::StyloStyleSourceScope as StyleSourceScope;
-#[cfg(test)]
-use moli_selector::stylo_element_dependency_snapshot as style_element_dependency_snapshot;
 use moli_selector::{QueryContainerSizes, StyloDomStyleAdapter};
-#[cfg(test)]
-use moli_selector::{
-    StyloStylesheetSourceScopeFallbackInput, stylo_stylesheet_source_scope_fallback_roots,
-};
-#[cfg(test)]
-use style::Atom;
 use style::servo::restyle_damage::ServoRestyleDamage;
 
 mod active_stylesheets;
@@ -34,20 +22,13 @@ mod computed;
 pub(crate) use computed::take_style_resolution_context_count_for_test;
 mod document_world;
 mod drain;
-mod eligibility;
-mod fallback;
 mod invalidation;
 pub(crate) mod media_list;
 mod mutation_effect;
 mod native_invalidation;
-mod outcome;
-mod pending_invalidation;
 mod pending_mutation;
-mod planner;
 mod property_metadata;
-mod query;
 mod registered_properties;
-mod request;
 mod retained;
 mod style_paths;
 pub(crate) use stylesheet::{
@@ -59,10 +40,7 @@ pub(crate) use stylesheet::{
 pub(crate) use stylesheet::{
     author_source_text_parse_count_for_test, reset_author_source_text_parse_count_for_test,
 };
-mod retained_plan;
 mod runtime_invalidation;
-mod schedule;
-mod scope;
 mod shadow_scopes;
 mod snapshot;
 mod source;
@@ -88,9 +66,6 @@ use state::{ScreenStyleChanges, ScreenStyleInvalidation};
 pub(crate) use style_paths::StyleInvalidationScope;
 mod stylesheet;
 mod stylesheet_resources;
-mod target_plan;
-mod target_queries;
-mod target_result;
 #[cfg(test)]
 mod tests;
 mod ua;
@@ -110,9 +85,6 @@ pub(crate) use computed::{
 use document_world::{DocumentStyleWorld, DocumentStyleWorlds};
 pub(in crate::style_engine) use drain::StyleInvalidationDrainBoundary;
 pub(crate) use drain::StyleInvalidationTurnExitBoundary;
-use drain::drain_style_invalidations;
-#[cfg(test)]
-use moli_selector::StyloSourceDependencySummary;
 pub(crate) use mutation_effect::{
     StyleAttributeImpact, StyleMutationEffect, normalized_style_attribute_name,
 };
@@ -123,17 +95,14 @@ pub(crate) use registered_properties::{
     CssCustomPropertyRegistration, CssCustomPropertyRegistrationError,
     CssCustomPropertyRegistrationRecord,
 };
-#[cfg(test)]
-use scope::style_source_scope_for_mutation_effects;
 pub(crate) use source::adopted::AdoptedStyleSheetInstallation;
 pub(crate) use source::inline::InlineStyleCspState;
 pub(crate) use source::store::{
     OwnerStyleSheetSource, StylesheetFontFaceDescriptor, StyloStylesheetSource,
 };
-pub(crate) use source_id::StyleSourceId;
 #[cfg(test)]
-use source_id::StyleSourceKind;
-use source_id::{StyleInvalidationSourceTarget, StyleScopeId};
+use source_id::StyleScopeId;
+pub(crate) use source_id::StyleSourceId;
 pub(crate) use source_lifecycle::OwnedStyleSourceDocumentContext;
 use source_lifecycle::StyleSourceDocumentContext;
 pub(crate) use source_owner::{
@@ -145,8 +114,6 @@ use stylesheet_resources::{
     reset_stylesheet_resource_manifest_build_count_for_test,
     stylesheet_resource_manifest_build_count_for_test,
 };
-#[cfg(test)]
-use target_queries::PendingStyleInvalidationTargetQueries;
 pub(crate) use world_environment::{
     StyleTreeScopeVersions, StyleViewport, StyleWorldEnvironment, StyloStyleEnvironment,
 };
@@ -667,16 +634,6 @@ impl MoliStyleEngine {
     }
 
     #[cfg(test)]
-    pub(crate) fn invalidation_clear_all_fallback_reasons_for_document_for_test(
-        &self,
-        document: DomHandle,
-    ) -> Vec<moli_selector::StyloSourceInvalidationFallbackReason> {
-        self.world_for_document(document)
-            .document_state
-            .invalidation_clear_all_fallback_reasons_for_test()
-    }
-
-    #[cfg(test)]
     pub(crate) fn clear_retained_style_system_for_document_for_test(&self, document: DomHandle) {
         self.world_for_document(document)
             .document_state
@@ -778,25 +735,10 @@ impl MoliStyleEngine {
         document: DomHandle,
     ) -> usize {
         let world = self.world_for_document(document);
-        world.pending_invalidations.work_item_count_for_test()
+        usize::from(!world.pending_invalidations.borrow().is_empty())
             + world
                 .pending_structural_mutations
                 .work_item_count_for_test()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pending_style_invalidation_work_kind_names_for_document_for_test(
-        &self,
-        document: DomHandle,
-    ) -> Vec<&'static str> {
-        let world = self.world_for_document(document);
-        let mut names = world.pending_invalidations.work_kind_names_for_test();
-        names.extend(
-            world
-                .pending_structural_mutations
-                .work_kind_names_for_test(),
-        );
-        names
     }
 
     #[cfg(test)]
@@ -945,7 +887,6 @@ impl MoliStyleEngine {
             self.drain_pending_style_invalidations_for_document_and_boundary(
                 host,
                 document,
-                document_context,
                 StyleInvalidationDrainBoundary::ComputedStyleRead,
             );
         }
@@ -961,7 +902,6 @@ impl MoliStyleEngine {
             self.drain_pending_style_invalidations_for_document_and_boundary(
                 host,
                 document,
-                document_context,
                 boundary.into(),
             );
         }
@@ -971,24 +911,19 @@ impl MoliStyleEngine {
         &self,
         host: &DomHost,
         document: DomHandle,
-        document_context: StyleSourceDocumentContext<'_>,
         boundary: StyleInvalidationDrainBoundary,
     ) {
         let world = self.world_for_document(document);
-        let had_structural_mutations =
-            self.flush_pending_structural_mutations_for_world(host, &world);
+        self.flush_pending_structural_mutations_for_world(host, &world);
         let pending = world.pending_invalidations.take();
-        let source_stores = world.borrow_source_stores();
-        drain_style_invalidations(
+        if !pending.is_empty() && moli_trace::style_invalidation_trace_enabled() {
+            tracing::info!(target: "moli_style_invalidation", ?document, ?boundary, "drain DOM invalidation");
+        }
+        pending.drain(
             &self.dom_adapter,
             &world,
             self.invalidation_cleanup_for_world(&world),
             host,
-            &source_stores,
-            document_context,
-            had_structural_mutations,
-            pending,
-            boundary,
         );
         world.document_state.finish_screen_style_invalidation();
     }
@@ -1002,7 +937,6 @@ impl MoliStyleEngine {
         self.drain_pending_style_invalidations_for_document_and_boundary(
             host,
             document,
-            StyleSourceDocumentContext::for_root_document(document),
             StyleInvalidationDrainBoundary::TestExplicit,
         );
     }
@@ -1023,72 +957,19 @@ impl MoliStyleEngine {
         let Some(world) = self.active_owner_document_world(host, handle) else {
             return false;
         };
-        let queries = IndexSet::from([RetainedStyleInvalidationQuery::attribute(
-            handle,
-            "style".into(),
-        )]);
-        let request = request::RetainedSourceDependencyRequestPlan::exact(queries);
+        // The active cascade already indexes attribute selectors. A pending
+        // source refresh can introduce new dependencies before the next read.
         world
-            .borrow_source_stores()
-            .has_dependency_match_for_request_plan(host, &request)
-    }
-
-    #[cfg(test)]
-    fn test_author_sources_have_relative_selector_dependency_for_document(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-    ) -> bool {
-        self.test_author_sources_match_dependency_summary_for_document(
-            host,
-            document,
-            source_scope,
-            emulated_media,
-            StyloSourceDependencySummary::has_relative_selector_dependency,
-        )
-    }
-
-    #[cfg(test)]
-    fn test_author_sources_match_dependency_summary_for_document(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-        summary_predicate: impl Fn(&StyloSourceDependencySummary) -> bool + Copy,
-    ) -> bool {
-        let world = self.world_for_document(document);
-        let source_stores = world.borrow_source_stores();
-        source_stores
-            .matching_dependency_sources(
-                host,
-                source_scope,
-                emulated_media,
-                StyleViewport::default(),
-            )
-            .iter()
-            .any(|source| source.dependency_summary_matches_for_test(summary_predicate))
-    }
-
-    #[cfg(test)]
-    fn test_author_sources_have_attribute_dependency_for_document(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        element: DomHandle,
-        attribute_name: &str,
-    ) -> bool {
-        let world = self.world_for_document(document);
-        let source_stores = world.borrow_source_stores();
-        let mut queries = IndexSet::new();
-        queries.insert(RetainedStyleInvalidationQuery::attribute(
-            element,
-            attribute_name.to_owned(),
-        ));
-        let request_plan = request::RetainedSourceDependencyRequestPlan::exact(queries);
-        source_stores.has_dependency_match_for_request_plan(host, &request_plan)
+            .document_state
+            .source_dirty_scope_snapshot()
+            .requires_retained_style_update()
+            || host.has_shadow_roots()
+            || world
+                .document_state
+                .try_with_retained_style_system(|retained| {
+                    native_invalidation::style_attribute_in_selector(&retained.stylist)
+                })
+                != Some(false)
     }
 
     #[cfg(test)]
@@ -1105,52 +986,6 @@ impl MoliStyleEngine {
             .retained_source_records_for_lifecycle(host, &source_lifecycle)
             .into_iter()
             .map(|record| record.id().clone())
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn matching_dependency_source_ids_for_document_for_test(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-    ) -> Vec<(StyleSourceId, IndexSet<DomHandle>)> {
-        self.matching_dependency_source_targets_for_document_for_test(
-            host,
-            document,
-            source_scope,
-            emulated_media,
-        )
-        .into_iter()
-        .filter_map(|(target, fallback_roots)| {
-            Some((target.stylesheet_source_id()?.clone(), fallback_roots))
-        })
-        .collect()
-    }
-
-    #[cfg(test)]
-    fn matching_dependency_source_targets_for_document_for_test(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-    ) -> Vec<(StyleInvalidationSourceTarget, IndexSet<DomHandle>)> {
-        let world = self.world_for_document(document);
-        let source_stores = world.borrow_source_stores();
-        let sources = source_stores.matching_dependency_sources(
-            host,
-            source_scope,
-            emulated_media,
-            StyleViewport::default(),
-        );
-        sources
-            .into_iter()
-            .map(|source| {
-                let (target, fallback_roots) = source.into_target_and_fallback_roots_for_test();
-                (target, fallback_roots.into_iter().collect())
-            })
             .collect()
     }
 
@@ -1324,14 +1159,6 @@ impl MoliStyleEngine {
             read_document,
         )
     }
-}
-
-#[cfg(test)]
-fn stylo_source_metadata_for_css_text(
-    css_text: &str,
-    base_url: &url::Url,
-) -> source::store::StyleSourceMetadata {
-    stylesheet::style_source_metadata_for_css_text(css_text, base_url).0
 }
 
 fn retain_owner_documents_except_document(

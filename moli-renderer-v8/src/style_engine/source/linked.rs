@@ -1,18 +1,16 @@
-use moli_selector::StyloStyleSourceScope as StyleSourceScope;
 use std::collections::{HashMap, HashSet};
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::super::{
-    StyleSourceId, StyleViewport,
-    request::RetainedSourceDependencyRequestPlan,
+    StyleSourceId,
     source_lifecycle::{
         StyleSourceLifecycleOwner, StyleSourceLifecycleReport,
         StyleSourceLifecycleRetainedSourceIdSink, StyleSourceLifecycleSourceRequests,
         StyleSourceLifecycleWithoutSourceReason, TrackedStyleSourceIds,
         TrackedStyleSourceLifecycleEntry,
     },
-    source_record::{MatchingStyleDependencySource, RetainedStylesheetSourceRecord},
+    source_record::RetainedStylesheetSourceRecord,
 };
 use super::store::StyloStylesheetSource;
 
@@ -127,58 +125,6 @@ impl LinkedStylesheetSources {
         }
         let lifecycle_owner = StyleSourceLifecycleOwner::LinkedStyleSheet { owner };
         Some(lifecycle_owner.tracked_entry(host, || self.tracked_source_ids(host, owner)))
-    }
-
-    pub(in crate::style_engine) fn has_retained_sources(&self, host: &DomHost) -> bool {
-        self.tracked_owners()
-            .any(|owner| self.retained_source_for_owner(host, owner).is_some())
-    }
-
-    pub(in crate::style_engine) fn matching_dependency_sources_for_store(
-        &self,
-        host: &DomHost,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-        viewport: StyleViewport,
-    ) -> Vec<MatchingStyleDependencySource> {
-        let mut sources = Vec::new();
-        self.for_each_retained_source_record(host, |record| {
-            if let Some(source) =
-                record.matching_dependency_source(host, source_scope, emulated_media, viewport)
-            {
-                sources.push(source);
-            }
-        });
-        sources
-    }
-
-    pub(in crate::style_engine) fn has_dependency_match_for_store(
-        &self,
-        host: &DomHost,
-        request_plan: &RetainedSourceDependencyRequestPlan,
-    ) -> bool {
-        self.tracked_owners().any(|owner| {
-            self.retained_source_for_owner(host, owner)
-                .is_some_and(|source| {
-                    request_plan
-                        .matches_dependency_summary(source.source_dependency_summary().as_ref())
-                })
-        })
-    }
-
-    fn for_each_retained_source_record<'a>(
-        &'a self,
-        host: &DomHost,
-        mut callback: impl FnMut(RetainedStylesheetSourceRecord<'a>),
-    ) {
-        for owner in self.tracked_owners() {
-            let Some(source_id) = StyleSourceId::linked_style_sheet(host, owner) else {
-                continue;
-            };
-            if let Some(record) = self.retained_source_record(host, source_id, owner) {
-                callback(record);
-            }
-        }
     }
 
     pub(in crate::style_engine) fn tracked_lifecycle_entries_for_source_ids<'a>(

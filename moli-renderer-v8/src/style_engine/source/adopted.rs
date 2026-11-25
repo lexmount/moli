@@ -5,15 +5,14 @@ use indexmap::IndexSet;
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::super::{
-    StyleSourceId, StyleViewport,
-    request::RetainedSourceDependencyRequestPlan,
+    StyleSourceId,
     source_lifecycle::{
         StyleSourceLifecycleOwner, StyleSourceLifecycleReport,
         StyleSourceLifecycleRetainedSourceIdSink, StyleSourceLifecycleSourceRequests,
         StyleSourceLifecycleWithoutSourceReason, TrackedStyleSourceIds,
         TrackedStyleSourceLifecycleEntry,
     },
-    source_record::{MatchingStyleDependencySource, RetainedStylesheetSourceRecord},
+    source_record::RetainedStylesheetSourceRecord,
 };
 use super::store::StyloStylesheetSource;
 
@@ -316,154 +315,6 @@ impl AdoptedStyleSheetSources {
         ))
     }
 
-    pub(in crate::style_engine) fn for_each_retained_document_source_record_for_document<'a>(
-        &'a self,
-        host: &DomHost,
-        document: DomHandle,
-        mut callback: impl FnMut(RetainedStylesheetSourceRecord<'a>),
-    ) {
-        let Some(sources) = self
-            .sources_by_owner
-            .get(&AdoptedStyleSheetOwner::Document(document))
-        else {
-            return;
-        };
-        let lifecycle_owner = StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets { document };
-        if !lifecycle_owner.retained_source_records_are_available(host) {
-            return;
-        }
-        for source in sources {
-            let client_id = source
-                .source()
-                .adopted_client_id()
-                .expect("installed adopted stylesheet must have a client id");
-            let source_id = StyleSourceId::document_adopted_style_sheet(document, client_id);
-            if let Some(record) = self.retained_source_record(
-                source_id,
-                AdoptedStyleSheetOwner::Document(document),
-                client_id,
-            ) {
-                callback(record);
-            }
-        }
-    }
-
-    pub(in crate::style_engine) fn matching_dependency_sources_for_document(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        source_scope: &moli_selector::StyloStyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-        viewport: StyleViewport,
-    ) -> Vec<MatchingStyleDependencySource> {
-        let mut sources = Vec::new();
-        self.for_each_retained_document_source_record_for_document(host, document, |record| {
-            if let Some(source) =
-                record.matching_dependency_source(host, source_scope, emulated_media, viewport)
-            {
-                sources.push(source);
-            }
-        });
-        self.for_each_retained_shadow_root_source_record_for_document(host, document, |record| {
-            if let Some(source) =
-                record.matching_dependency_source(host, source_scope, emulated_media, viewport)
-            {
-                sources.push(source);
-            }
-        });
-        sources
-    }
-
-    pub(in crate::style_engine) fn has_dependency_match_for_document(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        request_plan: &RetainedSourceDependencyRequestPlan,
-    ) -> bool {
-        self.document_sources_have_dependency_match(host, document, request_plan)
-            || self.shadow_root_sources_have_dependency_match(host, document, request_plan)
-    }
-
-    pub(in crate::style_engine) fn for_each_retained_shadow_root_source_record_for_document<'a>(
-        &'a self,
-        host: &DomHost,
-        document: DomHandle,
-        mut callback: impl FnMut(RetainedStylesheetSourceRecord<'a>),
-    ) {
-        for root in self.tracked_shadow_roots_for_document(host, document) {
-            let Some(sources) = self
-                .sources_by_owner
-                .get(&AdoptedStyleSheetOwner::ShadowRoot(root))
-            else {
-                continue;
-            };
-            let lifecycle_owner = StyleSourceLifecycleOwner::ShadowRootAdoptedStyleSheets { root };
-            if !lifecycle_owner.retained_source_records_are_available(host) {
-                continue;
-            }
-            for source in sources {
-                let client_id = source
-                    .source()
-                    .adopted_client_id()
-                    .expect("installed adopted stylesheet must have a client id");
-                let source_id = StyleSourceId::shadow_root_adopted_style_sheet(root, client_id);
-                if let Some(record) = self.retained_source_record(
-                    source_id,
-                    AdoptedStyleSheetOwner::ShadowRoot(root),
-                    client_id,
-                ) {
-                    callback(record);
-                }
-            }
-        }
-    }
-
-    fn document_sources_have_dependency_match(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        request_plan: &RetainedSourceDependencyRequestPlan,
-    ) -> bool {
-        let owner = AdoptedStyleSheetOwner::Document(document);
-        let Some(sources) = self.sources_by_owner.get(&owner) else {
-            return false;
-        };
-        if !(StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets { document })
-            .retained_source_records_are_available(host)
-        {
-            return false;
-        }
-        sources.iter().any(|source| {
-            request_plan
-                .matches_dependency_summary(source.source().source_dependency_summary().as_ref())
-        })
-    }
-
-    fn shadow_root_sources_have_dependency_match(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        request_plan: &RetainedSourceDependencyRequestPlan,
-    ) -> bool {
-        self.tracked_shadow_roots_for_document(host, document)
-            .any(|root| {
-                let owner = AdoptedStyleSheetOwner::ShadowRoot(root);
-                let Some(sources) = self.sources_by_owner.get(&owner) else {
-                    return false;
-                };
-                if !(StyleSourceLifecycleOwner::ShadowRootAdoptedStyleSheets { root })
-                    .retained_source_records_are_available(host)
-                {
-                    return false;
-                }
-                sources.iter().any(|source| {
-                    request_plan.matches_dependency_summary(
-                        source.source().source_dependency_summary().as_ref(),
-                    )
-                })
-            })
-    }
-
     fn tracked_owners(&self) -> impl Iterator<Item = AdoptedStyleSheetOwner> + '_ {
         self.tracked_owners.iter().copied()
     }
@@ -660,17 +511,6 @@ impl AdoptedStyleSheetSources {
             }
             AdoptedStyleSheetOwner::Document(_) | AdoptedStyleSheetOwner::ShadowRoot(_) => None,
         })
-    }
-
-    pub(in crate::style_engine) fn has_document_retained_sources(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-    ) -> bool {
-        self.sources(AdoptedStyleSheetOwner::Document(document))
-            .is_some_and(|sources| !sources.is_empty())
-            && StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets { document }
-                .retained_source_records_are_available(host)
     }
 }
 

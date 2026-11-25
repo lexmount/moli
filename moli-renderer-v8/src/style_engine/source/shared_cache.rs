@@ -6,10 +6,9 @@ use std::{
 
 use indexmap::IndexMap;
 use moli_crypto::Sha256Context;
-use moli_selector::StyloSourceDependencySummary;
 use parking_lot::Mutex;
 
-use super::super::{source_key::StyleSourceKey, stylesheet::style_source_metadata_for_css_text};
+use super::super::{source_key::StyleSourceKey, stylesheet::stylesheet_import_urls};
 use super::store::StylesheetFontFaceDescriptor;
 
 const RETAINED_BYTES_LIMIT: usize = 64 * 1024;
@@ -32,14 +31,8 @@ pub(super) struct SharedStyleSourceContents {
     css_fingerprint: [u8; 32],
     // Live owner sheets have their own parsed rule trees. Text-only callers
     // share one fallback parse for selector dependencies and import discovery.
-    metadata: OnceLock<SharedStyleSourceMetadata>,
+    imports: OnceLock<Arc<[url::Url]>>,
     font_faces: OnceLock<Arc<[StylesheetFontFaceDescriptor]>>,
-}
-
-#[derive(Debug)]
-struct SharedStyleSourceMetadata {
-    source_dependency_summary: Arc<StyloSourceDependencySummary>,
-    import_urls: Arc<[url::Url]>,
 }
 
 #[derive(Debug)]
@@ -87,7 +80,7 @@ impl SharedStyleSourceContents {
             css_text,
             base_url: Arc::new(base_url),
             css_fingerprint,
-            metadata: OnceLock::new(),
+            imports: OnceLock::new(),
             font_faces: OnceLock::new(),
         }
     }
@@ -112,10 +105,6 @@ impl SharedStyleSourceContents {
         self.css_fingerprint
     }
 
-    pub(super) fn source_dependency_summary(&self) -> Arc<StyloSourceDependencySummary> {
-        Arc::clone(&self.metadata().source_dependency_summary)
-    }
-
     pub(super) fn font_faces(&self) -> Arc<[StylesheetFontFaceDescriptor]> {
         Arc::clone(self.font_faces.get_or_init(|| {
             crate::css_style::parse_css_font_faces(self.css_text())
@@ -127,26 +116,20 @@ impl SharedStyleSourceContents {
     }
 
     pub(super) fn import_urls(&self) -> &[url::Url] {
-        self.metadata().import_urls.as_ref()
+        self.import_urls_cached().as_ref()
     }
 
     pub(super) fn import_urls_handle(&self) -> Arc<[url::Url]> {
-        Arc::clone(&self.metadata().import_urls)
+        Arc::clone(self.import_urls_cached())
     }
 
     fn matches_input(&self, css_text: &str, base_url: &url::Url) -> bool {
         self.css_text.as_ref() == css_text && self.base_url.as_ref() == base_url
     }
 
-    fn metadata(&self) -> &SharedStyleSourceMetadata {
-        self.metadata.get_or_init(|| {
-            let (metadata, imports) =
-                style_source_metadata_for_css_text(self.css_text(), self.base_url());
-            SharedStyleSourceMetadata {
-                source_dependency_summary: Arc::new(metadata.dependency_summary),
-                import_urls: imports.into(),
-            }
-        })
+    fn import_urls_cached(&self) -> &Arc<[url::Url]> {
+        self.imports
+            .get_or_init(|| stylesheet_import_urls(self.css_text(), self.base_url()).into())
     }
 }
 
@@ -289,9 +272,9 @@ mod tests {
         let weak_source = Arc::downgrade(&source);
 
         let retained = cache.insert_or_get(key, source);
-        assert!(retained.metadata.get().is_none());
+        assert!(retained.imports.get().is_none());
         assert!(retained.font_faces().is_empty());
-        assert!(retained.metadata.get().is_none());
+        assert!(retained.imports.get().is_none());
         assert_eq!(cache.entries.len(), 1);
         assert_eq!(cache.retained_bytes, ENTRY_RETAINED_BYTES);
         drop(retained);
