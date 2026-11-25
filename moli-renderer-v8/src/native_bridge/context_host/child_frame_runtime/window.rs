@@ -1513,11 +1513,37 @@ impl PageScriptHost {
             .to_owned()
     }
 
-    pub(crate) fn child_performance_time_origin(&self, handle: DomHandle) -> f64 {
+    pub(crate) fn child_document_performance_timing(
+        &self,
+        handle: DomHandle,
+    ) -> Option<crate::document_runtime::DocumentTimingSnapshot> {
         self.child_browsing_contexts
             .get(&handle)
-            .map(|entry| entry.performance_time_origin_millis())
-            .unwrap_or_else(moli_time::unix_epoch_millis)
+            .map(|entry| entry.document_performance_timing())
+    }
+
+    pub(in crate::native_bridge::context_host) fn record_child_document_lifecycle_timing(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        phase: crate::document_runtime::DocumentLifecycleTiming,
+    ) {
+        if !self
+            .frame_owner_store
+            .child_document_task_owner_is_current(handle, owner)
+        {
+            return;
+        }
+        let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
+            return;
+        };
+        let timing = entry.record_document_lifecycle_timing(phase);
+        if let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle) {
+            crate::context_bootstrap::project_window_document_lifecycle_timing(
+                scope, window, timing, true,
+            );
+        }
     }
 }
 

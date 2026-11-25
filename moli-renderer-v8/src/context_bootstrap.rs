@@ -495,12 +495,14 @@ pub(crate) use self::notification_runtime::{
     build_notification_object_from_snapshot, notification_get_options_tag,
     notification_options_payload,
 };
+#[cfg(test)]
+pub(crate) use self::performance_runtime::bind_window_performance_seed;
 pub(crate) use self::performance_runtime::{
     FetchResourceTiming, ResourcePerformanceEntry, bind_document_performance,
-    bind_window_performance_seed, current_performance_time_origin,
+    bind_window_document_performance, current_performance_time_origin,
     current_window_performance_time_origin_seed, increment_performance_event_count,
-    project_document_lifecycle_timing, record_resource_performance_entry,
-    run_resource_timing_buffer_full_task,
+    project_document_lifecycle_timing, project_window_document_lifecycle_timing,
+    record_resource_performance_entry, run_resource_timing_buffer_full_task,
 };
 use self::range_live::{
     update_live_ranges_for_character_data_edit, update_live_ranges_for_character_data_reset,

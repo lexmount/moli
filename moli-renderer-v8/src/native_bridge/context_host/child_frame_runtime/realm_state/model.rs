@@ -48,7 +48,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) struct ChildWind
     pub(super) window_name: String,
     pub(super) navigation_seed: NavigationHistoryEntrySeed,
     pub(super) navigation_type: String,
-    pub(super) performance_time_origin: f64,
+    pub(super) performance_timing: crate::document_runtime::DocumentTimingSnapshot,
     pub(super) policy: DocumentPolicyContainer,
 }
 
