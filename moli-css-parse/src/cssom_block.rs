@@ -3,7 +3,10 @@ use style::{
         CssDeclarationBlock as NativeBlock, CssDeclarationEntry, CssMutationProjection,
         CssRemoveResult, CssSetResult,
     },
-    properties::{PropertyDeclarationBlock, PropertyDeclarationId, PropertyId},
+    properties::{
+        Importance, PropertyDeclaration, PropertyDeclarationBlock, PropertyDeclarationId,
+        PropertyId,
+    },
     servo_arc::Arc,
     shared_lock::{Locked, SharedRwLock},
 };
@@ -98,15 +101,7 @@ impl CssDeclarationBlock {
         self.with_declarations(|block| {
             block
                 .declaration_importance_iter()
-                .filter_map(|(declaration, importance)| {
-                    let mut value = CssString::new();
-                    declaration.to_css(&mut value).ok()?;
-                    Some(CssDeclarationEntry {
-                        name: declaration_name(declaration.id()),
-                        value,
-                        priority: importance.important(),
-                    })
-                })
+                .filter_map(|(declaration, importance)| declaration_entry(declaration, importance))
                 .collect()
         })
     }
@@ -167,6 +162,19 @@ fn declaration_name(property: PropertyDeclarationId<'_>) -> String {
         "font-width" => "font-stretch".to_owned(),
         name => name.to_owned(),
     }
+}
+
+pub(crate) fn declaration_entry(
+    declaration: &PropertyDeclaration,
+    importance: Importance,
+) -> Option<CssDeclarationEntry> {
+    let mut value = CssString::new();
+    declaration.to_css(&mut value).ok()?;
+    Some(CssDeclarationEntry {
+        name: declaration_name(declaration.id()),
+        value,
+        priority: importance.important(),
+    })
 }
 
 pub fn parse_declaration_block(text: &str) -> CssDeclarationBlock {
