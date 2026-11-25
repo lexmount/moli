@@ -1,5 +1,15 @@
 use super::*;
 
+fn linked_source_text(
+    engine: &MoliStyleEngine,
+    host: &DomHost,
+    owner: DomHandle,
+) -> Option<String> {
+    engine
+        .linked_stylesheet_source_for_owner_with_host(host, owner)
+        .map(|source| source.serialized_css_text().to_string())
+}
+
 #[test]
 fn adopting_inert_template_styles_does_not_prepare_unused_sources() {
     let mut host = test_host();
@@ -261,12 +271,6 @@ fn author_stylesheet_sources_are_owned_by_style_engine() {
         engine.shadow_root_adopted_style_sheet_sources_with_host(&host, shadow_root)[0].base_url(),
         &shadow_url
     );
-    assert!(
-        engine.shadow_root_adopted_style_sheet_tracks_root_for_document_for_test(
-            document,
-            shadow_root
-        )
-    );
     assert_eq!(
         engine
             .owner_style_sheet_text_with_host(&host, owner)
@@ -353,180 +357,29 @@ fn redirected_linked_stylesheet_source_update_drops_stale_final_url_alias() {
 }
 
 #[test]
-fn retained_sources_are_scoped_to_document_worlds() {
+fn linked_stylesheet_source_is_available_in_its_detached_document_until_removed() {
     let mut host = test_host();
-    let document = host.document_handle();
+    let document = host.create_detached_html_document();
+    let link = host.create_element("link");
+    assert!(host.set_attribute(link, "rel", "stylesheet"));
+    assert!(host.set_attribute(link, "href", "detached.css"));
+    assert!(host.append_child(document, link));
+
+    let url = url::Url::parse("https://example.test/detached.css").unwrap();
     let mut engine = MoliStyleEngine::new();
-
-    let disconnected_style = host.create_element("style");
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        disconnected_style,
-        ".disconnected { color: red; }".into(),
-    );
-
-    let disconnected_link = host.create_element("link");
-    assert!(host.set_attribute(disconnected_link, "rel", "stylesheet"));
-    assert!(host.set_attribute(disconnected_link, "href", "app.css"));
-    let linked_url = url::Url::parse("https://example.test/app.css").unwrap();
-    engine.record_stylesheet_source_for_url_for_document_for_test(
-        document,
-        &linked_url,
-        StyloStylesheetSource::new(".linked { color: blue; }".into(), linked_url.clone()),
-    );
-    assert!(engine.install_recorded_linked_stylesheet_source_for_test(
-        &host,
-        disconnected_link,
-        &linked_url,
-    ));
-
-    let inputs = FullStyleWorldSnapshot::default();
-    engine.ensure_retained_style_system_for_document(
-        &host,
-        host.document_handle(),
-        StyleWorldKey::new(&inputs, None),
-        &inputs,
-    );
-    engine.with_retained_style_system_for_document_for_test(host.document_handle(), |retained| {
-        assert!(
-            retained.source_cascade_data.is_empty(),
-            "disconnected active-document owners should stay trackable without retained source data"
-        );
-    });
-
-    let detached_document = host.create_detached_html_document();
-    let detached_style = host.create_element("style");
-    assert!(host.append_child(detached_document, detached_style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        detached_style,
-        ".detached { color: green; }".into(),
-    );
-    let detached_style_id =
-        StyleSourceId::owner_style_sheet(&host, detached_style).expect("detached style source id");
-
-    let detached_link = host.create_element("link");
-    assert!(host.set_attribute(detached_link, "rel", "stylesheet"));
-    assert!(host.set_attribute(detached_link, "href", "app.css"));
-    assert!(host.append_child(detached_document, detached_link));
     engine.install_linked_stylesheet_source_for_owners_for_test(
         &host,
-        &linked_url,
-        StyloStylesheetSource::new(".linked { color: blue; }".into(), linked_url.clone()),
-        &[detached_link],
+        &url,
+        StyloStylesheetSource::new(".detached-link { color: blue; }".into(), url.clone()),
+        &[link],
     );
-    let detached_link_id =
-        StyleSourceId::linked_style_sheet(&host, detached_link).expect("detached link source id");
-
-    engine.ensure_retained_style_system_for_document(
-        &host,
-        host.document_handle(),
-        StyleWorldKey::new(&inputs, None),
-        &inputs,
-    );
-    engine.with_retained_style_system_for_document_for_test(host.document_handle(), |retained| {
-        assert!(
-            retained.source_cascade_data.is_empty(),
-            "active document retained source data should not include detached document sources"
-        );
-    });
-
-    engine.ensure_retained_style_system_for_document(
-        &host,
-        detached_document,
-        StyleWorldKey::new(&inputs, None),
-        &inputs,
-    );
-    engine.with_retained_style_system_for_document_for_test(detached_document, |retained| {
-        assert_eq!(retained.source_cascade_data.len(), 2);
-        assert!(
-            retained
-                .source_cascade_data
-                .contains_key(&detached_style_id),
-            "detached document owner stylesheet should stay local to detached retained data"
-        );
-        assert!(
-            retained.source_cascade_data.contains_key(&detached_link_id),
-            "detached linked stylesheet should stay local to detached retained data"
-        );
-    });
-}
-
-#[test]
-fn removed_detached_document_stylesheet_owners_are_not_retained_sources() {
-    let mut host = test_host();
-    let detached_document = host.create_detached_html_document();
-    let mut engine = MoliStyleEngine::new();
-
-    let detached_style = host.create_element("style");
-    assert!(host.append_child(detached_document, detached_style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        detached_style,
-        ".detached-style { color: green; }".into(),
-    );
-    let detached_style_id =
-        StyleSourceId::owner_style_sheet(&host, detached_style).expect("detached style source id");
-
-    let detached_link = host.create_element("link");
-    assert!(host.set_attribute(detached_link, "rel", "stylesheet"));
-    assert!(host.set_attribute(detached_link, "href", "detached.css"));
-    assert!(host.append_child(detached_document, detached_link));
-    let detached_link_url = url::Url::parse("https://example.test/detached.css").unwrap();
-    engine.install_linked_stylesheet_source_for_owners_for_test(
-        &host,
-        &detached_link_url,
-        StyloStylesheetSource::new(
-            ".detached-link { color: blue; }".into(),
-            detached_link_url.clone(),
-        ),
-        &[detached_link],
-    );
-    let detached_link_id =
-        StyleSourceId::linked_style_sheet(&host, detached_link).expect("detached link source id");
-
-    let retained_before_removal = engine
-        .retained_stylesheet_source_ids_for_document_for_test(&host, detached_document)
-        .into_iter()
-        .collect::<HashSet<_>>();
     assert_eq!(
-        retained_before_removal,
-        HashSet::from([detached_style_id.clone(), detached_link_id.clone()])
+        linked_source_text(&engine, &host, link).as_deref(),
+        Some(".detached-link { color: blue; }"),
     );
 
-    assert!(host.remove_child(detached_document, detached_style));
-    assert!(host.remove_child(detached_document, detached_link));
-
-    let retained_after_removal = engine
-        .retained_stylesheet_source_ids_for_document_for_test(&host, detached_document)
-        .into_iter()
-        .collect::<HashSet<_>>();
-    assert!(
-        retained_after_removal.is_empty(),
-        "removed detached-document stylesheet owners must not stay retained"
-    );
-
-    let report = source_lifecycle_report_for_document_for_test(
-        &engine,
-        &host,
-        detached_document,
-        StyleSourceDocumentContext::for_root_document(detached_document),
-    );
-    for owner in [
-        StyleSourceLifecycleOwner::OwnerStyleSheet {
-            owner: detached_style,
-        },
-        StyleSourceLifecycleOwner::LinkedStyleSheet {
-            owner: detached_link,
-        },
-    ] {
-        assert_eq!(
-            lifecycle_availability_for(report.records(), owner),
-            Some(&StyleSourceLifecycleAvailability::Unavailable {
-                reason: StyleSourceLifecycleUnavailableReason::OwnerNotInDocumentTree,
-            })
-        );
-    }
+    assert!(host.remove_child(document, link));
+    assert_eq!(linked_source_text(&engine, &host, link), None);
 }
 
 #[test]
@@ -537,823 +390,27 @@ fn owner_stylesheet_source_moves_to_current_owner_document_world() {
     let mut engine = MoliStyleEngine::new();
 
     let owner = host.create_element("style");
+    let css = ".moved-owner { color: green; }";
     assert!(host.append_child(document, owner));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        owner,
-        ".moved-owner { color: green; }".into(),
-    );
-    let old_source_id =
-        StyleSourceId::owner_style_sheet(&host, owner).expect("old owner stylesheet source id");
+    engine.set_owner_style_sheet_text_with_host(&host, owner, css.into());
+    let old_world = engine.world_for_document(document);
     assert_eq!(
-        old_source_id.scope_id,
-        StyleScopeId::Document(document),
-        "initial owner stylesheet source should belong to the active document"
-    );
-    assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        vec![old_source_id.clone()]
+        old_world.owner_style_sheet_sources.borrow().text(owner),
+        Some(css)
     );
 
     assert!(host.append_child(detached_document, owner));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        owner,
-        ".moved-owner { color: green; }".into(),
-    );
-    let new_source_id =
-        StyleSourceId::owner_style_sheet(&host, owner).expect("new owner stylesheet source id");
+    engine.set_owner_style_sheet_text_with_host(&host, owner, css.into());
     assert_eq!(
-        new_source_id.scope_id,
-        StyleScopeId::Document(detached_document),
-        "moved owner stylesheet source should belong to its current owner document"
+        old_world.owner_style_sheet_sources.borrow().text(owner),
+        None
     );
-    assert!(
+    assert_eq!(
         engine
-            .retained_stylesheet_source_ids_for_document_for_test(&host, document)
-            .is_empty(),
-        "old document world must not retain the moved owner stylesheet source"
+            .owner_style_sheet_text_with_host(&host, owner)
+            .as_deref(),
+        Some(css)
     );
-    assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, detached_document),
-        vec![new_source_id.clone()]
-    );
-
-    let old_document_report = source_lifecycle_report_for_document_for_test(
-        &engine,
-        &host,
-        document,
-        StyleSourceDocumentContext::for_root_document(document),
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            old_document_report.records(),
-            StyleSourceLifecycleOwner::OwnerStyleSheet { owner },
-        ),
-        None,
-        "stale owner stylesheet source should be removed from the old document world"
-    );
-
-    let new_document_report = source_lifecycle_report_for_document_for_test(
-        &engine,
-        &host,
-        detached_document,
-        StyleSourceDocumentContext::for_root_document(detached_document),
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            new_document_report.records(),
-            StyleSourceLifecycleOwner::OwnerStyleSheet { owner },
-        ),
-        Some(&StyleSourceLifecycleAvailability::RetainedSources {
-            source_ids: vec![new_source_id],
-        })
-    );
-}
-
-#[test]
-fn removed_child_document_owner_stylesheet_is_not_retained_source() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let child_document = host.create_detached_html_document();
-    let document_context =
-        OwnedStyleSourceDocumentContext::new(document).with_child_documents([child_document]);
-    let mut engine = MoliStyleEngine::new();
-
-    let child_style = host.create_element("style");
-    assert!(host.append_child(child_document, child_style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        child_style,
-        ".child-style { color: green; }".into(),
-    );
-    let child_style_id =
-        StyleSourceId::owner_style_sheet(&host, child_style).expect("child style source id");
-
-    let retained_before_removal = engine
-        .retained_stylesheet_source_ids_for_document_for_test(&host, child_document)
-        .into_iter()
-        .collect::<HashSet<_>>();
-    assert_eq!(retained_before_removal, HashSet::from([child_style_id]));
-
-    assert!(host.remove_child(child_document, child_style));
-
-    let retained_after_removal = engine
-        .retained_stylesheet_source_ids_for_document_for_test(&host, child_document)
-        .into_iter()
-        .collect::<HashSet<_>>();
-    assert!(
-        retained_after_removal.is_empty(),
-        "removed child-document stylesheet owner must not stay retained"
-    );
-
-    let report = source_lifecycle_report_for_document_for_test(
-        &engine,
-        &host,
-        child_document,
-        document_context.as_ref(),
-    );
-    assert_eq!(
-        lifecycle_document_kind_for(
-            report.records(),
-            StyleSourceLifecycleOwner::OwnerStyleSheet { owner: child_style },
-        ),
-        Some(StyleSourceDocumentKind::Child)
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            report.records(),
-            StyleSourceLifecycleOwner::OwnerStyleSheet { owner: child_style },
-        ),
-        Some(&StyleSourceLifecycleAvailability::Unavailable {
-            reason: StyleSourceLifecycleUnavailableReason::OwnerNotInDocumentTree,
-        })
-    );
-}
-
-#[test]
-fn source_lifecycle_snapshot_distinguishes_trackable_and_retained_sources() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let mut engine = MoliStyleEngine::new();
-
-    let connected_style = host.create_element("style");
-    assert!(host.append_child(document, connected_style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        connected_style,
-        ".connected { color: green; }".into(),
-    );
-
-    let disconnected_style = host.create_element("style");
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        disconnected_style,
-        ".disconnected { color: red; }".into(),
-    );
-
-    let detached_document = host.create_detached_html_document();
-    let detached_style = host.create_element("style");
-    assert!(host.append_child(detached_document, detached_style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        detached_style,
-        ".detached { color: blue; }".into(),
-    );
-
-    let inactive_shadow_host = host.create_element("section");
-    let inactive_shadow_root = host
-        .attach_shadow_root(inactive_shadow_host, "open")
-        .expect("inactive shadow host should accept a shadow root");
-    let inactive_shadow_style = host.create_element("style");
-    assert!(host.append_child(inactive_shadow_root, inactive_shadow_style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        inactive_shadow_style,
-        ":host { color: purple; }".into(),
-    );
-
-    let connected_link = host.create_element("link");
-    assert!(host.set_attribute(connected_link, "rel", "stylesheet"));
-    assert!(host.set_attribute(connected_link, "href", "connected.css"));
-    assert!(host.append_child(document, connected_link));
-    let connected_link_url = url::Url::parse("https://example.test/connected.css").unwrap();
-    engine.install_linked_stylesheet_source_for_owners_for_test(
-        &host,
-        &connected_link_url,
-        StyloStylesheetSource::new(
-            ".linked-connected { color: black; }".into(),
-            connected_link_url.clone(),
-        ),
-        &[connected_link],
-    );
-
-    let disconnected_link = host.create_element("link");
-    assert!(host.set_attribute(disconnected_link, "rel", "stylesheet"));
-    assert!(host.set_attribute(disconnected_link, "href", "disconnected.css"));
-    let disconnected_link_url = url::Url::parse("https://example.test/disconnected.css").unwrap();
-    engine.install_linked_stylesheet_source_for_owners_for_test(
-        &host,
-        &disconnected_link_url,
-        StyloStylesheetSource::new(
-            ".linked-disconnected { color: gray; }".into(),
-            disconnected_link_url.clone(),
-        ),
-        &[disconnected_link],
-    );
-
-    let pending_link = host.create_element("link");
-    assert!(host.set_attribute(pending_link, "rel", "stylesheet"));
-    assert!(host.set_attribute(pending_link, "href", "pending.css"));
-    assert!(host.append_child(document, pending_link));
-
-    let missing_href_link = host.create_element("link");
-    assert!(host.set_attribute(missing_href_link, "rel", "stylesheet"));
-    assert!(host.append_child(document, missing_href_link));
-
-    let missing_document = NativeNodeId::new(90_011);
-    let empty_detached_document = host.create_detached_html_document();
-    engine.set_document_adopted_style_sheet_sources(
-        document,
-        vec![StyloStylesheetSource::new(
-            ".document-adopted { color: orange; }".into(),
-            url::Url::parse("https://example.test/document-adopted.css").unwrap(),
-        )],
-    );
-    engine.set_document_adopted_style_sheet_sources(
-        missing_document,
-        vec![StyloStylesheetSource::new(
-            ".missing-document-adopted { color: pink; }".into(),
-            url::Url::parse("https://example.test/missing-document-adopted.css").unwrap(),
-        )],
-    );
-    engine.set_document_adopted_style_sheet_sources(empty_detached_document, Vec::new());
-
-    let connected_shadow_host = host.create_element("article");
-    assert!(host.append_child(document, connected_shadow_host));
-    let connected_shadow_root = host
-        .attach_shadow_root(connected_shadow_host, "open")
-        .expect("connected shadow host should accept a shadow root");
-    engine.set_shadow_root_adopted_style_sheet_sources_with_host(
-        &host,
-        connected_shadow_root,
-        vec![StyloStylesheetSource::new(
-            ":host { color: teal; }".into(),
-            url::Url::parse("https://example.test/shadow-adopted.css").unwrap(),
-        )],
-    );
-    let empty_connected_shadow_host = host.create_element("aside");
-    assert!(host.append_child(document, empty_connected_shadow_host));
-    let empty_connected_shadow_root = host
-        .attach_shadow_root(empty_connected_shadow_host, "open")
-        .expect("connected empty shadow host should accept a shadow root");
-    engine.set_shadow_root_adopted_style_sheet_sources_with_host(
-        &host,
-        empty_connected_shadow_root,
-        Vec::new(),
-    );
-    engine.set_shadow_root_adopted_style_sheet_sources_with_host(
-        &host,
-        inactive_shadow_root,
-        vec![StyloStylesheetSource::new(
-            ":host { color: maroon; }".into(),
-            url::Url::parse("https://example.test/inactive-shadow-adopted.css").unwrap(),
-        )],
-    );
-    let document_adopted_source_ids =
-        engine.document_adopted_style_sheet_source_ids_for_test(document);
-    let connected_shadow_adopted_source_ids =
-        engine.shadow_root_adopted_style_sheet_source_ids_for_test(&host, connected_shadow_root);
-
-    let document_context = StyleSourceDocumentContext::for_root_document(document);
-    let root_report =
-        source_lifecycle_report_for_document_for_test(&engine, &host, document, document_context);
-    let detached_report = source_lifecycle_report_for_document_for_test(
-        &engine,
-        &host,
-        detached_document,
-        document_context,
-    );
-    let empty_detached_report = source_lifecycle_report_for_document_for_test(
-        &engine,
-        &host,
-        empty_detached_document,
-        document_context,
-    );
-    let missing_document_report = source_lifecycle_report_for_document_for_test(
-        &engine,
-        &host,
-        missing_document,
-        document_context,
-    );
-    let root_snapshot = root_report.snapshot();
-    assert_eq!(root_snapshot.tracked_owner_style_sheet_count(), 3);
-    assert_eq!(root_snapshot.retained_owner_style_sheet_source_count(), 1);
-    assert_eq!(root_snapshot.tracked_linked_style_sheet_owner_count(), 2);
-    assert_eq!(root_snapshot.retained_linked_style_sheet_source_count(), 1);
-    assert_eq!(root_snapshot.retained_document_adopted_source_count(), 1);
-    assert_eq!(root_snapshot.retained_shadow_adopted_source_count(), 1);
-    assert_eq!(root_snapshot.retained_root_document_source_count(), 4);
-    assert_eq!(root_report.records().len(), 9);
-    let detached_snapshot = detached_report.snapshot();
-    assert_eq!(detached_snapshot.tracked_owner_style_sheet_count(), 1);
-    assert_eq!(
-        detached_snapshot.retained_owner_style_sheet_source_count(),
-        1
-    );
-    assert_eq!(
-        detached_snapshot.retained_detached_document_source_count(),
-        1
-    );
-    assert_eq!(detached_report.records().len(), 1);
-    assert_eq!(empty_detached_report.records().len(), 1);
-    assert_eq!(missing_document_report.records().len(), 1);
-
-    let connected_style_source_id = StyleSourceId::owner_style_sheet(&host, connected_style)
-        .expect("connected owner stylesheet id");
-    assert_eq!(
-        root_report
-            .record_for_source_id_for_test(&connected_style_source_id)
-            .map(|record| record.availability().clone()),
-        Some(StyleSourceLifecycleAvailability::RetainedSources {
-            source_ids: vec![connected_style_source_id.clone()],
-        })
-    );
-    assert_eq!(
-        empty_detached_report
-            .record_for_source_id_for_test(&StyleSourceId::document_adopted_style_sheet(
-                empty_detached_document,
-                0,
-            ))
-            .map(|record| record.availability().clone()),
-        Some(StyleSourceLifecycleAvailability::AvailableWithoutSource {
-            reason: StyleSourceLifecycleWithoutSourceReason::EmptyDocumentAdoptedStyleSheets,
-        })
-    );
-    assert_eq!(
-        root_report
-            .record_for_source_id_for_test(&StyleSourceId::document_adopted_style_sheet(
-                document,
-                u64::MAX,
-            ))
-            .map(|record| record.availability().clone()),
-        Some(StyleSourceLifecycleAvailability::AvailableWithoutSource {
-            reason: StyleSourceLifecycleWithoutSourceReason::SourceIdMissing,
-        })
-    );
-
-    let active_retained_source_ids = engine
-        .retained_stylesheet_source_ids_for_document_for_test(&host, document)
-        .into_iter()
-        .collect::<HashSet<_>>();
-    assert_eq!(
-        active_retained_source_ids,
-        HashSet::from([
-            StyleSourceId::owner_style_sheet(&host, connected_style)
-                .expect("connected owner stylesheet id"),
-            StyleSourceId::linked_style_sheet(&host, connected_link)
-                .expect("connected linked stylesheet id"),
-            document_adopted_source_ids[0].clone(),
-            connected_shadow_adopted_source_ids[0].clone(),
-        ])
-    );
-    let detached_retained_source_ids = engine
-        .retained_stylesheet_source_ids_for_document_for_test(&host, detached_document)
-        .into_iter()
-        .collect::<HashSet<_>>();
-    assert_eq!(
-        detached_retained_source_ids,
-        HashSet::from([StyleSourceId::owner_style_sheet(&host, detached_style)
-            .expect("detached owner stylesheet id"),])
-    );
-
-    assert_eq!(
-        lifecycle_availability_for(
-            root_report.records(),
-            StyleSourceLifecycleOwner::OwnerStyleSheet {
-                owner: connected_style
-            },
-        ),
-        Some(&StyleSourceLifecycleAvailability::RetainedSources {
-            source_ids: vec![
-                StyleSourceId::owner_style_sheet(&host, connected_style)
-                    .expect("connected owner stylesheet id"),
-            ],
-        })
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            root_report.records(),
-            StyleSourceLifecycleOwner::OwnerStyleSheet {
-                owner: disconnected_style
-            },
-        ),
-        Some(&StyleSourceLifecycleAvailability::Unavailable {
-            reason: StyleSourceLifecycleUnavailableReason::OwnerNotInDocumentTree,
-        })
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            root_report.records(),
-            StyleSourceLifecycleOwner::LinkedStyleSheet {
-                owner: pending_link
-            },
-        ),
-        None
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            root_report.records(),
-            StyleSourceLifecycleOwner::LinkedStyleSheet {
-                owner: missing_href_link
-            },
-        ),
-        None
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            missing_document_report.records(),
-            StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets {
-                document: missing_document,
-            },
-        ),
-        Some(&StyleSourceLifecycleAvailability::Unavailable {
-            reason: StyleSourceLifecycleUnavailableReason::MissingNode,
-        })
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            root_report.records(),
-            StyleSourceLifecycleOwner::ShadowRootAdoptedStyleSheets {
-                root: empty_connected_shadow_root,
-            },
-        ),
-        Some(&StyleSourceLifecycleAvailability::AvailableWithoutSource {
-            reason: StyleSourceLifecycleWithoutSourceReason::EmptyShadowRootAdoptedStyleSheets,
-        })
-    );
-}
-#[derive(Default)]
-struct SourceLifecycleOwnerDetailsForTest {
-    details: Vec<StyleSourceLifecycleOwnerDetailTrace>,
-}
-
-impl StyleSourceLifecycleOwnerDetailTraceSink for SourceLifecycleOwnerDetailsForTest {
-    fn record_source_lifecycle_owner_detail_trace(
-        &mut self,
-        trace: StyleSourceLifecycleOwnerDetailTrace,
-    ) {
-        self.details.push(trace);
-    }
-}
-
-#[test]
-fn source_lifecycle_owner_detail_trace_records_owner_document_kind_and_availability() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let child_document = host.create_detached_html_document();
-    let detached_document = host.create_detached_html_document();
-    let missing_document = NativeNodeId::new(91_001);
-    let mut engine = MoliStyleEngine::new();
-    let document_context =
-        OwnedStyleSourceDocumentContext::new(document).with_child_documents([child_document]);
-
-    let connected_style = host.create_element("style");
-    assert!(host.append_child(document, connected_style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        connected_style,
-        ".connected { color: green; }".into(),
-    );
-
-    let disconnected_style = host.create_element("style");
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        disconnected_style,
-        ".disconnected { color: red; }".into(),
-    );
-
-    engine.set_document_adopted_style_sheet_sources(
-        child_document,
-        vec![StyloStylesheetSource::new(
-            ".child { color: blue; }".into(),
-            url::Url::parse("https://example.test/child.css").unwrap(),
-        )],
-    );
-    engine.set_document_adopted_style_sheet_sources(
-        detached_document,
-        vec![StyloStylesheetSource::new(
-            ".detached { color: purple; }".into(),
-            url::Url::parse("https://example.test/detached.css").unwrap(),
-        )],
-    );
-    engine.set_document_adopted_style_sheet_sources(
-        missing_document,
-        vec![StyloStylesheetSource::new(
-            ".missing { color: orange; }".into(),
-            url::Url::parse("https://example.test/missing.css").unwrap(),
-        )],
-    );
-
-    let mut sink = SourceLifecycleOwnerDetailsForTest::default();
-    for document in [
-        document,
-        child_document,
-        detached_document,
-        missing_document,
-    ] {
-        source_lifecycle_report_for_document_for_test(
-            &engine,
-            &host,
-            document,
-            document_context.as_ref(),
-        )
-        .record_owner_detail_trace_into(&mut sink);
-    }
-
-    let connected_owner = StyleSourceLifecycleOwner::OwnerStyleSheet {
-        owner: connected_style,
-    };
-    let connected_source_id =
-        StyleSourceId::owner_style_sheet(&host, connected_style).expect("connected source id");
-    let connected_detail =
-        lifecycle_owner_detail_for(&sink.details, connected_owner).expect("connected owner detail");
-    assert_eq!(
-        connected_detail.document_kind(),
-        Some(StyleSourceDocumentKind::Root)
-    );
-    assert_eq!(
-        connected_detail.availability(),
-        &StyleSourceLifecycleAvailability::RetainedSources {
-            source_ids: vec![connected_source_id],
-        }
-    );
-
-    let disconnected_detail = lifecycle_owner_detail_for(
-        &sink.details,
-        StyleSourceLifecycleOwner::OwnerStyleSheet {
-            owner: disconnected_style,
-        },
-    )
-    .expect("disconnected owner detail");
-    assert_eq!(
-        disconnected_detail.document_kind(),
-        Some(StyleSourceDocumentKind::Root)
-    );
-    assert_eq!(
-        disconnected_detail.availability(),
-        &StyleSourceLifecycleAvailability::Unavailable {
-            reason: StyleSourceLifecycleUnavailableReason::OwnerNotInDocumentTree,
-        }
-    );
-
-    let child_detail = lifecycle_owner_detail_for(
-        &sink.details,
-        StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets {
-            document: child_document,
-        },
-    )
-    .expect("child document adopted detail");
-    assert_eq!(
-        child_detail.document_kind(),
-        Some(StyleSourceDocumentKind::Child)
-    );
-    assert_eq!(
-        child_detail.availability(),
-        &StyleSourceLifecycleAvailability::RetainedSources {
-            source_ids: engine.document_adopted_style_sheet_source_ids_for_test(child_document),
-        }
-    );
-
-    let detached_detail = lifecycle_owner_detail_for(
-        &sink.details,
-        StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets {
-            document: detached_document,
-        },
-    )
-    .expect("detached document adopted detail");
-    assert_eq!(
-        detached_detail.document_kind(),
-        Some(StyleSourceDocumentKind::Detached)
-    );
-
-    let missing_detail = lifecycle_owner_detail_for(
-        &sink.details,
-        StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets {
-            document: missing_document,
-        },
-    )
-    .expect("missing document adopted detail");
-    assert_eq!(missing_detail.document_kind(), None);
-    assert_eq!(
-        missing_detail.availability(),
-        &StyleSourceLifecycleAvailability::Unavailable {
-            reason: StyleSourceLifecycleUnavailableReason::MissingNode,
-        }
-    );
-}
-
-#[test]
-fn source_lifecycle_report_for_source_ids_only_records_requested_tracked_owners() {
-    let mut host = test_host();
-    let mut engine = MoliStyleEngine::new();
-    let document = host.document_handle();
-
-    let requested_style = host.create_element("style");
-    assert!(host.append_child(document, requested_style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        requested_style,
-        ".requested { color: green; }".into(),
-    );
-    let requested_source_id =
-        StyleSourceId::owner_style_sheet(&host, requested_style).expect("requested source id");
-
-    let unrelated_style = host.create_element("style");
-    assert!(host.append_child(document, unrelated_style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        unrelated_style,
-        ".unrelated { color: blue; }".into(),
-    );
-    let unrelated_source_id =
-        StyleSourceId::owner_style_sheet(&host, unrelated_style).expect("unrelated source id");
-
-    let report = {
-        let document_world = engine.world_for_document(document);
-        let source_stores = document_world.borrow_source_stores();
-        source_stores.source_lifecycle_report_for_source_ids(
-            &host,
-            StyleSourceDocumentContext::for_root_document(document),
-            [requested_source_id.clone(), requested_source_id.clone()],
-        )
-    };
-
-    assert_eq!(report.records().len(), 1);
-    assert_eq!(
-        report
-            .record_for_source_id_for_test(&requested_source_id)
-            .map(|record| record.availability().clone()),
-        Some(StyleSourceLifecycleAvailability::RetainedSources {
-            source_ids: vec![requested_source_id],
-        })
-    );
-    assert!(
-        report
-            .record_for_source_id_for_test(&unrelated_source_id)
-            .is_none()
-    );
-    assert_eq!(report.snapshot().tracked_owner_style_sheet_count(), 1);
-    assert_eq!(
-        report.snapshot().retained_owner_style_sheet_source_count(),
-        1
-    );
-
-    let adopted_base_url = url::Url::parse("https://example.test/adopted.css").unwrap();
-    engine.set_document_adopted_style_sheet_sources(
-        document,
-        vec![
-            StyloStylesheetSource::new(
-                ".adopted-a { color: purple; }".into(),
-                adopted_base_url.clone(),
-            ),
-            StyloStylesheetSource::new(".adopted-b { color: orange; }".into(), adopted_base_url),
-        ],
-    );
-    let adopted_source_ids = engine.document_adopted_style_sheet_source_ids_for_test(document);
-    let requested_adopted_source_id = adopted_source_ids[0].clone();
-    let unrequested_adopted_source_id = adopted_source_ids[1].clone();
-    let adopted_report = {
-        let document_world = engine.world_for_document(document);
-        let source_stores = document_world.borrow_source_stores();
-        source_stores.source_lifecycle_report_for_source_ids(
-            &host,
-            StyleSourceDocumentContext::for_root_document(document),
-            [requested_adopted_source_id.clone()],
-        )
-    };
-
-    assert_eq!(
-        adopted_report
-            .record_for_source_id_for_test(&requested_adopted_source_id)
-            .map(|record| record.availability().clone()),
-        Some(StyleSourceLifecycleAvailability::RetainedSources {
-            source_ids: vec![requested_adopted_source_id],
-        })
-    );
-    assert_eq!(
-        adopted_report
-            .record_for_source_id_for_test(&unrequested_adopted_source_id)
-            .map(|record| record.availability().clone()),
-        Some(StyleSourceLifecycleAvailability::AvailableWithoutSource {
-            reason: StyleSourceLifecycleWithoutSourceReason::SourceIdMissing,
-        })
-    );
-    assert_eq!(
-        adopted_report
-            .snapshot()
-            .retained_document_adopted_source_count(),
-        1
-    );
-
-    let linked = host.create_element("link");
-    assert!(host.set_attribute(linked, "rel", "stylesheet"));
-    assert!(host.set_attribute(linked, "href", "linked.css"));
-    assert!(host.append_child(document, linked));
-    let linked_url = url::Url::parse("https://example.test/linked.css").unwrap();
-    engine.install_linked_stylesheet_source_for_owners_for_test(
-        &host,
-        &linked_url,
-        StyloStylesheetSource::new(".linked { color: black; }".into(), linked_url.clone()),
-        &[linked],
-    );
-    let requested_linked_source_id =
-        StyleSourceId::linked_style_sheet(&host, linked).expect("linked source id");
-    let linked_report = {
-        let document_world = engine.world_for_document(document);
-        let source_stores = document_world.borrow_source_stores();
-        source_stores.source_lifecycle_report_for_source_ids(
-            &host,
-            StyleSourceDocumentContext::for_root_document(document),
-            [requested_linked_source_id.clone()],
-        )
-    };
-
-    assert_eq!(
-        linked_report
-            .record_for_source_id_for_test(&requested_linked_source_id)
-            .map(|record| record.availability().clone()),
-        Some(StyleSourceLifecycleAvailability::RetainedSources {
-            source_ids: vec![requested_linked_source_id.clone()],
-        })
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            linked_report.records(),
-            StyleSourceLifecycleOwner::LinkedStyleSheet { owner: linked },
-        ),
-        Some(&StyleSourceLifecycleAvailability::RetainedSources {
-            source_ids: vec![requested_linked_source_id.clone()],
-        })
-    );
-    assert_eq!(
-        linked_report
-            .snapshot()
-            .tracked_linked_style_sheet_owner_count(),
-        1
-    );
-    assert_eq!(
-        linked_report
-            .snapshot()
-            .retained_linked_style_sheet_source_count(),
-        1
-    );
-
-    let detached_document = host.create_detached_html_document();
-    let detached_link = host.create_element("link");
-    assert!(host.set_attribute(detached_link, "rel", "stylesheet"));
-    assert!(host.set_attribute(detached_link, "href", "linked.css"));
-    assert!(host.append_child(detached_document, detached_link));
-    engine.install_linked_stylesheet_source_for_owners_for_test(
-        &host,
-        &linked_url,
-        StyloStylesheetSource::new(
-            ".detached-linked { color: blue; }".into(),
-            linked_url.clone(),
-        ),
-        &[detached_link],
-    );
-    let detached_linked_source_id =
-        StyleSourceId::linked_style_sheet(&host, detached_link).expect("detached linked source id");
-    let active_document_report_for_detached_source = {
-        let document_world = engine.world_for_document(document);
-        let source_stores = document_world.borrow_source_stores();
-        source_stores.source_lifecycle_report_for_source_ids(
-            &host,
-            StyleSourceDocumentContext::for_root_document(document),
-            [detached_linked_source_id.clone()],
-        )
-    };
-    assert!(
-        active_document_report_for_detached_source
-            .record_for_source_id_for_test(&detached_linked_source_id)
-            .is_none(),
-        "linked source-id lifecycle must not bypass the current document owner registry"
-    );
-    let detached_document_report_for_detached_source = {
-        let detached_world = engine.world_for_document(detached_document);
-        let source_stores = detached_world.borrow_source_stores();
-        source_stores.source_lifecycle_report_for_source_ids(
-            &host,
-            StyleSourceDocumentContext::for_root_document(detached_document),
-            [detached_linked_source_id.clone()],
-        )
-    };
-    assert_eq!(
-        detached_document_report_for_detached_source
-            .record_for_source_id_for_test(&detached_linked_source_id)
-            .map(|record| record.availability().clone()),
-        Some(StyleSourceLifecycleAvailability::RetainedSources {
-            source_ids: vec![detached_linked_source_id.clone()],
-        })
-    );
-
-    let untracked_document =
-        host.create_document(url::Url::parse("https://example.test/untracked/").unwrap());
-    let untracked_report = {
-        let document_world = engine.world_for_document(document);
-        let source_stores = document_world.borrow_source_stores();
-        source_stores.source_lifecycle_report_for_source_ids(
-            &host,
-            StyleSourceDocumentContext::for_root_document(document),
-            [StyleSourceId::document_adopted_style_sheet(
-                untracked_document,
-                0,
-            )],
-        )
-    };
-
-    assert!(untracked_report.records().is_empty());
 }
 
 #[test]
@@ -1435,91 +492,7 @@ fn shared_source_storage_keeps_source_identity_out_of_shared_cache() {
     );
 
     assert!(first_source.shares_source_storage_for_test(&second_source));
-    assert_ne!(
-        super::source::store::stylesheet_sources_cache_key(&[first_source]),
-        super::source::store::stylesheet_sources_cache_key(&[second_source])
-    );
-}
-
-#[test]
-fn linked_source_store_lifecycle_records_drive_retained_record_construction() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let style = host.create_element("style");
-    let link = host.create_element("link");
-    let shadow_host = host.create_element("section");
-    let shadow_root = host
-        .attach_shadow_root(shadow_host, "open")
-        .expect("section should host a shadow root");
-    assert!(host.append_child(document, style));
-    assert!(host.append_child(document, link));
-    assert!(host.append_child(document, shadow_host));
-    assert!(host.set_attribute(link, "rel", "stylesheet"));
-    assert!(host.set_attribute(link, "href", "linked.css"));
-
-    let mut linked_sources = super::source::linked::LinkedStylesheetSources::default();
-    let mut owner_sources = super::source_owner_text::OwnerStyleSheetSources::default();
-    owner_sources.set_source(
-        style,
-        ".owner { color: green; }".to_owned(),
-        url::Url::parse("https://example.test/").unwrap(),
-    );
-    let linked_url = url::Url::parse("https://example.test/linked.css").unwrap();
-    linked_sources.record_source_for_url(
-        &linked_url,
-        StyloStylesheetSource::new(".linked { color: blue; }".into(), linked_url.clone()),
-    );
-    assert!(linked_sources.bind_owner(link, linked_url));
-    let mut adopted_sources = super::source::adopted::AdoptedStyleSheetSources::default();
-    adopted_sources.set_document_sources(
-        document,
-        vec![StyloStylesheetSource::new(
-            ".document { color: purple; }".into(),
-            url::Url::parse("https://example.test/document.css").unwrap(),
-        )],
-    );
-    adopted_sources.set_shadow_root_sources(
-        shadow_root,
-        vec![StyloStylesheetSource::new(
-            ":host { color: orange; }".into(),
-            url::Url::parse("https://example.test/shadow.css").unwrap(),
-        )],
-    );
-    let source_stores = super::source_document::DocumentStyleSourceStores::borrowed_for_test(
-        document,
-        &linked_sources,
-        &owner_sources,
-        &adopted_sources,
-    );
-    let report = source_stores.source_lifecycle_report(
-        &host,
-        StyleSourceDocumentContext::for_root_document(document),
-    );
-    let retained_records = source_stores.retained_source_records_for_lifecycle(&host, &report);
-    let retained_record_ids = retained_records
-        .into_iter()
-        .map(|record| record.id().clone())
-        .collect::<HashSet<_>>();
-    let document_adopted_source_id = adopted_sources
-        .document_source_ids(document)
-        .into_iter()
-        .next()
-        .expect("document adopted source id");
-    let shadow_adopted_source_id = adopted_sources
-        .shadow_root_source_ids(shadow_root)
-        .into_iter()
-        .next()
-        .expect("shadow adopted source id");
-
-    assert_eq!(
-        retained_record_ids,
-        HashSet::from([
-            StyleSourceId::owner_style_sheet(&host, style).expect("owner source id"),
-            StyleSourceId::linked_style_sheet(&host, link).expect("linked source id"),
-            document_adopted_source_id,
-            shadow_adopted_source_id,
-        ])
-    );
+    assert_ne!(first_source.source_id(), second_source.source_id());
 }
 
 #[test]
@@ -1543,10 +516,7 @@ fn linked_owner_binding_requires_explicit_source_installation() {
         ),
     );
 
-    assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        Vec::<StyleSourceId>::new()
-    );
+    assert_eq!(linked_source_text(&engine, &host, link), None);
 
     engine.install_linked_stylesheet_source_for_owners_for_test(
         &host,
@@ -1556,8 +526,8 @@ fn linked_owner_binding_requires_explicit_source_installation() {
     );
 
     assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        vec![StyleSourceId::linked_style_sheet(&host, link).expect("linked source id")]
+        linked_source_text(&engine, &host, link).as_deref(),
+        Some("section { color: green; }")
     );
 }
 
@@ -1676,11 +646,9 @@ fn linked_owner_binding_changes_only_on_explicit_install() {
     );
     assert!(engine.install_recorded_linked_stylesheet_source_for_test(&host, link, &old_url,));
 
-    let linked_source_id =
-        StyleSourceId::linked_style_sheet(&host, link).expect("linked source id");
     assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        vec![linked_source_id.clone()]
+        linked_source_text(&engine, &host, link).as_deref(),
+        Some(".old { color: red; }")
     );
 
     let effects = host.set_attribute_effects(link, "href", "new.css");
@@ -1689,10 +657,9 @@ fn linked_owner_binding_changes_only_on_explicit_install() {
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(&host, &style_effects, &media);
 
-    assert!(
-        engine
-            .retained_stylesheet_source_ids_for_document_for_test(&host, document)
-            .is_empty(),
+    assert_eq!(
+        linked_source_text(&engine, &host, link),
+        None,
         "the old loaded stylesheet must not remain bound after href changes"
     );
 
@@ -1701,16 +668,15 @@ fn linked_owner_binding_changes_only_on_explicit_install() {
         &new_url,
         StyloStylesheetSource::new(".new { color: blue; }".into(), new_url.clone()),
     );
-    assert!(
-        engine
-            .retained_stylesheet_source_ids_for_document_for_test(&host, document)
-            .is_empty(),
+    assert_eq!(
+        linked_source_text(&engine, &host, link),
+        None,
         "recording a resource by URL must not infer an owner binding from live href"
     );
     assert!(engine.install_recorded_linked_stylesheet_source_for_test(&host, link, &new_url,));
     assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        vec![linked_source_id]
+        linked_source_text(&engine, &host, link).as_deref(),
+        Some(".new { color: blue; }")
     );
 }
 
@@ -1749,8 +715,8 @@ fn linked_owner_binding_survives_media_update_without_reinstall() {
         "media changes update the installed sheet instead of detaching its load/source binding"
     );
     assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        vec![StyleSourceId::linked_style_sheet(&host, link).expect("linked source id")]
+        linked_source_text(&engine, &host, link).as_deref(),
+        Some("main { color: green; }")
     );
 }
 
@@ -1775,11 +741,9 @@ fn linked_owner_keeps_processed_source_when_base_href_changes() {
     );
     assert!(engine.install_recorded_linked_stylesheet_source_for_test(&host, link, &old_url,));
 
-    let linked_source_id =
-        StyleSourceId::linked_style_sheet(&host, link).expect("linked source id");
     assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        vec![linked_source_id.clone()]
+        linked_source_text(&engine, &host, link).as_deref(),
+        Some(".old-base { color: red; }")
     );
 
     assert!(host.set_attribute(base, "href", "/theme/"));
@@ -1794,8 +758,8 @@ fn linked_owner_keeps_processed_source_when_base_href_changes() {
     engine.invalidate_for_mutations(&host, &effects, &media);
 
     assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        vec![linked_source_id],
+        linked_source_text(&engine, &host, link).as_deref(),
+        Some(".old-base { color: red; }"),
         "changing the document base must not re-key an already processed link"
     );
 }
@@ -1818,11 +782,9 @@ fn linked_owner_keeps_processed_source_when_base_href_is_inserted() {
     );
     assert!(engine.install_recorded_linked_stylesheet_source_for_test(&host, link, &old_url,));
 
-    let linked_source_id =
-        StyleSourceId::linked_style_sheet(&host, link).expect("linked source id");
     assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        vec![linked_source_id.clone()]
+        linked_source_text(&engine, &host, link).as_deref(),
+        Some(".old-base { color: red; }")
     );
 
     let base = host.create_element("base");
@@ -1839,49 +801,12 @@ fn linked_owner_keeps_processed_source_when_base_href_is_inserted() {
     engine.invalidate_for_mutations(&host, &effects, &media);
 
     assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        vec![linked_source_id],
+        linked_source_text(&engine, &host, link).as_deref(),
+        Some(".old-base { color: red; }"),
         "inserting a document base must not re-key an already processed link"
     );
 }
 
-#[test]
-fn missing_document_adopted_sources_remain_trackable_without_retained_source() {
-    let host = test_host();
-    let mut engine = MoliStyleEngine::new();
-    let missing_document = NativeNodeId::new(90_001);
-    let source_url = url::Url::parse("https://example.test/missing-document.css").unwrap();
-    let source_id = StyleSourceId::document_adopted_style_sheet(missing_document, 0);
-
-    engine.set_document_adopted_style_sheet_sources(
-        missing_document,
-        vec![StyloStylesheetSource::new(
-            "body:has(.marker) .target { color: green; }".into(),
-            source_url,
-        )],
-    );
-
-    assert_eq!(
-        engine.adopted_style_sheet_source_owner_counts_for_document_for_test(missing_document),
-        (1, 0),
-        "missing document owner stays trackable for future wrapper sync"
-    );
-    assert!(engine.document_adopted_style_sheet_tracks_document_for_test(missing_document));
-
-    let inputs = FullStyleWorldSnapshot::default();
-    engine.ensure_retained_style_system_for_document(
-        &host,
-        host.document_handle(),
-        StyleWorldKey::new(&inputs, None),
-        &inputs,
-    );
-    engine.with_retained_style_system_for_document_for_test(host.document_handle(), |retained| {
-        assert!(
-            !retained.source_cascade_data.contains_key(&source_id),
-            "missing document adopted sources should not produce retained cascade data"
-        );
-    });
-}
 #[test]
 fn unchanged_stylesheet_source_syncs_do_not_advance_generation() {
     let mut host = test_host();
@@ -1905,13 +830,6 @@ fn unchanged_stylesheet_source_syncs_do_not_advance_generation() {
     assert_eq!(
         engine.computed_cache_generation_for_document_for_test(active_document),
         0
-    );
-    assert!(engine.document_adopted_style_sheet_tracks_document_for_test(document));
-    assert!(
-        engine.shadow_root_adopted_style_sheet_tracks_root_for_document_for_test(
-            document,
-            shadow_root
-        )
     );
 
     let document_source = StyloStylesheetSource::new("body { color: red; }".into(), document_url);
@@ -1993,7 +911,7 @@ fn unchanged_stylesheet_source_syncs_do_not_advance_generation() {
     );
 }
 #[test]
-fn empty_adopted_sources_are_not_retained_but_shadow_roots_remain_trackable() {
+fn clearing_adopted_sheets_removes_document_and_shadow_sources() {
     let mut engine = MoliStyleEngine::new();
     let mut host = test_host();
     let document = host.document_handle();
@@ -2025,13 +943,6 @@ fn empty_adopted_sources_are_not_retained_but_shadow_roots_remain_trackable() {
         engine.adopted_style_sheet_source_owner_counts_for_document_for_test(document),
         (1, 1)
     );
-    assert!(engine.document_adopted_style_sheet_tracks_document_for_test(document));
-    assert!(
-        engine.shadow_root_adopted_style_sheet_tracks_root_for_document_for_test(
-            document,
-            shadow_root
-        )
-    );
 
     engine.set_document_adopted_style_sheet_sources(document, Vec::new());
     engine.set_shadow_root_adopted_style_sheet_sources_with_host(&host, shadow_root, Vec::new());
@@ -2040,7 +951,6 @@ fn empty_adopted_sources_are_not_retained_but_shadow_roots_remain_trackable() {
         engine.adopted_style_sheet_source_owner_counts_for_document_for_test(document),
         (0, 0)
     );
-    assert!(engine.document_adopted_style_sheet_tracks_document_for_test(document));
     assert!(
         engine
             .adopted_style_sheet_sources_for_document(document)
@@ -2051,16 +961,10 @@ fn empty_adopted_sources_are_not_retained_but_shadow_roots_remain_trackable() {
             .shadow_root_adopted_style_sheet_sources_with_host(&host, shadow_root)
             .is_empty()
     );
-    assert!(
-        engine.shadow_root_adopted_style_sheet_tracks_root_for_document_for_test(
-            document,
-            shadow_root
-        )
-    );
 }
 
 #[test]
-fn inactive_linked_stylesheet_owner_is_not_retained_source_client() {
+fn disabling_linked_stylesheet_owner_removes_source_binding() {
     let mut host = test_host();
     let document = host.document_handle();
     let link = host.create_element("link");
@@ -2077,11 +981,9 @@ fn inactive_linked_stylesheet_owner_is_not_retained_source_client() {
         &[link],
     );
 
-    let linked_source_id =
-        StyleSourceId::linked_style_sheet(&host, link).expect("active linked source id");
     assert_eq!(
-        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
-        vec![linked_source_id.clone()]
+        linked_source_text(&engine, &host, link).as_deref(),
+        Some(".linked { color: black; }")
     );
 
     let effects = host.set_attribute_effects(link, "disabled", "");
@@ -2089,107 +991,7 @@ fn inactive_linked_stylesheet_owner_is_not_retained_source_client() {
     let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(&host, &style_effects, &media);
-    assert!(
-        engine
-            .retained_stylesheet_source_ids_for_document_for_test(&host, document)
-            .is_empty()
-    );
-
-    let report = source_lifecycle_report_for_document_for_test(
-        &engine,
-        &host,
-        document,
-        StyleSourceDocumentContext::for_root_document(document),
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            report.records(),
-            StyleSourceLifecycleOwner::LinkedStyleSheet { owner: link },
-        ),
-        None
-    );
-}
-
-#[test]
-fn lifecycle_retained_source_gate_ignores_unavailable_tracked_owners() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let mut engine = MoliStyleEngine::new();
-
-    let disconnected_style = host.create_element("style");
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        disconnected_style,
-        "body:has(.marker) .target { color: green; }".into(),
-    );
-
-    let disconnected_link = host.create_element("link");
-    assert!(host.set_attribute(disconnected_link, "rel", "stylesheet"));
-    assert!(host.set_attribute(disconnected_link, "href", "disconnected.css"));
-    let disconnected_link_url = url::Url::parse("https://example.test/disconnected.css").unwrap();
-    engine.install_linked_stylesheet_source_for_owners_for_test(
-        &host,
-        &disconnected_link_url,
-        StyloStylesheetSource::new(
-            "body:has(.linked) .target { color: blue; }".into(),
-            disconnected_link_url.clone(),
-        ),
-        &[disconnected_link],
-    );
-
-    let inactive_shadow_host = host.create_element("section");
-    let inactive_shadow_root = host
-        .attach_shadow_root(inactive_shadow_host, "open")
-        .expect("inactive host should accept a shadow root");
-    engine.set_shadow_root_adopted_style_sheet_sources_with_host(
-        &host,
-        inactive_shadow_root,
-        vec![StyloStylesheetSource::new(
-            ":host(:has(.marker)) .target { color: purple; }".into(),
-            url::Url::parse("https://example.test/inactive-shadow.css").unwrap(),
-        )],
-    );
-
-    let document_world = engine.world_for_document(document);
-    let source_stores = document_world.borrow_source_stores();
-
-    let report = source_stores.source_lifecycle_report(
-        &host,
-        StyleSourceDocumentContext::for_root_document(document),
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            report.records(),
-            StyleSourceLifecycleOwner::OwnerStyleSheet {
-                owner: disconnected_style,
-            },
-        ),
-        Some(&StyleSourceLifecycleAvailability::Unavailable {
-            reason: StyleSourceLifecycleUnavailableReason::OwnerNotInDocumentTree,
-        })
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            report.records(),
-            StyleSourceLifecycleOwner::LinkedStyleSheet {
-                owner: disconnected_link,
-            },
-        ),
-        Some(&StyleSourceLifecycleAvailability::Unavailable {
-            reason: StyleSourceLifecycleUnavailableReason::OwnerNotInDocumentTree,
-        })
-    );
-    assert_eq!(
-        lifecycle_availability_for(
-            report.records(),
-            StyleSourceLifecycleOwner::ShadowRootAdoptedStyleSheets {
-                root: inactive_shadow_root,
-            },
-        ),
-        Some(&StyleSourceLifecycleAvailability::Unavailable {
-            reason: StyleSourceLifecycleUnavailableReason::InactiveShadowRoot,
-        })
-    );
+    assert_eq!(linked_source_text(&engine, &host, link), None);
 }
 
 #[test]

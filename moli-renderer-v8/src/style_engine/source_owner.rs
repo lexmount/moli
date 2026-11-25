@@ -29,6 +29,24 @@ pub(crate) fn stylesheet_owner_type_is_supported(element: &Element) -> bool {
     false
 }
 
+pub(super) fn stylesheet_owner_is_in_style_scope(host: &DomHost, owner: DomHandle) -> bool {
+    if let Some(root) = host.containing_shadow_root(owner) {
+        return moli_selector::stylo_shadow_root_host_participates_in_style_scope(host, root);
+    }
+    let Some(document) = host.owner_document_handle(owner) else {
+        return false;
+    };
+    // A document without a browsing context can still own an active stylesheet.
+    let mut current = Some(owner);
+    while let Some(handle) = current {
+        if handle == document {
+            return true;
+        }
+        current = host.node(handle).and_then(Node::parent_node);
+    }
+    false
+}
+
 pub(super) fn stylesheet_source_base_url(host: &DomHost, handle: DomHandle) -> url::Url {
     host.owner_document_handle(handle)
         .and_then(|document_handle| {

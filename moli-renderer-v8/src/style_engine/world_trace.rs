@@ -1,16 +1,9 @@
 use crate::document_runtime::DomHandle;
 
 use super::{
-    FullStyleWorldSnapshot,
-    source::store::StyloStylesheetSource,
-    source_dirty::StyleSourceDirtyScopeSnapshot,
-    source_id::StyleSourceId,
-    source_lifecycle::{
-        StyleSourceLifecycleOwnerDetailTrace, StyleSourceLifecycleOwnerDetailTraceSink,
-        StyleSourceLifecycleReport, StyleSourceLifecycleSnapshot, StyleSourceLifecycleSnapshotSink,
-    },
-    state::RetainedStyleSystem,
-    world_key::StyleWorldKeyMismatchTrace,
+    FullStyleWorldSnapshot, source::store::StyloStylesheetSource,
+    source_dirty::StyleSourceDirtyScopeSnapshot, source_id::StyleSourceId,
+    state::RetainedStyleSystem, world_key::StyleWorldKeyMismatchTrace,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,7 +31,6 @@ pub(super) struct StyleSourceInputShadowRootTrace {
 
 pub(super) fn trace_retained_style_system_change(
     inputs: &FullStyleWorldSnapshot,
-    source_lifecycle: &StyleSourceLifecycleReport,
     source_dirty_scope: &StyleSourceDirtyScopeSnapshot,
     source_set_generation: u64,
     retained: &RetainedStyleSystem,
@@ -47,9 +39,6 @@ pub(super) fn trace_retained_style_system_change(
     key_mismatch: Option<&StyleWorldKeyMismatchTrace>,
     document_context_documents: &[DomHandle],
 ) {
-    let mut lifecycle_snapshot = RetainedStyleSystemRebuildLifecycleSnapshot::default();
-    source_lifecycle.record_snapshot_into(&mut lifecycle_snapshot);
-    source_lifecycle.record_owner_detail_trace_into(&mut lifecycle_snapshot);
     let source_input = style_source_input_trace(inputs);
     tracing::info!(
         change_kind = ?change_kind,
@@ -59,7 +48,6 @@ pub(super) fn trace_retained_style_system_change(
         document_stylesheet_input_count = inputs.document_stylesheet_sources.len(),
         shadow_stylesheet_input_count = inputs.shadow_stylesheet_sources.len(),
         retained_shadow_cascade_count = retained.shadow_cascade_data.len(),
-        retained_source_cascade_data_count = retained.source_cascade_data.len(),
         document_context_documents = ?document_context_documents,
         source_set_generation,
         source_dirty_ids = ?source_dirty_scope.source_ids_vec(),
@@ -69,8 +57,6 @@ pub(super) fn trace_retained_style_system_change(
         source_dirty_records = ?source_dirty_scope.records_vec(),
         source_input = ?source_input,
         key_mismatch = ?key_mismatch,
-        source_lifecycle = ?lifecycle_snapshot.snapshot,
-        source_lifecycle_owner_details = ?lifecycle_snapshot.owner_details,
         "retained style system change summary"
     );
 }
@@ -111,25 +97,4 @@ pub(super) fn style_source_input_trace_for_test(
     inputs: &FullStyleWorldSnapshot,
 ) -> StyleSourceInputTrace {
     style_source_input_trace(inputs)
-}
-
-#[derive(Default)]
-struct RetainedStyleSystemRebuildLifecycleSnapshot {
-    snapshot: StyleSourceLifecycleSnapshot,
-    owner_details: Vec<StyleSourceLifecycleOwnerDetailTrace>,
-}
-
-impl StyleSourceLifecycleSnapshotSink for RetainedStyleSystemRebuildLifecycleSnapshot {
-    fn record_source_lifecycle_snapshot(&mut self, snapshot: StyleSourceLifecycleSnapshot) {
-        self.snapshot = snapshot;
-    }
-}
-
-impl StyleSourceLifecycleOwnerDetailTraceSink for RetainedStyleSystemRebuildLifecycleSnapshot {
-    fn record_source_lifecycle_owner_detail_trace(
-        &mut self,
-        trace: StyleSourceLifecycleOwnerDetailTrace,
-    ) {
-        self.owner_details.push(trace);
-    }
 }

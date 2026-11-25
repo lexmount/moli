@@ -83,7 +83,6 @@ pub(super) struct ShadowScopeReconciliation {
     pub(super) invalidations: Vec<(DomHandle, StylesheetInvalidationSet)>,
     pub(super) removed_roots: Vec<DomHandle>,
     pub(super) scope_fallbacks: Vec<DomHandle>,
-    pub(super) device_affected_roots: Vec<DomHandle>,
     pub(super) collections_changed: bool,
 }
 
@@ -201,7 +200,6 @@ pub(super) fn reconcile_dirty_shadow_scopes(
         invalidations,
         removed_roots,
         scope_fallbacks,
-        device_affected_roots,
         collections_changed,
     }
 }
@@ -219,7 +217,6 @@ pub(super) fn reconcile_shadow_scopes(
     let mut next_scopes = Vec::with_capacity(desired_scopes.len());
     let mut invalidations = Vec::new();
     let mut scope_fallbacks = Vec::new();
-    let mut device_affected_roots = Vec::new();
     let mut collections_changed = false;
     for (root, sources) in desired_scopes {
         let (mut scope, retained_scope) = if let Some(index) = previous_scopes
@@ -244,9 +241,6 @@ pub(super) fn reconcile_shadow_scopes(
             let guard = shared_lock.read();
             shadow_scope_media_changed(&scope, &retained.stylist, &guard)
         };
-        if device_affected {
-            device_affected_roots.push(*root);
-        }
 
         let reconciliation = scope
             .active_stylesheets_mut()
@@ -282,7 +276,6 @@ pub(super) fn reconcile_shadow_scopes(
         invalidations,
         removed_roots,
         scope_fallbacks,
-        device_affected_roots,
         collections_changed,
     }
 }

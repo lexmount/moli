@@ -13,8 +13,6 @@ use super::{
         retained_style_system_matches_full_snapshot, update_retained_style_system,
         update_retained_style_system_incrementally,
     },
-    source_document::DocumentStyleSourceStores,
-    source_lifecycle::StyleSourceDocumentContext,
     state::StyleDocumentState,
     world_key::StyleWorldKey,
     world_trace::{RetainedStyleSystemChangeKind, trace_retained_style_system_change},
@@ -83,34 +81,26 @@ pub(super) fn ensure_retained_style_system(
     host: &DomHost,
     dom_adapter: &StyloDomStyleAdapter,
     document_state: &StyleDocumentState,
-    source_stores: &DocumentStyleSourceStores<'_>,
-    document_context: StyleSourceDocumentContext<'_>,
     retained_document: DomHandle,
     invalidation_cleanup: StyleInvalidationCleanup<'_>,
     key: &StyleWorldKey,
     inputs: &FullStyleWorldSnapshot,
     author_styles_disabled: bool,
 ) {
-    let source_dirty_scope = document_state.source_dirty_scope_snapshot();
     if document_state
         .try_with_retained_style_system(|retained| {
             retained_style_system_matches_full_snapshot(retained, key, inputs)
         })
         .unwrap_or(false)
     {
-        if source_dirty_scope.requires_retained_style_update() {
-            document_state.clear_source_dirty_scopes();
-        }
+        document_state.clear_source_dirty_scopes();
         return;
     }
-    let trace_enabled = moli_trace::style_invalidation_trace_enabled();
+    let source_dirty_scope = moli_trace::style_invalidation_trace_enabled()
+        .then(|| document_state.source_dirty_scope_snapshot());
     let key_mismatch_trace =
         document_state.try_with_retained_style_system(|retained| retained.key.mismatch_trace(key));
-    let trace_documents = trace_enabled.then(|| vec![retained_document]);
 
-    let source_lifecycle = source_stores.source_lifecycle_report(host, document_context);
-    let retained_source_records =
-        source_stores.retained_source_records_for_lifecycle(host, &source_lifecycle);
     let shared_lock = dom_adapter.shared_lock().clone();
     let custom_property_history_is_append_only = document_state
         .try_with_retained_style_system(|retained| {
@@ -127,14 +117,7 @@ pub(super) fn ensure_retained_style_system(
         && custom_property_history_is_append_only;
     if can_update_in_place {
         let invalidations = document_state.update_retained_style_system_with_result(|retained| {
-            update_retained_style_system(
-                retained,
-                host,
-                key.clone(),
-                inputs,
-                &shared_lock,
-                &retained_source_records,
-            )
+            update_retained_style_system(retained, host, key.clone(), inputs, &shared_lock)
         });
         apply_retained_stylesheet_invalidations(
             host,
@@ -144,18 +127,17 @@ pub(super) fn ensure_retained_style_system(
             invalidations,
         );
         document_state.clear_source_dirty_scopes();
-        if trace_enabled {
+        if let Some(source_dirty_scope) = &source_dirty_scope {
             document_state.with_retained_style_system(|retained| {
                 trace_retained_style_system_change(
                     inputs,
-                    &source_lifecycle,
-                    &source_dirty_scope,
+                    source_dirty_scope,
                     document_state.source_set_generation(),
                     retained,
                     RetainedStyleSystemChangeKind::IncrementalUpdate,
                     custom_property_history_is_append_only,
                     key_mismatch_trace.as_ref(),
-                    trace_documents.as_deref().unwrap_or_default(),
+                    &[retained_document],
                 );
             });
         }
@@ -173,14 +155,12 @@ pub(super) fn ensure_retained_style_system(
         key.clone(),
         inputs,
         &shared_lock,
-        &retained_source_records,
         author_styles_disabled,
     );
-    if trace_enabled {
+    if let Some(source_dirty_scope) = &source_dirty_scope {
         trace_retained_style_system_change(
             inputs,
-            &source_lifecycle,
-            &source_dirty_scope,
+            source_dirty_scope,
             document_state.source_set_generation(),
             &retained,
             if key_mismatch_trace.is_some() {
@@ -190,7 +170,7 @@ pub(super) fn ensure_retained_style_system(
             },
             custom_property_history_is_append_only,
             key_mismatch_trace.as_ref(),
-            trace_documents.as_deref().unwrap_or_default(),
+            &[retained_document],
         );
     }
     document_state.set_retained_style_system(retained);
@@ -200,24 +180,16 @@ pub(super) fn ensure_retained_style_system_incrementally(
     host: &DomHost,
     dom_adapter: &StyloDomStyleAdapter,
     document_state: &StyleDocumentState,
-    source_stores: &DocumentStyleSourceStores<'_>,
-    document_context: StyleSourceDocumentContext<'_>,
     retained_document: DomHandle,
     invalidation_cleanup: StyleInvalidationCleanup<'_>,
     environment: &StyleWorldEnvironment,
     update: &IncrementalStyleWorldUpdate,
 ) {
-    let source_dirty_scope = document_state.source_dirty_scope_snapshot();
-    let Some((next_key, device_changed)) =
-        document_state.try_with_retained_style_system(|retained| {
-            (
-                retained.key.updated_for_observation(environment),
-                retained
-                    .key
-                    .device_differs_from_observation(environment.viewport, environment.media),
-            )
-        })
-    else {
+    let source_dirty_scope = moli_trace::style_invalidation_trace_enabled()
+        .then(|| document_state.source_dirty_scope_snapshot());
+    let Some(next_key) = document_state.try_with_retained_style_system(|retained| {
+        retained.key.updated_for_observation(environment)
+    }) else {
         // Planning guarantees an initial observation is full. Keep this guard
         // explicit so a stale or incorrectly reused plan cannot create a
         // partial Document world.
@@ -225,38 +197,9 @@ pub(super) fn ensure_retained_style_system_incrementally(
         return;
     };
 
-    let dirty_source_ids = source_dirty_scope
-        .source_ids_vec()
-        .into_iter()
-        .collect::<std::collections::HashSet<_>>();
-    let full_source_projection_scopes = source_dirty_scope
-        .full_source_projection_scope_ids()
-        .into_iter()
-        .collect::<std::collections::HashSet<_>>();
-    let source_lifecycle = if device_changed || !full_source_projection_scopes.is_empty() {
-        source_stores.source_lifecycle_report(host, document_context)
-    } else {
-        source_stores.source_lifecycle_report_for_source_ids(
-            host,
-            document_context,
-            dirty_source_ids.iter().cloned(),
-        )
-    };
-    let retained_source_records =
-        source_stores.retained_source_records_for_lifecycle(host, &source_lifecycle);
     let shared_lock = dom_adapter.shared_lock().clone();
     let invalidations = document_state.update_retained_style_system_with_result(|retained| {
-        update_retained_style_system_incrementally(
-            retained,
-            host,
-            retained_document,
-            next_key,
-            update,
-            &shared_lock,
-            &retained_source_records,
-            &dirty_source_ids,
-            &full_source_projection_scopes,
-        )
+        update_retained_style_system_incrementally(retained, host, next_key, update, &shared_lock)
     });
     apply_retained_stylesheet_invalidations(
         host,
@@ -267,7 +210,7 @@ pub(super) fn ensure_retained_style_system_incrementally(
     );
     document_state.clear_source_dirty_scopes();
 
-    if moli_trace::style_invalidation_trace_enabled() {
+    if let Some(source_dirty_scope) = source_dirty_scope {
         tracing::info!(
             retained_document = ?retained_document,
             document_scope_materialized = update.document_stylesheet_sources.is_some(),

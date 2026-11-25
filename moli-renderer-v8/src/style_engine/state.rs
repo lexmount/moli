@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::HashSet,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -21,7 +21,6 @@ use super::{
     shadow_scopes::ShadowScopeStyles,
     source_dirty::{StyleSourceDirtyReason, StyleSourceDirtyScopeSnapshot, StyleSourceDirtyScopes},
     source_id::{StyleScopeId, StyleSourceId},
-    source_key::StyleSourceSetKey,
     style_paths::{StyleInvalidationScope, StylePathCache},
     stylesheet_resources::{
         StylesheetResourceGeneration, StylesheetResourceManifest, StylesheetResourceSnapshot,
@@ -39,8 +38,6 @@ pub(super) struct RetainedStyleSystem {
     pub(super) stylesheet_resource_revision: u64,
     pub(super) user_agent_cascade_data: ServoArc<CascadeData>,
     pub(super) shadow_cascade_data: Vec<(DomHandle, ServoArc<CascadeData>)>,
-    pub(super) source_cascade_data: HashMap<StyleSourceId, ServoArc<CascadeData>>,
-    pub(super) source_cascade_keys: HashMap<StyleSourceId, StyleSourceSetKey>,
     pub(super) script_custom_property_registrations: Vec<CssCustomPropertyRegistrationRecord>,
 }
 

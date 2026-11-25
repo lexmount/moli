@@ -1040,7 +1040,7 @@ fn style_observation_materializes_dirty_scope_once_without_a_full_snapshot() {
 }
 
 #[test]
-fn document_stylesheet_mutation_reprojects_only_the_dirty_source() {
+fn document_stylesheet_mutation_updates_the_affected_targets() {
     let mut vm = new_parsed_test_vm(
         "https://style-observation-dirty-source-id.test/",
         r#"<!doctype html>
@@ -1058,7 +1058,6 @@ fn document_stylesheet_mutation_reprojects_only_the_dirty_source() {
         .expect("both stylesheet sources should initialize"),
         r#"["rgb(1, 2, 3)","rgb(4, 5, 6)"]"#
     );
-    crate::style_engine::reset_source_cascade_rebuild_count_for_test();
 
     assert_eq!(
         vm.eval(
@@ -1072,11 +1071,6 @@ JSON.stringify([
         )
         .expect("the dirty stylesheet should update"),
         r#"["rgb(7, 8, 9)","rgb(4, 5, 6)"]"#
-    );
-    assert_eq!(
-        crate::style_engine::source_cascade_rebuild_count_for_test(),
-        1,
-        "a single source mutation must not rebuild unrelated source cascade data"
     );
 }
 

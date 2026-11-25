@@ -6,12 +6,11 @@ use std::{
     },
 };
 
-use moli_crypto::Sha256Context;
 use style_traits::ToCss;
 
 use super::super::{
-    source_id::{StyleScopeId, StyleSourceId, StyleSourceKind},
-    source_key::{StyleSourceKey, StyleSourceSetKey},
+    source_id::{StyleSourceId, StyleSourceKind},
+    source_key::StyleSourceKey,
 };
 use super::shared_cache::{SharedStyleSourceContents, shared_style_source_contents};
 use crate::{
@@ -376,10 +375,6 @@ impl StyloStylesheetSource {
         self.origin_clean
     }
 
-    pub(in crate::style_engine) fn cache_key(&self) -> StyleSourceKey {
-        self.cache_key
-    }
-
     pub(crate) fn font_faces(&self) -> StdArc<[StylesheetFontFaceDescriptor]> {
         match &self.contents {
             StyloStylesheetSourceContents::Text { shared } => shared.font_faces(),
@@ -586,74 +581,6 @@ impl OwnerStyleSheetSource {
 
     pub(crate) fn owner(&self) -> DomHandle {
         self.owner
-    }
-}
-
-pub(in crate::style_engine) fn stylesheet_sources_cache_key(
-    sources: &[StyloStylesheetSource],
-) -> StyleSourceSetKey {
-    let mut hasher = Sha256Context::new();
-    hasher.update(sources.len().to_le_bytes());
-    for source in sources {
-        hasher.update(source.cache_key().fingerprint);
-        let media_text = source.media_text().as_bytes();
-        hasher.update(media_text.len().to_le_bytes());
-        hasher.update(media_text);
-        update_style_source_identity_hash(&mut hasher, source.source_id());
-        match source.adopted_client_id() {
-            Some(client_id) => {
-                hasher.update([1]);
-                hasher.update(client_id.to_le_bytes());
-            }
-            None => hasher.update([0]),
-        }
-    }
-    StyleSourceSetKey {
-        len: sources.len(),
-        fingerprint: hasher.finish(),
-    }
-}
-
-fn update_style_source_identity_hash(
-    hasher: &mut Sha256Context,
-    source_id: Option<&StyleSourceId>,
-) {
-    let Some(source_id) = source_id else {
-        hasher.update([0]);
-        return;
-    };
-    hasher.update([1]);
-    update_style_scope_identity_hash(hasher, source_id.scope_id);
-    match &source_id.kind {
-        StyleSourceKind::OwnerStyleSheet { owner } => {
-            hasher.update([0]);
-            hasher.update(owner.index().to_le_bytes());
-        }
-        StyleSourceKind::LinkedStyleSheet { owner } => {
-            hasher.update([1]);
-            hasher.update(owner.index().to_le_bytes());
-        }
-        StyleSourceKind::DocumentAdoptedStyleSheet { client_id } => {
-            hasher.update([2]);
-            hasher.update(client_id.to_le_bytes());
-        }
-        StyleSourceKind::ShadowRootAdoptedStyleSheet { client_id } => {
-            hasher.update([3]);
-            hasher.update(client_id.to_le_bytes());
-        }
-    }
-}
-
-fn update_style_scope_identity_hash(hasher: &mut Sha256Context, scope_id: StyleScopeId) {
-    match scope_id {
-        StyleScopeId::Document(document) => {
-            hasher.update([0]);
-            hasher.update(document.index().to_le_bytes());
-        }
-        StyleScopeId::ShadowRoot(root) => {
-            hasher.update([1]);
-            hasher.update(root.index().to_le_bytes());
-        }
     }
 }
 

@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 pub(super) mod adopted;
 pub(super) mod inline;
 pub(super) mod linked;
@@ -15,8 +13,8 @@ use crate::{
 use self::adopted::AdoptedStyleSheetInstallation;
 use self::store::StyloStylesheetSource;
 use super::{
-    MoliStyleEngine, source_dirty::StyleSourceDirtyReason, source_id::StyleScopeId,
-    source_owner::stylesheet_source_base_url, source_scope_plan::StyleSourceScopeCleanupPlan,
+    MoliStyleEngine, StyleSourceId, source_dirty::StyleSourceDirtyReason, source_id::StyleScopeId,
+    source_owner::stylesheet_source_base_url,
 };
 
 impl MoliStyleEngine {
@@ -149,17 +147,6 @@ impl MoliStyleEngine {
             .adopted_style_sheet_sources
             .borrow()
             .document_sources_or_empty_owned(document)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn document_adopted_style_sheet_tracks_document_for_test(
-        &self,
-        document: DomHandle,
-    ) -> bool {
-        self.world_for_document(document)
-            .adopted_style_sheet_sources
-            .borrow()
-            .tracks_document(document)
     }
 
     #[cfg(test)]
@@ -762,22 +749,9 @@ impl MoliStyleEngine {
             .shadow_root_sources_or_empty_owned(root)
     }
 
-    #[cfg(test)]
-    pub(crate) fn shadow_root_adopted_style_sheet_tracks_root_for_document_for_test(
-        &self,
-        document: DomHandle,
-        root: DomHandle,
-    ) -> bool {
-        self.world_for_document(document)
-            .adopted_style_sheet_sources
-            .borrow()
-            .tracks_shadow_root(root)
-    }
-
     pub(crate) fn mark_document_stylesheet_set_dirty(&mut self, document: DomHandle) {
-        let world = self.world_for_document(document);
-        world.document_state.bump_source_set_generation();
-        world.document_state.record_source_dirty_scope(
+        self.mark_source_scope_dirty(
+            document,
             StyleScopeId::Document(document),
             StyleSourceDirtyReason::DocumentStyleSheets,
             std::iter::empty(),
@@ -788,10 +762,15 @@ impl MoliStyleEngine {
     fn invalidate_document_stylesheet_set_for_document(
         &mut self,
         document: DomHandle,
-        source_ids: impl IntoIterator<Item = super::StyleSourceId>,
+        source_ids: impl IntoIterator<Item = StyleSourceId>,
     ) {
-        let plan = StyleSourceScopeCleanupPlan::document_adopted_stylesheets(document, source_ids);
-        self.apply_source_scope_cleanup_plan(plan);
+        self.mark_source_scope_dirty(
+            document,
+            StyleScopeId::Document(document),
+            StyleSourceDirtyReason::DocumentAdoptedStyleSheets,
+            source_ids,
+            [document],
+        );
     }
 
     fn invalidate_owner_stylesheet_set_for_owner_with_host(
@@ -799,50 +778,70 @@ impl MoliStyleEngine {
         host: &DomHost,
         owner: DomHandle,
     ) {
-        let plan = StyleSourceScopeCleanupPlan::owner_stylesheet(host, owner);
-        self.apply_source_scope_cleanup_plan(plan);
+        self.invalidate_stylesheet_owner_scope(
+            host,
+            owner,
+            StyleSourceId::owner_style_sheet(host, owner),
+            StyleSourceDirtyReason::OwnerStyleSheet,
+        );
     }
 
-    fn invalidate_linked_stylesheet_set_for_owner_handles_with_host(
+    fn invalidate_stylesheet_owner_scope(
         &mut self,
         host: &DomHost,
-        owners: &[DomHandle],
+        owner: DomHandle,
+        source_id: Option<StyleSourceId>,
+        reason: StyleSourceDirtyReason,
     ) {
-        let plan =
-            StyleSourceScopeCleanupPlan::linked_stylesheet_owners(host, owners.iter().copied());
-        self.apply_source_scope_cleanup_plan(plan);
+        let Some(document) = host.owner_document_handle(owner) else {
+            return;
+        };
+        if let Some(source_id) = source_id {
+            let scope = source_id.scope_id;
+            let roots = scope.style_roots(host);
+            if !roots.is_empty() {
+                self.mark_source_scope_dirty(document, scope, reason, [source_id], roots);
+                return;
+            }
+        }
+        self.mark_document_stylesheet_set_dirty(document);
     }
 
     fn invalidate_shadow_root_stylesheet_set_for_owner_with_host(
         &mut self,
         host: &DomHost,
         root: DomHandle,
-        source_ids: impl IntoIterator<Item = super::StyleSourceId>,
+        source_ids: impl IntoIterator<Item = StyleSourceId>,
     ) {
-        let plan =
-            StyleSourceScopeCleanupPlan::shadow_root_adopted_stylesheets(host, root, source_ids);
-        self.apply_source_scope_cleanup_plan(plan);
+        let Some(document) = host.owner_document_handle(root) else {
+            return;
+        };
+        if !host.is_shadow_root(root) {
+            self.mark_document_stylesheet_set_dirty(document);
+            return;
+        }
+        self.mark_source_scope_dirty(
+            document,
+            StyleScopeId::ShadowRoot(root),
+            StyleSourceDirtyReason::ShadowRootAdoptedStyleSheets,
+            source_ids,
+            std::iter::once(root).chain(host.shadow_root_host(root)),
+        );
     }
 
-    fn apply_source_scope_cleanup_plan(&mut self, plan: StyleSourceScopeCleanupPlan) {
-        for document in plan.full_documents() {
-            self.mark_document_stylesheet_set_dirty(document);
-        }
-        let mut source_set_generation_bumped_documents = HashSet::new();
-        for entry in plan.scoped_entries_by_document() {
-            let document = entry.document();
-            let world = self.world_for_document(document);
-            if source_set_generation_bumped_documents.insert(document) {
-                world.document_state.bump_source_set_generation();
-            }
-            let roots = entry.roots().clone();
-            world.document_state.record_source_dirty_scope(
-                entry.scope_id(),
-                entry.reason(),
-                entry.source_ids(),
-                roots.iter().copied(),
-            );
-        }
+    fn mark_source_scope_dirty(
+        &self,
+        document: DomHandle,
+        scope: StyleScopeId,
+        reason: StyleSourceDirtyReason,
+        source_ids: impl IntoIterator<Item = StyleSourceId>,
+        roots: impl IntoIterator<Item = DomHandle>,
+    ) {
+        let world = self.world_for_document(document);
+        world.document_state.bump_source_set_generation();
+        world
+            .document_state
+            .record_source_dirty_scope(scope, reason, source_ids, roots);
     }
 
     fn remove_linked_stylesheet_owner_from_document(
@@ -1013,7 +1012,12 @@ impl MoliStyleEngine {
         scoped_cleanup_document: Option<DomHandle>,
     ) {
         if scoped_cleanup_document.is_some() {
-            self.invalidate_linked_stylesheet_set_for_owner_handles_with_host(host, &[owner]);
+            self.invalidate_stylesheet_owner_scope(
+                host,
+                owner,
+                StyleSourceId::linked_style_sheet(host, owner),
+                StyleSourceDirtyReason::LinkedStyleSheet,
+            );
         }
         for document in previous_documents {
             if Some(document) == scoped_cleanup_document {
