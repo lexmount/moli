@@ -119,6 +119,7 @@ impl ServiceWorkerRuntimeService {
         register_completion_tx: RendererPageServiceWorkerTaskSender,
     ) {
         let queued_job = ServiceWorkerQueuedRegisterJob {
+            job_kind: ServiceWorkerRegistrationJobKind::Register,
             script_url,
             scope_url,
             document_url,
@@ -131,76 +132,237 @@ impl ServiceWorkerRuntimeService {
             force_update_page_load_waiter_ids: Vec::new(),
             request_client,
             network_policy,
-            browser_context_runtime,
+            worker_context_runtime: browser_context_runtime.worker_context_runtime(),
             broadcast_channel_top_level_site,
             indexed_db_manager,
             storage_bucket_store,
-            callbacks: vec![ServiceWorkerRegisterJob {
-                request_id: register_request_id,
-                document_owner: register_document_owner,
-                completion_tx: register_completion_tx,
-            }],
+            callbacks: vec![ServiceWorkerRegisterJob::window(
+                register_request_id,
+                register_document_owner,
+                register_completion_tx,
+            )],
         };
         self.start_queued_register_job(queued_job);
+    }
+
+    pub(crate) fn start_update_registration_with_storage_key(
+        &self,
+        scope_url: Url,
+        document_url: Url,
+        storage_key: String,
+        request_client: ResourceRequestClient,
+        network_policy: WorkerNetworkPolicy,
+        browser_context_runtime: RendererBrowserContextRuntime,
+        broadcast_channel_top_level_site: Option<String>,
+        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
+        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
+        register_request_id: u64,
+        register_document_owner: crate::window_document_identity::WindowDocumentOwner,
+        register_completion_tx: RendererPageServiceWorkerTaskSender,
+    ) {
+        let callback = ServiceWorkerRegisterJob::window(
+            register_request_id,
+            register_document_owner,
+            register_completion_tx,
+        );
+        let (launch, update_check, completed_register_callbacks) = {
+            let mut state = self.inner.state.lock();
+            let registration_key =
+                ServiceWorkerRegistrationKey::for_scope_and_storage_key(&scope_url, storage_key);
+            let newest = state
+                .registrations
+                .values()
+                .find(|registration| registration.key() == registration_key)
+                .filter(|registration| !registration.pending_unregistration)
+                .and_then(|registration| {
+                    let pending_update_check_new_version_id = state
+                        .pending_main_script_update_checks
+                        .get(&registration.id)
+                        .map(|pending_check| pending_check.new_version_id);
+                    let newest_version_id = registration
+                        .installing_version_id
+                        .filter(|version_id| {
+                            Some(*version_id) != pending_update_check_new_version_id
+                        })
+                        .or(registration.waiting_version_id)
+                        .or(registration.active_version_id)?;
+                    let newest_version = state.versions.get(&newest_version_id)?;
+                    Some((
+                        newest_version.script_url.clone(),
+                        newest_version.script_kind,
+                        registration.scope_url.clone(),
+                        registration.storage_key.clone(),
+                        registration.update_via_cache,
+                    ))
+                });
+            match newest {
+                Some((script_url, script_kind, scope_url, storage_key, update_via_cache)) => {
+                    let queued_job = ServiceWorkerQueuedRegisterJob {
+                        job_kind: ServiceWorkerRegistrationJobKind::Update,
+                        script_url,
+                        scope_url,
+                        document_url,
+                        storage_key,
+                        script_kind,
+                        update_via_cache,
+                        force_bypass_cache: false,
+                        skip_script_comparison: false,
+                        skip_waiting_after_install: false,
+                        force_update_page_load_waiter_ids: Vec::new(),
+                        request_client,
+                        network_policy,
+                        worker_context_runtime: browser_context_runtime.worker_context_runtime(),
+                        broadcast_channel_top_level_site,
+                        indexed_db_manager,
+                        storage_bucket_store,
+                        callbacks: vec![callback],
+                    };
+                    self.start_queued_register_job_locked(&mut state, queued_job)
+                }
+                None => (
+                    None,
+                    None,
+                    Some((
+                        vec![callback],
+                        Err(ServiceWorkerRegistrationError::type_error(
+                            "Failed to update a ServiceWorkerRegistration: No active or installing service worker is available.",
+                        )),
+                    )),
+                ),
+            }
+        };
+        self.finish_queued_register_job_start(launch, update_check, completed_register_callbacks);
     }
 
     pub(super) fn start_queued_register_job(&self, queued_job: ServiceWorkerQueuedRegisterJob) {
         let (launch, update_check, completed_register_callbacks) = {
             let mut state = self.inner.state.lock();
-            let registration_key = queued_job.registration_key();
-            self.restore_stored_registration_for_queued_job_locked(&mut state, &queued_job);
-            let registration_id = state
-                .registrations
-                .values()
-                .find(|registration| registration.key() == registration_key)
-                .map(|registration| registration.id)
-                .unwrap_or_else(|| {
-                    ServiceWorkerRegistrationId(
-                        self.inner
-                            .next_registration_id
-                            .fetch_add(1, Ordering::Relaxed),
-                    )
-                });
-            state
-                .registrations
-                .entry(registration_id)
-                .or_insert_with(|| ServiceWorkerRegistration {
-                    id: registration_id,
-                    storage_key: registration_key.storage_key.clone(),
-                    scope_url: queued_job.scope_url.clone(),
-                    script_url: queued_job.script_url.clone(),
-                    installing_version_id: None,
-                    waiting_version_id: None,
-                    active_version_id: None,
-                    pending_unregistration: false,
-                    update_via_cache: queued_job.update_via_cache,
-                    navigation_preload_state: ServiceWorkerNavigationPreloadState::default(),
-                    last_update_check_time_ms: None,
-                    pending_register_jobs: HashMap::new(),
-                    controlled_client_ids: HashSet::new(),
-                });
-            let (
-                installing_version_id,
-                pending_unregistration,
-                registration_scope_url,
-                registration_update_via_cache,
-            ) = {
-                let Some(registration) = state.registrations.get(&registration_id) else {
-                    return;
-                };
-                (
-                    registration.installing_version_id,
-                    registration.pending_unregistration,
-                    registration.scope_url.clone(),
-                    registration.update_via_cache,
-                )
+            self.start_queued_register_job_locked(&mut state, queued_job)
+        };
+        self.finish_queued_register_job_start(launch, update_check, completed_register_callbacks);
+    }
+
+    pub(super) fn finish_queued_register_job_start(
+        &self,
+        launch: Option<ServiceWorkerQueuedLaunch>,
+        update_check: Option<(
+            ServiceWorkerRegistrationId,
+            ServiceWorkerScriptUpdateCheckParams,
+        )>,
+        completed_register_callbacks: Option<(
+            Vec<ServiceWorkerRegisterJob>,
+            std::result::Result<ServiceWorkerRegistrationSnapshot, ServiceWorkerRegistrationError>,
+        )>,
+    ) {
+        if let Some((callbacks, result)) = completed_register_callbacks {
+            ServiceWorkerRegisterJob::send_all(callbacks, result);
+        }
+        if let Some((registration_id, load_params)) = update_check {
+            self.start_main_script_update_check(registration_id, load_params);
+        }
+        if let Some(launch) = launch {
+            self.start_queued_launch(launch);
+        }
+    }
+
+    pub(super) fn start_queued_register_job_locked(
+        &self,
+        state: &mut ServiceWorkerRuntimeState,
+        mut queued_job: ServiceWorkerQueuedRegisterJob,
+    ) -> (
+        Option<ServiceWorkerQueuedLaunch>,
+        Option<(
+            ServiceWorkerRegistrationId,
+            ServiceWorkerScriptUpdateCheckParams,
+        )>,
+        Option<(
+            Vec<ServiceWorkerRegisterJob>,
+            std::result::Result<ServiceWorkerRegistrationSnapshot, ServiceWorkerRegistrationError>,
+        )>,
+    ) {
+        let is_update = queued_job.job_kind == ServiceWorkerRegistrationJobKind::Update;
+        let registration_key = queued_job.registration_key();
+        if !is_update {
+            self.restore_stored_registration_for_queued_job_locked(state, &queued_job);
+        }
+        let existing_registration_id = state
+            .registrations
+            .values()
+            .find(|registration| registration.key() == registration_key)
+            .map(|registration| registration.id);
+        let registration_id = match existing_registration_id {
+            Some(registration_id) => registration_id,
+            None if is_update => {
+                return (
+                    None,
+                    None,
+                    Some((
+                        queued_job.callbacks,
+                        Err(ServiceWorkerRegistrationError::type_error(
+                            "Failed to update a ServiceWorkerRegistration: No registration exists for this scope.",
+                        )),
+                    )),
+                );
+            }
+            None => ServiceWorkerRegistrationId(
+                self.inner
+                    .next_registration_id
+                    .fetch_add(1, Ordering::Relaxed),
+            ),
+        };
+        state
+            .registrations
+            .entry(registration_id)
+            .or_insert_with(|| ServiceWorkerRegistration {
+                id: registration_id,
+                storage_key: registration_key.storage_key.clone(),
+                scope_url: queued_job.scope_url.clone(),
+                script_url: queued_job.script_url.clone(),
+                installing_version_id: None,
+                waiting_version_id: None,
+                active_version_id: None,
+                pending_unregistration: false,
+                update_via_cache: queued_job.update_via_cache,
+                navigation_preload_state: ServiceWorkerNavigationPreloadState::default(),
+                last_update_check_time_ms: None,
+                pending_register_jobs: HashMap::new(),
+                controlled_client_ids: HashSet::new(),
+            });
+        let (
+            installing_version_id,
+            pending_unregistration,
+            registration_scope_url,
+            registration_update_via_cache,
+        ) = {
+            let Some(registration) = state.registrations.get(&registration_id) else {
+                return (None, None, None);
             };
-            if pending_unregistration
-                && let Some(registration) = state.registrations.get_mut(&registration_id)
-            {
+            (
+                registration.installing_version_id,
+                registration.pending_unregistration,
+                registration.scope_url.clone(),
+                registration.update_via_cache,
+            )
+        };
+        if pending_unregistration {
+            if is_update {
+                return (
+                    None,
+                    None,
+                    Some((
+                        queued_job.callbacks,
+                        Err(ServiceWorkerRegistrationError::type_error(
+                            "Failed to update a ServiceWorkerRegistration: The registration is unregistering.",
+                        )),
+                    )),
+                );
+            }
+            if let Some(registration) = state.registrations.get_mut(&registration_id) {
                 registration.pending_unregistration = false;
             }
-            let can_coalesce_with_installing = installing_version_id
+        }
+        let can_coalesce_with_installing = !is_update
+            && installing_version_id
                 .and_then(|version_id| state.versions.get(&version_id))
                 .is_some_and(|version| {
                     version.script_url == queued_job.script_url
@@ -208,91 +370,103 @@ impl ServiceWorkerRuntimeService {
                         && registration_scope_url == queued_job.scope_url
                         && registration_update_via_cache == queued_job.update_via_cache
                 });
-            let pending_update_check_matches = state
-                .pending_main_script_update_checks
-                .get(&registration_id)
-                .map(|pending_update_check| {
-                    pending_update_check.matches_registration_job(&queued_job)
-                });
-            if let Some(matches_pending_update_check) = pending_update_check_matches {
-                if matches_pending_update_check {
-                    state
-                        .pending_main_script_update_checks
-                        .get_mut(&registration_id)
-                        .expect("pending update check should exist")
-                        .append_callbacks_from(queued_job);
-                } else {
-                    state
-                        .job_coordinator
-                        .enqueue_register(registration_key, queued_job);
-                }
-                (None, None, None)
-            } else if can_coalesce_with_installing {
-                let callbacks = queued_job.callbacks;
-                let Some(installing_version_id) = installing_version_id else {
-                    return;
-                };
-                state.bind_force_update_page_load_waiters(
-                    installing_version_id,
-                    queued_job.force_update_page_load_waiter_ids.clone(),
-                );
-                if let Some(pending_job) =
-                    state
-                        .registrations
-                        .get_mut(&registration_id)
-                        .and_then(|registration| {
-                            registration
-                                .pending_register_jobs
-                                .get_mut(&installing_version_id)
-                        })
-                {
-                    (
-                        None,
-                        None,
-                        pending_job.add_callbacks(callbacks, queued_job.skip_waiting_after_install),
-                    )
-                } else {
-                    let snapshot =
-                        state
-                            .registrations
-                            .get(&registration_id)
-                            .and_then(|registration| {
-                                if !registration.references_version(installing_version_id) {
-                                    return None;
-                                }
-                                Some(service_worker_registration_snapshot(&state, registration))
-                            });
-                    (
-                        None,
-                        None,
-                        snapshot.map(|snapshot| (callbacks, Ok(snapshot))),
-                    )
-                }
-            } else if installing_version_id.is_some() {
+        let pending_update_check_matches = state
+            .pending_main_script_update_checks
+            .get(&registration_id)
+            .map(|pending_update_check| pending_update_check.matches_registration_job(&queued_job));
+        if let Some(matches_pending_update_check) = pending_update_check_matches {
+            if matches_pending_update_check {
+                state
+                    .pending_main_script_update_checks
+                    .get_mut(&registration_id)
+                    .expect("pending update check should exist")
+                    .append_callbacks_from(queued_job);
+            } else {
                 state
                     .job_coordinator
                     .enqueue_register(registration_key, queued_job);
-                (None, None, None)
-            } else if !queued_job.skip_script_comparison
-                && let Some(snapshot) =
-                    state
-                        .registrations
-                        .get(&registration_id)
-                        .and_then(|registration| {
-                            same_registration_options_fast_path_snapshot(
-                                &state,
-                                registration,
-                                &queued_job.script_url,
-                                queued_job.script_kind,
-                                queued_job.update_via_cache,
-                                true,
-                            )
-                        })
+            }
+            (None, None, None)
+        } else if can_coalesce_with_installing {
+            let callbacks = queued_job.callbacks;
+            let Some(installing_version_id) = installing_version_id else {
+                return (None, None, None);
+            };
+            state.bind_force_update_page_load_waiters(
+                installing_version_id,
+                queued_job.force_update_page_load_waiter_ids.clone(),
+            );
+            if let Some(pending_job) =
+                state
+                    .registrations
+                    .get_mut(&registration_id)
+                    .and_then(|registration| {
+                        registration
+                            .pending_register_jobs
+                            .get_mut(&installing_version_id)
+                    })
             {
-                let callbacks = queued_job.callbacks;
-                (None, None, Some((callbacks, Ok(snapshot))))
-            } else if let Some(update_check) = self.start_main_script_update_check_locked(
-                &mut state,
+                (
+                    None,
+                    None,
+                    pending_job.add_callbacks(callbacks, queued_job.skip_waiting_after_install),
+                )
+            } else {
+                let snapshot = state
+                    .registrations
+                    .get(&registration_id)
+                    .and_then(|registration| {
+                        if !registration.references_version(installing_version_id) {
+                            return None;
+                        }
+                        Some(service_worker_registration_snapshot(state, registration))
+                    });
+                (
+                    None,
+                    None,
+                    snapshot.map(|snapshot| (callbacks, Ok(snapshot))),
+                )
+            }
+        } else if installing_version_id.is_some() {
+            state
+                .job_coordinator
+                .enqueue_register(registration_key, queued_job);
+            (None, None, None)
+        } else if !is_update
+            && !queued_job.skip_script_comparison
+            && let Some(snapshot) =
+                state
+                    .registrations
+                    .get(&registration_id)
+                    .and_then(|registration| {
+                        same_registration_options_fast_path_snapshot(
+                            state,
+                            registration,
+                            &queued_job.script_url,
+                            queued_job.script_kind,
+                            queued_job.update_via_cache,
+                            true,
+                        )
+                    })
+        {
+            let callbacks = queued_job.callbacks;
+            (None, None, Some((callbacks, Ok(snapshot))))
+        } else {
+            if is_update
+                && let Err(message) =
+                    validate_and_refresh_update_job_locked(state, registration_id, &mut queued_job)
+            {
+                return (
+                    None,
+                    None,
+                    Some((
+                        queued_job.callbacks,
+                        Err(ServiceWorkerRegistrationError::type_error(message)),
+                    )),
+                );
+            }
+            if let Some(update_check) = self.start_main_script_update_check_locked(
+                state,
                 registration_id,
                 queued_job.clone(),
             ) {
@@ -304,20 +478,11 @@ impl ServiceWorkerRuntimeService {
                 }
             } else {
                 (
-                    self.start_queued_registration_now(&mut state, registration_id, queued_job),
+                    self.start_queued_registration_now(state, registration_id, queued_job),
                     None,
                     None,
                 )
             }
-        };
-        if let Some((callbacks, result)) = completed_register_callbacks {
-            ServiceWorkerRegisterJob::send_all(callbacks, result);
-        }
-        if let Some((registration_id, load_params)) = update_check {
-            self.start_main_script_update_check(registration_id, load_params);
-        }
-        if let Some(launch) = launch {
-            self.start_queued_launch(launch);
         }
     }
 
@@ -486,7 +651,8 @@ impl ServiceWorkerRuntimeService {
     ) -> Option<ServiceWorkerMainScriptUpdateCheckStart> {
         let registration = state.registrations.get(&registration_id)?;
         if registration.installing_version_id.is_some()
-            || registration.active_version_id.is_none()
+            || (registration.waiting_version_id.is_none()
+                && registration.active_version_id.is_none())
             || registration.update_via_cache != queued_job.update_via_cache
         {
             return None;
@@ -846,7 +1012,39 @@ impl ServiceWorkerRuntimeService {
             };
             match queued_job {
                 ServiceWorkerQueuedJob::Register(queued_job) => {
-                    let queued_job = *queued_job;
+                    let mut queued_job = *queued_job;
+                    if queued_job.job_kind == ServiceWorkerRegistrationJobKind::Update
+                        && let Err(message) = validate_and_refresh_update_job_locked(
+                            state,
+                            registration_id,
+                            &mut queued_job,
+                        )
+                    {
+                        if !queued_job.callbacks.is_empty() {
+                            progress.push(LifecycleProgress::RegisterFailed((
+                                queued_job.callbacks,
+                                ServiceWorkerRegistrationError::type_error(message),
+                            )));
+                        }
+                        let is_empty_without_more_jobs = state
+                            .registrations
+                            .get(&registration_id)
+                            .is_some_and(|registration| {
+                                registration.installing_version_id.is_none()
+                                    && registration.waiting_version_id.is_none()
+                                    && registration.active_version_id.is_none()
+                            })
+                            && !state.job_coordinator.has_jobs(&registration_key);
+                        if is_empty_without_more_jobs {
+                            progress.extend(execute_pending_clear_locked(
+                                state,
+                                registration_id,
+                                ServiceWorkerPendingClearAction::DeleteRegistration,
+                            ));
+                            return progress;
+                        }
+                        continue;
+                    }
                     if let Some(update_check) = self.start_main_script_update_check_locked(
                         state,
                         registration_id,
@@ -883,12 +1081,61 @@ impl ServiceWorkerRuntimeService {
                         .get(&registration_id)
                         .is_some_and(|registration| registration.pending_unregistration)
                     {
+                        while state.job_coordinator.peek_next_is_update(&registration_key) {
+                            if let Some(ServiceWorkerQueuedJob::Register(update_job)) =
+                                state.job_coordinator.pop_next(&registration_key)
+                                && !update_job.callbacks.is_empty()
+                            {
+                                progress.push(LifecycleProgress::RegisterFailed((
+                                    update_job.callbacks,
+                                    ServiceWorkerRegistrationError::type_error(
+                                        "Failed to update a ServiceWorkerRegistration: The registration is unregistering.",
+                                    ),
+                                )));
+                            }
+                        }
                         return progress;
                     }
                 }
             }
         }
     }
+}
+
+fn validate_and_refresh_update_job_locked(
+    state: &ServiceWorkerRuntimeState,
+    registration_id: ServiceWorkerRegistrationId,
+    queued_job: &mut ServiceWorkerQueuedRegisterJob,
+) -> Result<(), &'static str> {
+    let Some(registration) = state.registrations.get(&registration_id) else {
+        return Err(
+            "Failed to update a ServiceWorkerRegistration: No active or waiting service worker is available.",
+        );
+    };
+    if registration.pending_unregistration {
+        return Err(
+            "Failed to update a ServiceWorkerRegistration: No active or waiting service worker is available.",
+        );
+    }
+    let Some(newest_version) = registration
+        .waiting_version_id
+        .or(registration.active_version_id)
+        .and_then(|version_id| state.versions.get(&version_id))
+    else {
+        return Err(
+            "Failed to update a ServiceWorkerRegistration: No active or waiting service worker is available.",
+        );
+    };
+    if newest_version.script_url != queued_job.script_url {
+        return Err(
+            "Failed to update a ServiceWorkerRegistration: The registration script URL has changed.",
+        );
+    }
+    // W3C Service Workers §4.3.7: Update uses the registration's current
+    // updateViaCache mode and the newest worker's script type.
+    queued_job.update_via_cache = registration.update_via_cache;
+    queued_job.script_kind = newest_version.script_kind;
+    Ok(())
 }
 
 fn main_script_update_check_cache_mode(

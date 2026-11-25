@@ -1360,3 +1360,517 @@ async fn navigator_service_worker_periodic_sync_register_respects_permission() {
         .await
         .expect("service worker periodic sync permission script server should finish");
 }
+
+#[tokio::test]
+async fn service_worker_registration_update_resolves_for_identical_script_and_validates_receiver() {
+    let worker_body = r#"
+        self.addEventListener("install", event => {
+          event.waitUntil(self.skipWaiting());
+        });
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+    "#;
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            worker_body,
+        ),
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            worker_body,
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+        (() => {
+          globalThis.__swUpdateIdenticalDone = false;
+          globalThis.__swUpdateIdenticalProbe = "pending";
+          (async () => {
+            const reg = await navigator.serviceWorker.register("worker.js", { scope: "./" });
+            let updateFoundCount = 0;
+            reg.addEventListener("updatefound", () => {
+              updateFoundCount += 1;
+            });
+            const updateFn = reg.update;
+            const updated = await reg.update();
+            let invalidReceiver = "resolved";
+            let syncThrew = false;
+            try {
+              const p = updateFn.call({});
+              try {
+                await p;
+              } catch (error) {
+                invalidReceiver = error instanceof TypeError ? "TypeError" : String(error);
+              }
+            } catch (_error) {
+              syncThrew = true;
+            }
+            globalThis.__swUpdateIdenticalProbe = JSON.stringify({
+              type: typeof updateFn,
+              name: updateFn && updateFn.name,
+              length: updateFn && updateFn.length,
+              sameRegistration: updated === reg,
+              updateFoundCount,
+              invalidReceiver,
+              syncThrew
+            });
+          })().catch(error => {
+            globalThis.__swUpdateIdenticalProbe =
+              "error:" + (error && error.name) + ":" + (error && error.message);
+          }).finally(() => {
+            globalThis.__swUpdateIdenticalDone = true;
+          });
+        })()
+        "#,
+    )
+    .expect("service worker update identical probe should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__swUpdateIdenticalDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__swUpdateIdenticalProbe)")
+            .unwrap(),
+        r#"{"type":"function","name":"update","length":0,"sameRegistration":true,"updateFoundCount":0,"invalidReceiver":"TypeError","syncThrew":false}"#
+    );
+
+    server
+        .await
+        .expect("service worker update identical server should receive both requests");
+}
+
+#[tokio::test]
+async fn service_worker_registration_update_installs_changed_script_and_fires_updatefound() {
+    let worker_v1 = r#"
+        self.addEventListener("install", event => {
+          event.waitUntil(self.skipWaiting());
+        });
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+        self.addEventListener("message", event => {
+          event.ports[0].postMessage("v1");
+        });
+    "#;
+    let worker_v2 = r#"
+        self.addEventListener("install", event => {
+          event.waitUntil(self.skipWaiting());
+        });
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+        self.addEventListener("message", event => {
+          event.ports[0].postMessage("v2");
+        });
+    "#;
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            worker_v1,
+        ),
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            worker_v2,
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+        (() => {
+          globalThis.__swUpdateChangedDone = false;
+          globalThis.__swUpdateChangedProbe = "pending";
+          const askWorker = worker => new Promise(resolve => {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = event => resolve(event.data);
+            worker.postMessage("ping", [channel.port2]);
+          });
+          (async () => {
+            const reg = await navigator.serviceWorker.register("worker.js", { scope: "./" });
+            await navigator.serviceWorker.ready;
+            const beforeVersion = await askWorker(reg.active);
+            let updateFoundCount = 0;
+            const controllerChanged = new Promise(resolve => {
+              navigator.serviceWorker.addEventListener("controllerchange", () => resolve(true), { once: true });
+            });
+            reg.addEventListener("updatefound", () => {
+              updateFoundCount += 1;
+            });
+            const updated = await reg.update();
+            await controllerChanged;
+            const afterVersion = await askWorker(reg.active);
+            globalThis.__swUpdateChangedProbe = JSON.stringify({
+              beforeVersion,
+              sameRegistration: updated === reg,
+              updateFoundCount,
+              afterVersion
+            });
+          })().catch(error => {
+            globalThis.__swUpdateChangedProbe =
+              "error:" + (error && error.name) + ":" + (error && error.message);
+          }).finally(() => {
+            globalThis.__swUpdateChangedDone = true;
+          });
+        })()
+        "#,
+    )
+    .expect("service worker update changed probe should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__swUpdateChangedDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__swUpdateChangedProbe)")
+            .unwrap(),
+        r#"{"beforeVersion":"v1","sameRegistration":true,"updateFoundCount":1,"afterVersion":"v2"}"#
+    );
+
+    server
+        .await
+        .expect("service worker update changed server should finish");
+}
+
+#[tokio::test]
+async fn service_worker_registration_update_rejects_on_script_error_and_after_unregister() {
+    let worker_body = r#"
+        self.addEventListener("install", event => {
+          event.waitUntil(self.skipWaiting());
+        });
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+    "#;
+    let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            Vec::new(),
+            worker_body,
+        ),
+        (
+            "/app/worker.js",
+            "text/plain",
+            vec![("X-Content-Type-Options", "nosniff")],
+            "not javascript",
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+        (() => {
+          globalThis.__swUpdateErrorDone = false;
+          globalThis.__swUpdateErrorProbe = "pending";
+          (async () => {
+            const reg = await navigator.serviceWorker.register("worker.js", { scope: "./" });
+            await navigator.serviceWorker.ready;
+            if (typeof reg.update !== "function") {
+              throw new Error("missing reg.update");
+            }
+            let scriptError = "resolved";
+            try {
+              await reg.update();
+            } catch (error) {
+              scriptError = (
+                error instanceof TypeError
+                && !(error instanceof DOMException)
+                && !String(error.message).includes("is not a function")
+              )
+                ? "TypeError"
+                : String(error && error.name) + ":" + String(error && error.message);
+            }
+            const activePreserved = reg.active !== null;
+            const unregistered = await reg.unregister();
+            let afterUnregister = "resolved";
+            try {
+              await reg.update();
+            } catch (error) {
+              afterUnregister = (
+                error instanceof TypeError
+                && !(error instanceof DOMException)
+                && !String(error.message).includes("is not a function")
+              )
+                ? "TypeError"
+                : String(error && error.name) + ":" + String(error && error.message);
+            }
+            const lookupAfter = await navigator.serviceWorker.getRegistration();
+            globalThis.__swUpdateErrorProbe = JSON.stringify({
+              scriptError,
+              activePreserved,
+              unregistered,
+              afterUnregister,
+              stillUnregistered: lookupAfter === undefined
+            });
+          })().catch(error => {
+            globalThis.__swUpdateErrorProbe =
+              "error:" + (error && error.name) + ":" + (error && error.message);
+          }).finally(() => {
+            globalThis.__swUpdateErrorDone = true;
+          });
+        })()
+        "#,
+    )
+    .expect("service worker update error probe should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__swUpdateErrorDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__swUpdateErrorProbe)").unwrap(),
+        r#"{"scriptError":"TypeError","activePreserved":true,"unregistered":true,"afterUnregister":"TypeError","stillUnregistered":true}"#
+    );
+
+    server
+        .await
+        .expect("service worker update error server should finish");
+}
+
+#[tokio::test]
+async fn service_worker_registration_update_uses_receiver_realm_when_borrowed() {
+    let worker_body = r#"
+        self.addEventListener("install", event => {
+          event.waitUntil(self.skipWaiting());
+        });
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+    "#;
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/worker.js",
+        "text/javascript; charset=utf-8",
+        worker_body,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+        (() => {
+          globalThis.__swUpdateRealmDone = false;
+          globalThis.__swUpdateRealmProbe = "pending";
+          (async () => {
+            const parentReg = await navigator.serviceWorker.register("worker.js", { scope: "./" });
+            await navigator.serviceWorker.ready;
+            const frame = document.createElement("iframe");
+            document.body.appendChild(frame);
+            const child = frame.contentWindow;
+            const childReg = await child.navigator.serviceWorker.getRegistration();
+            await parentReg.unregister();
+            const promise = parentReg.update.call(childReg);
+            const promiseInChildRealm =
+              promise instanceof child.Promise && !(promise instanceof window.Promise);
+            const errorInChildRealm = await promise.then(
+              () => false,
+              error => error instanceof child.TypeError && !(error instanceof window.TypeError)
+            );
+            globalThis.__swUpdateRealmProbe = JSON.stringify({
+              promiseInChildRealm,
+              errorInChildRealm
+            });
+          })().catch(error => {
+            globalThis.__swUpdateRealmProbe =
+              "error:" + (error && error.name) + ":" + (error && error.message);
+          }).finally(() => {
+            globalThis.__swUpdateRealmDone = true;
+          });
+        })()
+        "#,
+    )
+    .expect("service worker update realm probe should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__swUpdateRealmDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__swUpdateRealmProbe)").unwrap(),
+        r#"{"promiseInChildRealm":true,"errorInChildRealm":true}"#
+    );
+
+    server
+        .await
+        .expect("service worker update realm server should finish");
+}
+
+#[tokio::test]
+async fn service_worker_global_scope_registration_update_rejects_while_installing_and_updates_when_active()
+ {
+    let worker_v1 = r#"
+        let installUpdateOutcome = "not-run";
+        self.addEventListener("install", event => {
+          event.waitUntil(
+            Promise.resolve().then(() => {
+              if (typeof self.registration.update !== "function") {
+                throw new Error("missing self.registration.update");
+              }
+              return self.registration.update();
+            }).then(
+              () => { installUpdateOutcome = "resolved"; },
+              error => {
+                installUpdateOutcome = (
+                  error instanceof TypeError
+                  && String(error.message).includes("installing")
+                )
+                  ? "TypeError"
+                  : String(error && error.name) + ":" + String(error && error.message);
+              }
+            ).then(() => self.skipWaiting())
+          );
+        });
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+        self.addEventListener("message", event => {
+          if (event.data === "update") {
+            Promise.resolve().then(() => self.registration.update()).then(
+              updated => event.ports[0].postMessage(JSON.stringify({
+                installUpdateOutcome,
+                sameRegistration: updated === self.registration,
+                outcome: "resolved"
+              })),
+              error => event.ports[0].postMessage(JSON.stringify({
+                installUpdateOutcome,
+                outcome: "rejected:" + (error && error.name) + ":" + (error && error.message)
+              }))
+            );
+          }
+        });
+    "#;
+    let worker_v2 = r#"
+        self.addEventListener("install", event => {
+          event.waitUntil(self.skipWaiting());
+        });
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+        self.addEventListener("message", event => {
+          event.ports[0].postMessage("v2");
+        });
+    "#;
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            worker_v1,
+        ),
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            worker_v2,
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+        (() => {
+          globalThis.__swWorkerSelfUpdateDone = false;
+          globalThis.__swWorkerSelfUpdateProbe = "pending";
+          const askWorker = (worker, payload) => new Promise(resolve => {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = event => resolve(event.data);
+            worker.postMessage(payload, [channel.port2]);
+          });
+          (async () => {
+            const reg = await navigator.serviceWorker.register("worker.js", { scope: "./" });
+            await navigator.serviceWorker.ready;
+            const controllerChanged = new Promise(resolve => {
+              navigator.serviceWorker.addEventListener("controllerchange", () => resolve(true), { once: true });
+            });
+            const workerReply = JSON.parse(await askWorker(reg.active, "update"));
+            if (workerReply.outcome !== "resolved") {
+              globalThis.__swWorkerSelfUpdateProbe = JSON.stringify(workerReply);
+              return;
+            }
+            await controllerChanged;
+            const afterVersion = await askWorker(reg.active, "ping");
+            globalThis.__swWorkerSelfUpdateProbe = JSON.stringify({
+              installUpdateOutcome: workerReply.installUpdateOutcome,
+              sameRegistration: workerReply.sameRegistration,
+              outcome: workerReply.outcome,
+              afterVersion
+            });
+          })().catch(error => {
+            globalThis.__swWorkerSelfUpdateProbe =
+              "error:" + (error && error.name) + ":" + (error && error.message);
+          }).finally(() => {
+            globalThis.__swWorkerSelfUpdateDone = true;
+          });
+        })()
+        "#,
+    )
+    .expect("service worker self update probe should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__swWorkerSelfUpdateDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__swWorkerSelfUpdateProbe)")
+            .unwrap(),
+        r#"{"installUpdateOutcome":"TypeError","sameRegistration":true,"outcome":"resolved","afterVersion":"v2"}"#
+    );
+
+    server
+        .await
+        .expect("service worker self update server should finish");
+}

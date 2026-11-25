@@ -1,6 +1,144 @@
 use super::*;
 
 impl ServiceWorkerRuntimeService {
+    pub(super) fn finish_registration_update_requested(
+        &self,
+        request: ServiceWorkerRegistrationUpdate,
+        run: RendererServiceWorkerRunIdentity,
+        source_host: SharedRendererServiceWorkerHost,
+    ) {
+        let (launch, update_check, completed_register_callbacks) = {
+            let mut state = self.inner.state.lock();
+            let reject = |host: SharedRendererServiceWorkerHost,
+                          error: ServiceWorkerRegistrationError| {
+                (
+                    None,
+                    None,
+                    Some((
+                        vec![ServiceWorkerRegisterJob::worker(request.request_id, host)],
+                        Err(error),
+                    )),
+                )
+            };
+            match state.versions.get(&request.version_id) {
+                None => reject(
+                    source_host,
+                    ServiceWorkerRegistrationError::type_error(
+                        "Failed to execute 'update' on 'ServiceWorkerRegistration': service worker version is unavailable.",
+                    ),
+                ),
+                Some(version)
+                    if version.run != run || version.registration_id != request.registration_id =>
+                {
+                    reject(
+                        source_host,
+                        ServiceWorkerRegistrationError::type_error(
+                            "Failed to execute 'update' on 'ServiceWorkerRegistration': service worker request is stale.",
+                        ),
+                    )
+                }
+                // W3C Service Workers §4.3.7 step 4: a service worker cannot update
+                // its own registration while it is still installing.
+                Some(version)
+                    if version.lifecycle_state
+                        == ServiceWorkerVersionLifecycleState::Installing =>
+                {
+                    let host = match &version.running_state {
+                        ServiceWorkerVersionRunningState::Running { host }
+                        | ServiceWorkerVersionRunningState::Starting { host } => host.clone(),
+                        ServiceWorkerVersionRunningState::Stopped => source_host,
+                    };
+                    reject(
+                        host,
+                        ServiceWorkerRegistrationError::type_error(
+                            "Failed to execute 'update' on 'ServiceWorkerRegistration': A service worker cannot update itself while installing.",
+                        ),
+                    )
+                }
+                Some(version) => match &version.running_state {
+                    ServiceWorkerVersionRunningState::Running { host } => {
+                        let host = host.clone();
+                        let queued_job = state
+                            .registrations
+                            .get(&request.registration_id)
+                            .filter(|registration| !registration.pending_unregistration)
+                            .and_then(|registration| {
+                                let pending_update_check_new_version_id = state
+                                    .pending_main_script_update_checks
+                                    .get(&registration.id)
+                                    .map(|pending_check| pending_check.new_version_id);
+                                let newest_version_id = registration
+                                    .installing_version_id
+                                    .filter(|version_id| {
+                                        Some(*version_id) != pending_update_check_new_version_id
+                                    })
+                                    .or(registration.waiting_version_id)
+                                    .or(registration.active_version_id)?;
+                                let newest_version = state.versions.get(&newest_version_id)?;
+                                Some(ServiceWorkerQueuedRegisterJob {
+                                    job_kind: ServiceWorkerRegistrationJobKind::Update,
+                                    script_url: newest_version.script_url.clone(),
+                                    scope_url: registration.scope_url.clone(),
+                                    document_url: newest_version.launch_config.document_url.clone(),
+                                    storage_key: registration.storage_key.clone(),
+                                    script_kind: newest_version.script_kind,
+                                    update_via_cache: registration.update_via_cache,
+                                    force_bypass_cache: false,
+                                    skip_script_comparison: false,
+                                    skip_waiting_after_install: false,
+                                    force_update_page_load_waiter_ids: Vec::new(),
+                                    request_client: newest_version.launch_config.request_client(),
+                                    network_policy: newest_version
+                                        .launch_config
+                                        .network_policy
+                                        .clone(),
+                                    worker_context_runtime: newest_version
+                                        .launch_config
+                                        .worker_context_runtime
+                                        .clone(),
+                                    broadcast_channel_top_level_site: newest_version
+                                        .launch_config
+                                        .broadcast_channel_top_level_site
+                                        .clone(),
+                                    indexed_db_manager: newest_version
+                                        .launch_config
+                                        .indexed_db_manager
+                                        .clone(),
+                                    storage_bucket_store: newest_version
+                                        .launch_config
+                                        .storage_bucket_store
+                                        .clone(),
+                                    callbacks: vec![ServiceWorkerRegisterJob::worker(
+                                        request.request_id,
+                                        host.clone(),
+                                    )],
+                                })
+                            });
+                        match queued_job {
+                            Some(queued_job) => {
+                                self.start_queued_register_job_locked(&mut state, queued_job)
+                            }
+                            None => reject(
+                                host,
+                                ServiceWorkerRegistrationError::type_error(
+                                    "Failed to execute 'update' on 'ServiceWorkerRegistration': No active or waiting service worker registration is available.",
+                                ),
+                            ),
+                        }
+                    }
+                    ServiceWorkerVersionRunningState::Starting { .. }
+                    | ServiceWorkerVersionRunningState::Stopped => reject(
+                        source_host,
+                        ServiceWorkerRegistrationError::type_error(
+                            "Failed to execute 'update' on 'ServiceWorkerRegistration': service worker is not running.",
+                        ),
+                    ),
+                },
+            }
+        };
+        self.finish_queued_register_job_start(launch, update_check, completed_register_callbacks);
+    }
+
     pub(super) fn finish_show_notification_requested(
         &self,
         request: ServiceWorkerShowNotification,

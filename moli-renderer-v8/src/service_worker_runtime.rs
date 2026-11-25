@@ -57,6 +57,7 @@ pub(crate) use events::{
     ServiceWorkerPushGetSubscriptionResult, ServiceWorkerPushSubscribe,
     ServiceWorkerPushSubscribeResult, ServiceWorkerPushSubscriptionSnapshot,
     ServiceWorkerPushUnsubscribe, ServiceWorkerPushUnsubscribeResult,
+    ServiceWorkerRegistrationUpdate, ServiceWorkerRegistrationUpdateResult,
     ServiceWorkerRequestDestination, ServiceWorkerShowNotification,
     ServiceWorkerShowNotificationResult, ServiceWorkerSyncCompletion, ServiceWorkerSyncEvent,
     ServiceWorkerSyncGetTags, ServiceWorkerSyncGetTagsResult, ServiceWorkerSyncRegistration,

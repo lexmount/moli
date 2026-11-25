@@ -19,6 +19,11 @@ pub(in crate::worker) struct PendingServiceWorkerClientsOpenWindow {
     pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
 }
 
+pub(in crate::worker) struct PendingServiceWorkerRegistrationUpdate {
+    pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
+    pub(in crate::worker) registration: v8::Global<v8::Object>,
+}
+
 pub(in crate::worker) struct PendingServiceWorkerShowNotification {
     pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
 }
@@ -172,6 +177,32 @@ impl WorkerGlobalState {
         request_id: u64,
     ) -> Option<PendingServiceWorkerClientsOpenWindow> {
         self.pending_service_worker_clients_open_windows
+            .remove(&request_id)
+    }
+
+    pub(in crate::worker) fn register_pending_service_worker_registration_update(
+        &mut self,
+        resolver: v8::Global<v8::PromiseResolver>,
+        registration: v8::Global<v8::Object>,
+    ) -> u64 {
+        let request_id = self
+            .service_worker_registration_update_request_ids
+            .allocate();
+        self.pending_service_worker_registration_updates.insert(
+            request_id,
+            PendingServiceWorkerRegistrationUpdate {
+                resolver,
+                registration,
+            },
+        );
+        request_id
+    }
+
+    pub(in crate::worker) fn take_pending_service_worker_registration_update(
+        &mut self,
+        request_id: u64,
+    ) -> Option<PendingServiceWorkerRegistrationUpdate> {
+        self.pending_service_worker_registration_updates
             .remove(&request_id)
     }
 
@@ -640,6 +671,40 @@ pub(in crate::worker) fn drain_service_worker_get_notifications_result(
         }
     }
     let _ = resolver.resolve(scope, array.into());
+}
+
+pub(in crate::worker) fn drain_service_worker_registration_update_result(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    result: ServiceWorkerRegistrationUpdateResult,
+) {
+    let pending = {
+        let mut state = state.borrow_mut();
+        let Some(pending) =
+            state.take_pending_service_worker_registration_update(result.request_id)
+        else {
+            return;
+        };
+        pending
+    };
+    let resolver = v8::Local::new(scope, &pending.resolver);
+    match result.result {
+        Ok(()) => {
+            let registration = v8::Local::new(scope, &pending.registration);
+            let _ = resolver.resolve(scope, registration.into());
+        }
+        Err(error) => {
+            let reason = if error.kind.rejects_as_type_error_for_update() {
+                match v8_string(scope, &error.message) {
+                    Some(message) => v8::Exception::type_error(scope, message),
+                    None => v8::undefined(scope).into(),
+                }
+            } else {
+                worker_dom_exception_value(scope, &error.message, error.kind.dom_exception_name())
+            };
+            let _ = resolver.reject(scope, reason);
+        }
+    }
 }
 
 pub(in crate::worker) fn drain_service_worker_sync_registration_result(

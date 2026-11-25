@@ -502,6 +502,20 @@ impl RendererServiceWorkerHost {
         handle.dispatch_service_worker_show_notification_result(result);
     }
 
+    pub(super) fn dispatch_registration_update_result(
+        &self,
+        result: crate::runtime::ServiceWorkerRegistrationUpdateResult,
+    ) {
+        let state = self.state.lock();
+        let RendererServiceWorkerHostState::Running {
+            handle: Some(handle),
+        } = &*state
+        else {
+            return;
+        };
+        handle.dispatch_service_worker_registration_update_result(result);
+    }
+
     pub(super) fn dispatch_sync_registration_result(
         &self,
         result: crate::runtime::ServiceWorkerSyncRegistrationResult,
@@ -774,6 +788,12 @@ fn spawn_parent_message_pump(
                     WorkerToParentMessage::ServiceWorkerGetNotifications(request) => {
                         service
                             .enqueue_get_notifications_requested(request, Arc::clone(&source_host));
+                    }
+                    WorkerToParentMessage::ServiceWorkerRegistrationUpdate(request) => {
+                        service.enqueue_registration_update_requested(
+                            request,
+                            Arc::clone(&source_host),
+                        );
                     }
                     WorkerToParentMessage::ServiceWorkerSyncRegistration(request) => {
                         service

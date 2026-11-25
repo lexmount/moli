@@ -22,7 +22,8 @@ use crate::runtime::{
     ServiceWorkerPushCompletion, ServiceWorkerPushEvent, ServiceWorkerPushGetSubscription,
     ServiceWorkerPushGetSubscriptionResult, ServiceWorkerPushSubscribe,
     ServiceWorkerPushSubscribeResult, ServiceWorkerPushUnsubscribe,
-    ServiceWorkerPushUnsubscribeResult, ServiceWorkerShowNotification,
+    ServiceWorkerPushUnsubscribeResult, ServiceWorkerRegistrationUpdate,
+    ServiceWorkerRegistrationUpdateResult, ServiceWorkerShowNotification,
     ServiceWorkerShowNotificationResult, ServiceWorkerSyncCompletion, ServiceWorkerSyncEvent,
     ServiceWorkerSyncGetTags, ServiceWorkerSyncGetTagsResult, ServiceWorkerSyncRegistration,
     ServiceWorkerSyncRegistrationResult, ServiceWorkerWorkerMessage,
@@ -153,6 +154,8 @@ pub(crate) enum WorkerMessage {
     ServiceWorkerClientFocusResult(ServiceWorkerClientFocusResult),
     /// Resolve a Service Worker `clients.openWindow()` request in the worker.
     ServiceWorkerClientsOpenWindowResult(ServiceWorkerClientsOpenWindowResult),
+    /// Resolve a Service Worker `ServiceWorkerRegistration.update()` request in the worker.
+    ServiceWorkerRegistrationUpdateResult(ServiceWorkerRegistrationUpdateResult),
     /// Resolve a Service Worker `ServiceWorkerRegistration.showNotification()` request in the worker.
     ServiceWorkerShowNotificationResult(ServiceWorkerShowNotificationResult),
     /// Resolve a Service Worker `ServiceWorkerRegistration.getNotifications()` request in the worker.
@@ -244,6 +247,8 @@ pub(crate) enum WorkerToParentMessage {
     ServiceWorkerSyncCompleted(ServiceWorkerSyncCompletion),
     /// A Service Worker periodic sync event finished dispatch and all `waitUntil()` promises.
     ServiceWorkerPeriodicSyncCompleted(ServiceWorkerPeriodicSyncCompletion),
+    /// A Service Worker requested an update check for its own registration.
+    ServiceWorkerRegistrationUpdate(ServiceWorkerRegistrationUpdate),
     /// A Service Worker requested display/recording of a notification.
     ServiceWorkerShowNotification(Box<ServiceWorkerShowNotification>),
     /// A Service Worker requested stored notification snapshots.
@@ -870,6 +875,15 @@ impl WorkerHandle {
             .send(WorkerMessage::ServiceWorkerPeriodicSyncEvent(Box::new(
                 event,
             )));
+    }
+
+    pub(crate) fn dispatch_service_worker_registration_update_result(
+        &self,
+        result: ServiceWorkerRegistrationUpdateResult,
+    ) {
+        let _ = self
+            .tx
+            .send(WorkerMessage::ServiceWorkerRegistrationUpdateResult(result));
     }
 
     pub(crate) fn dispatch_service_worker_sync_registration_result(

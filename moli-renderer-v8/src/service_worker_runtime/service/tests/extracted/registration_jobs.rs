@@ -1187,3 +1187,413 @@ fn devtools_functional_event_dispatch_uses_active_registration_owner() {
     assert_eq!(periodic.owner, test_run_owner(version_id, &run));
     assert_eq!(periodic.tag, "periodic-tag");
 }
+
+#[test]
+fn update_job_queues_behind_installing_worker_and_rejects_after_failed_install() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let first_version_id = ServiceWorkerVersionId(1);
+    let scope_url = url("https://example.test/app/");
+    let script_url = url("https://example.test/app/worker.js");
+    let document_url = url("https://example.test/app/page.html");
+    let storage_key = ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&document_url);
+    let mut register_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let mut first_update_queue =
+        crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let mut second_update_queue =
+        crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+
+    insert_starting_version_with_register_job(
+        &service,
+        registration_id,
+        first_version_id,
+        script_url,
+        scope_url.clone(),
+        10,
+        register_queue.sender(),
+    );
+
+    // Two concurrent update() calls while v1 is installing must queue behind v1
+    // (not coalesce onto v1's Register job) and coalesce with each other.
+    service.start_update_registration_with_storage_key(
+        scope_url.clone(),
+        document_url.clone(),
+        storage_key.clone(),
+        test_request_client(&service),
+        WorkerNetworkPolicy::default(),
+        service.browser_context_runtime(),
+        None,
+        None,
+        None,
+        20,
+        crate::window_document_identity::WindowDocumentOwner::for_test(1),
+        first_update_queue.sender(),
+    );
+    service.start_update_registration_with_storage_key(
+        scope_url,
+        document_url,
+        storage_key,
+        test_request_client(&service),
+        WorkerNetworkPolicy::default(),
+        service.browser_context_runtime(),
+        None,
+        None,
+        None,
+        21,
+        crate::window_document_identity::WindowDocumentOwner::for_test(1),
+        second_update_queue.sender(),
+    );
+
+    let diagnostics = service.diagnostics_snapshot();
+    assert_eq!(diagnostics.queued_register_job_count, 1);
+    assert!(!first_update_queue.has_ready_task());
+    assert!(!second_update_queue.has_ready_task());
+
+    let first_run = exact_version_run(&service, first_version_id);
+    service.finish_worker_start_failed(
+        first_version_id,
+        first_run,
+        ServiceWorkerVersionStartFailure::ScriptLoad {
+            message: "initial load failed".to_owned(),
+        },
+    );
+
+    let register_completion = pop_register_completion(&mut register_queue);
+    assert_eq!(register_completion.request_id, 10);
+    assert!(register_completion.result.is_err());
+
+    let first_update_completion = pop_register_completion(&mut first_update_queue);
+    assert_eq!(first_update_completion.request_id, 20);
+    assert_eq!(
+        first_update_completion
+            .result
+            .expect_err("queued update should reject after initial install fails")
+            .kind,
+        crate::service_worker_runtime::ServiceWorkerRegistrationErrorKind::Type
+    );
+
+    let second_update_completion = pop_register_completion(&mut second_update_queue);
+    assert_eq!(second_update_completion.request_id, 21);
+    assert_eq!(
+        second_update_completion
+            .result
+            .expect_err("coalesced update should also reject after initial install fails")
+            .kind,
+        crate::service_worker_runtime::ServiceWorkerRegistrationErrorKind::Type
+    );
+
+    let state = service.inner.state.lock();
+    assert!(
+        !state.registrations.contains_key(&registration_id),
+        "empty registration should be deleted once queued update rejects"
+    );
+    drop(state);
+
+    service.terminate_all_for_context_shutdown();
+}
+
+#[test]
+fn update_job_queued_after_unregister_rejects_even_with_controlled_client() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let first_version_id = ServiceWorkerVersionId(1);
+    let scope_url = url("https://example.test/app/");
+    let script_url = url("https://example.test/app/worker.js");
+    let document_url = url("https://example.test/app/page.html");
+    let storage_key = ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&document_url);
+    let mut register_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let mut unregister_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let mut update_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+
+    insert_starting_version_with_register_job(
+        &service,
+        registration_id,
+        first_version_id,
+        script_url.clone(),
+        scope_url.clone(),
+        30,
+        register_queue.sender(),
+    );
+    {
+        let mut state = service.inner.state.lock();
+        state
+            .registrations
+            .get_mut(&registration_id)
+            .expect("registration should exist")
+            .controlled_client_ids
+            .insert(ServiceWorkerClientId(99));
+    }
+
+    assert_eq!(
+        service.start_unregistration(&scope_url, 31, 1, unregister_queue.sender()),
+        ServiceWorkerUnregisterStart::Queued
+    );
+    service.start_update_registration_with_storage_key(
+        scope_url,
+        document_url,
+        storage_key,
+        test_request_client(&service),
+        WorkerNetworkPolicy::default(),
+        service.browser_context_runtime(),
+        None,
+        None,
+        None,
+        32,
+        crate::window_document_identity::WindowDocumentOwner::for_test(1),
+        update_queue.sender(),
+    );
+
+    let first_run = exact_version_run(&service, first_version_id);
+    service.finish_worker_start_completed(
+        first_version_id,
+        first_run.clone(),
+        script_url.to_string(),
+    );
+    service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
+        event_id: ServiceWorkerEventId(1),
+        owner: test_run_owner(first_version_id, &first_run),
+        kind: ServiceWorkerLifecycleEventKind::Install,
+        result: Ok(()),
+    });
+
+    assert!(pop_register_completion(&mut register_queue).result.is_ok());
+    assert!(pop_unregister_completion(&mut unregister_queue).result);
+    let update_completion = pop_register_completion(&mut update_queue);
+    assert_eq!(update_completion.request_id, 32);
+    assert_eq!(
+        update_completion
+            .result
+            .expect_err("queued update behind unregister must reject immediately")
+            .kind,
+        crate::service_worker_runtime::ServiceWorkerRegistrationErrorKind::Type
+    );
+
+    let diagnostics = service.diagnostics_snapshot();
+    assert_eq!(diagnostics.pending_unregistration_count, 1);
+    assert_eq!(diagnostics.queued_register_job_count, 0);
+
+    service.terminate_all_for_context_shutdown();
+}
+
+#[test]
+fn update_job_rejects_when_intervening_register_changes_script_url() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let first_version_id = ServiceWorkerVersionId(1);
+    let scope_url = url("https://example.test/app/");
+    let first_script_url = url("https://example.test/app/worker-v1.js");
+    let second_script_url = url("https://example.test/app/worker-v2.js");
+    let document_url = url("https://example.test/app/page.html");
+    let storage_key = ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&document_url);
+    let mut first_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let mut second_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let mut update_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+
+    insert_starting_version_with_register_job(
+        &service,
+        registration_id,
+        first_version_id,
+        first_script_url.clone(),
+        scope_url.clone(),
+        40,
+        first_queue.sender(),
+    );
+    push_queued_register_job(
+        &service,
+        registration_id,
+        second_script_url.clone(),
+        scope_url.clone(),
+        41,
+        second_queue.sender(),
+    );
+    service.start_update_registration_with_storage_key(
+        scope_url,
+        document_url,
+        storage_key,
+        test_request_client(&service),
+        WorkerNetworkPolicy::default(),
+        service.browser_context_runtime(),
+        None,
+        None,
+        None,
+        42,
+        crate::window_document_identity::WindowDocumentOwner::for_test(1),
+        update_queue.sender(),
+    );
+
+    let first_run = exact_version_run(&service, first_version_id);
+    service.finish_worker_start_completed(
+        first_version_id,
+        first_run.clone(),
+        first_script_url.to_string(),
+    );
+    service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
+        event_id: ServiceWorkerEventId(1),
+        owner: test_run_owner(first_version_id, &first_run),
+        kind: ServiceWorkerLifecycleEventKind::Install,
+        result: Ok(()),
+    });
+    assert!(pop_register_completion(&mut first_queue).result.is_ok());
+
+    let second_version_id = ServiceWorkerVersionId(2);
+    let second_run = exact_version_run(&service, second_version_id);
+    service.finish_worker_start_completed(
+        second_version_id,
+        second_run.clone(),
+        second_script_url.to_string(),
+    );
+    service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
+        event_id: ServiceWorkerEventId(2),
+        owner: test_run_owner(second_version_id, &second_run),
+        kind: ServiceWorkerLifecycleEventKind::Install,
+        result: Ok(()),
+    });
+    assert!(pop_register_completion(&mut second_queue).result.is_ok());
+
+    let update_completion = pop_register_completion(&mut update_queue);
+    assert_eq!(update_completion.request_id, 42);
+    assert_eq!(
+        update_completion
+            .result
+            .expect_err("stale update must reject instead of reverting script URL")
+            .kind,
+        crate::service_worker_runtime::ServiceWorkerRegistrationErrorKind::Type
+    );
+
+    let snapshot = snapshot_for_registration(&service, registration_id);
+    assert_eq!(
+        snapshot
+            .waiting()
+            .or_else(|| snapshot.active())
+            .expect("v2 should remain newest worker")
+            .script_url(),
+        &second_script_url
+    );
+
+    service.terminate_all_for_context_shutdown();
+}
+
+#[test]
+fn update_job_refreshes_update_via_cache_and_script_kind_after_intervening_register() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let first_version_id = ServiceWorkerVersionId(1);
+    let scope_url = url("https://example.test/app/");
+    let script_url = url("https://example.test/app/worker.js");
+    let document_url = url("https://example.test/app/page.html");
+    let storage_key = ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&document_url);
+    let mut first_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let mut second_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let mut update_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+
+    insert_starting_version_with_register_job(
+        &service,
+        registration_id,
+        first_version_id,
+        script_url.clone(),
+        scope_url.clone(),
+        50,
+        first_queue.sender(),
+    );
+    service.start_registration(
+        script_url.clone(),
+        scope_url.clone(),
+        document_url.clone(),
+        WorkerScriptKind::Module,
+        test_request_client(&service),
+        WorkerNetworkPolicy::default(),
+        service.browser_context_runtime(),
+        None,
+        None,
+        None,
+        ServiceWorkerUpdateViaCache::All,
+        51,
+        1,
+        second_queue.sender(),
+    );
+    service.start_update_registration_with_storage_key(
+        scope_url,
+        document_url,
+        storage_key,
+        test_request_client(&service),
+        WorkerNetworkPolicy::default(),
+        service.browser_context_runtime(),
+        None,
+        None,
+        None,
+        52,
+        crate::window_document_identity::WindowDocumentOwner::for_test(1),
+        update_queue.sender(),
+    );
+
+    let first_run = exact_version_run(&service, first_version_id);
+    service.finish_worker_start_completed(
+        first_version_id,
+        first_run.clone(),
+        script_url.to_string(),
+    );
+    service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
+        event_id: ServiceWorkerEventId(1),
+        owner: test_run_owner(first_version_id, &first_run),
+        kind: ServiceWorkerLifecycleEventKind::Install,
+        result: Ok(()),
+    });
+    assert!(pop_register_completion(&mut first_queue).result.is_ok());
+
+    let second_version_id = ServiceWorkerVersionId(2);
+    let second_run = exact_version_run(&service, second_version_id);
+    service.finish_worker_start_completed(
+        second_version_id,
+        second_run.clone(),
+        script_url.to_string(),
+    );
+    {
+        let mut state = service.inner.state.lock();
+        let version = state
+            .versions
+            .get_mut(&second_version_id)
+            .expect("second version should exist");
+        version.main_script_resource = Some(test_script_resource(&script_url));
+    }
+    service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
+        event_id: ServiceWorkerEventId(2),
+        owner: test_run_owner(second_version_id, &second_run),
+        kind: ServiceWorkerLifecycleEventKind::Install,
+        result: Ok(()),
+    });
+    assert!(pop_register_completion(&mut second_queue).result.is_ok());
+
+    let diagnostics = service.diagnostics_snapshot();
+    assert_eq!(
+        diagnostics.pending_main_script_update_check_count, 1,
+        "queued update should start a main-script update check using refreshed registration options"
+    );
+    assert_eq!(diagnostics.queued_register_job_count, 0);
+    assert!(!update_queue.has_ready_task());
+
+    let state = service.inner.state.lock();
+    let registration = state
+        .registrations
+        .get(&registration_id)
+        .expect("registration should exist");
+    assert_eq!(
+        registration.update_via_cache,
+        ServiceWorkerUpdateViaCache::All,
+        "queued update must preserve the intervening register()'s updateViaCache"
+    );
+    let pending_check = state
+        .pending_main_script_update_checks
+        .get(&registration_id)
+        .expect("pending update check should exist");
+    assert_eq!(
+        pending_check.queued_job.update_via_cache,
+        ServiceWorkerUpdateViaCache::All
+    );
+    assert_eq!(
+        pending_check.queued_job.script_kind,
+        WorkerScriptKind::Module
+    );
+    drop(state);
+
+    service.terminate_all_for_context_shutdown();
+}

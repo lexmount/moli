@@ -67,6 +67,15 @@ struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
     #[webapi(accessor_property, getter = service_worker_registration_active_getter_callback)]
     active: (),
 
+    #[webapi(
+        method,
+        returns_promise,
+        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance,
+        callback = navigator_service_worker_update_callback,
+        length = 0
+    )]
+    update: (),
+
     #[webapi(method, callback = navigator_service_worker_unregister_callback, length = 0)]
     unregister: (),
 
@@ -1107,6 +1116,72 @@ fn service_worker_container_owner_scope<'s>(
     container: v8::Local<'s, v8::Object>,
 ) -> OwnerDispatchScope {
     service_worker_owner_scope_from_object(scope, container)
+}
+
+fn navigator_service_worker_update_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    // The registration owns update promises and rejection values, including
+    // calls through an update method borrowed from another Window.
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        return;
+    };
+    let promise = resolver.get_promise(scope);
+    rv.set(promise.into());
+
+    let Some(scope_url) = service_worker_registration_scope_from_this(scope, args.this()) else {
+        reject_service_worker_promise_with_type_error(
+            scope,
+            resolver,
+            "Failed to execute 'update' on 'ServiceWorkerRegistration': registration scope is unavailable.",
+        );
+        return;
+    };
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        reject_service_worker_promise_with_type_error(
+            scope,
+            resolver,
+            "Failed to execute 'update' on 'ServiceWorkerRegistration': failed to get native bridge.",
+        );
+        return;
+    };
+    let host = unsafe { &mut *host_ptr };
+    let owner = service_worker_owner_scope_from_object(scope, args.this());
+    let Some(request_context) = host.service_worker_window_request_context(owner) else {
+        reject_service_worker_promise_with_type_error(
+            scope,
+            resolver,
+            "Failed to execute 'update' on 'ServiceWorkerRegistration': service worker document is no longer current.",
+        );
+        return;
+    };
+    let Some(request_client) = host
+        .document_resource_loader_for_window_owner(request_context.owner().window_document_owner())
+        .map(|loader| loader.request_client().clone())
+    else {
+        reject_service_worker_promise_with_type_error(
+            scope,
+            resolver,
+            "Failed to execute 'update' on 'ServiceWorkerRegistration': The ServiceWorker registration Document is no longer active.",
+        );
+        return;
+    };
+    let (request_id, document_owner, completion_tx) =
+        host.register_pending_service_worker_register(scope, resolver, request_context.owner());
+    host.update_service_worker_registration(
+        scope_url,
+        &request_context,
+        request_client,
+        request_id,
+        document_owner,
+        completion_tx,
+    );
 }
 
 fn navigator_service_worker_unregister_callback<'s>(

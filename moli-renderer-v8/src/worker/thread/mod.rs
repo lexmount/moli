@@ -81,11 +81,12 @@ use super::global_scope::{
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
     drain_service_worker_push_get_subscription_result, drain_service_worker_push_subscribe_result,
-    drain_service_worker_push_unsubscribe_result, drain_service_worker_show_notification_result,
-    drain_service_worker_sync_get_tags_result, drain_service_worker_sync_registration_result,
-    drain_worker_fetch_completion, drain_worker_opfs_completion, drain_worker_webcrypto_completion,
-    drain_worker_xhr_completion, install_worker_global_scope,
-    prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
+    drain_service_worker_push_unsubscribe_result, drain_service_worker_registration_update_result,
+    drain_service_worker_show_notification_result, drain_service_worker_sync_get_tags_result,
+    drain_service_worker_sync_registration_result, drain_worker_fetch_completion,
+    drain_worker_opfs_completion, drain_worker_webcrypto_completion, drain_worker_xhr_completion,
+    install_worker_global_scope, prepare_worker_global_scope_templates,
+    service_worker_fetch_handler_type,
 };
 #[cfg(test)]
 use super::handle::WorkerErrorReport;
@@ -610,6 +611,7 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
         || !state.pending_service_worker_client_navigates.is_empty()
         || !state.pending_service_worker_client_focuses.is_empty()
         || !state.pending_service_worker_clients_open_windows.is_empty()
+        || !state.pending_service_worker_registration_updates.is_empty()
         || !state.pending_service_worker_show_notifications.is_empty()
         || !state.pending_service_worker_get_notifications.is_empty()
         || !state.pending_service_worker_sync_registrations.is_empty()
@@ -1798,6 +1800,7 @@ async fn worker_main(
         pending_service_worker_client_navigates: std::collections::HashMap::new(),
         pending_service_worker_client_focuses: std::collections::HashMap::new(),
         pending_service_worker_clients_open_windows: std::collections::HashMap::new(),
+        pending_service_worker_registration_updates: std::collections::HashMap::new(),
         pending_service_worker_show_notifications: std::collections::HashMap::new(),
         pending_service_worker_get_notifications: std::collections::HashMap::new(),
         pending_service_worker_sync_registrations: std::collections::HashMap::new(),
@@ -1812,6 +1815,7 @@ async fn worker_main(
         service_worker_client_navigate_request_ids: Default::default(),
         service_worker_client_focus_request_ids: Default::default(),
         service_worker_clients_open_window_request_ids: Default::default(),
+        service_worker_registration_update_request_ids: Default::default(),
         service_worker_show_notification_request_ids: Default::default(),
         service_worker_get_notifications_request_ids: Default::default(),
         service_worker_sync_registration_request_ids: Default::default(),
@@ -2584,6 +2588,22 @@ async fn worker_main(
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 drain_service_worker_clients_open_window_result(scope, &state, result);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
+            WorkerLoopWake::Message(Some(
+                WorkerMessage::ServiceWorkerRegistrationUpdateResult(result),
+            )) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages
+                        .push_back(WorkerMessage::ServiceWorkerRegistrationUpdateResult(result));
+                    continue;
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                drain_service_worker_registration_update_result(scope, &state, result);
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }

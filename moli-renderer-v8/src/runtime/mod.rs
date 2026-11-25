@@ -559,6 +559,7 @@ pub(crate) use crate::service_worker_runtime::{
     ServiceWorkerPushGetSubscriptionResult, ServiceWorkerPushSubscribe,
     ServiceWorkerPushSubscribeResult, ServiceWorkerPushSubscriptionSnapshot,
     ServiceWorkerPushUnsubscribe, ServiceWorkerPushUnsubscribeResult, ServiceWorkerRegistrationId,
+    ServiceWorkerRegistrationUpdate, ServiceWorkerRegistrationUpdateResult,
     ServiceWorkerShowNotification, ServiceWorkerShowNotificationResult,
     ServiceWorkerSyncCompletion, ServiceWorkerSyncEvent, ServiceWorkerSyncGetTags,
     ServiceWorkerSyncGetTagsResult, ServiceWorkerSyncRegistration,

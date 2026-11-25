@@ -136,6 +136,7 @@ async fn dispatch_service_worker_fetch_event_and_handled_console_for_test(
             | WorkerToParentMessage::ServiceWorkerPushUnsubscribe(_)
             | WorkerToParentMessage::ServiceWorkerSyncCompleted(_)
             | WorkerToParentMessage::ServiceWorkerPeriodicSyncCompleted(_)
+            | WorkerToParentMessage::ServiceWorkerRegistrationUpdate(_)
             | WorkerToParentMessage::ServiceWorkerShowNotification(_)
             | WorkerToParentMessage::ServiceWorkerGetNotifications(_)
             | WorkerToParentMessage::ServiceWorkerSyncRegistration(_)

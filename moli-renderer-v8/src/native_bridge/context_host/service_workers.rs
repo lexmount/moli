@@ -744,6 +744,50 @@ impl PageScriptHost {
         self.watch_pending_service_worker_ready();
     }
 
+    pub(crate) fn update_service_worker_registration(
+        &mut self,
+        scope_url: Url,
+        request_context: &ServiceWorkerWindowRequestContext,
+        request_client: crate::network::ResourceRequestClient,
+        register_request_id: u64,
+        register_document_owner: WindowDocumentOwner,
+        register_completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
+    ) {
+        self.ensure_service_worker_client_for_request_context(request_context);
+        let creator_secure_context =
+            moli_url::is_potentially_trustworthy_url(request_context.document_url());
+        let secure_context =
+            WorkerSecureContextPolicy::Inherited(creator_secure_context).resolve(&scope_url);
+        let network_policy = WorkerNetworkPolicy {
+            secure_context: WorkerSecureContextPolicy::Inherited(secure_context),
+            permission_overrides: self.permission_overrides().to_vec(),
+            extra_http_headers: self.extra_http_headers().clone(),
+            network_offline: self.network_offline(),
+            blocked_url_patterns: self.blocked_url_patterns().to_vec(),
+            network_partition_key: None,
+        };
+        let document_url = request_context.document_url().clone();
+        let storage_key = request_context.serialized_storage_key();
+        let storage_key_top_level_site = Some(request_context.storage_key_top_level_site());
+        self.browser_context_runtime
+            .service_worker_runtime()
+            .start_update_registration_with_storage_key(
+                scope_url,
+                document_url,
+                storage_key,
+                request_client,
+                network_policy,
+                self.browser_context_runtime(),
+                storage_key_top_level_site,
+                self.indexed_db_manager(),
+                Some(self.storage_bucket_store()),
+                register_request_id,
+                register_document_owner,
+                register_completion_tx,
+            );
+        self.watch_pending_service_worker_ready();
+    }
+
     pub(crate) fn watch_pending_service_worker_ready(&mut self) -> bool {
         let requests = self.pending_service_worker_ready_requests();
         let mut attached_any = false;
