@@ -1,6 +1,6 @@
 use super::{
     PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget,
-    rendering_updates::PendingRenderingUpdatePayload,
+    rendering_updates::{PendingRenderingUpdatePayload, coalesce_animation_start_scan},
     window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask},
 };
 use crate::{
@@ -105,6 +105,16 @@ impl PageScriptHost {
         {
             let mut events = state.rendering_events.borrow_mut();
             for payload in payloads {
+                if let RealtimeEventPayload::AnimationStartScan(event_target) = *payload
+                    && coalesce_animation_start_scan(
+                        &mut events,
+                        target,
+                        event_target,
+                        RealtimeEventPayload::AnimationStartScan(EventTargetHandle::Window),
+                    )
+                {
+                    continue;
+                }
                 if events
                     .find_slot_index(target, kind, |pending| pending == payload)
                     .is_none()

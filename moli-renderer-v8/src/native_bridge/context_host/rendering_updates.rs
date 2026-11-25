@@ -43,6 +43,34 @@ pub(super) type RenderingUpdateState = ExactWindowDocumentTaskLedger<
     PendingRenderingUpdatePayload,
 >;
 
+pub(super) fn coalesce_animation_start_scan<I: Copy + Eq, P: PartialEq>(
+    updates: &mut ExactWindowDocumentTaskLedger<I, RendererPageRenderingUpdateTaskKind, P>,
+    target: WindowDocumentTaskTarget,
+    event_target: EventTargetHandle,
+    window_scan: P,
+) -> bool {
+    let kind = RendererPageRenderingUpdateTaskKind::AnimationStartScan;
+    let scans_document = event_target == EventTargetHandle::Window;
+    let Some(index) = updates.find_slot_index(target, kind, |pending| {
+        scans_document || pending == &window_scan
+    }) else {
+        return false;
+    };
+    if scans_document {
+        // The earliest queued opportunity can cover every element scan for
+        // this exact Document.
+        let task_id = updates.at(index).task_id();
+        updates.replace(
+            index,
+            PendingExactWindowDocumentTask::new(task_id, target, kind, window_scan),
+        );
+        updates.retain(|pending| {
+            pending.target() != target || pending.kind() != kind || pending.task_id() == task_id
+        });
+    }
+    true
+}
+
 impl PageScriptHost {
     /// Publish post-parse autofocus as a rendering update for the exact main
     /// Document that just completed DOMContentLoaded.
@@ -247,6 +275,16 @@ impl PageScriptHost {
             )
         {
             return self.queue_realtime_rendering_update(target, kind, payload);
+        }
+        if let PendingRenderingUpdatePayload::AnimationStartScan(event_target) = payload
+            && coalesce_animation_start_scan(
+                &mut self.rendering_updates,
+                target,
+                event_target,
+                PendingRenderingUpdatePayload::AnimationStartScan(EventTargetHandle::Window),
+            )
+        {
+            return true;
         }
         if self
             .rendering_updates
@@ -643,5 +681,65 @@ impl PageScriptHost {
             );
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document_runtime::DomHandle;
+    use crate::frame_owner_model::{DocumentId, FrameSchedulerLaneId, LocalWindowId};
+
+    #[test]
+    fn animation_start_scan_coalescing_keeps_the_earliest_document_task() {
+        let target = |id| {
+            WindowDocumentTaskTarget::new(
+                WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
+                    FrameSchedulerLaneId(1),
+                    LocalWindowId(1),
+                    DocumentId(id),
+                )),
+                OwnerDispatchScope::Top,
+            )
+        };
+        let first = target(1);
+        let replacement = target(2);
+        let kind = RendererPageRenderingUpdateTaskKind::AnimationStartScan;
+        let node = EventTargetHandle::Node(DomHandle::new(1));
+        let other_node = EventTargetHandle::Node(DomHandle::new(2));
+        let window = EventTargetHandle::Window;
+        let mut updates = ExactWindowDocumentTaskLedger::default();
+        updates.push(PendingExactWindowDocumentTask::new(
+            1_u64, first, kind, node,
+        ));
+        updates.push(PendingExactWindowDocumentTask::new(
+            2,
+            replacement,
+            kind,
+            node,
+        ));
+        updates.push(PendingExactWindowDocumentTask::new(
+            3, first, kind, other_node,
+        ));
+
+        assert!(coalesce_animation_start_scan(
+            &mut updates,
+            first,
+            window,
+            window
+        ));
+        assert!(coalesce_animation_start_scan(
+            &mut updates,
+            first,
+            other_node,
+            window
+        ));
+        assert_eq!(
+            updates
+                .iter()
+                .map(|task| (task.task_id(), *task.payload()))
+                .collect::<Vec<_>>(),
+            [(1, window), (2, node)],
+        );
     }
 }
