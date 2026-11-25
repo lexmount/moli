@@ -702,7 +702,7 @@ impl DocumentRuntime {
             );
             self.note_derived_element_state_style_activity(host_ptr, &derived_old_style_states);
             if name.eq_ignore_ascii_case("style") {
-                unsafe { &mut *host_ptr }.clear_element_inline_style_declaration_state(handle);
+                unsafe { &mut *host_ptr }.clear_element_inline_style_resolution_text(handle);
             }
         }
         if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
@@ -908,7 +908,7 @@ impl DocumentRuntime {
             if name.eq_ignore_ascii_case("style") {
                 let runtime = unsafe { &mut *host_ptr };
                 runtime.clear_element_inline_style_base_url(handle);
-                runtime.clear_element_inline_style_declaration_state(handle);
+                runtime.clear_element_inline_style_resolution_text(handle);
             }
         }
         if changed {
@@ -1046,7 +1046,7 @@ impl DocumentRuntime {
             if namespace.is_none() && local_name.eq_ignore_ascii_case("style") {
                 let runtime = unsafe { &mut *host_ptr };
                 runtime.clear_element_inline_style_base_url(handle);
-                runtime.clear_element_inline_style_declaration_state(handle);
+                runtime.clear_element_inline_style_resolution_text(handle);
             }
         }
         if changed {
@@ -1184,7 +1184,7 @@ impl DocumentRuntime {
             );
             self.note_derived_element_state_style_activity(host_ptr, &derived_old_style_states);
             if namespace.is_none() && local_name.eq_ignore_ascii_case("style") {
-                unsafe { &mut *host_ptr }.clear_element_inline_style_declaration_state(handle);
+                unsafe { &mut *host_ptr }.clear_element_inline_style_resolution_text(handle);
             }
         }
         if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {

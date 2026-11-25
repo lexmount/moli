@@ -2,7 +2,9 @@ use super::*;
 
 #[test]
 fn renderer_uses_the_published_cssom_block_only_in_its_parse_context() {
-    use crate::css_style::{CssInlineStyleDeclarationState, InlineStyleParseContext};
+    use crate::css_style::{
+        CssInlineStyleDeclarationState, CssomStyleAttribute, InlineStyleParseContext,
+    };
     use style::{context::QuirksMode, stylesheets::UrlExtraData};
 
     let mut host = test_host();
@@ -11,27 +13,25 @@ fn renderer_uses_the_published_cssom_block_only_in_its_parse_context() {
     let source_text = "width: 10px;";
     assert!(host.append_child(document, target));
     assert!(host.set_attribute(target, "style", source_text));
-    let source = host
-        .dom()
-        .find_attribute(target, "style")
-        .unwrap()
-        .shared_style_value();
     let document_url = url::Url::parse("https://example.test/").unwrap();
     let mut block = moli_css_parse::parse_declaration_block(source_text);
     let published = block.publish();
     let mut engine = MoliStyleEngine::new();
-    engine.set_cssom_inline_style(
+    host.replace_style_attribute_source(
         target,
-        CssInlineStyleDeclarationState {
-            block,
-            parse_context: Some(InlineStyleParseContext {
-                document,
-                url_data: UrlExtraData::from(document_url.clone()),
-                quirks_mode: QuirksMode::NoQuirks,
-            }),
-            ..Default::default()
-        },
-        source,
+        Box::new(CssomStyleAttribute::with_text(
+            CssInlineStyleDeclarationState {
+                block,
+                parse_context: Some(InlineStyleParseContext {
+                    document,
+                    url_data: UrlExtraData::from(document_url.clone()),
+                    quirks_mode: QuirksMode::NoQuirks,
+                }),
+                ..Default::default()
+            },
+            source_text.to_owned(),
+            true,
+        )),
     );
     let inputs = FullStyleWorldSnapshot::default();
     let read = |engine: &MoliStyleEngine| {

@@ -1254,7 +1254,7 @@ fn inline_cssom_defers_text_through_style_resolution_and_observation() {
     assert!(
         !host
             .borrow()
-            .element_deferred_cssom_style(handle)
+            .element_cssom_style(handle)
             .unwrap()
             .is_serialized()
     );
@@ -1274,6 +1274,13 @@ fn inline_cssom_defers_text_through_style_resolution_and_observation() {
             ])
         "#).unwrap(),
         r#"[["width: 12px; height: 20px;","width: 14px; height: 20px;"],3,"width: 14px; height: 22px;","width: 14px; height: 22px;"]"#,
+    );
+    assert!(
+        host.borrow()
+            .element_cssom_style(handle)
+            .unwrap()
+            .is_serialized(),
+        "oldValue observation must keep the declaration on the node"
     );
     assert_eq!(
         before_update.get_attribute(handle, "style").as_deref(),

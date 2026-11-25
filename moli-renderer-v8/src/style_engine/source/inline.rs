@@ -1,53 +1,7 @@
 use moli_dom::native::InlineStyleAttribute;
-use std::{
-    cell::{Ref, RefCell},
-    collections::HashMap,
-    sync::Arc,
-};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
-use crate::{css_style::CssInlineStyleDeclarationState, document_runtime::DomHandle};
-
-pub(in crate::style_engine) struct InlineCssomDeclaration {
-    pub(in crate::style_engine) state: CssInlineStyleDeclarationState,
-    pub(in crate::style_engine) source: Option<Arc<InlineStyleAttribute>>,
-}
-
-impl crate::style_engine::MoliStyleEngine {
-    pub(crate) fn cssom_inline_style(
-        &self,
-        handle: DomHandle,
-    ) -> Option<Ref<'_, CssInlineStyleDeclarationState>> {
-        Ref::filter_map(self.cssom_inline_styles.borrow(), |states| {
-            states.get(&handle).map(|entry| &entry.state)
-        })
-        .ok()
-    }
-
-    pub(crate) fn set_cssom_inline_style(
-        &self,
-        handle: DomHandle,
-        state: CssInlineStyleDeclarationState,
-        source: Option<Arc<InlineStyleAttribute>>,
-    ) {
-        self.cssom_inline_styles
-            .borrow_mut()
-            .insert(handle, InlineCssomDeclaration { state, source });
-    }
-
-    pub(crate) fn take_cssom_inline_style(
-        &self,
-        handle: DomHandle,
-    ) -> Option<CssInlineStyleDeclarationState> {
-        self.cssom_inline_styles
-            .borrow_mut()
-            .remove(&handle)
-            .map(|inline| inline.state)
-    }
-
-    pub(crate) fn clear_cssom_inline_styles(&self) {
-        self.cssom_inline_styles.borrow_mut().clear();
-    }
-}
+use crate::document_runtime::DomHandle;
 
 #[derive(Debug, Default)]
 pub(in crate::style_engine) struct InlineStyleMetadataStore {

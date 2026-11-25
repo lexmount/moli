@@ -1,7 +1,5 @@
 use std::{
-    cell::Ref,
     fmt,
-    ops::Deref,
     sync::{Arc, OnceLock},
 };
 
@@ -117,25 +115,10 @@ pub(crate) struct CssInlineStyleDeclarationState {
     pub(crate) parse_context: Option<InlineStyleParseContext>,
 }
 
-pub(crate) enum InlineStyleStateRef<'a> {
-    Cached(Ref<'a, CssInlineStyleDeclarationState>),
-    Deferred(RwLockReadGuard<'a, CssInlineStyleDeclarationState>),
-}
-
-impl Deref for InlineStyleStateRef<'_> {
-    type Target = CssInlineStyleDeclarationState;
-
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Cached(state) => state,
-            Self::Deferred(state) => state,
-        }
-    }
-}
-
 pub(crate) struct CssomStyleAttribute {
     state: RwLock<CssInlineStyleDeclarationState>,
     text: OnceLock<Box<str>>,
+    cssom_authored: bool,
 }
 
 impl CssomStyleAttribute {
@@ -143,7 +126,24 @@ impl CssomStyleAttribute {
         Self {
             state: RwLock::new(state),
             text: OnceLock::new(),
+            cssom_authored: true,
         }
+    }
+
+    pub(crate) fn with_text(
+        state: CssInlineStyleDeclarationState,
+        text: String,
+        cssom_authored: bool,
+    ) -> Self {
+        Self {
+            state: RwLock::new(state),
+            text: OnceLock::from(text.into_boxed_str()),
+            cssom_authored,
+        }
+    }
+
+    pub(crate) fn is_cssom_authored(&self) -> bool {
+        self.cssom_authored
     }
 
     pub(crate) fn from_attribute(attribute: &moli_dom::native::Attribute) -> Option<&Self> {
@@ -185,6 +185,7 @@ impl CssomStyleAttribute {
             return false;
         }
         self.text.take();
+        self.cssom_authored = true;
         true
     }
 
@@ -207,27 +208,6 @@ impl CssomStyleAttribute {
         }
         *source = Arc::new(InlineStyleAttribute::Deferred(Box::new(next)));
         true
-    }
-
-    pub(crate) fn take_state(
-        source: Arc<moli_dom::native::InlineStyleAttribute>,
-    ) -> CssInlineStyleDeclarationState {
-        use moli_dom::native::InlineStyleAttribute;
-        match Arc::try_unwrap(source) {
-            Ok(InlineStyleAttribute::Deferred(style)) => {
-                let style: Box<dyn std::any::Any> = style;
-                style
-                    .downcast::<Self>()
-                    .expect("CSSOM style attribute")
-                    .state
-                    .into_inner()
-            }
-            Ok(InlineStyleAttribute::Text(_)) => unreachable!("expected a deferred attribute"),
-            Err(shared) => Self::from_source(&shared)
-                .expect("CSSOM style attribute")
-                .read()
-                .clone(),
-        }
     }
 
     #[cfg(test)]
