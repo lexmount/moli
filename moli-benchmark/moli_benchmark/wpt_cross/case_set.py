@@ -390,6 +390,7 @@ class AnyJsMeta:
 
 
 UNSUPPORTED_SERVER_FEATURE_SUBSTRINGS: tuple[str, ...] = (".py",)
+IMAGE_AND_STASH_PATH = "/html/semantics/embedded-content/the-img-element/resources/image-and-stash.py"
 SUPPORTED_WASM_WEBAPI_WPTSERVE_HANDLER_REFERENCES: tuple[str, ...] = (
     "/fetch/api/resources/redirect.py",
     "/wasm/webapi/status.py",
@@ -729,15 +730,17 @@ def _html_path_is_supported(
 
 
 @lru_cache(maxsize=None)
-def _preload_count_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
-    resource = "preload/resources/preload-count.py"
-    relative = posixpath.relpath(resource, directory)
+def _counter_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    references = []
+    for resource in ("/preload/resources/preload-count.py", IMAGE_AND_STASH_PATH):
+        relative = posixpath.relpath(resource.removeprefix("/"), directory)
+        references.extend((resource, relative, "./" + relative))
     return tuple(
         re.compile(
             rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
             rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
         )
-        for reference in ("/" + resource, relative, "./" + relative)
+        for reference in references
     )
 
 
@@ -1005,7 +1008,7 @@ def _supported_wptserve_handler_references(
         supported += _document_charset_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _iframe_stash_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _remote_context_handler_reference_patterns(posixpath.dirname(rel) or ".")
-        supported += _preload_count_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _counter_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _navigation_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _json_module_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None:
