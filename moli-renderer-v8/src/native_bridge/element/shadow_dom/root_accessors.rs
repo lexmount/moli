@@ -1009,7 +1009,7 @@ pub(in crate::native_bridge) fn element_shadow_root_getter_function<'s>(
         }
         return;
     }
-    let runtime = unsafe { &mut *runtime_ptr };
+    let runtime = unsafe { &*runtime_ptr };
     let Some(root_handle) = runtime.dom_host().shadow_root_handle(handle) else {
         rv.set_null();
         return;
@@ -1023,12 +1023,16 @@ pub(in crate::native_bridge) fn element_shadow_root_getter_function<'s>(
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    match runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, root_handle)
+    match wrapped_handle_value(scope, runtime_ptr, root_handle)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
         Some(root) => {
-            ensure_shadow_root_adopted_style_sheets_initialized(scope, runtime, root_handle, root);
+            ensure_shadow_root_adopted_style_sheets_initialized(
+                scope,
+                unsafe { &mut *runtime_ptr },
+                root_handle,
+                root,
+            );
             rv.set(root.into());
         }
         None => rv.set_null(),
