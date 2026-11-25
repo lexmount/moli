@@ -3,6 +3,9 @@ use moli_layout::{
     ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
 };
 use std::time::Instant;
+use style::{
+    matching::StyleChange, properties::ComputedValues, servo::restyle_damage::ServoRestyleDamage,
+};
 
 use crate::{
     document_runtime::DomHandle,
@@ -133,7 +136,9 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
             let (primary, before, after) = styles.into_element_computed_values();
             before.is_none()
                 && after.is_none()
-                && previous.has_stylo_style(&primary)
+                && previous
+                    .stylo_computed_values()
+                    .is_some_and(|previous| same_layout_style(previous, &primary))
                 && !suppresses_noscript_box(self.runtime.dom_host(), node, self.scripting_enabled)
         })
     }
@@ -293,6 +298,28 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         }
         Ok(resolved)
     }
+}
+
+fn same_layout_style(previous: &ComputedValues, current: &ComputedValues) -> bool {
+    if std::ptr::eq(previous, current) {
+        return true;
+    }
+    if previous.effective_zoom != current.effective_zoom
+        || previous.writing_mode != current.writing_mode
+        || previous.flags != current.flags
+        || match (previous.visited_style(), current.visited_style()) {
+            (None, None) => false,
+            (Some(previous), Some(current)) => !std::ptr::eq(previous, current),
+            _ => true,
+        }
+    {
+        return false;
+    }
+    // A DOM move can re-resolve an unchanged style into a new allocation.
+    let difference = ServoRestyleDamage::compute_style_difference::<moli_selector::StyloElement<'_>>(
+        previous, current,
+    );
+    difference.damage.is_empty() && matches!(difference.change, StyleChange::Unchanged)
 }
 
 const fn anonymous_box_kind(display: LayoutDisplay) -> StyloAnonymousBoxKind {

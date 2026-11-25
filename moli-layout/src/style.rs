@@ -582,13 +582,6 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
 }
 
 impl ResolvedLayoutStyle {
-    /// Tests the identity of the Stylo allocation backing this layout input.
-    pub fn has_stylo_style(&self, computed: &ServoArc<ComputedValues>) -> bool {
-        self.computed
-            .as_ref()
-            .is_some_and(|previous| ServoArc::ptr_eq(previous, computed))
-    }
-
     /// Converts one retained Stylo style while preserving its allocation for
     /// the full lifetime of the pass-local Taffy projection.
     pub fn from_stylo(computed: ServoArc<ComputedValues>) -> Self {

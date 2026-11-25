@@ -116,6 +116,67 @@ fn realtime_retained_numeric_layout_matches_fresh_geometry_and_paint() {
 }
 
 #[test]
+fn realtime_rebuilds_only_the_changed_box_branch() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;display:flex;height:200px;align-items:flex-start}",
+        "section{width:140px;flex:none}",
+        "section div{height:12px;background:blue}</style>",
+        "<section id=edited><div id=first></div><div id=second></div></section>",
+        "<section id=stable><div id=neighbor></div></section>",
+    ));
+    assert_eq!(vm.eval("String(edited.offsetHeight)").unwrap(), "24");
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    let mut inserted = None;
+
+    for (action, expected_height, can_reuse) in [
+        ("edited.style.width='120px'", "24", true),
+        (
+            "window.added=document.createElement('div');added.id='added';edited.prepend(added)",
+            "36",
+            true,
+        ),
+        ("edited.append(added)", "36", true),
+        ("added.remove()", "24", true),
+        ("first.style.display='none'", "12", true),
+        ("first.style.display='block'", "24", true),
+        ("stable.append(first)", "12", false),
+    ] {
+        let height = vm
+            .eval(&format!("{action};String(edited.offsetHeight)"))
+            .unwrap();
+        assert_eq!(height, expected_height);
+        let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+        assert_eq!(metrics.retained_box_count > 0, can_reuse, "{action}");
+        if can_reuse {
+            assert!(metrics.retained_numeric_layout_hits > 0, "{action}");
+        }
+        inserted = vm.document_runtime.get_element_by_id("added").or(inserted);
+        let sources = ["edited", "first", "second", "stable", "neighbor"]
+            .into_iter()
+            .map(|id| vm.document_runtime.get_element_by_id(id).unwrap())
+            .chain(inserted);
+        let host = host.borrow();
+        let fresh = host
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::new(viewport, moli_layout::LayoutFlushReason::Test),
+            )
+            .unwrap()
+            .unwrap();
+        for source in sources {
+            let retained = host
+                .with_latest_layout_tree_for_document(document, |tree| {
+                    tree.client_rects_for_source(source)
+                })
+                .unwrap();
+            assert_eq!(retained, fresh.client_rects_for_source(source), "{action}");
+        }
+    }
+}
+
+#[test]
 fn realtime_layout_observes_cssom_sources_without_dom_attribute_mutations() {
     let mut vm = realtime_vm(
         "<!doctype html><style>#target{width:100px;height:10px}</style><div id=target></div>",
