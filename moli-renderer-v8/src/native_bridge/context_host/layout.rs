@@ -415,7 +415,7 @@ impl PageScriptHost {
         let pass = self
             .build_layout_pass_for_document(document, request)?
             .ok_or(LayoutError::NoLayoutRoot)?;
-        self.publish_layout_pass_for_document(document, pass, None);
+        self.publish_layout_pass_for_document(document, pass, false);
         Ok(())
     }
 
@@ -579,7 +579,7 @@ impl PageScriptHost {
         &self,
         document: DomHandle,
         mut pass: LayoutPassResult<DomHandle>,
-        paint_generation: Option<u64>,
+        retain_paint: bool,
     ) {
         if let Some(state) = &self.realtime_layout_state {
             state.clear_publication();
@@ -655,7 +655,7 @@ impl PageScriptHost {
                 document,
                 tree,
                 retained,
-                paint_generation,
+                retain_paint,
                 #[cfg(feature = "devtools")]
                 frames.geometry,
             );

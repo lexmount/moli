@@ -70,6 +70,60 @@ fn retained_layout_world_belongs_to_realtime_screen_publication() {
     }
 }
 
+#[cfg(feature = "devtools")]
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_canvas_pixels_update_without_replacing_geometry() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut vm =
+                realtime_vm("<!doctype html><canvas id=canvas width=12 height=12></canvas>");
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let document = host.borrow().document_handle();
+            let viewport = host.borrow().layout_viewport_for_document(document);
+            let session = crate::runtime::RendererScreencastPaintSession::default();
+            let paint = |vm: &mut StandaloneScriptVmHarness| {
+                vm.paint_current_screen_layout(
+                    &session,
+                    viewport,
+                    moli_layout::PaintCaptureRequest::viewport(),
+                    moli_layout::LayoutFlushReason::Screenshot,
+                )
+                .unwrap()
+                .unwrap()
+            };
+            vm.eval(
+                "const ctx=canvas.getContext('2d'); ctx.fillStyle='red'; ctx.fillRect(0,0,12,12)",
+            )
+            .unwrap();
+            let before = paint(&mut vm);
+            let publications = vm.layout_pass_observability_for_test().1;
+            vm.eval("ctx.fillStyle='blue'; ctx.fillRect(0,0,12,12)")
+                .unwrap();
+            let updated = paint(&mut vm);
+            assert_ne!(before, updated);
+            assert_eq!(vm.layout_pass_observability_for_test().1, publications);
+            let fresh = host
+                .borrow()
+                .build_layout_pass_for_document(
+                    document,
+                    moli_layout::LayoutPassRequest::with_paint(
+                        viewport,
+                        moli_layout::LayoutFlushReason::Screenshot,
+                    ),
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(Some(&updated), fresh.paint_snapshot());
+
+            let publications = vm.layout_pass_observability_for_test().1;
+            vm.eval("canvas.width=24").unwrap();
+            paint(&mut vm);
+            assert_eq!(vm.eval("String(canvas.offsetWidth)").unwrap(), "24");
+            assert_eq!(vm.layout_pass_observability_for_test().1, publications + 1);
+        })
+        .await;
+}
+
 #[test]
 fn realtime_retained_numeric_layout_matches_fresh_geometry_and_paint() {
     let mut vm = realtime_vm(concat!(

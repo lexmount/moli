@@ -20,8 +20,6 @@ pub(crate) struct VisualResourceGeneration(Arc<VisualResourceState>);
 #[derive(Default)]
 struct VisualResourceState {
     generation: AtomicU64,
-    #[cfg(feature = "devtools")]
-    retained_paint_generation: AtomicU64,
     #[cfg(feature = "molio")]
     viewport_wake: OnceLock<RwLock<Weak<Notify>>>,
 }
@@ -33,24 +31,6 @@ impl VisualResourceGeneration {
     }
 
     pub(crate) fn bump(&self) {
-        #[cfg(feature = "devtools")]
-        self.0
-            .retained_paint_generation
-            .fetch_add(1, Ordering::AcqRel);
-        self.bump_visual_output();
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn retained_paint_generation(&self) -> u64 {
-        self.0.retained_paint_generation.load(Ordering::Acquire)
-    }
-
-    /// CSS images are bound afresh when painting a retained screen.
-    pub(crate) fn bump_css_image(&self) {
-        self.bump_visual_output();
-    }
-
-    fn bump_visual_output(&self) {
         self.0.generation.fetch_add(1, Ordering::AcqRel);
         #[cfg(feature = "molio")]
         if let Some(wake) = self

@@ -31,11 +31,6 @@ struct CachedInferredFrameStyleViewport {
     viewport: StyleViewport,
 }
 
-struct RetainedLayout {
-    world: Box<RetainedLayoutWorld<DomHandle>>,
-    paint_generation: Option<u64>,
-}
-
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
 ///
 /// `ScriptVm` outlives `document.open()`, so the main-document owner
@@ -62,7 +57,7 @@ pub(super) struct DocumentLayoutState {
     latest_layout: LatestLayoutTreeCache,
     /// The working tree for this publication and the next Realtime pass.
     /// The frozen tree remains available while the next pass owns the world.
-    retained_layout: Option<RetainedLayout>,
+    retained_layout: Option<Box<RetainedLayoutWorld<DomHandle>>>,
     /// Last used content viewport published by each live iframe owner's
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
     /// separate from the single latest-tree slot because a later fresh layout
@@ -231,14 +226,11 @@ impl DocumentLayoutState {
         document: DomHandle,
         tree: FrozenLayoutTree<DomHandle>,
         retained: Option<Box<RetainedLayoutWorld<DomHandle>>>,
-        paint_generation: Option<u64>,
+        retain_paint: bool,
         #[cfg(feature = "devtools")] frame_geometry: PublishedFrameGeometry,
     ) {
-        self.retained_layout = retained.map(|world| RetainedLayout {
-            paint_generation: paint_generation.filter(|_| world.has_paint()),
-            world,
-        });
-        if paint_generation.is_none() {
+        self.retained_layout = retained;
+        if !retain_paint {
             self.discard_screen_paint();
         }
         self.latest_layout.publish(
@@ -250,14 +242,13 @@ impl DocumentLayoutState {
     }
 
     pub(super) fn take_retained_layout(&mut self) -> Option<Box<RetainedLayoutWorld<DomHandle>>> {
-        self.retained_layout.take().map(|retained| retained.world)
+        self.retained_layout.take()
     }
 
     pub(super) fn discard_screen_paint(&mut self) {
         if let Some(retained) = &mut self.retained_layout {
-            if retained.world.can_reuse_layout() {
-                retained.world.discard_paint();
-                retained.paint_generation = None;
+            if retained.can_reuse_layout() {
+                retained.discard_paint();
             } else {
                 self.retained_layout = None;
             }
@@ -268,16 +259,15 @@ impl DocumentLayoutState {
     pub(super) fn retained_screen_paint(
         &self,
         document: DomHandle,
-        resource_generation: u64,
     ) -> Option<(
         &FrozenLayoutTree<DomHandle>,
         &RetainedLayoutWorld<DomHandle>,
     )> {
         let retained = self.retained_layout.as_ref()?;
-        if retained.paint_generation != Some(resource_generation) {
+        if !retained.has_paint() {
             return None;
         }
-        Some((self.latest_layout(document)?, &retained.world))
+        Some((self.latest_layout(document)?, retained))
     }
 
     pub(super) fn update_repaint_styles(
@@ -289,7 +279,7 @@ impl DocumentLayoutState {
     ) -> bool {
         self.retained_layout
             .as_mut()
-            .is_some_and(|retained| retained.world.update_repaint_styles(styles))
+            .is_some_and(|retained| retained.update_repaint_styles(styles))
     }
 
     pub(super) fn update_screen_style_projection(
@@ -307,10 +297,7 @@ impl DocumentLayoutState {
         ) else {
             return false;
         };
-        let Some(tree) = retained
-            .world
-            .project_screen_styles(previous, styles, scroll_offset)
-        else {
+        let Some(tree) = retained.project_screen_styles(previous, styles, scroll_offset) else {
             return false;
         };
         self.latest_layout.replace_projection(tree);
@@ -321,14 +308,14 @@ impl DocumentLayoutState {
     pub(super) fn has_reusable_layout(&self) -> bool {
         self.retained_layout
             .as_ref()
-            .is_some_and(|retained| retained.world.can_reuse_layout())
+            .is_some_and(|retained| retained.can_reuse_layout())
     }
 
     #[cfg(all(test, feature = "devtools"))]
     pub(super) fn has_retained_paint_for_test(&self) -> bool {
         self.retained_layout
             .as_ref()
-            .is_some_and(|retained| retained.world.has_paint())
+            .is_some_and(|retained| retained.has_paint())
     }
 
     pub(super) fn refresh_scroll_projection(

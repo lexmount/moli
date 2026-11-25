@@ -5,7 +5,7 @@ mod screen_styles;
 pub(crate) use inline_svg::parse_count as svg_parse_count;
 pub(crate) use screen_styles::screen_targets_allow_layout_reuse;
 mod source_view;
-pub(crate) use source_view::native_scroll_offset;
+pub(crate) use source_view::{native_replaced_image, native_scroll_offset};
 mod style_resolver;
 
 use std::collections::HashMap;

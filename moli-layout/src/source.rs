@@ -268,6 +268,12 @@ pub enum LayoutReplacedKind {
     FormControl,
 }
 
+impl LayoutReplacedKind {
+    pub(crate) const fn is_live_paint_image(self) -> bool {
+        matches!(self, Self::Image | Self::Canvas | Self::Media)
+    }
+}
+
 /// Typed HTML inputs consumed by table construction and sizing.
 ///
 /// Values are normalized by the renderer adapter so the layout crate never
@@ -531,6 +537,8 @@ impl LayoutCssImageState {
 }
 
 pub(crate) type CssImageLookup<'a> = dyn Fn(&str) -> LayoutCssImageState + 'a;
+pub(crate) type LiveReplacedImageLookup<'a, N> =
+    dyn Fn(N, LayoutReplacedKind) -> Option<LayoutImageResource> + 'a;
 
 pub(crate) fn css_image_url(image: &style::values::computed::Image) -> Option<&str> {
     let style::values::generics::image::GenericImage::Url(url) = image else {

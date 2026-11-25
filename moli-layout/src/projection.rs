@@ -230,6 +230,19 @@ where
         }
         if paint.is_none() {
             world.release_paint_storage();
+        } else {
+            // Only layout-produced images, such as inline SVG, belong to
+            // the retained tree. Live inputs are sampled for each paint.
+            for layout_box in &mut world.boxes {
+                if layout_box.source.is_some()
+                    && layout_box
+                        .element_semantics()
+                        .and_then(|element| element.replaced)
+                        .is_some_and(crate::LayoutReplacedKind::is_live_paint_image)
+                {
+                    layout_box.replaced_image = None;
+                }
+            }
         }
         Box::new(RetainedLayoutWorld {
             world,
@@ -458,6 +471,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
         tree: &FrozenLayoutTree<N>,
         request: PaintCaptureRequest,
         css_images: &dyn Fn(N, &str) -> crate::LayoutCssImageState,
+        live_replaced_images: &crate::source::LiveReplacedImageLookup<'_, N>,
     ) -> Result<PaintSnapshot, LayoutError> {
         let paint = self
             .paint
@@ -492,6 +506,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
             scroll,
             &coordinates.spaces,
             &document_images,
+            live_replaced_images,
         );
 
         let mut embedded_paint = HashMap::new();
@@ -507,7 +522,10 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
                 base_background_color: crate::PaintColor::TRANSPARENT,
                 ..PaintCaptureRequest::viewport()
             };
-            embedded_paint.insert(*id, retained.paint(&frame.tree, child_request, css_images)?);
+            embedded_paint.insert(
+                *id,
+                retained.paint(&frame.tree, child_request, css_images, live_replaced_images)?,
+            );
         }
 
         let capture = request.resolve(tree.viewport, tree.viewport_scroll, tree.content_size)?;

@@ -62,6 +62,48 @@ impl<'a> NativeLayoutSourceView<'a> {
     }
 }
 
+pub(crate) fn native_replaced_image(
+    runtime: &PageScriptHost,
+    node: DomHandle,
+    kind: LayoutReplacedKind,
+) -> Option<LayoutImageResource> {
+    match kind {
+        LayoutReplacedKind::Image => {
+            let ready = runtime.ready_image_for_layout(node)?;
+            Some(LayoutImageResource {
+                intrinsic_width: ready.intrinsic_width,
+                intrinsic_height: ready.intrinsic_height,
+                pixels: ready.pixels,
+                svg: ready.svg,
+            })
+        }
+        LayoutReplacedKind::Canvas => {
+            let pixels = runtime.canvas_pixels_for_layout(node)?;
+            Some(LayoutImageResource {
+                intrinsic_width: pixels.width as f32,
+                intrinsic_height: pixels.height as f32,
+                pixels: Some(pixels),
+                svg: None,
+            })
+        }
+        #[cfg(all(
+            feature = "media-ext",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        LayoutReplacedKind::Media => {
+            let pixels = runtime.video_image(node)?;
+            Some(LayoutImageResource {
+                intrinsic_width: pixels.width as f32,
+                intrinsic_height: pixels.height as f32,
+                pixels: Some(pixels),
+                svg: None,
+            })
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn native_scroll_offset(host: &DomHost, node: DomHandle) -> moli_layout::LayoutPoint {
     host.node(node)
         .and_then(Node::as_element)
@@ -269,41 +311,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             .node(node)
             .and_then(Node::as_element)
             .map(|element| layout_element_semantics_for_source(self.host(), node, element))?;
-        match semantics.replaced {
-            Some(LayoutReplacedKind::Image) => {
-                let ready = self.runtime.ready_image_for_layout(node)?;
-                Some(LayoutImageResource {
-                    intrinsic_width: ready.intrinsic_width,
-                    intrinsic_height: ready.intrinsic_height,
-                    pixels: ready.pixels,
-                    svg: ready.svg,
-                })
-            }
-            Some(LayoutReplacedKind::Canvas) => {
-                let pixels = self.runtime.canvas_pixels_for_layout(node)?;
-                Some(LayoutImageResource {
-                    intrinsic_width: pixels.width as f32,
-                    intrinsic_height: pixels.height as f32,
-                    pixels: Some(pixels),
-                    svg: None,
-                })
-            }
-            #[cfg(all(
-                feature = "media-ext",
-                any(target_os = "linux", target_os = "macos"),
-                target_pointer_width = "64"
-            ))]
-            Some(LayoutReplacedKind::Media) => {
-                let pixels = self.runtime.video_image(node)?;
-                Some(LayoutImageResource {
-                    intrinsic_width: pixels.width as f32,
-                    intrinsic_height: pixels.height as f32,
-                    pixels: Some(pixels),
-                    svg: None,
-                })
-            }
-            _ => None,
-        }
+        native_replaced_image(self.runtime, node, semantics.replaced?)
     }
 
     fn css_image_state(&self, resolved_url: &str) -> LayoutCssImageState {
