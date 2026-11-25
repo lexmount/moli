@@ -61,26 +61,15 @@ pub(crate) fn apply_parser_created_null_registry_associations(
             );
         }
     }
-    let declarative_default_roots = host
+    for root in host
         .dom_host()
-        .snapshot_shadow_root_bindings()
-        .into_iter()
-        .filter(|binding| binding.declarative && !binding.init.null_custom_element_registry())
-        .filter_map(|binding| {
-            if host
-                .custom_element_registry_association(binding.root)
-                .is_some()
-            {
-                return None;
-            }
-            let owner_document = host.dom_host().owner_document_handle(binding.root)?;
-            Some((
-                binding.root,
-                host.effective_custom_element_registry_association(owner_document),
-            ))
-        })
-        .collect::<Vec<_>>();
-    for (root, association) in declarative_default_roots {
-        host.set_custom_element_registry_association(root, association);
+        .declarative_shadow_roots_with_document_registry()
+    {
+        if host.custom_element_registry_association(root).is_none()
+            && let Some(document) = host.dom_host().owner_document_handle(root)
+        {
+            let association = host.effective_custom_element_registry_association(document);
+            host.set_custom_element_registry_association(root, association);
+        }
     }
 }
