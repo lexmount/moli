@@ -1477,6 +1477,23 @@ impl PageScriptHost {
             })
     }
 
+    pub(crate) fn create_text_node_with_utf16(
+        &mut self,
+        document: Option<DomHandle>,
+        units: Vec<u16>,
+    ) -> DomHandle {
+        let value = string_from_utf16_units_lossy(&units);
+        let handle = match document {
+            Some(document) => self.create_text_node_for_document(document, &value),
+            None => self.create_text_node(&value),
+        };
+        if utf16_units_contain_unpaired_surrogate(&units) {
+            self.character_data_utf16_overrides
+                .insert(handle, U16String::from_vec(units));
+        }
+        handle
+    }
+
     pub(crate) fn set_character_data_utf16_units(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
