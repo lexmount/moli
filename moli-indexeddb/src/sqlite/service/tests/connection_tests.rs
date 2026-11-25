@@ -102,6 +102,7 @@ fn start(
         Command::Begin {
             transaction,
             mode: request.handle().mode(),
+            durability: crate::TransactionDurability::Relaxed,
             stores: request.handle().stores().into_iter().collect(),
             version: None,
             admission: Some(request.handle().clone()),
