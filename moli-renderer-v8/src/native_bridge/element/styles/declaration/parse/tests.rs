@@ -1365,6 +1365,7 @@ fn inline_state_pdb_queries_use_stored_block_when_it_wins_order() {
             style_entry("padding-left", "1px"),
         ],
         side_entries: vec![style_entry("padding", "var(--pad)")],
+        parse_context: None,
     };
     assert_eq!(
         inline_state_property_value_with_pdb(&partial_side_state, "padding-left").as_deref(),
@@ -1388,6 +1389,7 @@ fn inline_state_pdb_queries_use_stored_block_when_it_wins_order() {
             priority: true,
             ..style_entry("padding", "var(--pad)")
         }],
+        parse_context: None,
     };
     assert!(
         inline_state_property_value_with_pdb(&important_side_state, "padding-left").is_none(),
@@ -1435,6 +1437,7 @@ fn inline_pdb_mutation_empty_return_uses_mutated_block_entries() {
             style_entry("color", "red"),
         ],
         side_entries: vec![style_entry("--token", "value")],
+        parse_context: None,
     };
     let affected_names = style_property_affected_names_with_pdb("color")
         .expect("color affected names should come from PDB");

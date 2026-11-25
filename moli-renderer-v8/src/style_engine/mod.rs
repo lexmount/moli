@@ -124,6 +124,7 @@ pub(crate) use registered_properties::{
 #[cfg(test)]
 use scope::style_source_scope_for_mutation_effects;
 pub(crate) use source::adopted::AdoptedStyleSheetInstallation;
+use source::inline::InlineCssomDeclaration;
 pub(crate) use source::inline::InlineStyleCspState;
 pub(crate) use source::store::{
     OwnerStyleSheetSource, StylesheetFontFaceDescriptor, StyloStylesheetSource,
@@ -168,6 +169,7 @@ pub(crate) struct MoliStyleEngine {
     owner_stylesheet_source_documents: RefCell<HashMap<DomHandle, DomHandle>>,
     linked_stylesheet_owner_documents: RefCell<HashMap<DomHandle, DomHandle>>,
     inline_style_metadata_documents: RefCell<HashMap<DomHandle, DomHandle>>,
+    cssom_inline_styles: RefCell<HashMap<DomHandle, InlineCssomDeclaration>>,
 }
 
 impl Default for MoliStyleEngine {
@@ -192,6 +194,7 @@ impl MoliStyleEngine {
             owner_stylesheet_source_documents: RefCell::new(HashMap::new()),
             linked_stylesheet_owner_documents: RefCell::new(HashMap::new()),
             inline_style_metadata_documents: RefCell::new(HashMap::new()),
+            cssom_inline_styles: RefCell::new(HashMap::new()),
         }
     }
 

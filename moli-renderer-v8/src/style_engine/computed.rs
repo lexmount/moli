@@ -1358,15 +1358,13 @@ fn populate_inline_style_attribute_for_resolution(
         engine.dom_adapter.clear_inline_style_attribute(node);
         return;
     }
-    let Some(source) = world
-        .inline_style_metadata
-        .resolution_text(node)
-        .or_else(|| {
-            host.dom()
-                .find_attribute(node, "style")?
-                .shared_style_value()
-        })
-    else {
+    let override_text = world.inline_style_metadata.resolution_text(node);
+    let has_override = override_text.is_some();
+    let Some(source) = override_text.or_else(|| {
+        host.dom()
+            .find_attribute(node, "style")?
+            .shared_style_value()
+    }) else {
         engine.dom_adapter.clear_inline_style_attribute(node);
         return;
     };
@@ -1374,23 +1372,46 @@ fn populate_inline_style_attribute_for_resolution(
         .inline_style_metadata
         .base_url(node)
         .unwrap_or_else(|| style_resolution_base_url(host, document_url, node));
-    if engine.dom_adapter.inline_style_attribute_matches(
-        world.document,
-        node,
-        &source,
-        &base_url,
-        quirks_mode,
-    ) {
+    let typed = (!has_override).then(|| {
+        let mut sources = engine.cssom_inline_styles.borrow_mut();
+        let inline = sources.get_mut(&node)?;
+        let Some(context) = inline.state.parse_context.as_ref() else {
+            tracing::trace!(target: "moli::inline_style", reason = "compatibility", "using text for inline style");
+            return None;
+        };
+        if !context.matches(world.document, &base_url, quirks_mode)
+            || !inline.source.as_ref().is_some_and(|text| std::sync::Arc::ptr_eq(text, &source))
+        {
+            tracing::trace!(target: "moli::inline_style", reason = "source_or_context_changed", "using text for inline style");
+            return None;
+        }
+        Some((context.url_data.clone(), inline.state.block.publish()))
+    }).flatten();
+    if typed.is_none()
+        && engine.dom_adapter.inline_style_attribute_matches(
+            world.document,
+            node,
+            &source,
+            &base_url,
+            quirks_mode,
+        )
+    {
         return;
     }
-    let url_data = UrlExtraData::from(base_url);
-    let declarations = parse_style_attribute(
-        source.as_str(),
-        &url_data,
-        None,
-        quirks_mode,
-        CssRuleType::Style,
-    );
+    let (url_data, declarations) = typed.unwrap_or_else(|| {
+        let url_data = UrlExtraData::from(base_url);
+        let declarations = parse_style_attribute(
+            source.as_str(),
+            &url_data,
+            None,
+            quirks_mode,
+            CssRuleType::Style,
+        );
+        (
+            url_data,
+            ServoArc::new(engine.dom_adapter.shared_lock().wrap(declarations)),
+        )
+    });
     engine.dom_adapter.set_inline_style_attribute(
         node,
         InlineStyleSnapshot {
@@ -1398,7 +1419,7 @@ fn populate_inline_style_attribute_for_resolution(
             source,
             url_data,
             quirks_mode,
-            declarations: ServoArc::new(engine.dom_adapter.shared_lock().wrap(declarations)),
+            declarations,
         },
     );
 }

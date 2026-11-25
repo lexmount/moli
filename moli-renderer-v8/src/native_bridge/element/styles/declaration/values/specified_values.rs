@@ -585,7 +585,7 @@ pub(super) fn inline_style_property_value_for_inline_style(
 ) -> Option<String> {
     let property = canonical_style_property_name(property);
     if let Some(state) = runtime.element_inline_style_declaration_state(handle)
-        && let Some(value) = inline_state_property_value_with_pdb(state, &property)
+        && let Some(value) = inline_state_property_value_with_pdb(&state, &property)
     {
         return Some(normalize_touch_action_serialization(&property, &value));
     }
@@ -1271,7 +1271,7 @@ pub(in crate::native_bridge::element::styles) fn style_property_value_with_viewp
         );
     }
     if let Some(state) = runtime.element_inline_style_declaration_state(handle)
-        && let Some(value) = inline_state_property_value_with_pdb(state, &property)
+        && let Some(value) = inline_state_property_value_with_pdb(&state, &property)
     {
         return normalize_specified_cssom_value(&property, value);
     }

@@ -8,7 +8,6 @@ use crate::{
             SharedStorageBucketStore, SharedWebStorageStore, WeakIndexedDbManager,
             new_shared_storage_bucket_store, new_shared_web_storage_store,
         },
-        css_style::CssInlineStyleDeclarationState,
         custom_elements::{
             CustomElementReactionCoordinator, CustomElementRegistryAssociation,
             CustomElementRegistryKey, CustomElementStore, RegistryAssociationRetarget,
@@ -1082,7 +1081,6 @@ pub(crate) struct PageScriptHost {
     disconnected_shadow_roots: HashSet<DomHandle>,
     live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry,
     style_engine: MoliStyleEngine,
-    inline_style_declarations: HashMap<DomHandle, CssInlineStyleDeclarationState>,
     css_module_texts_by_url: HashMap<String, String>,
     css_module_failed_urls: HashSet<String>,
     popover_focus_restore_targets: HashMap<DomHandle, Option<DomHandle>>,

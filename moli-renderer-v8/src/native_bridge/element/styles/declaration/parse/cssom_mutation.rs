@@ -17,6 +17,7 @@ use super::pdb_compat::{
     style_property_mutation_cleanup_names_with_pdb,
 };
 use super::*;
+use crate::css_style::InlineStyleParseContext;
 
 pub(crate) fn parse_inline_css_text_with_base(
     style_text: &str,
@@ -140,6 +141,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
     };
     let affected_names = style_property_mutation_affected_names_with_pdb(name)?;
     let current = cached
+        .as_deref()
         .or(initial.as_ref())
         .expect("inline style declaration state");
     if current.entries.is_empty() && current.side_entries.is_empty() && name != "all" {
@@ -148,7 +150,35 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             && !cssom_style_property_uses_preferred_pdb_supplemental_entries(
                 name, value, priority,
             ))
-        .then(|| moli_css_parse::ParsedCssomProperty::parse(name, value, priority))
+        .then(|| {
+            let document = runtime.dom_host().owner_document_handle(handle)?;
+            let base = inline_base_url
+                .clone()
+                .unwrap_or_else(|| runtime.element_inline_style_base_url(handle));
+            // CSSOM parses in standards mode. Rendering uses the document mode
+            // and may consume this block when both contexts agree.
+            let mode = QuirksMode::NoQuirks;
+            let matching_context = current
+                .parse_context
+                .as_ref()
+                .filter(|previous| previous.matches(document, &base, mode));
+            let publishable = matching_context.is_some() || current.block.is_empty();
+            let context = matching_context
+                .cloned()
+                .unwrap_or_else(|| InlineStyleParseContext {
+                    document,
+                    url_data: UrlExtraData::from(base),
+                    quirks_mode: mode,
+                });
+            moli_css_parse::ParsedCssomProperty::parse(
+                name,
+                value,
+                priority,
+                &context.url_data,
+                mode,
+            )
+            .map(|declarations| (declarations, publishable.then_some(context)))
+        })
         .flatten();
         if value.is_empty() || parsed.is_some() {
             if value.is_empty()
@@ -160,13 +190,14 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             }
             // Parsing is complete. Move the block out until publication so no
             // borrow of the declaration store spans an author callback.
+            drop(cached);
             let had_cached_state = initial.is_none();
             let mut state = initial.unwrap_or_else(|| {
                 unsafe { &mut *runtime_ptr }
                     .take_element_inline_style_declaration_state(handle)
                     .expect("cached inline style declaration state")
             });
-            if let Some(parsed) = parsed {
+            if let Some((parsed, context)) = parsed {
                 let cleanup_names = style_property_mutation_cleanup_names_with_pdb(name);
                 let compare_longhand = cleanup_names.is_empty() && !update_inline_style_base;
                 if !parsed.apply(&mut state.block, compare_longhand) {
@@ -176,6 +207,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                     }
                     return Some(false);
                 }
+                state.parse_context = context;
                 for property in cleanup_names {
                     state.block.remove_property(&property);
                 }
@@ -195,8 +227,10 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         }
     }
     let mut state = initial
-        .or_else(|| cached.cloned())
+        .or_else(|| cached.as_deref().cloned())
         .expect("compatibility inline style declaration state");
+    drop(cached);
+    state.parse_context = None;
     if inline_state_has_unpreservable_side_entries_for_property(&state, name, &affected_names) {
         return None;
     }

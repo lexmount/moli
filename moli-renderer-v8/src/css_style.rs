@@ -106,6 +106,27 @@ pub(crate) struct CssInlineStyleDeclarationState {
     pub(crate) block: moli_css_parse::CssDeclarationBlock,
     pub(crate) entries: Vec<CssStyleEntry>,
     pub(crate) side_entries: Vec<CssStyleEntry>,
+    pub(crate) parse_context: Option<InlineStyleParseContext>,
+}
+
+#[derive(Clone)]
+pub(crate) struct InlineStyleParseContext {
+    pub(crate) document: crate::document_runtime::DomHandle,
+    pub(crate) url_data: style::stylesheets::UrlExtraData,
+    pub(crate) quirks_mode: style::context::QuirksMode,
+}
+
+impl InlineStyleParseContext {
+    pub(crate) fn matches(
+        &self,
+        document: crate::document_runtime::DomHandle,
+        base: &url::Url,
+        quirks_mode: style::context::QuirksMode,
+    ) -> bool {
+        self.document == document
+            && self.url_data.0.as_ref() == base
+            && self.quirks_mode == quirks_mode
+    }
 }
 
 impl CssInlineStyleDeclarationState {
@@ -2967,6 +2988,7 @@ mod tests {
                 style_entry("display", "flex"),
             ],
             side_entries: vec![style_entry("-webkit-transform-origin", "20px 30px")],
+            parse_context: None,
         };
 
         assert_eq!(
@@ -3003,6 +3025,7 @@ mod tests {
                 style_entry("height", "0"),
             ],
             side_entries: vec![style_entry("-webkit-transform-origin", "20px 30px")],
+            parse_context: None,
         };
 
         assert_eq!(
@@ -3041,6 +3064,7 @@ mod tests {
                 style_entry("-webkit-transform-origin", "20px 30px"),
             ],
             side_entries: vec![style_entry("-webkit-transform-origin", "20px 30px")],
+            parse_context: None,
         };
 
         let entries = state
@@ -3090,6 +3114,7 @@ mod tests {
             block: moli_css_parse::parse_declaration_block("display: block; opacity: 0.5;"),
             entries: vec![style_entry("display", "inline")],
             side_entries: Vec::new(),
+            parse_context: None,
         };
 
         state.refresh_pdb_entries();
@@ -3116,6 +3141,7 @@ mod tests {
             block: moli_css_parse::parse_declaration_block("all: inherit;"),
             entries: vec![style_entry("all", "inherit")],
             side_entries: Vec::new(),
+            parse_context: None,
         };
 
         state.refresh_pdb_entries();

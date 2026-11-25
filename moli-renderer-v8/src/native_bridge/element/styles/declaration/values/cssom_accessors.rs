@@ -9,7 +9,7 @@ pub(in crate::native_bridge::element::styles) fn style_property_priority(
         return String::new();
     };
     if let Some(state) = runtime.element_inline_style_declaration_state(handle)
-        && let Some(priority) = inline_state_property_priority_with_pdb(state, &property)
+        && let Some(priority) = inline_state_property_priority_with_pdb(&state, &property)
     {
         return if priority {
             "important".to_owned()

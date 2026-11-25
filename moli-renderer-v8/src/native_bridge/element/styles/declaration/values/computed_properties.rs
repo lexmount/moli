@@ -2208,7 +2208,7 @@ fn inline_longhand_property_value_for_shorthand(
 ) -> Option<String> {
     let property = canonical_style_property_name(property);
     if let Some(state) = runtime.element_inline_style_declaration_state(handle)
-        && let Some(value) = inline_state_property_value_with_pdb(state, &property)
+        && let Some(value) = inline_state_property_value_with_pdb(&state, &property)
         && !value.is_empty()
     {
         return Some(value);
@@ -2225,7 +2225,7 @@ fn inline_longhand_property_priority_for_shorthand(
 ) -> Option<bool> {
     let property = canonical_style_property_name(property);
     if let Some(state) = runtime.element_inline_style_declaration_state(handle)
-        && let Some(priority) = inline_state_property_priority_with_pdb(state, &property)
+        && let Some(priority) = inline_state_property_priority_with_pdb(&state, &property)
     {
         return Some(priority);
     }

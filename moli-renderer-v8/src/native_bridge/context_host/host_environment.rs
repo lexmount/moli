@@ -2735,8 +2735,8 @@ impl PageScriptHost {
     pub(crate) fn element_inline_style_declaration_state(
         &self,
         handle: DomHandle,
-    ) -> Option<&crate::css_style::CssInlineStyleDeclarationState> {
-        self.inline_style_declarations.get(&handle)
+    ) -> Option<std::cell::Ref<'_, crate::css_style::CssInlineStyleDeclarationState>> {
+        self.style_engine.cssom_inline_style(handle)
     }
 
     pub(crate) fn set_element_inline_style_declaration_state(
@@ -2744,18 +2744,24 @@ impl PageScriptHost {
         handle: DomHandle,
         state: crate::css_style::CssInlineStyleDeclarationState,
     ) {
-        self.inline_style_declarations.insert(handle, state);
+        let source = self
+            .dom_host()
+            .dom()
+            .find_attribute(handle, "style")
+            .and_then(|attribute| attribute.shared_style_value());
+        self.style_engine
+            .set_cssom_inline_style(handle, state, source);
     }
 
     pub(crate) fn take_element_inline_style_declaration_state(
         &mut self,
         handle: DomHandle,
     ) -> Option<crate::css_style::CssInlineStyleDeclarationState> {
-        self.inline_style_declarations.remove(&handle)
+        self.style_engine.take_cssom_inline_style(handle)
     }
 
     pub(crate) fn clear_element_inline_style_declaration_state(&mut self, handle: DomHandle) {
-        self.inline_style_declarations.remove(&handle);
+        self.style_engine.take_cssom_inline_style(handle);
         self.clear_element_inline_style_resolution_text(handle);
     }
 
