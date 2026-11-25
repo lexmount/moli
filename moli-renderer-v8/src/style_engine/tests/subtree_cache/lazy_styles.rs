@@ -528,11 +528,12 @@ fn inherited_ancestor_change_lazily_refreshes_descendant_style() {
     );
     assert!(
         !element_style_is_dirty_for_test(&engine, &host, descendant),
-        "the descendant is represented by the lazy dirty-root generation"
+        "inherited work is computed when the dirty ancestor is read"
     );
-    assert!(
-        engine.retained_style_invalidation_root_count_for_document_for_test(document) > 0,
-        "the finalized invalidation must publish a lazy subtree root"
+    assert_eq!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(document),
+        0,
+        "exact selector invalidation is carried by the native hint"
     );
 
     assert_eq!(
@@ -823,8 +824,8 @@ fn lazy_child_restyle_keeps_earlier_inheritance_and_stops_at_an_override() {
 }
 
 #[test]
-fn descendant_restyle_history_limit_preserves_deferred_inheritance() {
-    use crate::style_engine::lazy_invalidation::MAX_RETAINED_DESCENDANT_RESTYLES;
+fn branch_requirement_budget_preserves_deferred_inheritance() {
+    use crate::style_engine::style_paths::MAX_CACHED_BRANCH_REQUIREMENTS;
 
     let mut host = test_host();
     let document = host.document_handle();
@@ -832,7 +833,7 @@ fn descendant_restyle_history_limit_preserves_deferred_inheritance() {
     let unrelated = host.create_element("aside");
     assert!(host.append_child(document, parent));
     assert!(host.append_child(document, unrelated));
-    let branches = (0..MAX_RETAINED_DESCENDANT_RESTYLES + 1)
+    let branches = (0..MAX_CACHED_BRANCH_REQUIREMENTS + 1)
         .map(|_| {
             let handle = host.create_element("div");
             assert!(host.append_child(parent, handle));
@@ -864,26 +865,32 @@ fn descendant_restyle_history_limit_preserves_deferred_inheritance() {
     }
 
     let world = engine.world_for_document(document);
-    let invalidation = &world.document_state.lazy_invalidation_roots;
+    let invalidation = &world.document_state.style_paths;
     let before = invalidation.generation();
     assert!(host.set_attribute(parent, "class", "blue"));
-    invalidation.record_targets(&host, document, [(parent, StyleInvalidationScope::Element)]);
+    assert!(engine.dom_adapter.mark_element_style_dirty(
+        parent,
+        style::invalidation::element::restyle_hints::RestyleHint::RESTYLE_SELF,
+    ));
+    world.document_state.record_style_targets(
+        &host,
+        document,
+        [(parent, StyleInvalidationScope::Element)],
+    );
     assert_eq!(color(&host, unrelated).as_deref(), green);
     assert!(invalidation.checked_path(unrelated).is_some());
-    assert_eq!(
-        invalidation.targets_after(before),
-        Some(vec![(parent, StyleInvalidationScope::Element)])
-    );
+    assert!(invalidation.can_compare_after(before));
+    assert_eq!(invalidation.branch_requirement_count(), 0);
 
     let mut peak = 0;
     for branch in branches {
         assert_eq!(color(&host, branch).as_deref(), blue);
-        peak = peak.max(invalidation.descendant_restyle_count());
-        assert!(peak <= MAX_RETAINED_DESCENDANT_RESTYLES);
+        peak = peak.max(invalidation.branch_requirement_count());
+        assert!(peak <= MAX_CACHED_BRANCH_REQUIREMENTS);
     }
-    assert_eq!(peak, MAX_RETAINED_DESCENDANT_RESTYLES);
-    assert!(invalidation.targets_after(before).is_none());
-    assert!(invalidation.checked_path(unrelated).is_none());
+    assert_eq!(peak, MAX_CACHED_BRANCH_REQUIREMENTS);
+    assert!(!invalidation.can_compare_after(before));
+    assert!(invalidation.checked_path(unrelated).is_some());
     assert_eq!(color(&host, deferred).as_deref(), blue);
     assert_eq!(color(&host, unrelated).as_deref(), green);
 }

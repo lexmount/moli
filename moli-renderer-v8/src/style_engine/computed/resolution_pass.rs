@@ -201,23 +201,18 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
             return None;
         }
         self.prepare(handle)?;
-        let invalidation = &state.lazy_invalidation_roots;
+        let invalidation = &state.style_paths;
         // Preparing a target can coalesce the history this traversal read.
-        if !invalidation.can_replay_after(after)
+        if !invalidation.can_compare_after(after)
             || !state.screen_style_target_has_supported_damage(handle, supported)
         {
             return None;
         }
-        let restyles = invalidation.descendant_restyles(handle);
-        Some(if restyles.subtree > after {
-            RestyleHint::restyle_subtree()
-        } else if restyles.children > after {
-            RestyleHint::RECASCADE_SELF
-        } else if restyles.inheriting_reset > after {
-            RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE
-        } else {
-            RestyleHint::empty()
-        })
+        Some(
+            invalidation
+                .branch_requirements(handle)
+                .child_hint_after(after),
+        )
     }
 
     pub(crate) fn may_inherit_reset_style(&self, handle: DomHandle) -> bool {
@@ -321,12 +316,12 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
             node_wrappers = self.context.adapter.bound_node_count(),
             validated_elements = self.validations,
             resolved_elements = self.resolutions,
-            retained_descendant_restyles = self
+            cached_branch_requirements = self
                 .context
                 .world
                 .document_state
-                .lazy_invalidation_roots
-                .descendant_restyle_count(),
+                .style_paths
+                .branch_requirement_count(),
         );
     }
 
@@ -348,7 +343,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         let element = self.context.adapter.element(self.host, handle)?;
 
         let world = self.context.world;
-        let invalidation = &world.document_state.lazy_invalidation_roots;
+        let invalidation = &world.document_state.style_paths;
 
         let mut current = Some(element);
         let mut parent = None;
@@ -374,7 +369,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                     (
                         path.depth + 1,
                         path.subtree_generation,
-                        invalidation.descendant_restyles(parent),
+                        invalidation.branch_requirements(parent),
                     )
                 });
             let mut subtree_generation =
@@ -396,18 +391,12 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                         .flags
                         .contains(ComputedValueFlags::INHERITS_RESET_STYLE)
                 });
-            let element_generation = invalidation.element_generation(handle);
-            let child_requirement = child_restyles.child_requirement(inherits_reset);
-            let required_generation = subtree_generation
-                .max(element_generation)
-                .max(child_requirement);
+            let last_observation = invalidation.last_observation(handle);
             let mut hint = data.as_ref().map_or(RestyleHint::empty(), |data| data.hint);
-            if !invalidation.element_is_current(handle, subtree_generation)
-                || (hint.is_empty() && !invalidation.element_is_current(handle, element_generation))
-            {
+            if subtree_generation > last_observation {
                 hint.insert(RestyleHint::RESTYLE_SELF);
             }
-            if !invalidation.element_is_current(handle, child_requirement) {
+            if child_restyles.child_requirement(inherits_reset) > last_observation {
                 hint.insert(RestyleHint::RECASCADE_SELF);
             }
             let has_styles = data.is_some_and(|data| data.has_styles());
@@ -443,22 +432,13 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                 };
                 record_screen_restyle(world, element, &previous, &data, child_hint);
                 data.clear_restyle_flags_and_damage();
-                invalidation.record_descendant_restyle(
-                    handle,
-                    child_hint,
-                    required_generation,
-                    subtree_generation,
-                );
+                if previous.get_primary().is_some() {
+                    invalidation.record_child_requirements(handle, child_hint, subtree_generation);
+                }
             }
             self.validations += 1;
-            subtree_generation =
-                subtree_generation.max(invalidation.descendant_restyles(handle).subtree);
-            let path = invalidation.mark_path_checked(
-                handle,
-                required_generation,
-                subtree_generation,
-                depth,
-            );
+            subtree_generation = subtree_generation.max(invalidation.subtree_generation(handle));
+            let path = invalidation.mark_path_checked(handle, subtree_generation, depth);
             parent = Some((handle, path));
         }
         Some(element)

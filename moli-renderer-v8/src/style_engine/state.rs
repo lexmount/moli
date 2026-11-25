@@ -12,17 +12,17 @@ use style::{
     stylist::{CascadeData, Stylist},
 };
 
-use crate::document_runtime::DomHandle;
+use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::{
     CssCustomPropertyRegistrationRecord, StyleTreeScopeVersions, StyleViewport,
     StyloStyleEnvironment,
     active_stylesheets::ActiveStylesheetCollection,
-    lazy_invalidation::{LazyStyleInvalidationRoots, StyleInvalidationScope},
     shadow_scopes::ShadowScopeStyles,
     source_dirty::{StyleSourceDirtyReason, StyleSourceDirtyScopeSnapshot, StyleSourceDirtyScopes},
     source_id::{StyleScopeId, StyleSourceId},
     source_key::StyleSourceSetKey,
+    style_paths::{StyleInvalidationScope, StylePathCache},
     stylesheet_resources::{
         StylesheetResourceGeneration, StylesheetResourceManifest, StylesheetResourceSnapshot,
     },
@@ -81,12 +81,15 @@ pub(super) struct StyleDocumentGenerationSnapshot {
     pub(super) target_context_epoch: u64,
 }
 
+const MAX_PENDING_SCREEN_RESTYLES: usize = 1_024;
+
 #[derive(Default)]
 pub(super) enum ScreenStyleInvalidation {
     #[default]
     Clean,
     Pending {
         after: u64,
+        targets: IndexMap<DomHandle, StyleInvalidationScope>,
         damage: IndexMap<DomHandle, ServoRestyleDamage>,
     },
     Full,
@@ -128,7 +131,7 @@ pub(super) struct StyleDocumentState {
     screen_style_comparison_generation: Cell<u64>,
     screen_style_coverage: RefCell<Option<ScreenStyleCoverage>>,
     pub(super) screen_style_invalidation: RefCell<ScreenStyleInvalidation>,
-    pub(super) lazy_invalidation_roots: LazyStyleInvalidationRoots,
+    pub(super) style_paths: StylePathCache,
     #[cfg(debug_assertions)]
     completed_style_observation: RefCell<Option<CompletedStyleObservation>>,
     #[cfg(all(test, debug_assertions))]
@@ -157,7 +160,7 @@ impl StyleDocumentState {
             screen_style_comparison_generation: Cell::new(0),
             screen_style_coverage: RefCell::default(),
             screen_style_invalidation: RefCell::default(),
-            lazy_invalidation_roots: LazyStyleInvalidationRoots::default(),
+            style_paths: StylePathCache::default(),
             #[cfg(debug_assertions)]
             completed_style_observation: RefCell::new(None),
             #[cfg(all(test, debug_assertions))]
@@ -208,7 +211,7 @@ impl StyleDocumentState {
                 return;
             }
             if matches!(*change, ScreenStyleInvalidation::Clean) {
-                *change = self.pending_screen_style_invalidation();
+                *change = Self::pending_screen_style_invalidation(self.style_paths.generation());
             }
         }
     }
@@ -220,10 +223,49 @@ impl StyleDocumentState {
         }
     }
 
-    fn pending_screen_style_invalidation(&self) -> ScreenStyleInvalidation {
+    fn pending_screen_style_invalidation(after: u64) -> ScreenStyleInvalidation {
         ScreenStyleInvalidation::Pending {
-            after: self.lazy_invalidation_roots.generation(),
+            after,
+            targets: IndexMap::new(),
             damage: IndexMap::new(),
+        }
+    }
+
+    pub(super) fn record_style_targets(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+        targets: impl IntoIterator<Item = (DomHandle, StyleInvalidationScope)>,
+    ) {
+        let mut targets = targets
+            .into_iter()
+            .filter(|(handle, _)| {
+                host.node(*handle).is_some()
+                    && (*handle == document
+                        || host.owner_document_handle(*handle) == Some(document))
+            })
+            .peekable();
+        if targets.peek().is_none() {
+            return;
+        }
+        let mut screen = self.screen_style_invalidation.borrow_mut();
+        self.style_paths.invalidate_paths();
+
+        for (handle, scope) in targets {
+            if scope == StyleInvalidationScope::Subtree {
+                self.style_paths.invalidate_subtree(handle);
+            }
+            // Temporary layout inputs also invalidate cached style paths.
+            // Only collect them for screen comparison when screen work is pending.
+            if let ScreenStyleInvalidation::Pending { targets, .. } = &mut *screen
+                && host.is_connected(handle)
+            {
+                let target = targets.entry(handle).or_insert(scope);
+                *target = (*target).max(scope);
+                if targets.len() > MAX_PENDING_SCREEN_RESTYLES {
+                    *screen = ScreenStyleInvalidation::Full;
+                }
+            }
         }
     }
 
@@ -249,11 +291,11 @@ impl StyleDocumentState {
             return;
         }
         if matches!(*change, ScreenStyleInvalidation::Clean) {
-            *change = self.pending_screen_style_invalidation();
+            *change = Self::pending_screen_style_invalidation(self.style_paths.generation());
         }
         if let ScreenStyleInvalidation::Pending { damage, .. } = &mut *change {
             *damage.entry(handle).or_default() |= observed;
-            if damage.len() > super::lazy_invalidation::MAX_RETAINED_INVALIDATION_ROOTS {
+            if damage.len() > MAX_PENDING_SCREEN_RESTYLES {
                 *change = ScreenStyleInvalidation::Full;
             }
         }
@@ -261,12 +303,19 @@ impl StyleDocumentState {
 
     pub(super) fn finish_screen_style_invalidation(&self) {
         let mut change = self.screen_style_invalidation.borrow_mut();
-        let ScreenStyleInvalidation::Pending { after, damage } = &*change else {
+        let ScreenStyleInvalidation::Pending {
+            after,
+            targets,
+            damage,
+        } = &*change
+        else {
             return;
         };
-        if !self.screen_style_dependencies_are_current() {
+        if !self.screen_style_dependencies_are_current()
+            || !self.style_paths.can_compare_after(*after)
+        {
             *change = ScreenStyleInvalidation::Full;
-        } else if damage.is_empty() && *after == self.lazy_invalidation_roots.generation() {
+        } else if damage.is_empty() && targets.is_empty() {
             *change = ScreenStyleInvalidation::Clean;
         }
     }
@@ -429,7 +478,7 @@ impl StyleDocumentState {
     pub(super) fn clear_retained_style_system(&self) {
         self.invalidate_screen_style_comparisons();
         self.retained_style_system.borrow_mut().take();
-        self.lazy_invalidation_roots.clear();
+        self.style_paths.clear();
         self.clear_source_dirty_scopes();
         self.clear_invalidation_clear_all_fallback_reasons();
         self.clear_selector_caches();

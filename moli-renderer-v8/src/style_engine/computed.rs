@@ -789,7 +789,7 @@ fn with_resolved_style_in_current_world<R>(
     callback: impl FnOnce(&ServoArc<ComputedValues>, Option<&ElementStyles>) -> Option<R>,
 ) -> Option<R> {
     let computed_cache_generation = world.document_state.computed_cache_generation();
-    let invalidation = &world.document_state.lazy_invalidation_roots;
+    let invalidation = &world.document_state.style_paths;
     let path_checked =
         invalidation.generation() == 0 || invalidation.checked_path(handle).is_some();
     if path_checked && host.owner_document_handle(handle) == Some(world.document) {

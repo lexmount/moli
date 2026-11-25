@@ -37,7 +37,6 @@ mod drain;
 mod eligibility;
 mod fallback;
 mod invalidation;
-mod lazy_invalidation;
 pub(crate) mod media_list;
 mod mutation_effect;
 mod outcome;
@@ -49,6 +48,7 @@ mod query;
 mod registered_properties;
 mod request;
 mod retained;
+mod style_paths;
 pub(crate) use stylesheet::{
     NativeStylesheetFontFaceProjection, NativeStylesheetFontFaceRuleProjection,
     StylesheetFontFaceProjection, StylesheetFontFaceRuleProjection, initial_font_size_px,
@@ -80,11 +80,11 @@ mod source_owner_text;
 mod source_record;
 mod source_scope_plan;
 mod state;
-pub(crate) use lazy_invalidation::StyleInvalidationScope;
 #[cfg(debug_assertions)]
 pub(crate) use state::ComputedStyleObservationInputEpochs;
 pub(crate) use state::ScreenStyleCoverage;
 use state::{ScreenStyleChanges, ScreenStyleInvalidation};
+pub(crate) use style_paths::StyleInvalidationScope;
 mod stylesheet;
 mod stylesheet_resources;
 mod target_plan;
@@ -290,15 +290,18 @@ impl MoliStyleEngine {
         state.finish_screen_style_invalidation();
         match &*state.screen_style_invalidation.borrow() {
             ScreenStyleInvalidation::Clean => Some(ScreenStyleChanges::default()),
-            ScreenStyleInvalidation::Pending { after, damage } => Some(ScreenStyleChanges {
+            ScreenStyleInvalidation::Pending {
+                after,
+                targets,
+                damage,
+            } => Some(ScreenStyleChanges {
                 after: *after,
-                targets: state
-                    .lazy_invalidation_roots
-                    .targets_after(*after)?
-                    .into_iter()
-                    .filter(|&(handle, _)| {
-                        host.is_connected(handle)
-                            && host.owner_document_handle(handle) == Some(document)
+                targets: targets
+                    .iter()
+                    .filter_map(|(&handle, &scope)| {
+                        (host.is_connected(handle)
+                            && host.owner_document_handle(handle) == Some(document))
+                        .then_some((handle, scope))
                     })
                     .collect(),
                 observed_damage: damage
@@ -577,7 +580,7 @@ impl MoliStyleEngine {
     ) -> usize {
         self.world_for_document(document)
             .document_state
-            .lazy_invalidation_roots
+            .style_paths
             .root_count()
     }
 
@@ -588,7 +591,7 @@ impl MoliStyleEngine {
     ) -> u64 {
         self.world_for_document(document)
             .document_state
-            .lazy_invalidation_roots
+            .style_paths
             .generation()
     }
 
@@ -599,7 +602,7 @@ impl MoliStyleEngine {
     ) -> u64 {
         self.world_for_document(document)
             .document_state
-            .lazy_invalidation_roots
+            .style_paths
             .path_node_visit_count()
     }
 
@@ -884,9 +887,9 @@ impl MoliStyleEngine {
             if host.is_connected(handle) {
                 world.document_state.invalidate_screen_style_comparisons();
             }
-            let invalidation = &world.document_state.lazy_invalidation_roots;
+            let invalidation = &world.document_state.style_paths;
             if invalidation.forget_checked_path(handle) {
-                invalidation.record_targets(
+                world.document_state.record_style_targets(
                     host,
                     world.document,
                     [(handle, StyleInvalidationScope::Subtree)],
