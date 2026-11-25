@@ -160,10 +160,16 @@ impl PageScriptHost {
             "layout policy can change only at an idle realtime boundary"
         );
         if !policy.uses_real_layout() {
-            self.document_layout_state.get_mut().clear_latest_layout();
+            self.document_layout_state
+                .borrow_mut()
+                .clear_latest_layout();
         }
         if self.layout_policy != policy {
-            self.document_layout_state.get_mut().retained_layout = None;
+            drop(
+                self.document_layout_state
+                    .borrow_mut()
+                    .take_retained_layout(),
+            );
             self.realtime_layout_state = policy.is_realtime().then(Box::default);
         }
         self.layout_policy = policy;
@@ -408,7 +414,7 @@ impl PageScriptHost {
         let pass = self
             .build_layout_pass_for_document(document, request)?
             .ok_or(LayoutError::NoLayoutRoot)?;
-        self.publish_layout_pass_for_document(document, pass);
+        self.publish_layout_pass_for_document(document, pass, None);
         Ok(())
     }
 
@@ -467,8 +473,7 @@ impl PageScriptHost {
     pub(crate) fn has_retained_layout_for_test(&self) -> bool {
         self.document_layout_state
             .borrow()
-            .retained_layout
-            .is_some()
+            .has_reusable_layout_for_test()
     }
 
     pub(crate) fn build_layout_pass_for_document_in_environment(
@@ -498,7 +503,7 @@ impl PageScriptHost {
         let (pass, feedback) = {
             let mut state = self.document_layout_state.borrow_mut();
             let retained = if realtime_screen {
-                state.retained_layout.take()
+                state.take_retained_layout()
             } else {
                 None
             };
@@ -573,6 +578,7 @@ impl PageScriptHost {
         &self,
         document: DomHandle,
         mut pass: LayoutPassResult<DomHandle>,
+        paint_generation: Option<u64>,
     ) {
         if let Some(state) = &self.realtime_layout_state {
             state.clear_publication();
@@ -635,7 +641,6 @@ impl PageScriptHost {
         self.note_wheel_scroll_target_layout(document, &tree);
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
-            state.retained_layout = retained;
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
             state.update_frame_viewports(frame_viewports)
         };
@@ -648,6 +653,8 @@ impl PageScriptHost {
             .publish_latest_layout(
                 document,
                 tree,
+                retained,
+                paint_generation,
                 #[cfg(feature = "devtools")]
                 frames.geometry,
             );

@@ -31,12 +31,16 @@ struct CachedInferredFrameStyleViewport {
     viewport: StyleViewport,
 }
 
+struct RetainedLayout {
+    world: Box<RetainedLayoutWorld<DomHandle>>,
+    paint_generation: Option<u64>,
+}
+
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
 ///
 /// `ScriptVm` outlives `document.open()`, so the main-document owner
 /// transition replaces this value explicitly. This state owns the latest
-/// frozen layout tree and document font/text services. Active Realtime
-/// screencasts hold their paint inputs in the Realtime publication state.
+/// frozen layout tree, retained working tree, and document font/text services.
 /// Embedded documents receive separate Parley services so a main-document
 /// `@font-face` registration cannot leak across the browsing-context boundary.
 /// The single snapshot slot records the exact root Document it was built for;
@@ -56,9 +60,9 @@ pub(super) struct DocumentLayoutState {
     embedded_web_fonts: Option<Box<HashMap<DomHandle, DocumentWebFontState>>>,
     visual_state_generation: u64,
     latest_layout: LatestLayoutTreeCache,
-    /// Mutable input for the next Realtime screen pass. The frozen tree
-    /// above remains available while a new pass owns this working tree.
-    pub(super) retained_layout: Option<Box<RetainedLayoutWorld<DomHandle>>>,
+    /// The working tree for this publication and the next Realtime pass.
+    /// The frozen tree remains available while the next pass owns the world.
+    retained_layout: Option<RetainedLayout>,
     /// Last used content viewport published by each live iframe owner's
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
     /// separate from the single latest-tree slot because a later fresh layout
@@ -226,14 +230,68 @@ impl DocumentLayoutState {
         &mut self,
         document: DomHandle,
         tree: FrozenLayoutTree<DomHandle>,
+        retained: Option<Box<RetainedLayoutWorld<DomHandle>>>,
+        paint_generation: Option<u64>,
         #[cfg(feature = "devtools")] frame_geometry: PublishedFrameGeometry,
     ) {
+        self.retained_layout = retained.map(|world| RetainedLayout {
+            paint_generation: paint_generation.filter(|_| world.has_paint()),
+            world,
+        });
+        if paint_generation.is_none() {
+            self.discard_screen_paint();
+        }
         self.latest_layout.publish(
             document,
             tree,
             #[cfg(feature = "devtools")]
             frame_geometry,
         );
+    }
+
+    pub(super) fn take_retained_layout(&mut self) -> Option<Box<RetainedLayoutWorld<DomHandle>>> {
+        self.retained_layout.take().map(|retained| retained.world)
+    }
+
+    pub(super) fn discard_screen_paint(&mut self) {
+        if let Some(retained) = &mut self.retained_layout {
+            if retained.world.can_reuse_layout() {
+                retained.world.discard_paint();
+                retained.paint_generation = None;
+            } else {
+                self.retained_layout = None;
+            }
+        }
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(super) fn retained_screen_paint(
+        &self,
+        document: DomHandle,
+        resource_generation: u64,
+    ) -> Option<(
+        &FrozenLayoutTree<DomHandle>,
+        &RetainedLayoutWorld<DomHandle>,
+    )> {
+        let retained = self.retained_layout.as_ref()?;
+        if retained.paint_generation != Some(resource_generation) {
+            return None;
+        }
+        Some((self.latest_layout(document)?, &retained.world))
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_reusable_layout_for_test(&self) -> bool {
+        self.retained_layout
+            .as_ref()
+            .is_some_and(|retained| retained.world.can_reuse_layout())
+    }
+
+    #[cfg(all(test, feature = "devtools"))]
+    pub(super) fn has_retained_paint_for_test(&self) -> bool {
+        self.retained_layout
+            .as_ref()
+            .is_some_and(|retained| retained.world.has_paint())
     }
 
     pub(super) fn refresh_scroll_projection(

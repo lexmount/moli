@@ -904,7 +904,7 @@ pub(crate) struct PageScriptHost {
     document_runtime: *mut DocumentRuntime,
     layout_policy: moli_page_types::LayoutPolicy,
     scrollbars_hidden: bool,
-    document_layout_state: RefCell<layout_state::DocumentLayoutState>,
+    document_layout_state: Rc<RefCell<layout_state::DocumentLayoutState>>,
     media_queries: RefCell<media_queries::MediaQueryState>,
     realtime_layout_state: Option<Box<realtime_layout::RealtimeLayoutState>>,
     layout_pass_active: Cell<bool>,

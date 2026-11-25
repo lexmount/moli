@@ -6,7 +6,7 @@ use crate::{
     inline::prepare_inline_contexts,
     list::prepare_list_markers,
     overflow::OverflowProjection,
-    projection::finish_layout_pass,
+    projection::{RetainedPaintData, finish_layout_pass},
     taffy_tree::{compute_prepared_world_layout, prepare_world_layout},
 };
 use std::collections::{HashMap, HashSet};
@@ -22,7 +22,7 @@ where
     pub tree: FrozenLayoutTree<N>,
     pub paint: Option<PaintSnapshot>,
     pub css_image_references: Vec<crate::LayoutCssImageReference<N>>,
-    pub(crate) screen_paint: Option<Box<crate::ScreenPaintLayout<N>>>,
+    pub(crate) retained_layout: Option<Box<RetainedLayoutWorld<N>>>,
 }
 
 impl<N> EmbeddedFrameSnapshot<N>
@@ -39,7 +39,7 @@ where
             tree,
             paint,
             css_image_references,
-            screen_paint: None,
+            retained_layout: None,
         }
     }
 }
@@ -170,15 +170,14 @@ impl LayoutPassRequest {
         self.retain_screen_paint
     }
 
-    /// Keep an owned working tree for a subsequent screen publication. Paint
-    /// publications already own their working tree for the screencast lease.
+    /// Keep the working tree and numeric caches for a subsequent screen pass.
     pub const fn with_retained_layout_world(mut self) -> Self {
         self.retain_layout_world = true;
         self
     }
 
     pub const fn retains_layout_world(self) -> bool {
-        self.retain_layout_world && !self.retain_screen_paint
+        self.retain_layout_world
     }
 
     /// Whether this demand also needs immutable software-paint input.
@@ -296,13 +295,38 @@ where
     reuse_numeric_layout: bool,
 }
 
-/// Document-owned construction state with no borrows into the live source.
+/// Document-owned working tree with optional paint inputs for its publication.
 pub struct RetainedLayoutWorld<N>
 where
     N: Copy + std::fmt::Debug + Eq + Hash,
 {
     pub(crate) world: LayoutWorld<N>,
     pub(crate) viewport: LayoutViewport,
+    pub(crate) reusable_layout: bool,
+    pub(crate) paint: Option<Box<RetainedPaintData<N>>>,
+}
+
+impl<N: Copy + std::fmt::Debug + Eq + Hash> RetainedLayoutWorld<N> {
+    /// Whether the working tree was retained for another numeric layout pass.
+    pub const fn can_reuse_layout(&self) -> bool {
+        self.reusable_layout
+    }
+
+    pub const fn has_paint(&self) -> bool {
+        self.paint.is_some()
+    }
+
+    /// Release the old publication's paint inputs while retaining layout caches.
+    pub fn discard_paint(&mut self) {
+        if self.paint.take().is_some() {
+            self.world.release_paint_storage();
+        }
+    }
+
+    fn into_layout_world(mut self) -> LayoutWorld<N> {
+        self.discard_paint();
+        self.world
+    }
 }
 
 /// Pass-local numeric layout, before embedded frames and paint are projected.
@@ -477,16 +501,24 @@ where
 {
     let started = Instant::now();
     let phase_started = Instant::now();
-    let (mut world, retained_box_count, reuse_numeric_layout) = if let Some(mut retained) = retained
-        && request.retains_layout_world()
-        && retained.viewport == request.viewport
-        && retained.world.environment == request.environment
-        && let Some((count, reuse_numeric_layout)) =
-            crate::builder::update_layout_world(source, styles, &mut retained.world)?
-    {
-        (retained.world, count, reuse_numeric_layout)
+    let reusable = retained.filter(|retained| {
+        request.retains_layout_world()
+            && retained.can_reuse_layout()
+            && retained.viewport == request.viewport
+            && retained.world.environment == request.environment
+    });
+    let reused = if let Some(retained) = reusable {
+        // Paint metadata indexes the previous publication. Retire it before
+        // updating the world, even when the update later requires a cold pass.
+        let mut world = retained.into_layout_world();
+        crate::builder::update_layout_world(source, styles, &mut world)?
+            .map(|(count, reuse_numeric_layout)| (world, count, reuse_numeric_layout))
     } else {
-        (build_layout_world(source, styles)?, 0, false)
+        None
+    };
+    let (mut world, retained_box_count, reuse_numeric_layout) = match reused {
+        Some(reused) => reused,
+        None => (build_layout_world(source, styles)?, 0, false),
     };
     world.environment = request.environment;
     if request.viewport.mobile_frame_size().is_some() {

@@ -375,7 +375,7 @@ impl PageScriptHost {
             document_runtime: runtime as *mut DocumentRuntime,
             layout_policy: moli_page_types::LayoutPolicy::default(),
             scrollbars_hidden: false,
-            document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::default()),
+            document_layout_state: Rc::default(),
             realtime_layout_state: None,
             media_queries: RefCell::default(),
             layout_pass_active: Cell::new(false),
