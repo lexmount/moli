@@ -143,7 +143,7 @@ pub use util::functional_pseudo_name;
 
 pub use stylo_stylesheet::{
     CssContainerConditionView, container_conditions_from_native,
-    parse_container_conditions_with_stylo,
+    parse_container_conditions_with_stylo, parse_container_rule_condition_snapshot_with_stylo,
 };
 
 #[cfg(test)]
