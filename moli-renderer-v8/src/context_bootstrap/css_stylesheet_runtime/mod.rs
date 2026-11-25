@@ -43,6 +43,7 @@ use crate::detached_css_style::{
     build_lightweight_css_font_face_descriptors, build_lightweight_css_keyframe_style_declaration,
     build_lightweight_css_page_descriptors, build_lightweight_css_rule_style_declaration,
     build_lightweight_css_style_declaration, create_lightweight_css_style_stylo_declaration_block,
+    initialize_lightweight_css_style_from_stylo_declaration_block,
     lightweight_css_keyframe_declaration_write_uses_pdb,
     lightweight_css_rule_declaration_write_uses_pdb, lightweight_css_style_css_text,
     lightweight_css_style_has_pdb_side_entries,
