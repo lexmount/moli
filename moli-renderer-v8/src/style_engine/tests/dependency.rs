@@ -2696,7 +2696,9 @@ fn viewport_change_updates_the_persistent_style_world_in_place() {
     );
     let world = engine.world_for_document(document);
     world.document_state.note_screen_style_attribute_change();
-    world.document_state.note_affected_screen_styles([target]);
+    world
+        .document_state
+        .note_affected_screen_styles([(target, ScreenStyleScope::Element)]);
     world.document_state.finish_screen_style_invalidation();
     assert!(
         matches!(

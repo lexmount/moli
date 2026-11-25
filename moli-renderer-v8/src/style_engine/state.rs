@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
 };
 
-use indexmap::IndexSet;
+use indexmap::IndexMap;
 use moli_selector::StyloSourceInvalidationFallbackReason;
 use selectors::context::SelectorCaches;
 use style::{
@@ -86,16 +86,25 @@ pub(super) enum ScreenStyleInvalidation {
     #[default]
     Clean,
     Pending,
-    Subtrees {
-        roots: IndexSet<DomHandle>,
-        observed_damage: ServoRestyleDamage,
-    },
+    Affected(IndexMap<DomHandle, ScreenStyleWork>),
     Full,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ScreenStyleScope {
+    Element,
+    Subtree,
+}
+
+#[derive(Default)]
+pub(super) struct ScreenStyleWork {
+    pub(super) scope: Option<ScreenStyleScope>,
+    pub(super) damage: ServoRestyleDamage,
 }
 
 #[derive(Default)]
 pub(crate) struct ScreenStyleChanges {
-    pub(crate) roots: Vec<DomHandle>,
+    pub(crate) targets: Vec<(DomHandle, ScreenStyleScope)>,
     pub(crate) observed_damage: ServoRestyleDamage,
 }
 
@@ -196,43 +205,51 @@ impl StyleDocumentState {
         }
     }
 
-    pub(super) fn note_affected_screen_styles(&self, roots: impl IntoIterator<Item = DomHandle>) {
+    pub(super) fn note_affected_screen_styles(
+        &self,
+        targets: impl IntoIterator<Item = (DomHandle, ScreenStyleScope)>,
+    ) {
         let mut change = self.screen_style_invalidation.borrow_mut();
-        match &mut *change {
-            ScreenStyleInvalidation::Pending => {
-                let roots: IndexSet<_> = roots.into_iter().collect();
-                if !roots.is_empty() {
-                    *change = ScreenStyleInvalidation::Subtrees {
-                        roots,
-                        observed_damage: ServoRestyleDamage::empty(),
-                    };
-                }
-            }
-            ScreenStyleInvalidation::Subtrees {
-                roots: affected, ..
-            } => affected.extend(roots),
-            ScreenStyleInvalidation::Clean | ScreenStyleInvalidation::Full => {}
+        let mut targets = targets.into_iter().peekable();
+        if matches!(*change, ScreenStyleInvalidation::Pending) && targets.peek().is_some() {
+            *change = ScreenStyleInvalidation::Affected(IndexMap::new());
         }
-        if matches!(&*change, ScreenStyleInvalidation::Subtrees { roots, .. }
-            if roots.len() > super::lazy_invalidation::MAX_RETAINED_INVALIDATION_ROOTS)
-        {
-            *change = ScreenStyleInvalidation::Full;
+        if let ScreenStyleInvalidation::Affected(affected) = &mut *change {
+            for (handle, scope) in targets {
+                let entry = affected
+                    .entry(handle)
+                    .or_default()
+                    .scope
+                    .get_or_insert(scope);
+                *entry = (*entry).max(scope);
+            }
+            if affected.len() > super::lazy_invalidation::MAX_RETAINED_INVALIDATION_ROOTS {
+                *change = ScreenStyleInvalidation::Full;
+            }
         }
     }
 
-    pub(super) fn record_screen_style_damage(&self, compare: impl FnOnce() -> ServoRestyleDamage) {
+    pub(super) fn record_screen_style_damage(
+        &self,
+        handle: DomHandle,
+        compare: impl FnOnce() -> ServoRestyleDamage,
+    ) {
         if self.screen_cache_generations.get().is_none() {
             return;
         }
         let mut change = self.screen_style_invalidation.borrow_mut();
-        if let ScreenStyleInvalidation::Subtrees {
-            observed_damage, ..
-        } = &mut *change
+        if let ScreenStyleInvalidation::Affected(affected) = &mut *change
             && self.screen_style_dependencies_are_current()
         {
             // Carry work across style reads until the screen consumes it.
             // The published baseline still covers unresolved styles.
-            *observed_damage |= compare();
+            let observed = compare();
+            if !observed.is_empty() {
+                affected.entry(handle).or_default().damage |= observed;
+                if affected.len() > super::lazy_invalidation::MAX_RETAINED_INVALIDATION_ROOTS {
+                    *change = ScreenStyleInvalidation::Full;
+                }
+            }
         }
     }
 

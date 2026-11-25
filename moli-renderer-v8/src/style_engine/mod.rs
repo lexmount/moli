@@ -18,6 +18,7 @@ use moli_selector::{
 };
 #[cfg(test)]
 use style::Atom;
+use style::servo::restyle_damage::ServoRestyleDamage;
 
 mod active_stylesheets;
 #[cfg(test)]
@@ -81,6 +82,7 @@ mod source_scope_plan;
 mod state;
 #[cfg(debug_assertions)]
 pub(crate) use state::ComputedStyleObservationInputEpochs;
+pub(crate) use state::ScreenStyleScope;
 use state::{ScreenStyleChanges, ScreenStyleInvalidation};
 mod stylesheet;
 mod stylesheet_resources;
@@ -284,14 +286,65 @@ impl MoliStyleEngine {
         };
         match &*world.document_state.screen_style_invalidation.borrow() {
             ScreenStyleInvalidation::Clean => Some(ScreenStyleChanges::default()),
-            ScreenStyleInvalidation::Subtrees {
-                roots,
-                observed_damage,
-            } => Some(ScreenStyleChanges {
-                roots: roots.iter().copied().collect(),
-                observed_damage: *observed_damage,
+            ScreenStyleInvalidation::Affected(affected) => Some(ScreenStyleChanges {
+                targets: affected
+                    .iter()
+                    .filter_map(|(&handle, work)| work.scope.map(|scope| (handle, scope)))
+                    .collect(),
+                observed_damage: affected
+                    .values()
+                    .fold(Default::default(), |all, work| all | work.damage),
             }),
             ScreenStyleInvalidation::Pending | ScreenStyleInvalidation::Full => None,
+        }
+    }
+
+    pub(crate) fn record_compared_screen_style_damage(
+        &self,
+        document: DomHandle,
+        handle: DomHandle,
+        damage: ServoRestyleDamage,
+    ) {
+        if let Some(world) = self.document_worlds.active_world(document) {
+            world
+                .document_state
+                .record_screen_style_damage(handle, || damage);
+        }
+    }
+
+    pub(crate) fn has_supported_screen_style_damage(
+        &self,
+        document: DomHandle,
+        supported: ServoRestyleDamage,
+    ) -> bool {
+        self.document_worlds
+            .active_world(document)
+            .is_none_or(|world| {
+                let state = &world.document_state;
+                state.finish_screen_style_invalidation();
+                match &*state.screen_style_invalidation.borrow() {
+                    ScreenStyleInvalidation::Clean => true,
+                    ScreenStyleInvalidation::Affected(affected) => affected
+                        .values()
+                        .all(|work| supported.contains(work.damage)),
+                    ScreenStyleInvalidation::Pending | ScreenStyleInvalidation::Full => false,
+                }
+            })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn screen_style_damage_for_node_for_test(
+        &self,
+        document: DomHandle,
+        handle: DomHandle,
+    ) -> Option<ServoRestyleDamage> {
+        let world = self.document_worlds.active_world(document)?;
+        match &*world.document_state.screen_style_invalidation.borrow() {
+            ScreenStyleInvalidation::Affected(affected) => affected
+                .get(&handle)
+                .map(|work| work.damage)
+                .filter(|damage| !damage.is_empty()),
+            _ => None,
         }
     }
 

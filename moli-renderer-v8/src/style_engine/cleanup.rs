@@ -12,7 +12,7 @@ use super::{
         FinalizedStyleInvalidationResult, StyleInvalidationCleanupApplicationContext,
         StyleInvalidationCleanupApplicationSink, StyleInvalidationCleanupApplicationSubtrees,
     },
-    state::StyleDocumentState,
+    state::{ScreenStyleScope, StyleDocumentState},
 };
 
 pub(super) struct StyleInvalidationCleanup<'a> {
@@ -81,7 +81,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
             for &handle in &selector_flag_handles {
                 self.dom_adapter.clear_element_selector_flags(handle);
             }
-            self.clear_shadow_cascade_data_in_subtrees(host, &roots);
+            self.clear_shadow_cascade_data_in_subtrees(host, roots.iter().copied());
         }
         cleared
     }
@@ -119,7 +119,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
         let roots = self.existing_subtree_roots(host, roots);
         let cleared = self.record_lazy_invalidation_roots(host, &roots).is_some();
         if cleared {
-            self.clear_shadow_cascade_data_in_subtrees(host, &roots);
+            self.clear_shadow_cascade_data_in_subtrees(host, roots.iter().copied());
         }
         cleared
     }
@@ -142,13 +142,25 @@ impl<'a> StyleInvalidationCleanup<'a> {
         let generations_before = self.document_state.generation_snapshot();
         self.document_state
             .clear_invalidation_clear_all_fallback_reasons();
-        let (affected_roots, shadow_cascade_scope_roots) = subtrees.into_root_sets();
+        let StyleInvalidationCleanupApplicationSubtrees {
+            exact_nodes: mut affected_roots,
+            subtree_roots,
+            shadow_cascade_roots,
+        } = subtrees;
+        affected_roots.extend(subtree_roots.iter().copied());
+        let complete_selector_targets = context.has_complete_selector_targets();
         let eagerly_invalidated_roots = self
-            .record_lazy_invalidation_roots(host, &affected_roots)
+            .record_lazy_invalidation_targets(host, &affected_roots, |handle| {
+                if complete_selector_targets && !subtree_roots.contains(&handle) {
+                    ScreenStyleScope::Element
+                } else {
+                    ScreenStyleScope::Subtree
+                }
+            })
             .expect("subtree cleanup application should carry an existing root");
         let cleared_shadow_cascade_roots =
             if context.clears_shadow_cascade_data_for_cleanup_target() {
-                self.clear_shadow_cascade_data_in_subtrees(host, &shadow_cascade_scope_roots)
+                self.clear_shadow_cascade_data_in_subtrees(host, shadow_cascade_roots)
             } else {
                 IndexSet::new()
             };
@@ -199,12 +211,12 @@ impl<'a> StyleInvalidationCleanup<'a> {
     fn clear_shadow_cascade_data_in_subtrees(
         &self,
         host: &DomHost,
-        roots: &IndexSet<DomHandle>,
+        roots: impl IntoIterator<Item = DomHandle>,
     ) -> IndexSet<DomHandle> {
-        if roots.is_empty() {
+        let root_set = roots.into_iter().collect::<HashSet<_>>();
+        if root_set.is_empty() {
             return IndexSet::new();
         }
-        let root_set = roots.iter().copied().collect::<HashSet<_>>();
         let shadow_roots = self
             .dom_adapter
             .shadow_cascade_roots_for_document(self.document)
@@ -250,13 +262,31 @@ impl<'a> StyleInvalidationCleanup<'a> {
         host: &DomHost,
         roots: &IndexSet<DomHandle>,
     ) -> Option<IndexSet<DomHandle>> {
+        self.record_lazy_invalidation_targets(host, roots, |_| ScreenStyleScope::Subtree)
+    }
+
+    fn record_lazy_invalidation_targets(
+        &self,
+        host: &DomHost,
+        roots: &IndexSet<DomHandle>,
+        scope: impl Fn(DomHandle) -> ScreenStyleScope,
+    ) -> Option<IndexSet<DomHandle>> {
         if roots.is_empty() {
             return None;
         }
-        self.document_state
-            .note_affected_screen_styles(roots.iter().copied().filter(|&root| {
-                host.is_connected(root) && host.owner_document_handle(root) == Some(self.document)
-            }));
+        self.document_state.note_affected_screen_styles(
+            roots
+                .iter()
+                .copied()
+                .filter(|&root| {
+                    host.is_connected(root)
+                        && host.owner_document_handle(root) == Some(self.document)
+                })
+                .map(|root| (root, scope(root))),
+        );
+        // Canonical styles are demanded independently of screen updates. Keep
+        // their existing inheritance coverage until that path can consume
+        // the computed differences as well.
         self.document_state.lazy_invalidation_roots.record_roots(
             host,
             self.document,
