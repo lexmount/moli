@@ -345,7 +345,6 @@ fn detached_document_adopted_stylesheet_change_uses_document_world() {
         engine.adopted_style_sheet_source_owner_counts_for_document_for_test(detached_document),
         (1, 0)
     );
-    assert!(engine.document_adopted_style_sheet_tracks_document_for_test(detached_document));
     assert_eq!(
         engine
             .adopted_style_sheet_sources_for_document(document)

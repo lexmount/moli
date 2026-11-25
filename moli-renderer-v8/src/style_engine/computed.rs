@@ -50,7 +50,7 @@ use super::{
     StyleWorldUpdate, StyleWorldUpdatePlan,
     cache::ComputedElementStyleCacheKey,
     document_world::DocumentStyleWorld,
-    source_lifecycle::StyleSourceDocumentContext,
+    source_document::StyleSourceDocumentContext,
     world_key::StyleWorldKey,
     world_lifecycle::{
         ensure_retained_style_system, ensure_retained_style_system_incrementally,
@@ -403,7 +403,6 @@ pub(super) fn computed_style_property_value(
                 handle,
                 &style_system_key,
                 inputs,
-                document_context,
                 pseudo_element,
                 |style| serialize_computed_custom_property(style, property),
             );
@@ -415,7 +414,6 @@ pub(super) fn computed_style_property_value(
             handle,
             &style_system_key,
             inputs,
-            document_context,
             pseudo_element.as_ref(),
             |style, _styles| serialize_computed_custom_property(style, property),
         );
@@ -431,7 +429,6 @@ pub(super) fn computed_style_property_value(
             handle,
             &style_system_key,
             inputs,
-            document_context,
             pseudo_element,
             |style| serialize_resolved_computed_property(style, property_id.clone()),
         );
@@ -443,7 +440,6 @@ pub(super) fn computed_style_property_value(
         handle,
         &style_system_key,
         inputs,
-        document_context,
         pseudo_element.as_ref(),
         |style, _styles| serialize_resolved_computed_property(style, property_id),
     )
@@ -581,7 +577,7 @@ pub(super) fn computed_style_snapshot_after_world_update(
         document_context,
     );
     let world = engine.world_for_document(owner_document);
-    apply_style_world_update(engine, host, &world, update, document_context);
+    apply_style_world_update(engine, host, &world, update);
     with_resolved_style_in_current_world(
         engine,
         host,
@@ -599,7 +595,6 @@ pub(super) fn apply_style_world_update(
     host: &DomHost,
     world: &DocumentStyleWorld,
     update: &PreparedStyleWorldUpdate,
-    document_context: StyleSourceDocumentContext<'_>,
 ) {
     match update.update() {
         StyleWorldUpdate::Full(inputs) => {
@@ -616,17 +611,13 @@ pub(super) fn apply_style_world_update(
                 world.document,
                 &style_system_key,
                 inputs,
-                document_context,
             );
         }
         StyleWorldUpdate::Incremental(incremental) => {
-            let source_stores = world.borrow_source_stores();
             ensure_retained_style_system_incrementally(
                 host,
                 &engine.dom_adapter,
                 &world.document_state,
-                &source_stores,
-                document_context,
                 world.document,
                 engine.invalidation_cleanup_for_world(world),
                 update.environment(),
@@ -713,7 +704,6 @@ fn computed_style_snapshot_after_style_update_with_key(
         handle,
         style_system_key,
         inputs,
-        document_context,
         None,
         |_style, styles| styles.map(StyloComputedStyleSnapshot::from_element_styles),
     )
@@ -752,7 +742,6 @@ fn with_resolved_style<R>(
     handle: DomHandle,
     style_system_key: &StyleWorldKey,
     inputs: &FullStyleWorldSnapshot,
-    document_context: StyleSourceDocumentContext<'_>,
     pseudo_element: Option<&PseudoElement>,
     callback: impl FnOnce(&ServoArc<ComputedValues>, Option<&ElementStyles>) -> Option<R>,
 ) -> Option<R> {
@@ -765,7 +754,6 @@ fn with_resolved_style<R>(
         owner_document,
         style_system_key,
         inputs,
-        document_context,
     );
     with_resolved_style_in_current_world(
         engine,
@@ -896,7 +884,6 @@ fn with_lazily_resolved_pseudo_style<R>(
     handle: DomHandle,
     style_system_key: &StyleWorldKey,
     inputs: &FullStyleWorldSnapshot,
-    document_context: StyleSourceDocumentContext<'_>,
     pseudo_element: &PseudoElement,
     callback: impl FnOnce(&ServoArc<ComputedValues>) -> Option<R>,
 ) -> Option<R> {
@@ -910,7 +897,6 @@ fn with_lazily_resolved_pseudo_style<R>(
         owner_document,
         style_system_key,
         inputs,
-        document_context,
     );
     with_lazily_resolved_pseudo_style_in_current_world(
         engine,
@@ -986,15 +972,11 @@ fn ensure_retained_style_system_for_computed_read(
     retained_document: DomHandle,
     key: &StyleWorldKey,
     inputs: &FullStyleWorldSnapshot,
-    document_context: StyleSourceDocumentContext<'_>,
 ) {
-    let source_stores = world.borrow_source_stores();
     ensure_retained_style_system(
         host,
         &engine.dom_adapter,
         &world.document_state,
-        &source_stores,
-        document_context,
         retained_document,
         engine.invalidation_cleanup_for_world(world),
         key,
@@ -1104,15 +1086,7 @@ pub(super) fn ensure_retained_style_system_for_document_for_test(
     inputs: &FullStyleWorldSnapshot,
 ) {
     let world = engine.world_for_document(document);
-    ensure_retained_style_system_for_computed_read(
-        engine,
-        host,
-        &world,
-        document,
-        &key,
-        inputs,
-        StyleSourceDocumentContext::for_root_document(document),
-    );
+    ensure_retained_style_system_for_computed_read(engine, host, &world, document, &key, inputs);
 }
 
 fn populate_inline_style_attribute_for_resolution(

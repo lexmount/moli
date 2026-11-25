@@ -1,25 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use indexmap::IndexSet;
+use crate::document_runtime::DomHandle;
 
-use crate::{document_runtime::DomHandle, dom::native::DomHost};
-
-use super::super::{
-    StyleSourceId,
-    source_lifecycle::{
-        StyleSourceLifecycleOwner, StyleSourceLifecycleReport,
-        StyleSourceLifecycleRetainedSourceIdSink, StyleSourceLifecycleSourceRequests,
-        StyleSourceLifecycleWithoutSourceReason, TrackedStyleSourceIds,
-        TrackedStyleSourceLifecycleEntry,
-    },
-    source_record::RetainedStylesheetSourceRecord,
-};
+use super::super::StyleSourceId;
 use super::store::StyloStylesheetSource;
 
 #[derive(Debug, Default)]
 pub(in crate::style_engine) struct AdoptedStyleSheetSources {
     sources_by_owner: HashMap<AdoptedStyleSheetOwner, Vec<InstalledAdoptedStylesheetClient>>,
-    tracked_owners: IndexSet<AdoptedStyleSheetOwner>,
     next_client_id: u64,
 }
 
@@ -97,7 +85,6 @@ enum AdoptedStyleSheetOwner {
 impl AdoptedStyleSheetSources {
     pub(in crate::style_engine) fn clear_all(&mut self) {
         self.sources_by_owner.clear();
-        self.tracked_owners.clear();
         self.next_client_id = 0;
     }
 
@@ -166,7 +153,6 @@ impl AdoptedStyleSheetSources {
         owner: AdoptedStyleSheetOwner,
         mut clients: Vec<InstalledAdoptedStylesheetClient>,
     ) -> bool {
-        self.tracked_owners.insert(owner);
         if clients.is_empty() {
             return self.sources_by_owner.remove(&owner).is_some();
         }
@@ -291,44 +277,6 @@ impl AdoptedStyleSheetSources {
         })
     }
 
-    fn source(
-        &self,
-        owner: AdoptedStyleSheetOwner,
-        client_id: u64,
-    ) -> Option<&StyloStylesheetSource> {
-        self.sources_by_owner
-            .get(&owner)?
-            .iter()
-            .find(|client| client.source().adopted_client_id() == Some(client_id))
-            .map(InstalledAdoptedStylesheetClient::source)
-    }
-
-    fn retained_source_record<'a>(
-        &'a self,
-        source_id: StyleSourceId,
-        owner: AdoptedStyleSheetOwner,
-        client_id: u64,
-    ) -> Option<RetainedStylesheetSourceRecord<'a>> {
-        let source = self.source(owner, client_id)?;
-        Some(RetainedStylesheetSourceRecord::registered(
-            source_id, source,
-        ))
-    }
-
-    fn tracked_owners(&self) -> impl Iterator<Item = AdoptedStyleSheetOwner> + '_ {
-        self.tracked_owners.iter().copied()
-    }
-
-    pub(in crate::style_engine) fn tracks_document(&self, document: DomHandle) -> bool {
-        self.tracked_owners
-            .contains(&AdoptedStyleSheetOwner::Document(document))
-    }
-
-    pub(in crate::style_engine) fn tracks_shadow_root(&self, root: DomHandle) -> bool {
-        self.tracked_owners
-            .contains(&AdoptedStyleSheetOwner::ShadowRoot(root))
-    }
-
     #[cfg(test)]
     pub(in crate::style_engine) fn document_source_owner_count(&self) -> usize {
         self.sources_by_owner
@@ -343,141 +291,6 @@ impl AdoptedStyleSheetSources {
             .keys()
             .filter(|owner| matches!(owner, AdoptedStyleSheetOwner::ShadowRoot(_)))
             .count()
-    }
-
-    pub(in crate::style_engine) fn tracked_lifecycle_entries_for_document<'a>(
-        &'a self,
-        host: &'a DomHost,
-        document: DomHandle,
-    ) -> impl Iterator<Item = TrackedStyleSourceLifecycleEntry> + 'a {
-        self.tracked_document_lifecycle_entry(host, document)
-            .into_iter()
-            .chain(self.tracked_shadow_root_lifecycle_entries_for_document(host, document))
-    }
-
-    pub(in crate::style_engine) fn tracked_lifecycle_entries_for_source_ids<'a>(
-        &'a self,
-        host: &'a DomHost,
-        source_ids: impl IntoIterator<Item = StyleSourceId> + 'a,
-    ) -> Vec<TrackedStyleSourceLifecycleEntry> {
-        StyleSourceLifecycleSourceRequests::from_source_ids(source_ids)
-            .into_tracked_entries(move |owner| match owner {
-                StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets { document } => {
-                    self.tracked_document_lifecycle_entry(host, document)
-                }
-                StyleSourceLifecycleOwner::ShadowRootAdoptedStyleSheets { root } => {
-                    self.tracked_shadow_root_lifecycle_entry(host, root)
-                }
-                StyleSourceLifecycleOwner::OwnerStyleSheet { .. }
-                | StyleSourceLifecycleOwner::LinkedStyleSheet { .. } => None,
-            })
-            .collect()
-    }
-
-    pub(in crate::style_engine) fn retained_source_records_for_lifecycle<'a>(
-        &'a self,
-        source_lifecycle: &StyleSourceLifecycleReport,
-    ) -> Vec<RetainedStylesheetSourceRecord<'a>> {
-        let mut requests = RetainedAdoptedSourceRecordRequests::default();
-        source_lifecycle.record_retained_source_ids_into(&mut requests);
-        requests
-            .source_ids
-            .iter()
-            .filter_map(|source_id| self.retained_source_record_for_id(source_id))
-            .collect()
-    }
-
-    fn retained_source_record_for_id<'a>(
-        &'a self,
-        source_id: &StyleSourceId,
-    ) -> Option<RetainedStylesheetSourceRecord<'a>> {
-        match (&source_id.scope_id, &source_id.kind) {
-            (
-                super::super::source_id::StyleScopeId::Document(document),
-                super::super::source_id::StyleSourceKind::DocumentAdoptedStyleSheet { client_id },
-            ) => self.retained_source_record(
-                source_id.clone(),
-                AdoptedStyleSheetOwner::Document(*document),
-                *client_id,
-            ),
-            (
-                super::super::source_id::StyleScopeId::ShadowRoot(root),
-                super::super::source_id::StyleSourceKind::ShadowRootAdoptedStyleSheet { client_id },
-            ) => self.retained_source_record(
-                source_id.clone(),
-                AdoptedStyleSheetOwner::ShadowRoot(*root),
-                *client_id,
-            ),
-            _ => None,
-        }
-    }
-
-    pub(in crate::style_engine) fn tracked_shadow_root_lifecycle_entries_for_document<'a>(
-        &'a self,
-        host: &'a DomHost,
-        document: DomHandle,
-    ) -> impl Iterator<Item = TrackedStyleSourceLifecycleEntry> + 'a {
-        self.tracked_shadow_roots_for_document(host, document)
-            .filter_map(move |root| self.tracked_shadow_root_lifecycle_entry(host, root))
-    }
-
-    pub(in crate::style_engine) fn tracked_document_lifecycle_entry(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-    ) -> Option<TrackedStyleSourceLifecycleEntry> {
-        if !self.tracks_document(document) {
-            return None;
-        }
-        let lifecycle_owner = StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets { document };
-        Some(lifecycle_owner.tracked_entry(host, || {
-            self.tracked_source_ids(
-                AdoptedStyleSheetOwner::Document(document),
-                |client_id| StyleSourceId::document_adopted_style_sheet(document, client_id),
-                StyleSourceLifecycleWithoutSourceReason::EmptyDocumentAdoptedStyleSheets,
-            )
-        }))
-    }
-
-    pub(in crate::style_engine) fn tracked_shadow_root_lifecycle_entry(
-        &self,
-        host: &DomHost,
-        root: DomHandle,
-    ) -> Option<TrackedStyleSourceLifecycleEntry> {
-        if !self.tracks_shadow_root(root) {
-            return None;
-        }
-        let lifecycle_owner = StyleSourceLifecycleOwner::ShadowRootAdoptedStyleSheets { root };
-        Some(lifecycle_owner.tracked_entry(host, || {
-            self.tracked_source_ids(
-                AdoptedStyleSheetOwner::ShadowRoot(root),
-                |client_id| StyleSourceId::shadow_root_adopted_style_sheet(root, client_id),
-                StyleSourceLifecycleWithoutSourceReason::EmptyShadowRootAdoptedStyleSheets,
-            )
-        }))
-    }
-
-    fn tracked_source_ids(
-        &self,
-        owner: AdoptedStyleSheetOwner,
-        make_source_id: impl Fn(u64) -> StyleSourceId,
-        empty_reason: StyleSourceLifecycleWithoutSourceReason,
-    ) -> TrackedStyleSourceIds {
-        let Some(sources) = self.sources(owner) else {
-            return TrackedStyleSourceIds::WithoutSource(empty_reason);
-        };
-        let source_ids = sources
-            .iter()
-            .map(|client| {
-                make_source_id(
-                    client
-                        .source()
-                        .adopted_client_id()
-                        .expect("installed adopted stylesheet must have a client id"),
-                )
-            })
-            .collect();
-        TrackedStyleSourceIds::retained_or_without_source(source_ids, empty_reason)
     }
 
     fn source_ids(
@@ -496,32 +309,6 @@ impl AdoptedStyleSheetSources {
                 )
             })
             .collect()
-    }
-
-    fn tracked_shadow_roots_for_document<'a>(
-        &'a self,
-        host: &'a DomHost,
-        document: DomHandle,
-    ) -> impl Iterator<Item = DomHandle> + 'a {
-        self.tracked_owners().filter_map(move |owner| match owner {
-            AdoptedStyleSheetOwner::ShadowRoot(root)
-                if host.owner_document_handle(root) == Some(document) =>
-            {
-                Some(root)
-            }
-            AdoptedStyleSheetOwner::Document(_) | AdoptedStyleSheetOwner::ShadowRoot(_) => None,
-        })
-    }
-}
-
-#[derive(Default)]
-struct RetainedAdoptedSourceRecordRequests {
-    source_ids: Vec<StyleSourceId>,
-}
-
-impl StyleSourceLifecycleRetainedSourceIdSink for RetainedAdoptedSourceRecordRequests {
-    fn record_source_lifecycle_retained_source_id(&mut self, source_id: &StyleSourceId) {
-        self.source_ids.push(source_id.clone());
     }
 }
 

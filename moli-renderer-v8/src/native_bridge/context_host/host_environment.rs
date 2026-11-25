@@ -1929,13 +1929,11 @@ impl PageScriptHost {
         update: Option<&PreparedStyleWorldUpdate>,
         resolve: impl FnOnce(&mut crate::style_engine::StyleResolutionPass<'_, '_>) -> R,
     ) -> R {
-        let source_context =
-            update.map(|_| self.style_source_document_context_for_read_document(document));
         self.style_engine.with_style_resolution_pass(
             self.dom_host(),
             self.document_url(),
             document,
-            update.zip(source_context.as_ref().map(|context| context.as_ref())),
+            update,
             resolve,
         )
     }

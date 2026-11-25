@@ -44,20 +44,12 @@ mod runtime_invalidation;
 mod shadow_scopes;
 mod snapshot;
 mod source;
-mod source_cascade;
-#[cfg(test)]
-pub(crate) use source_cascade::{
-    reset_source_cascade_rebuild_count_for_test, source_cascade_rebuild_count_for_test,
-};
 mod source_dirty;
 mod source_document;
 mod source_id;
 mod source_key;
-mod source_lifecycle;
 mod source_owner;
 mod source_owner_text;
-mod source_record;
-mod source_scope_plan;
 mod state;
 #[cfg(debug_assertions)]
 pub(crate) use state::ComputedStyleObservationInputEpochs;
@@ -100,11 +92,11 @@ pub(crate) use source::inline::InlineStyleCspState;
 pub(crate) use source::store::{
     OwnerStyleSheetSource, StylesheetFontFaceDescriptor, StyloStylesheetSource,
 };
+pub(crate) use source_document::OwnedStyleSourceDocumentContext;
+use source_document::StyleSourceDocumentContext;
 #[cfg(test)]
 use source_id::StyleScopeId;
 pub(crate) use source_id::StyleSourceId;
-pub(crate) use source_lifecycle::OwnedStyleSourceDocumentContext;
-use source_lifecycle::StyleSourceDocumentContext;
 pub(crate) use source_owner::{
     link_rel_qualifies_as_stylesheet, stylesheet_owner_type_is_supported,
 };
@@ -978,23 +970,6 @@ impl MoliStyleEngine {
     }
 
     #[cfg(test)]
-    pub(crate) fn retained_stylesheet_source_ids_for_document_for_test(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-    ) -> Vec<StyleSourceId> {
-        let world = self.world_for_document(document);
-        let document_context = StyleSourceDocumentContext::for_root_document(document);
-        let source_stores = world.borrow_source_stores();
-        let source_lifecycle = source_stores.source_lifecycle_report(host, document_context);
-        source_stores
-            .retained_source_records_for_lifecycle(host, &source_lifecycle)
-            .into_iter()
-            .map(|record| record.id().clone())
-            .collect()
-    }
-
-    #[cfg(test)]
     pub(crate) fn computed_style_property_value(
         &self,
         host: &DomHost,
@@ -1091,12 +1066,12 @@ impl MoliStyleEngine {
         host: &DomHost,
         document_url: &url::Url,
         document: DomHandle,
-        update: Option<(&PreparedStyleWorldUpdate, StyleSourceDocumentContext<'_>)>,
+        update: Option<&PreparedStyleWorldUpdate>,
         resolve: impl FnOnce(&mut computed::StyleResolutionPass<'_, '_>) -> R,
     ) -> R {
-        if let Some((update, document_context)) = update {
+        if let Some(update) = update {
             let world = self.world_for_document(document);
-            computed::apply_style_world_update(self, host, &world, update, document_context);
+            computed::apply_style_world_update(self, host, &world, update);
         }
         computed::with_style_resolution_pass(self, host, document_url, document, resolve)
     }

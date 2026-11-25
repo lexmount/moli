@@ -173,7 +173,7 @@ fn stylesheet_source_clones_share_css_text_and_base_url() {
 
     assert!(source.shares_source_storage_for_test(&cloned));
     assert!(StdArc::ptr_eq(&source.base_url, &cloned.base_url));
-    assert_eq!(source.cache_key(), cloned.cache_key());
+    assert_eq!(source, cloned);
 }
 #[test]
 fn source_scope_fallback_roots_preserve_unrelated_document_cache() {
