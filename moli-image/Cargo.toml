@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[features]
+native-video = ["dep:core-video", "dep:tokio"]
+
 [dependencies]
 image = { version = "0.25.10", default-features = false, features = ["gif", "webp", "bmp"] }
 libjpeg-turbo-rs = { git = "https://github.com/lexmount/libjpeg-turbo-rs", rev = "82a1375407abda75ffc31ee0dad5920bc219d84e" }
@@ -11,6 +14,10 @@ png = "0.18"
 thiserror = "2.0.17"
 usvg = { version = "=0.48.1", default-features = true }
 xmlparser = "0.13.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-video = { version = "0.5.2", optional = true }
+tokio = { version = "1.53.1", features = ["sync"], optional = true }
 
 [lints]
 workspace = true

@@ -26,7 +26,10 @@ pub(super) fn paint_image(
     image: &PaintImage,
     scale: f64,
 ) {
-    let Some(resource) = snapshot.image(image.image) else {
+    let Some(pixels) = snapshot
+        .image(image.image)
+        .and_then(|resource| resource.image.rgba())
+    else {
         return;
     };
     let destination = if image.repeat_bounds.is_some() {
@@ -42,7 +45,7 @@ pub(super) fn paint_image(
         };
         destination
     };
-    if resource.image.width == 0 || resource.image.height == 0 {
+    if pixels.width == 0 || pixels.height == 0 {
         return;
     }
     let quality = match image.sampling {
@@ -56,11 +59,11 @@ pub(super) fn paint_image(
     };
     let brush = ImageBrush {
         image: ImageData {
-            data: Blob::new(resource.image.clone()),
+            data: Blob::new(pixels.clone()),
             format: ImageFormat::Rgba8,
             alpha_type: ImageAlphaType::Alpha,
-            width: resource.image.width,
-            height: resource.image.height,
+            width: pixels.width,
+            height: pixels.height,
         },
         sampler: ImageSampler {
             x_extend: extend,
@@ -72,8 +75,8 @@ pub(super) fn paint_image(
     let image_to_destination =
         Affine::translate((f64::from(destination.x), f64::from(destination.y)))
             * Affine::scale_non_uniform(
-                f64::from(destination.width) / f64::from(resource.image.width),
-                f64::from(destination.height) / f64::from(resource.image.height),
+                f64::from(destination.width) / f64::from(pixels.width),
+                f64::from(destination.height) / f64::from(pixels.height),
             );
     if let Some(bounds) = image.repeat_bounds {
         let Some(bounds) = pixel_snap_paint_rect(bounds).and_then(to_backend_rect) else {

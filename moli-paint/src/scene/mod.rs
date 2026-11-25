@@ -133,6 +133,7 @@ pub(crate) fn to_backend_blend_mode(
     };
     let compose = match composite {
         PaintCompositeMode::SrcOver => Compose::SrcOver,
+        PaintCompositeMode::DestOut => Compose::DestOut,
         PaintCompositeMode::DestIn => Compose::DestIn,
         PaintCompositeMode::SrcOut => Compose::SrcOut,
         PaintCompositeMode::SrcIn => Compose::SrcIn,

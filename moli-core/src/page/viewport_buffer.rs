@@ -1,11 +1,15 @@
 use std::{ops::Range, sync::Arc};
 
 use anyhow::{Context as _, Result};
+#[cfg(target_os = "macos")]
+use moli_image::{VideoFrameListener, VideoFrameSource};
 use moli_page_types::ViewportSurface;
 use moli_paint::{
     RasterBufferLayout, RasterPixelFormat, raster_buffer_layout, raster_damage_rows,
     raster_snapshot_rows_into,
 };
+#[cfg(target_os = "macos")]
+use moli_paint::{ViewportComposition, ViewportVideoLayer};
 use moli_renderer_v8::{
     RendererDocumentLifecycleIdentity, RendererRasterStream, RendererViewportCursor,
     RendererViewportEditor, RendererViewportFrame,
@@ -27,6 +31,10 @@ struct ViewportSlot {
 struct ViewportPixels {
     bytes: Arc<Vec<u8>>,
     band_versions: Arc<[u64]>,
+    #[cfg(target_os = "macos")]
+    video_layers: Arc<[ViewportVideoLayer]>,
+    #[cfg(target_os = "macos")]
+    video_sources: Arc<[VideoFrameSource]>,
 }
 
 /// Three caller-provided buffers for the visible frame, a reader, and a writer.
@@ -36,6 +44,8 @@ pub struct ViewportBuffers {
     last_frame: Option<RendererViewportFrame>,
     version: u64,
     band_versions: Arc<[u64]>,
+    #[cfg(target_os = "macos")]
+    native_video: bool,
 }
 
 impl ViewportBuffers {
@@ -67,7 +77,16 @@ impl ViewportBuffers {
             last_frame: None,
             version: 0,
             band_versions: vec![0; layout.height.div_ceil(VIEWPORT_BAND_HEIGHT) as usize].into(),
+            #[cfg(target_os = "macos")]
+            native_video: false,
         })
+    }
+
+    /// Opts into presentation of planar video resources by the viewport consumer.
+    #[cfg(target_os = "macos")]
+    pub fn with_native_video(mut self) -> Self {
+        self.native_video = true;
+        self
     }
 
     fn paint(&mut self, frame: &RendererViewportFrame) -> Result<Option<ViewportPixels>> {
@@ -117,6 +136,10 @@ impl ViewportBuffers {
                 return Ok(Some(ViewportPixels {
                     bytes: slot.bytes.clone(),
                     band_versions: versions,
+                    #[cfg(target_os = "macos")]
+                    video_layers: Arc::default(),
+                    #[cfg(target_os = "macos")]
+                    video_sources: Arc::default(),
                 }));
             }
         }
@@ -149,6 +172,8 @@ pub struct ViewportFrameRef<'a> {
     pub pixels: Option<&'a [u8]>,
     /// Versions of successive full-width bands, valid for this viewport revision.
     pub band_versions: &'a [u64],
+    #[cfg(target_os = "macos")]
+    pub video_layers: &'a [ViewportVideoLayer],
 }
 
 #[derive(Clone)]
@@ -182,6 +207,8 @@ struct OutputState {
     frame: Option<ReadyFrame>,
     cursor: Option<RendererViewportCursor>,
     display_tick_request: Option<u64>,
+    #[cfg(target_os = "macos")]
+    video_listeners: Vec<(VideoFrameSource, Arc<VideoFrameListener>)>,
 }
 
 impl OutputState {
@@ -192,6 +219,8 @@ impl OutputState {
         self.frame = None;
         self.cursor = None;
         self.display_tick_request = None;
+        #[cfg(target_os = "macos")]
+        self.video_listeners.clear();
         cleared
     }
 }
@@ -242,6 +271,11 @@ impl ViewportOutput {
                 .pixels
                 .as_ref()
                 .map_or(&[], |pixels| pixels.band_versions.as_ref()),
+            #[cfg(target_os = "macos")]
+            video_layers: frame
+                .pixels
+                .as_ref()
+                .map_or(&[], |pixels| pixels.video_layers.as_ref()),
         }))
     }
 
@@ -290,9 +324,42 @@ impl ViewportOutput {
     fn publish(&self, binding: u64, frame: Option<ReadyFrame>) {
         let mut state = self.state.lock();
         if state.binding == binding && (state.frame.is_some() || frame.is_some()) {
+            #[cfg(target_os = "macos")]
+            {
+                state.video_listeners = frame
+                    .as_ref()
+                    .and_then(|frame| frame.pixels.as_ref())
+                    .map(|pixels| {
+                        pixels
+                            .video_sources
+                            .iter()
+                            .map(|source| {
+                                let visible = pixels
+                                    .video_layers
+                                    .iter()
+                                    .any(|layer| &layer.source == source);
+                                let listener = source.listen(visible.then(|| self.changes.clone()));
+                                (source.clone(), listener)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            }
             state.frame = frame;
             drop(state);
             self.changes.send_replace(());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn prepare_video(&self, binding: u64, sources: &[VideoFrameSource]) {
+        let mut state = self.state.lock();
+        if state.binding == binding {
+            // Retire demoted subscriptions before sampling the software
+            // image. Any later video update will invalidate the raster.
+            state
+                .video_listeners
+                .retain(|(source, _)| sources.contains(source));
         }
     }
 }
@@ -441,7 +508,7 @@ async fn rasterize_frames(
                         if output.state.lock().binding == binding {
                             let frame = snapshots.borrow_and_update().clone();
                             if let Some(frame) = frame {
-                                match buffers.paint(&frame) {
+                                match paint_frame(&mut buffers, &frame, &output, binding) {
                                     Ok(pixels) => {
                                         let current = snapshots.borrow();
                                         if current.as_ref().is_some_and(|current| {
@@ -485,6 +552,30 @@ async fn rasterize_frames(
             break;
         }
     }
+}
+
+fn paint_frame(
+    buffers: &mut ViewportBuffers,
+    frame: &RendererViewportFrame,
+    _output: &ViewportOutput,
+    _binding: u64,
+) -> Result<Option<ViewportPixels>> {
+    #[cfg(target_os = "macos")]
+    if buffers.native_video
+        && let Some(snapshot) = &frame.snapshot
+    {
+        let mut composition = ViewportComposition::new(snapshot, &frame.video_sources);
+        _output.prepare_video(_binding, &composition.sources);
+        composition.refresh_software_frames();
+        let mut frame = frame.clone();
+        frame.snapshot = Some(composition.raster);
+        return Ok(buffers.paint(&frame)?.map(|mut pixels| {
+            pixels.video_layers = composition.layers.into();
+            pixels.video_sources = composition.sources.into();
+            pixels
+        }));
+    }
+    buffers.paint(frame)
 }
 
 #[cfg(test)]

@@ -693,6 +693,8 @@ async fn refresh_capture(
             gpui::BgraImage::reserve_pixels(size)?,
         ];
         let buffers = ViewportBuffers::new(layout, storage)?;
+        #[cfg(target_os = "macos")]
+        let buffers = buffers.with_native_video();
         *capture = Some(
             page.subscribe_viewport_buffer_with_pointer(
                 surface,

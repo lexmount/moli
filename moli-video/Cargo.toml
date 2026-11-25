@@ -5,6 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [features]
+molio = ["moli-image?/native-video", "dep:core-foundation", "dep:core-video"]
 media-ext = [
     "dep:anyhow",
     "dep:bytes",
@@ -27,6 +28,8 @@ rsmpeg = { git = "https://github.com/lexmount/rsmpeg", rev = "a9fb542d8e2f0ca45e
 symphonia = { version = "0.6.1", default-features = false, features = ["aac"], optional = true }
 
 [target.'cfg(all(target_os = "macos", target_pointer_width = "64"))'.dependencies]
+core-foundation = { version = "0.10", optional = true }
+core-video = { version = "0.5.2", optional = true }
 coreaudio-rs = { version = "0.14.2", default-features = false, features = ["audio_unit"], optional = true }
 objc2-core-audio = { version = "0.3.2", default-features = false, features = ["HostTime"], optional = true }
 

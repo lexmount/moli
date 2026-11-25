@@ -231,13 +231,42 @@ impl PageScriptHost {
         viewport: moli_layout::PaintViewport,
         base_background_color: [u8; 4],
     ) -> crate::runtime::RendererVisualStateToken {
+        self.visual_state_token_for_resources(
+            document,
+            viewport,
+            base_background_color,
+            self.visual_resource_generation(),
+        )
+    }
+
+    #[cfg(feature = "molio")]
+    pub(crate) fn viewport_visual_state_token(
+        &self,
+        document: crate::runtime::RendererDocumentLifecycleIdentity,
+        viewport: moli_layout::PaintViewport,
+    ) -> crate::runtime::RendererVisualStateToken {
+        #[cfg(target_os = "macos")]
+        let resources = self.image_resources.viewport_visual_generation();
+        #[cfg(not(target_os = "macos"))]
+        let resources = self.visual_resource_generation();
+        self.visual_state_token_for_resources(document, viewport, [255; 4], resources)
+    }
+
+    #[cfg(feature = "devtools")]
+    fn visual_state_token_for_resources(
+        &self,
+        document: crate::runtime::RendererDocumentLifecycleIdentity,
+        viewport: moli_layout::PaintViewport,
+        base_background_color: [u8; 4],
+        resource_generation: u64,
+    ) -> crate::runtime::RendererVisualStateToken {
         crate::runtime::RendererVisualStateToken::new(
             document,
             self.dom_host().dom_version(),
             self.style_engine
                 .visual_style_input_generations(self.active_layout_document_handles()),
             self.visual_state_generation(),
-            self.visual_resource_generation(),
+            resource_generation,
             viewport,
             base_background_color,
         )

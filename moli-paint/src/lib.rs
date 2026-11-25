@@ -12,6 +12,8 @@ pub mod pdf;
 mod raster;
 mod scene;
 mod validation;
+#[cfg(all(feature = "molio", target_os = "macos"))]
+mod viewport_composition;
 
 pub use error::PaintError;
 pub use moli_image::RgbaImage as RasterImage;
@@ -21,3 +23,5 @@ pub use raster::{
 };
 #[cfg(feature = "molio")]
 pub use raster::{raster_damage_rows, raster_snapshot_rows_into};
+#[cfg(all(feature = "molio", target_os = "macos"))]
+pub use viewport_composition::{ViewportComposition, ViewportVideoLayer};

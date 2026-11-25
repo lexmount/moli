@@ -126,18 +126,20 @@ pub fn raster_damage_rows(
         .images
         .iter()
         .zip(&current.images)
-        .all(|(old, new)| Arc::ptr_eq(&old.image, &new.image))
+        .all(|(old, new)| old.image.same_pixels(&new.image))
     {
         return 0..0;
     }
     let scale = f64::from(current.surface.device_scale);
     let mut top = layout.height;
     let mut bottom = 0;
+    let mut has_filter = false;
+    let mut referenced_image_changed = false;
     for fragment in &current.fragments {
         match fragment {
             PaintFragment::PushLayer {
                 filter: Some(_), ..
-            } => return full,
+            } => has_filter = true,
             PaintFragment::Image(image) => {
                 let Some((old, new)) = previous
                     .images
@@ -146,9 +148,10 @@ pub fn raster_damage_rows(
                 else {
                     return full;
                 };
-                if Arc::ptr_eq(&old.image, &new.image) {
+                if old.image.same_pixels(&new.image) {
                     continue;
                 }
+                referenced_image_changed = true;
                 let Some(rect) =
                     pixel_snap_paint_rect(image.repeat_bounds.unwrap_or(image.destination))
                         .and_then(to_backend_rect)
@@ -172,7 +175,13 @@ pub fn raster_damage_rows(
             _ => {}
         }
     }
-    if top < bottom { top..bottom } else { 0..0 }
+    if has_filter && referenced_image_changed {
+        full
+    } else if top < bottom {
+        top..bottom
+    } else {
+        0..0
+    }
 }
 
 /// Repaints full-width rows of an existing viewport buffer, rounded out to

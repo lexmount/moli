@@ -268,7 +268,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
                 Some(LayoutImageResource {
                     intrinsic_width: ready.intrinsic_width,
                     intrinsic_height: ready.intrinsic_height,
-                    pixels: ready.pixels,
+                    pixels: ready.pixels.map(Into::into),
                     svg: ready.svg,
                 })
             }
@@ -277,7 +277,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
                 Some(LayoutImageResource {
                     intrinsic_width: pixels.width as f32,
                     intrinsic_height: pixels.height as f32,
-                    pixels: Some(pixels),
+                    pixels: Some(pixels.into()),
                     svg: None,
                 })
             }
@@ -288,9 +288,10 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             ))]
             Some(LayoutReplacedKind::Media) => {
                 let pixels = self.runtime.video_image(node)?;
+                let (width, height) = pixels.dimensions();
                 Some(LayoutImageResource {
-                    intrinsic_width: pixels.width as f32,
-                    intrinsic_height: pixels.height as f32,
+                    intrinsic_width: width as f32,
+                    intrinsic_height: height as f32,
                     pixels: Some(pixels),
                     svg: None,
                 })
@@ -317,7 +318,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         Some(LayoutImageResource {
             intrinsic_width: ready.intrinsic_width,
             intrinsic_height: ready.intrinsic_height,
-            pixels: ready.pixels,
+            pixels: ready.pixels.map(Into::into),
             svg: ready.svg,
         })
     }

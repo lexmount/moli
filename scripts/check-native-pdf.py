@@ -36,7 +36,9 @@ def data_url(data, media_type):
 def capture(binary, output, name, html, url=None):
     path = output / f"{name}.pdf"
     started = time.perf_counter()
-    peak_kib = 0
+    # /proc is Linux-only, and a short-lived process may exit before a sample.
+    # Preserve missing measurements as JSON null rather than reporting zero RSS.
+    peak_kib = None
     with path.open("wb") as target:
         process = subprocess.Popen(
             [str(binary), "fetch", "--resource", "--layout", "--wait-until", "load",
@@ -52,7 +54,7 @@ def capture(binary, output, name, html, url=None):
             try:
                 for line in Path(f"/proc/{process.pid}/status").read_text().splitlines():
                     if line.startswith("VmHWM:"):
-                        peak_kib = max(peak_kib, int(line.split()[1]))
+                        peak_kib = max(peak_kib or 0, int(line.split()[1]))
             except FileNotFoundError:
                 pass
             time.sleep(0.005)

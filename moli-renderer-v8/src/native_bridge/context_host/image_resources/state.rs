@@ -377,6 +377,16 @@ impl ImageResourceStore {
         self.visual_generation.bump();
     }
 
+    #[cfg(all(feature = "media-ext", feature = "molio", target_os = "macos"))]
+    pub(in crate::native_bridge::context_host) fn bump_composited_video_generation(&self) {
+        self.visual_generation.bump_composited_video();
+    }
+
+    #[cfg(all(feature = "molio", target_os = "macos"))]
+    pub(in crate::native_bridge::context_host) fn viewport_visual_generation(&self) -> u64 {
+        self.visual_generation.viewport_current()
+    }
+
     #[cfg(feature = "molio")]
     pub(super) fn set_viewport_resource_wake(&self, wake: &std::sync::Arc<tokio::sync::Notify>) {
         self.visual_generation.set_viewport_wake(wake);

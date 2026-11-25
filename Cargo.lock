@@ -5010,6 +5010,7 @@ dependencies = [
  "moli-fetch",
  "moli-file-api",
  "moli-header-field",
+ "moli-image",
  "moli-indexeddb",
  "moli-page-types",
  "moli-paint",
@@ -5285,10 +5286,12 @@ dependencies = [
 name = "moli-image"
 version = "0.1.0"
 dependencies = [
+ "core-video",
  "image",
  "libjpeg-turbo-rs",
  "png",
  "thiserror 2.0.18",
+ "tokio",
  "usvg",
  "xmlparser",
 ]
@@ -5997,6 +6000,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "core-foundation",
+ "core-video",
  "coreaudio-rs",
  "moli-image",
  "moli-web-mime",

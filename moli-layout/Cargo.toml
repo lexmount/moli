@@ -5,7 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [features]
-molio = []
+molio = ["moli-image/native-video"]
 
 [dependencies]
 brotlic = "0.8.2"

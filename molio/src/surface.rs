@@ -19,6 +19,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::host::{KeyInput, TabCommand};
 use crate::text_input::MoliTextInputBridge;
 
+#[cfg(target_os = "macos")]
+mod video;
+
 #[derive(Clone, Copy)]
 struct WheelRoute {
     document: RendererDocumentLifecycleIdentity,
@@ -59,6 +62,8 @@ struct ViewportImage {
     height: u32,
     banded: bool,
     bands: Vec<ViewportBandImage>,
+    #[cfg(target_os = "macos")]
+    video_layers: Vec<moli_core::page::ViewportVideoLayer>,
 }
 
 impl ViewportImage {
@@ -109,6 +114,8 @@ impl ViewportImage {
             height,
             banded,
             bands,
+            #[cfg(target_os = "macos")]
+            video_layers: frame.video_layers.to_vec(),
         })
     }
 
@@ -142,6 +149,8 @@ impl ViewportImage {
         pixels: Option<&[u8]>,
     ) -> anyhow::Result<bool> {
         let bounds = self.paint_bounds(bounds, window);
+        #[cfg(target_os = "macos")]
+        video::paint_layers(&self.video_layers, bounds, self.width, self.height, window);
         let row_bytes = self.width as usize * 4;
         for band in &self.bands {
             let top = bounds.size.height * (band.start as f32 / self.height as f32);
@@ -1105,6 +1114,8 @@ mod tests {
                                     layout,
                                     pixels: Some(pixels.as_slice()),
                                     band_versions: versions.as_slice(),
+                                    #[cfg(target_os = "macos")]
+                                    video_layers: &[],
                                 };
                                 assert!(surface.paint_ready_image(frame, bounds, window).unwrap());
                             } else {

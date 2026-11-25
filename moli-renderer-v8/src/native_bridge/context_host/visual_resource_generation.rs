@@ -20,6 +20,8 @@ pub(crate) struct VisualResourceGeneration(Arc<VisualResourceState>);
 #[derive(Default)]
 struct VisualResourceState {
     generation: AtomicU64,
+    #[cfg(all(feature = "molio", target_os = "macos"))]
+    composited_video_generation: AtomicU64,
     #[cfg(feature = "molio")]
     viewport_wake: OnceLock<RwLock<Weak<Notify>>>,
 }
@@ -27,7 +29,11 @@ struct VisualResourceState {
 impl VisualResourceGeneration {
     #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn current(&self) -> u64 {
-        self.0.generation.load(Ordering::Acquire)
+        let current = self.0.generation.load(Ordering::Acquire);
+        #[cfg(all(feature = "molio", target_os = "macos"))]
+        let current =
+            current.wrapping_add(self.0.composited_video_generation.load(Ordering::Acquire));
+        current
     }
 
     pub(crate) fn bump(&self) {
@@ -41,6 +47,18 @@ impl VisualResourceGeneration {
         {
             wake.notify_one();
         }
+    }
+
+    #[cfg(all(feature = "media-ext", feature = "molio", target_os = "macos"))]
+    pub(super) fn bump_composited_video(&self) {
+        self.0
+            .composited_video_generation
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    #[cfg(all(feature = "molio", target_os = "macos"))]
+    pub(super) fn viewport_current(&self) -> u64 {
+        self.0.generation.load(Ordering::Acquire)
     }
 
     #[cfg(feature = "molio")]

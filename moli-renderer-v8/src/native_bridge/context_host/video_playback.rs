@@ -387,17 +387,28 @@ impl PageScriptHost {
             >= 8
     }
 
-    pub(crate) fn video_image(&self, media: DomHandle) -> Option<Arc<moli_image::RgbaImage>> {
+    pub(crate) fn video_image(&self, media: DomHandle) -> Option<moli_image::ImagePixels> {
         self.current_video(media)?
             .shown
             .as_ref()
             .map(|frame| frame.image.clone())
     }
 
+    #[cfg(all(feature = "molio", target_os = "macos"))]
+    pub(crate) fn viewport_video_sources(&self) -> Vec<moli_image::VideoFrameSource> {
+        self.video_playbacks
+            .values()
+            .filter_map(|video| match &video.shown.as_ref()?.image {
+                moli_image::ImagePixels::Video { source, .. } => source.clone(),
+                moli_image::ImagePixels::Rgba(_) => None,
+            })
+            .collect()
+    }
+
     pub(crate) fn video_dimensions(&self, media: DomHandle) -> Option<(u32, u32)> {
         let video = self.current_video(media)?;
         if let Some(frame) = &video.shown {
-            Some((frame.image.width, frame.image.height))
+            Some(frame.image.dimensions())
         } else {
             video
                 .metadata
@@ -709,8 +720,7 @@ pub(super) fn apply_video_update(
                     first_frame,
                 }) => {
                     video.metadata = Some(metadata);
-                    video.shown = Some(first_frame);
-                    host.note_video_frame(true);
+                    present_frame(host, media, first_frame);
                     true
                 }
                 Ok(DecodeResult::Frame(_) | DecodeResult::Waiting) => false,
@@ -773,13 +783,43 @@ pub(super) fn apply_video_update(
 
 fn present_frame(host: &mut PageScriptHost, media: DomHandle, frame: VideoFrame) {
     let video = host.video_playbacks.get_mut(&media).expect("current video");
-    let dimensions = (frame.image.width, frame.image.height);
+    let dimensions = frame.image.dimensions();
     let resized = video
         .shown
         .as_ref()
-        .is_none_or(|shown| (shown.image.width, shown.image.height) != dimensions);
+        .is_none_or(|shown| shown.image.dimensions() != dimensions);
+    #[cfg(all(feature = "molio", target_os = "macos"))]
+    let (frame, composited) = publish_native_frame(video.shown.as_ref(), frame);
     video.shown = Some(frame);
+    #[cfg(all(feature = "molio", target_os = "macos"))]
+    if composited {
+        // Screenshots and software captures still observe the new pixels.
+        host.image_resources.bump_composited_video_generation();
+        return;
+    }
     host.note_video_frame(resized);
+}
+
+#[cfg(all(feature = "molio", target_os = "macos"))]
+fn publish_native_frame(previous: Option<&VideoFrame>, mut next: VideoFrame) -> (VideoFrame, bool) {
+    use moli_image::{ImagePixels, VideoFrameSource};
+
+    let ImagePixels::Video { frame, source } = &mut next.image else {
+        return (next, false);
+    };
+    let previous = previous
+        .filter(|previous| previous.image.dimensions() == frame.dimensions())
+        .and_then(|previous| match &previous.image {
+            ImagePixels::Video { source, .. } => source.clone(),
+            ImagePixels::Rgba(_) => None,
+        });
+    let Some(previous) = previous else {
+        *source = Some(VideoFrameSource::new(Arc::clone(frame)));
+        return (next, false);
+    };
+    let composited = previous.publish(Arc::clone(frame));
+    *source = Some(previous);
+    (next, composited)
 }
 
 fn present_video(

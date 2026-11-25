@@ -2,7 +2,10 @@
 
 `raster_snapshot` produces RGBA pixels through AnyRender/Vello CPU.
 `pdf::pdf_snapshot` consumes the same owned snapshot and writes PDF through
-upstream [Krilla at `5eb4e1f`](https://github.com/LaurenzV/krilla/commit/5eb4e1fb24a24ce78b533c23b080969917530c32).
+the [Moli Krilla fork at `c1f42be`](https://github.com/lexmount/krilla/commit/c1f42beeb7fcefd958c27e3a72c5f120eba071b7),
+based on upstream `5eb4e1f`. The fork adds invisible glyph output and checks SVG
+coverage per glyph, so searchable copies do not repaint color-glyph artwork and
+unrelated SVG records do not change a glyph's rendering.
 CDP `Page.printToPDF` and CLI `--dump pdf` use the PDF backend.
 CLI PDF exports include CSS backgrounds, preserving colored controls and white
 text on colored backgrounds. CDP continues to use its `printBackground` option,
@@ -70,12 +73,12 @@ whole export, across text runs and pages, and submits them through Krilla's exis
 path/graphic APIs. Contour keys include the font instance, font size and independent
 X/Y expansion; graphics also include fill or stroke paint. Placement and paint order
 do not duplicate geometry. This cache is separate from prepared-ink measurement;
-Krilla remains pinned to upstream without an expanded-glyph extension. The visible native
+Krilla does not need an expanded-glyph extension. The visible native
 fill carries text semantics when available; path-only text retains one invisible
 native copy for searching and extraction. Font instances
 are cached separately by font identity and normalized variation coordinates.
 The PDF backend leaves SVG glyph rendering disabled, so SVG-backed glyphs use
-their available base outlines for synthetic fill and stroke. Fonts with SVG data
+their available base outlines for synthetic fill and stroke. Glyphs with SVG data
 bypass the native synthetic-fill shortcut, whose Type3 rendering forces a fill.
 Synthetic passes resolve each glyph's contour or native outline fallback independently;
 neighboring glyphs do not select its drawing mode or add searchable copies.
@@ -87,8 +90,10 @@ radial gradients, clips, opacity and PDF blend modes use native PDF primitives.
 Existing AnyRender geometry lowering is shared for non-text drawing; text bypasses
 its glyph API because that API does not carry Unicode semantics. SVG scenes that
 cannot be replayed natively, shadows, other gradient interpolation spaces and
-filters use bounded CPU raster fallbacks. Ordinary filtered text gets one transparent
-text copy for extraction, subject to page ownership, clips and opacity. Fully
+filters use bounded CPU raster fallbacks. Ordinary filtered text gets one invisible
+text copy for extraction, subject to page ownership, clips and opacity. These
+copies use PDF's invisible text rendering mode (`3 Tr`) instead of zero fill
+opacity, which color-glyph drawing commands can override. Fully
 transparent groups contribute no text. Curved/rotated clips use a bounded CPU
 coverage probe at two samples per CSS pixel to exclude invisible clusters; the
 actual glyphs remain native PDF text. Destination masks that leave some visible
@@ -137,7 +142,7 @@ Run the PDF regressions with:
 
 ```sh
 cargo nextest run -p moli-paint -E 'test(pdf::)'
-cargo nextest run -p moli-protocol -E 'test(print_to_pdf) | test(domains::page::pdf::)'
+cargo nextest run -p moli-protocol --features test-support -E 'test(print_to_pdf) | test(domains::page::pdf::)'
 ```
 
 `tests/fixtures/moli-pdf.ttf` is original MIT/Apache-2.0 test data derived from the
@@ -157,7 +162,8 @@ uv run moli-cdp-smoke --group pdf
 The reader script checks the real CLI with MuPDF, including mixed RTL, multi-glyph
 clusters, repeated base letters, color glyphs, opacity, shadows, filters and a
 200,100 CSS-pixel document. It retains PDFs, rendered pages, extracted text and
-per-process timings/sampled peak RSS in `target/native-pdf-check/`. The Rust tests
+per-process timings/sampled peak RSS in `target/native-pdf-check/`. The RSS field
+is `null` when `/proc` sampling is unavailable, including on macOS. The Rust tests
 use lopdf for PDF objects and ordinary text; its extractor does not interpret
 ActualText and Type3 text correctly, so it is not the complex-text oracle.
 The reader script also compares rendered solid and gradient button backgrounds
