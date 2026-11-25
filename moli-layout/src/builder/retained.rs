@@ -167,7 +167,7 @@ where
         }
         layout_box.scroll_offset = self.sample_scroll_offset(node, &layout_box.style);
         if !restyled && retained.css_image_sources.contains(&node) {
-            layout_box.css_images = self.css_image_resources(node, &layout_box.style);
+            self.collect_css_images(node, &layout_box.style);
         }
         let element = layout_box
             .element_semantics

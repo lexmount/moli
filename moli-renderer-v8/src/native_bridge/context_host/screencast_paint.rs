@@ -4,13 +4,13 @@ use std::{
     sync::{Arc, OnceLock, Weak},
 };
 
-use moli_layout::{LayoutCssImageReference, ScreenPaintLayout};
+use moli_layout::ScreenPaintLayout;
 use tokio::{sync::watch, task::JoinHandle};
 
 use crate::document_runtime::DomHandle;
 use crate::raster_worker::RendererRasterStream;
 
-/// The active CDP subscription owns the sender. Polls clone it while a
+/// The active screen paint consumer owns the sender. Polls clone it while a
 /// request is in flight. Closing the channel only wakes cache cleanup.
 #[derive(Clone)]
 pub struct RendererScreencastPaintSession(Arc<ScreencastPaintSession>);
@@ -53,7 +53,6 @@ impl Eq for RendererScreencastPaintSession {}
 pub(super) struct ScreenPaintEntry {
     pub(super) layout: Box<ScreenPaintLayout<DomHandle>>,
     pub(super) resource_generation: u64,
-    pub(super) css_images: Vec<LayoutCssImageReference<DomHandle>>,
 }
 
 struct ScreenPaintConsumer {

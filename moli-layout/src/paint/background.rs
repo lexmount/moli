@@ -157,6 +157,7 @@ pub(super) fn project_background_layers<N>(
     layout_box: &LayoutBox<N>,
     areas: BoxAreas,
     paint_space: PaintSpace,
+    css_images: &crate::source::CssImageLookup<'_>,
     snapshot: &mut PaintSnapshot,
     text_clip_mask: &mut impl FnMut(&mut PaintSnapshot),
 ) where
@@ -250,14 +251,12 @@ pub(super) fn project_background_layers<N>(
                 }
             }
             GenericImage::Url(_) => {
+                let resource = crate::source::css_image_url(layer.image)
+                    .map_or_else(crate::LayoutCssImageState::default, css_images);
                 project_url_image_layer(
                     layout_box,
                     &layer,
-                    layout_box
-                        .css_images
-                        .background
-                        .get(layer_index)
-                        .and_then(Option::as_ref),
+                    resource.ready(),
                     areas,
                     paint_space,
                     snapshot,

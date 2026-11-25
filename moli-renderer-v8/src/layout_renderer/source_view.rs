@@ -4,9 +4,9 @@ use std::{
 };
 
 use moli_layout::{
-    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutImageResource,
-    LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutTableData,
-    LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    LayoutCssImageState, LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics,
+    LayoutImageResource, LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
+    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
 };
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
         flat_children, flat_parent, form_control_data, layout_element_classification, list_data,
         optional_positive_u16_attribute, select_control_data,
     },
-    native_bridge::{PageScriptHost, element::StyleObservation},
+    native_bridge::{CssImagePaintSnapshot, PageScriptHost, element::StyleObservation},
 };
 
 pub(super) struct NativeLayoutSourceView<'a> {
@@ -25,13 +25,14 @@ pub(super) struct NativeLayoutSourceView<'a> {
     document: Option<DomHandle>,
     styles: RefCell<StyleObservation<'a>>,
     paint_resources: bool,
+    css_images: Option<&'a CssImagePaintSnapshot>,
     text_selections: HashMap<DomHandle, LayoutTextSelection>,
 }
 
 impl<'a> NativeLayoutSourceView<'a> {
     #[cfg(test)]
     pub(super) fn new(runtime: &'a PageScriptHost, root: DomHandle) -> Self {
-        Self::with_paint_resources(runtime, root, StyleObservation::new(runtime), false)
+        Self::with_paint_resources(runtime, root, StyleObservation::new(runtime), false, None)
     }
 
     pub(super) fn with_paint_resources(
@@ -39,6 +40,7 @@ impl<'a> NativeLayoutSourceView<'a> {
         root: DomHandle,
         styles: StyleObservation<'a>,
         paint_resources: bool,
+        css_images: Option<&'a CssImagePaintSnapshot>,
     ) -> Self {
         Self {
             runtime,
@@ -46,6 +48,7 @@ impl<'a> NativeLayoutSourceView<'a> {
             document: runtime.dom_host().owner_document_handle(root),
             styles: RefCell::new(styles),
             paint_resources,
+            css_images,
             text_selections: document_text_selections(runtime, root),
         }
     }
@@ -299,27 +302,12 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         }
     }
 
-    fn css_image_resource(&self, resolved_url: &str) -> Option<LayoutImageResource> {
-        if !self.paint_resources {
-            return None;
-        }
-        let parsed = url::Url::parse(resolved_url).ok()?;
-        // Blink shares the fetched bytes using a fragment-free cache key, but
-        // then applies SVG view/element-fragment semantics separately. Until
-        // that latter projection exists, painting the whole SVG would be a
-        // visibly incorrect fallback.
-        if parsed.fragment().is_some() {
-            return None;
-        }
-        let ready = self
-            .runtime
-            .ready_css_image_for_layout(self.document?, parsed.as_str())?;
-        Some(LayoutImageResource {
-            intrinsic_width: ready.intrinsic_width,
-            intrinsic_height: ready.intrinsic_height,
-            pixels: ready.pixels,
-            svg: ready.svg,
-        })
+    fn css_image_state(&self, resolved_url: &str) -> LayoutCssImageState {
+        self.css_images
+            .zip(self.document)
+            .map_or_else(LayoutCssImageState::default, |(images, document)| {
+                images.image(document, resolved_url)
+            })
     }
 
     fn svg_content(

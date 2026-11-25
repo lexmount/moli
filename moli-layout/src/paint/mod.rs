@@ -220,6 +220,7 @@ where
             &projection.world.boxes[background.index()],
             BoxAreas::for_rect(capture.viewport_rect),
             paint_space,
+            projection.css_images,
             &mut snapshot,
             &mut text_clip_mask,
         );
@@ -620,7 +621,13 @@ where
                         transform,
                         filter: None,
                     });
-                    project_css_mask(layout_box, areas, paint_space, &mut snapshot);
+                    project_css_mask(
+                        layout_box,
+                        areas,
+                        paint_space,
+                        projection.css_images,
+                        &mut snapshot,
+                    );
                     snapshot.push_fragment(PaintFragment::PopLayer); // DestIn mask
                     snapshot.push_fragment(PaintFragment::PopLayer); // isolation
                 }
@@ -907,6 +914,7 @@ fn project_box_background<N>(
             layout_box,
             areas,
             paint_space,
+            projection.css_images,
             snapshot,
             &mut text_clip_mask,
         );
@@ -936,6 +944,7 @@ fn project_box_background<N>(
             radii,
             border_image,
             paint_space,
+            projection.css_images,
             || {
                 cull.local_rect(
                     projection.coordinate_spaces[geometry.coordinate_space.index()]

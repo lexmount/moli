@@ -1,6 +1,7 @@
 use super::CompletedPageCommand;
 use super::Page;
 use super::PendingPageCommand;
+use super::RendererScreenshotPurpose;
 use super::dom_protocol_support::DocumentNodeObjectSnapshot;
 use super::protocol_support::ChildFrameTreeSnapshot;
 use super::protocol_support::ScriptExecutionReport;
@@ -496,11 +497,11 @@ impl Page {
         self.start_capture_screenshot_with_request(RendererCaptureScreenshotRequest::viewport_png())
     }
 
-    /// Starts computed CSS image requests for an export and gives them the
-    /// remaining readiness budget. Capture can use ordinary border fallbacks
-    /// if the deadline expires or an image fails.
-    pub async fn prepare_screenshot_resources_async(
+    /// Starts computed CSS image requests for an export. Capture uses the
+    /// current resource state when the remaining readiness budget expires.
+    pub async fn prepare_paint_resources_async(
         &mut self,
+        purpose: RendererScreenshotPurpose,
         timeout: std::time::Duration,
     ) -> Result<()> {
         if timeout.is_zero() {
@@ -508,13 +509,13 @@ impl Page {
         }
         let prepared = tokio::time::timeout(timeout, async {
             let reply = self
-                .dispatch_page_command_async(RendererPageCommand::PrepareScreenshotResources)
+                .dispatch_page_command_async(RendererPageCommand::PreparePaintResources(purpose))
                 .await?;
             let ready = expect_page_reply!(
                 reply,
-                "prepare screenshot resources",
-                "a screenshot resource readiness reply",
-                RendererPageReply::PreparedScreenshotResources(ready) => Ok(ready)
+                "prepare paint resources",
+                "a paint resource readiness reply",
+                RendererPageReply::PreparedPaintResources(ready) => Ok(ready)
             )?;
             if let Some(ready) = ready {
                 ready.await;

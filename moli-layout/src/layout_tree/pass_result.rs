@@ -124,6 +124,10 @@ where
         &self.css_image_references
     }
 
+    pub fn take_css_image_references(&mut self) -> Vec<LayoutCssImageReference<N>> {
+        std::mem::take(&mut self.css_image_references)
+    }
+
     pub fn take_paint_snapshot(&mut self) -> Result<PaintSnapshot, LayoutError> {
         self.paint_snapshot
             .take()

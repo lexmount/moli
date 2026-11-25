@@ -19,7 +19,9 @@ use moli_page_types::ViewportSurface;
 use moli_selector::QueryContainerSizes;
 
 use crate::{
-    document_runtime::DomHandle, native_bridge::PageScriptHost, style_engine::ScreenStyleCoverage,
+    document_runtime::DomHandle,
+    native_bridge::{CssImagePaintSnapshot, PageScriptHost},
+    style_engine::ScreenStyleCoverage,
 };
 use container_feedback::ContainerQueryFeedback;
 
@@ -71,12 +73,16 @@ pub(crate) fn build_native_layout_pass<'a>(
         previous: HashMap::new(),
         screen_style_coverage: collect_screen_style_coverage.then(HashMap::new),
     };
+    let css_images = request
+        .requests_paint()
+        .then(|| runtime.css_image_paint_snapshot());
     let pass = build_native_layout_pass_recursive(
         runtime,
         root,
         services,
         embedded_document_services,
         request,
+        css_images.as_ref(),
         environment_override,
         &mut Vec::new(),
         &mut feedback.previous,
@@ -92,6 +98,7 @@ fn build_native_layout_pass_recursive(
     services: &mut DocumentLayoutServices,
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
+    css_images: Option<&CssImagePaintSnapshot>,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     document_stack: &mut Vec<DomHandle>,
     original_container_sizes: &mut HashMap<DomHandle, QueryContainerSizes>,
@@ -117,6 +124,7 @@ fn build_native_layout_pass_recursive(
             environment_override,
         ),
         request.requests_paint() || request.retains_screen_paint(),
+        css_images,
     );
     let source_ready = profile_started.map(|_| std::time::Instant::now());
     let mut styles_ready = None;
@@ -145,6 +153,7 @@ fn build_native_layout_pass_recursive(
             runtime,
             reason: request.reason,
             capture_paint: request.requests_paint(),
+            css_images,
             include_backgrounds: request.includes_backgrounds(),
             environment_override,
             frame_coverage: request.frame_coverage(),
@@ -250,6 +259,7 @@ struct NativeEmbeddedFrameRenderer<'a> {
     runtime: &'a PageScriptHost,
     reason: moli_layout::LayoutFlushReason,
     capture_paint: bool,
+    css_images: Option<&'a CssImagePaintSnapshot>,
     include_backgrounds: bool,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     frame_coverage: moli_layout::LayoutFrameCoverage,
@@ -317,6 +327,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             &mut services,
             self.embedded_document_services,
             request,
+            self.css_images,
             self.environment_override,
             self.document_stack,
             self.original_container_sizes,

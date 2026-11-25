@@ -511,16 +511,35 @@ pub struct LayoutImageResource {
     pub svg: Option<Arc<moli_image::SvgImage>>,
 }
 
-/// Pass-local resources for the computed CSS images.
-///
-/// The vectors preserve Stylo's layer indices. Missing entries represent a
-/// pending, failed, or unsupported resource and never retain a callback into
-/// the renderer's live resource owner.
+/// The state of a CSS image sampled for one paint projection.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct LayoutCssImageResources {
-    pub(crate) background: Vec<Option<LayoutImageResource>>,
-    pub(crate) border: Option<Box<LayoutImageResource>>,
-    pub(crate) mask: Vec<Option<LayoutImageResource>>,
+pub enum LayoutCssImageState {
+    #[default]
+    Unrequested,
+    Pending,
+    Ready(LayoutImageResource),
+    Failed,
+}
+
+impl LayoutCssImageState {
+    pub(crate) fn ready(&self) -> Option<&LayoutImageResource> {
+        match self {
+            Self::Ready(resource) => Some(resource),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) type CssImageLookup<'a> = dyn Fn(&str) -> LayoutCssImageState + 'a;
+
+pub(crate) fn css_image_url(image: &style::values::computed::Image) -> Option<&str> {
+    let style::values::generics::image::GenericImage::Url(url) = image else {
+        return None;
+    };
+    let url = url.url()?;
+    // SVG URL fragments need a distinct view/element projection.
+    (matches!(url.scheme(), "http" | "https" | "data" | "blob") && url.fragment().is_none())
+        .then(|| url.as_str())
 }
 
 /// A document or form-control selection sampled in UTF-16 units.
@@ -649,6 +668,12 @@ pub trait LayoutSource {
     /// not initiate fetches or wait for asynchronous decode.
     fn css_image_resource(&self, _resolved_url: &str) -> Option<LayoutImageResource> {
         None
+    }
+
+    /// Samples the current paint input, including a request still in flight.
+    fn css_image_state(&self, resolved_url: &str) -> LayoutCssImageState {
+        self.css_image_resource(resolved_url)
+            .map_or(LayoutCssImageState::Unrequested, LayoutCssImageState::Ready)
     }
 }
 

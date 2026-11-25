@@ -1,11 +1,12 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
+    rc::Rc,
 };
 
 use moli_layout::{
-    LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, LayoutViewport,
-    ScrollProjectionRefresh,
+    LayoutCssImageReference, LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult,
+    LayoutViewport, ScrollProjectionRefresh,
 };
 use style::servo::restyle_damage::ServoRestyleDamage;
 
@@ -75,6 +76,8 @@ pub(super) struct RealtimeLayoutState {
     non_dom_revision: Cell<Option<u64>>,
     scroll_projection_dirty: Cell<bool>,
     published: RefCell<Option<ScreenLayoutInputs>>,
+    css_images: RefCell<Rc<[LayoutCssImageReference<DomHandle>]>>,
+    css_images_need_preparation: Cell<bool>,
     #[cfg(feature = "devtools")]
     screencast_paint: ScreencastPaintState,
     pub(super) frame: RefCell<RealtimeFrameState>,
@@ -90,6 +93,8 @@ impl Default for RealtimeLayoutState {
             non_dom_revision: Cell::new(Some(0)),
             scroll_projection_dirty: Cell::new(false),
             published: RefCell::new(None),
+            css_images: RefCell::default(),
+            css_images_need_preparation: Cell::new(false),
             #[cfg(feature = "devtools")]
             screencast_paint: ScreencastPaintState::default(),
             frame: RefCell::new(RealtimeFrameState::default()),
@@ -116,6 +121,8 @@ impl RealtimeLayoutState {
         self.published.borrow_mut().take();
         #[cfg(feature = "devtools")]
         self.screencast_paint.publish(None);
+        self.css_images.take();
+        self.css_images_need_preparation.set(false);
     }
 
     pub(super) fn reset(&self) {
@@ -200,7 +207,7 @@ impl PageScriptHost {
     pub(crate) fn finish_layout_publication(
         &self,
         publication: PreparedLayoutPublication,
-        pass: LayoutPassResult<DomHandle>,
+        mut pass: LayoutPassResult<DomHandle>,
         feedback: LayoutPassFeedback<'_>,
     ) -> Result<(), LayoutError> {
         match publication.0 {
@@ -229,20 +236,18 @@ impl PageScriptHost {
                     ));
                 }
                 #[cfg(feature = "devtools")]
-                let (pass, paint) = {
-                    let mut pass = pass;
-                    let paint = paint_generation.zip(pass.take_screen_paint()).map(
-                        |(resource_generation, layout)| ScreenPaintEntry {
-                            layout,
-                            resource_generation,
-                            css_images: pass.css_image_references().to_vec(),
-                        },
-                    );
-                    (pass, paint)
-                };
+                let paint = paint_generation.zip(pass.take_screen_paint()).map(
+                    |(resource_generation, layout)| ScreenPaintEntry {
+                        layout,
+                        resource_generation,
+                    },
+                );
                 #[cfg(not(feature = "devtools"))]
                 let _ = paint_generation;
+                let images = pass.take_css_image_references();
                 self.publish_layout_pass_for_document(document, pass);
+                state.css_images_need_preparation.set(!images.is_empty());
+                *state.css_images.borrow_mut() = images.into();
                 #[cfg(feature = "devtools")]
                 state.screencast_paint.publish(paint);
                 self.did_publish_screen_layout(state, inputs, feedback.commit());
@@ -250,6 +255,28 @@ impl PageScriptHost {
             LayoutPublication::Transient => {}
         }
         Ok(())
+    }
+
+    pub(crate) fn take_realtime_css_image_preparation(
+        &self,
+    ) -> Option<Rc<[LayoutCssImageReference<DomHandle>]>> {
+        let state = self.realtime_layout_state.as_ref()?;
+        (state.css_images_need_preparation.get()
+            && crate::document_runtime::DocumentRuntime::css_image_fetch_enabled(self))
+        .then(|| {
+            state.css_images_need_preparation.set(false);
+            state.css_images.borrow().clone()
+        })
+    }
+
+    pub(crate) fn current_screen_css_images(
+        &self,
+    ) -> Result<Option<Rc<[LayoutCssImageReference<DomHandle>]>>, LayoutError> {
+        let Some(state) = &self.realtime_layout_state else {
+            return Ok(None);
+        };
+        self.ensure_current_screen_layout(LayoutFlushReason::Screenshot)?;
+        Ok(Some(state.css_images.borrow().clone()))
     }
 
     pub(crate) fn begin_screen_style_layout(&self, document: DomHandle) {
@@ -289,7 +316,7 @@ impl PageScriptHost {
     fn screen_paint_generation(&self, state: &RealtimeLayoutState) -> Option<u64> {
         #[cfg(feature = "devtools")]
         if state.screencast_paint.is_active() {
-            let generation = self.visual_resource_generation();
+            let generation = self.retained_paint_resource_generation();
             return (generation != u64::MAX).then_some(generation);
         }
         #[cfg(not(feature = "devtools"))]
@@ -305,18 +332,13 @@ impl PageScriptHost {
     }
 
     #[cfg(feature = "devtools")]
-    pub(crate) fn paint_current_screencast_layout(
+    pub(crate) fn paint_current_screen_layout(
         &self,
         session: &RendererScreencastPaintSession,
         viewport: LayoutViewport,
         capture: moli_layout::PaintCaptureRequest,
-    ) -> Result<
-        Option<(
-            moli_layout::PaintSnapshot,
-            Vec<moli_layout::LayoutCssImageReference<DomHandle>>,
-        )>,
-        LayoutError,
-    > {
+        reason: LayoutFlushReason,
+    ) -> Result<Option<moli_layout::PaintSnapshot>, LayoutError> {
         let Some(state) = &self.realtime_layout_state else {
             return Ok(None);
         };
@@ -325,22 +347,26 @@ impl PageScriptHost {
             return Ok(None);
         }
         state.screencast_paint.attach(session);
-        self.ensure_current_screen_layout(LayoutFlushReason::Screencast)?;
+        self.ensure_current_screen_layout(reason)?;
         let layout = self.document_layout_state.borrow();
         let Some(tree) = layout.latest_layout(document) else {
             return Ok(None);
         };
-        let resource_generation = self.visual_resource_generation();
+        let resource_generation = self.retained_paint_resource_generation();
         state
             .screencast_paint
             .read(|paint| {
                 if paint.resource_generation != resource_generation {
                     return Ok(None);
                 }
-                Ok(Some((
-                    paint.layout.paint(tree, capture)?,
-                    paint.css_images.clone(),
-                )))
+                let images = self.css_image_paint_snapshot();
+                let css_image = |root, url: &str| {
+                    self.layout_document_for_source(root)
+                        .map_or_else(moli_layout::LayoutCssImageState::default, |document| {
+                            images.image(document, url)
+                        })
+                };
+                paint.layout.paint(tree, capture, &css_image).map(Some)
             })
             .unwrap_or(Ok(None))
     }
