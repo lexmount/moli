@@ -106,3 +106,23 @@ fn window_focus_and_blur_validate_the_receiver_in_the_callee_realm() {
         "true"
     );
 }
+
+#[test]
+fn initial_child_focus_blurs_the_top_level_viewport() {
+    let mut vm = new_parsed_test_vm(
+        "https://initial-child-focus.test/",
+        "<!doctype html><iframe></iframe>",
+    );
+    assert_eq!(vm.eval(r#"
+        (() => {
+            const frame = document.querySelector('iframe');
+            const child = frame.contentWindow;
+            const events = [];
+            window.addEventListener('blur', event => events.push('top:' + (event.target === window)));
+            child.addEventListener('focus', event => events.push('child:' + (event.target === child)));
+            const focus = child.focus;
+            focus();
+            return [document.activeElement === frame, ...events].join('|');
+        })()
+    "#).unwrap(), "true|top:true|child:true");
+}

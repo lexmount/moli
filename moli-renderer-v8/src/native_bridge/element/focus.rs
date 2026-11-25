@@ -554,7 +554,7 @@ fn update_focus_from_previous_with_previous_focus_within(
         dispatch_interest_event_if_needed(scope, runtime_ptr, previous_handle, "loseinterest");
     }
     let window_focus_transition =
-        window_focus_transition_for_handles(scope, runtime_ptr, previous, next);
+        window_focus_transition_for_handles(unsafe { &*runtime_ptr }, previous, next);
     if let Some((previous_window, _)) = window_focus_transition {
         dispatch_window_focus_event(scope, runtime_ptr, previous_window, "blur");
     }
@@ -592,37 +592,31 @@ fn update_focus_from_previous_with_previous_focus_within(
 }
 
 fn window_focus_transition_for_handles(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
+    runtime: &PageScriptHost,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
 ) -> Option<(PendingWindowMessageEndpoint, PendingWindowMessageEndpoint)> {
-    let runtime = unsafe { &*runtime_ptr };
-    let execution_window = current_execution_window_endpoint(scope);
+    let next_window = focused_window_endpoint(runtime, next?)?;
     let previous_window = previous
         .and_then(|handle| focused_window_endpoint(runtime, handle))
-        .unwrap_or(execution_window);
-    // Clearing an element's focus does not blur its Window. A later focus in
-    // another Document supplies the concrete new focused-frame endpoint.
-    let next_window = next
-        .and_then(|handle| focused_window_endpoint(runtime, handle))
-        .unwrap_or(previous_window);
-    if previous_window == next_window {
-        return None;
-    }
-    Some((previous_window, next_window))
-}
-
-fn current_execution_window_endpoint(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> PendingWindowMessageEndpoint {
-    if let Some(handle) = crate::native_bridge::active_child_window_handle(scope) {
-        return PendingWindowMessageEndpoint::ChildWindow(handle);
-    }
-    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
-        return PendingWindowMessageEndpoint::LightweightPopup(popup_id);
-    }
-    PendingWindowMessageEndpoint::TopWindow
+        .unwrap_or_else(|| {
+            let PendingWindowMessageEndpoint::ChildWindow(mut child) = next_window else {
+                return next_window;
+            };
+            while let Some(parent) = runtime.child_browsing_context_parent_handle(child) {
+                child = parent;
+            }
+            // Before an element gains focus the traversable's viewport holds it.
+            runtime
+                .dom_host()
+                .owner_document_handle(child)
+                .and_then(|document| runtime.lightweight_popup_id_for_document_handle(document))
+                .map_or(
+                    PendingWindowMessageEndpoint::TopWindow,
+                    PendingWindowMessageEndpoint::LightweightPopup,
+                )
+        });
+    (previous_window != next_window).then_some((previous_window, next_window))
 }
 
 fn focused_window_endpoint(
@@ -650,9 +644,18 @@ fn dispatch_window_focus_event(
     endpoint: PendingWindowMessageEndpoint,
     event_type: &str,
 ) {
+    let runtime = unsafe { &mut *runtime_ptr };
+    let context = if endpoint == PendingWindowMessageEndpoint::TopWindow {
+        let Some(context) = runtime.page_default_context(scope) else {
+            return;
+        };
+        context
+    } else {
+        scope.get_current_context()
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let event = construct_focus_event(scope, event_type, None, false)
         .expect("Window focus transition must materialize its FocusEvent");
-    let runtime = unsafe { &mut *runtime_ptr };
     match endpoint {
         PendingWindowMessageEndpoint::TopWindow => {
             let _ = runtime.dispatch_public_event_best_effort(
