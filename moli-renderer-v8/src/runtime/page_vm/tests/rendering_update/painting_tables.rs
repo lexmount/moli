@@ -639,10 +639,12 @@ html,body{{margin:0;padding:0;background:white}}
             assert_eq!(snapshot.images.len(), 1);
             assert_eq!(snapshot.svg_images.len(), 4);
             assert!(snapshot.fragments.iter().any(|fragment| {
-                matches!(fragment, moli_layout::PaintFragment::Image(_))
+                matches!(fragment, moli_layout::PaintFragment::Tiles(tiles)
+                    if matches!(tiles.source, moli_layout::PaintTileSource::Image(..)))
             }));
             assert!(snapshot.fragments.iter().any(|fragment| {
-                matches!(fragment, moli_layout::PaintFragment::SvgImage(_))
+                matches!(fragment, moli_layout::PaintFragment::Tiles(tiles)
+                    if matches!(tiles.source, moli_layout::PaintTileSource::Svg(..)))
             }));
             assert!(snapshot.diagnostics.iter().all(|diagnostic| {
                 diagnostic.code != "background-image-resource-unavailable"

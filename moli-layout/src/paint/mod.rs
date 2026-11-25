@@ -16,7 +16,7 @@ mod text;
 use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use background::{project_background_color, project_background_layers};
-use border::{BorderImageGeometry, BorderImageRasters, border_image_area, project_box_border};
+use border::{BorderImageGeometry, border_image_area, project_box_border};
 use clip_path::{ClipPathUnsupported, project_clip_path};
 use cull::{PaintCullPlan, PaintCullRegion};
 use filters::{expanded_filter_clip, project_filters};
@@ -190,7 +190,6 @@ where
         .extend_from_slice(projection.diagnostics);
     let inline_images = inline_border_images(projection);
     let cull_plan = PaintCullPlan::build(projection, &inline_images);
-    let mut border_rasters = BorderImageRasters::default();
     let mut metrics = PaintProjectionMetrics {
         event_count: projection.metadata.events.len(),
         ..PaintProjectionMetrics::default()
@@ -442,7 +441,6 @@ where
                     capture.include_backgrounds,
                     current_cull,
                     &mut metrics,
-                    &mut border_rasters,
                     &mut snapshot,
                 );
             }
@@ -483,7 +481,6 @@ where
                     current_cull,
                     &mut metrics,
                     &inline_images,
-                    &mut border_rasters,
                     &mut snapshot,
                 );
             }
@@ -538,7 +535,6 @@ where
                     current_cull,
                     &mut metrics,
                     &inline_images,
-                    &mut border_rasters,
                     &mut snapshot,
                 );
             }
@@ -841,7 +837,6 @@ fn project_box_background<N>(
     include_backgrounds: bool,
     cull: PaintCullRegion,
     metrics: &mut PaintProjectionMetrics,
-    border_rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -952,7 +947,6 @@ fn project_box_background<N>(
                         .local_transform(),
                 )
             },
-            border_rasters,
             snapshot,
         );
     }
@@ -1154,7 +1148,6 @@ fn project_inline_contents<N>(
     cull: PaintCullRegion,
     metrics: &mut PaintProjectionMetrics,
     inline_images: &InlineBorderImages,
-    border_rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -1184,7 +1177,6 @@ fn project_inline_contents<N>(
         paint_space,
         include_backgrounds,
         inline_images,
-        border_rasters,
         snapshot,
         local_cull,
         &mut text_clip_mask,

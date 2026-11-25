@@ -79,11 +79,24 @@ pub(super) fn validate(snapshot: &PaintSnapshot) -> Result<(), PdfError> {
                 glyphs(&shadow.run) && point(shadow.offset) && shadow.blur_radius.is_finite(),
                 shadow.run.transform,
             ),
-            PaintFragment::Image(image) => (
-                rect(image.destination) && image.repeat_bounds.is_none_or(rect),
-                image.transform,
-            ),
+            PaintFragment::Image(image) => (rect(image.destination), image.transform),
             PaintFragment::SvgImage(image) => (rect(image.destination), image.transform),
+            PaintFragment::Tiles(tiles) => (
+                rect(tiles.source_rect)
+                    && rect(tiles.grid.coverage)
+                    && crate::scene::tiles::valid_tile_axis(tiles.grid.x)
+                    && crate::scene::tiles::valid_tile_axis(tiles.grid.y)
+                    && match &tiles.source {
+                        PaintTileSource::Image(..) => true,
+                        PaintTileSource::Svg(_, size) => {
+                            finite([size.width, size.height])
+                                && size.width > 0.0
+                                && size.height > 0.0
+                        }
+                        PaintTileSource::Brush(value) => brush(value),
+                    },
+                tiles.transform,
+            ),
             PaintFragment::PopLayer => continue,
         };
         if !valid

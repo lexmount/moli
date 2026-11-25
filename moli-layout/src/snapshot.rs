@@ -583,13 +583,57 @@ pub enum PaintImageSampling {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintImage {
     pub image: PaintImageId,
-    /// One image tile, before the property transform.
     pub destination: PaintRect,
-    /// When present, repeat the tile continuously on both axes inside these
-    /// finite bounds, in the same coordinate space as `destination`.
-    /// The tile phase and size stay fractional; only the coverage is snapped.
-    pub repeat_bounds: Option<PaintRect>,
     pub sampling: PaintImageSampling,
+    pub transform: PaintTransform2D,
+}
+
+/// One axis of a finite tile grid in local CSS pixels. The step includes the
+/// tile size and any gap. A single tile does not require a step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaintTileAxis {
+    pub start: f64,
+    pub size: f64,
+    pub step: f64,
+    pub count: u32,
+}
+
+impl PaintTileAxis {
+    pub const fn new(start: f64, size: f64, step: f64, count: u32) -> Self {
+        Self {
+            start,
+            size,
+            step,
+            count,
+        }
+    }
+}
+
+/// A tile grid clipped to `coverage`, in the same coordinate space as the
+/// undisplaced tiles. Pixel snapping never accumulates into the grid phase.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaintTileGrid {
+    pub x: PaintTileAxis,
+    pub y: PaintTileAxis,
+    pub coverage: PaintRect,
+    pub snap_tiles: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PaintTileSource {
+    Image(PaintImageId, PaintImageSampling),
+    Svg(PaintSvgImageId, PaintSize),
+    Brush(PaintBrush),
+}
+
+/// Draws a rectangle of a source once or repeatedly. Raster source rectangles
+/// use image pixels and constrain filtering to the texels they intersect.
+/// SVG source rectangles use coordinates in the supplied SVG viewport.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaintTiles {
+    pub source: PaintTileSource,
+    pub source_rect: PaintRect,
+    pub grid: PaintTileGrid,
     pub transform: PaintTransform2D,
 }
 
@@ -799,6 +843,8 @@ pub enum PaintFragment {
     Image(PaintImage),
     /// One parsed vector image backed by a snapshot-local SVG resource table.
     SvgImage(PaintSvgImage),
+    /// One clipped, finite grid sharing a source rectangle across all tiles.
+    Tiles(Box<PaintTiles>),
 }
 
 impl PaintFragment {
@@ -1237,6 +1283,15 @@ fn rebase_embedded_fragment(
             image.image = *svg_image_ids.get(image.image.index())?;
             image.transform = parent.concatenate(image.transform);
             PaintFragment::SvgImage(image)
+        }
+        PaintFragment::Tiles(mut tiles) => {
+            match &mut tiles.source {
+                PaintTileSource::Image(image, _) => *image = *image_ids.get(image.index())?,
+                PaintTileSource::Svg(image, _) => *image = *svg_image_ids.get(image.index())?,
+                PaintTileSource::Brush(_) => {}
+            }
+            tiles.transform = parent.concatenate(tiles.transform);
+            PaintFragment::Tiles(tiles)
         }
     })
 }

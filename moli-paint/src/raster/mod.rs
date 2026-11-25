@@ -134,42 +134,44 @@ pub fn raster_damage_rows(
     let mut top = layout.height;
     let mut bottom = 0;
     for fragment in &current.fragments {
-        match fragment {
+        let (id, rect, transform) = match fragment {
             PaintFragment::PushLayer {
                 filter: Some(_), ..
             } => return full,
-            PaintFragment::Image(image) => {
-                let Some((old, new)) = previous
-                    .images
-                    .get(image.image.index())
-                    .zip(current.images.get(image.image.index()))
-                else {
-                    return full;
-                };
-                if Arc::ptr_eq(&old.image, &new.image) {
-                    continue;
-                }
-                let Some(rect) =
-                    pixel_snap_paint_rect(image.repeat_bounds.unwrap_or(image.destination))
-                        .and_then(to_backend_rect)
-                else {
-                    return full;
-                };
-                let bounds = device_transform(image.transform, scale).transform_rect_bbox(rect);
-                if !bounds.is_finite() {
-                    return full;
-                }
-                // Widen to include the antialiasing fringe at transformed edges.
-                if bounds.x1 > -2.0 && bounds.x0 < f64::from(layout.width) + 2.0 {
-                    let first = (bounds.y0.floor() - 2.0) as u32;
-                    let end = ((bounds.y1.ceil() + 2.0) as u32).min(layout.height);
-                    if first < end {
-                        top = top.min(first);
-                        bottom = bottom.max(end);
-                    }
-                }
+            PaintFragment::Image(image) => (
+                image.image,
+                pixel_snap_paint_rect(image.destination).and_then(to_backend_rect),
+                image.transform,
+            ),
+            PaintFragment::Tiles(tiles) => match tiles.source {
+                moli_layout::PaintTileSource::Image(id, _) => (
+                    id,
+                    crate::scene::tiles::grid_coverage(tiles.grid),
+                    tiles.transform,
+                ),
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let Some((old, new)) = previous.image(id).zip(current.image(id)) else {
+            return full;
+        };
+        if Arc::ptr_eq(&old.image, &new.image) {
+            continue;
+        }
+        let Some(rect) = rect else { return full };
+        let bounds = device_transform(transform, scale).transform_rect_bbox(rect);
+        if !bounds.is_finite() {
+            return full;
+        }
+        // Widen to include the antialiasing fringe at transformed edges.
+        if bounds.x1 > -2.0 && bounds.x0 < f64::from(layout.width) + 2.0 {
+            let first = (bounds.y0.floor() - 2.0) as u32;
+            let end = ((bounds.y1.ceil() + 2.0) as u32).min(layout.height);
+            if first < end {
+                top = top.min(first);
+                bottom = bottom.max(end);
             }
-            _ => {}
         }
     }
     if top < bottom { top..bottom } else { 0..0 }
@@ -231,6 +233,12 @@ pub fn raster_snapshot_rows_into(
         &snapshot.fragments,
         f64::from(snapshot.surface.device_scale),
         layout,
+        Rect::new(
+            0.0,
+            f64::from(start),
+            f64::from(layout.width),
+            f64::from(end),
+        ),
     );
     let mut renderer = VelloCpuImageRenderer::new(region.width, region.height);
     renderer.render(
@@ -265,7 +273,19 @@ fn render_snapshot(snapshot: &PaintSnapshot, dimensions: RasterBufferLayout, pix
     renderer.render(
         |scene| {
             paint_canvas(scene, snapshot.canvas_color, dimensions);
-            paint_fragment_stream(scene, snapshot, &snapshot.fragments, scale, dimensions);
+            paint_fragment_stream(
+                scene,
+                snapshot,
+                &snapshot.fragments,
+                scale,
+                dimensions,
+                Rect::new(
+                    0.0,
+                    0.0,
+                    f64::from(dimensions.width),
+                    f64::from(dimensions.height),
+                ),
+            );
         },
         pixels,
     );
@@ -382,6 +402,7 @@ fn paint_fragment_stream(
     fragments: &[PaintFragment],
     scale: f64,
     dimensions: RasterBufferLayout,
+    output: Rect,
 ) {
     let mut index = 0usize;
     while index < fragments.len() {
@@ -394,7 +415,7 @@ fn paint_fragment_stream(
             _ => None,
         };
         let Some(filter) = isolated_filter else {
-            paint_fragment(scene, snapshot, fragment, scale);
+            paint_fragment(scene, snapshot, fragment, scale, output);
             index += 1;
             continue;
         };
@@ -426,6 +447,7 @@ fn paint_fragment_stream(
                     &fragments[index + 1..end],
                     scale,
                     dimensions,
+                    output,
                 );
             },
             &mut filtered_rgba,
