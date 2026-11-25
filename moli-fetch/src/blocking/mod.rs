@@ -538,11 +538,24 @@ pub(crate) fn store_response_cookies(
     request_context: &NetworkCookieRequestContext,
 ) -> Result<Vec<StoredCookieSetReport>> {
     let mut cookie_store = cookie_store.lock()?;
-    Ok(cookie_store.store_response_headers_with_context_reports(
+    let reports = cookie_store.store_response_headers_with_context_reports(
         response_url,
         headers,
         request_context,
-    ))
+    );
+    if headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("clear-site-data"))
+        .any(|(_, value)| {
+            let value = crate::decode_header_value(value);
+            crate::split_http_header_list(&value)
+                .any(|directive| matches!(directive, "\"cookies\"" | "\"*\""))
+        })
+        && moli_url::is_potentially_trustworthy_url(response_url)
+    {
+        cookie_store.clear_cookies_for_response_site(response_url, request_context);
+    }
+    Ok(reports)
 }
 
 pub(crate) fn configure_easy(

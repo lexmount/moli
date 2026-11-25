@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cookie_store::CookieStore;
-use moli_site::site_key_for_host;
+use moli_site::{registrable_site_host, site_key_for_host};
 
 use super::BrowserCookieStore;
 #[cfg(any(test, feature = "test-support"))]
@@ -15,10 +15,33 @@ use crate::{
 use crate::{
     CookieSiteDataClearReport, CookieSiteDataClearScope, CookieSiteDataScope,
     CookieSiteDataSummary, CookieStorageClearReport, CookieStorageClearTarget,
-    CookieStorageStateDiff, CookieStorageStateSnapshot,
+    CookieStorageStateDiff, CookieStorageStateSnapshot, NetworkCookieRequestContext,
 };
 
 impl BrowserCookieStore {
+    /// Clears the response site's unpartitioned cookies and cookies in the request partition.
+    pub fn clear_cookies_for_response_site(
+        &mut self,
+        response_url: &url::Url,
+        request_context: &NetworkCookieRequestContext,
+    ) -> usize {
+        let Some(host) = response_url.host_str() else {
+            return 0;
+        };
+        let site = registrable_site_host(host);
+        let partition = crate::model::cookie_partition_key_for_url(
+            &request_context.browser_context,
+            response_url,
+        );
+        self.delete_cookies_matching(|cookie| {
+            registrable_site_host(&cookie.domain) == site
+                && cookie
+                    .partition_key
+                    .as_ref()
+                    .is_none_or(|key| key == &partition)
+        })
+    }
+
     /// Clears all cookies from the live store.
     pub fn clear(&mut self) {
         let _ = self.clear_with_scope_and_report(CookieSiteDataClearScope::All);

@@ -727,3 +727,48 @@ fn interception_authorization_is_scoped_to_the_explicitly_overridden_hop() -> Re
     assert!(has_auth(&request, &request.url).is_empty());
     Ok(())
 }
+
+#[tokio::test]
+async fn clear_site_cookies_runs_after_set_cookie_and_requires_credentials() -> Result<()> {
+    for transport in Transport::ALL {
+        let clear = || {
+            ScriptedResponse::ok("body")
+                .with_header("Clear-Site-Data", r#""cookies""#)
+                .with_header("Set-Cookie", "new=1")
+        };
+        let server = ScriptedHttpServer::spawn(vec![
+            clear(),
+            ScriptedResponse::ok("body")
+                .with_header("Clear-Site-Data", r#""unknown, \"cookies\"", cookies"#),
+            clear(),
+            ScriptedResponse::ok("body")
+                .with_header("Set-Cookie", "new=1")
+                .with_header("Clear-Site-Data", r#""*""#),
+        ]);
+        let url = Url::parse(&server.url())?;
+        let cookies = new_shared_browser_cookie_store();
+        cookies
+            .lock()?
+            .store_response_headers(&url, &[("Set-Cookie".to_owned(), b"old=1".to_vec())]);
+        let client = FetchClient::new(&FetchConfig::default(), cookies.clone());
+
+        for (credentials, expected) in [
+            (RequestCredentialsMode::Omit, Some("old=1")),
+            (RequestCredentialsMode::Include, Some("old=1")),
+            (RequestCredentialsMode::Include, None),
+            (RequestCredentialsMode::Include, None),
+        ] {
+            let request =
+                Request::new("GET", url.as_str(), None, crate::RequestHeaders::default())?
+                    .with_credentials_mode(credentials);
+            transport.fetch(&client, request).await?;
+            assert_eq!(
+                cookies.lock()?.cookie_header(&url).as_deref(),
+                expected,
+                "{transport:?}"
+            );
+        }
+        server.shutdown();
+    }
+    Ok(())
+}
