@@ -2087,15 +2087,8 @@ impl PageScriptHost {
             self.note_realtime_layout_input_change();
         }
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
-        self.style_engine.invalidate_for_focus_change_with_viewport(
-            unsafe { &*dom_host },
-            previous,
-            next,
-            &emulated_media,
-            viewport,
-        );
+        self.style_engine
+            .invalidate_focus_change(unsafe { &*dom_host }, previous, next);
     }
 
     pub(crate) fn note_focus_style_activity_with_previous_focus_within(
@@ -2106,16 +2099,12 @@ impl PageScriptHost {
     ) {
         self.note_realtime_layout_input_change();
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
         self.style_engine
-            .invalidate_for_focus_change_with_previous_focus_within_and_viewport(
+            .invalidate_focus_change_with_previous_focus_within(
                 unsafe { &*dom_host },
                 previous,
                 next,
                 previous_focus_within,
-                &emulated_media,
-                viewport,
             );
     }
 
@@ -2128,16 +2117,8 @@ impl PageScriptHost {
             self.note_realtime_layout_input_change();
         }
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
         self.style_engine
-            .invalidate_for_target_change_with_viewport(
-                unsafe { &*dom_host },
-                previous,
-                next,
-                &emulated_media,
-                viewport,
-            );
+            .invalidate_target_change(unsafe { &*dom_host }, previous, next);
     }
 
     pub(crate) fn note_element_state_style_activity_with_old_state(
@@ -2153,17 +2134,12 @@ impl PageScriptHost {
             self.note_realtime_layout_input_change();
         }
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
-        self.style_engine
-            .invalidate_for_element_state_change_with_old_state_and_viewport(
-                unsafe { &*dom_host },
-                element,
-                state,
-                old_state,
-                &emulated_media,
-                viewport,
-            );
+        self.style_engine.invalidate_element_state_change(
+            unsafe { &*dom_host },
+            element,
+            state,
+            old_state,
+        );
     }
 
     #[cfg(feature = "devtools")]
@@ -2223,17 +2199,12 @@ impl PageScriptHost {
             self.note_realtime_layout_input_change();
         }
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
-        self.style_engine
-            .invalidate_for_custom_state_change_with_viewport(
-                unsafe { &*dom_host },
-                element,
-                state_names,
-                old_custom_states,
-                &emulated_media,
-                viewport,
-            );
+        self.style_engine.invalidate_custom_state_change(
+            unsafe { &*dom_host },
+            element,
+            state_names,
+            old_custom_states,
+        );
     }
 
     pub(crate) fn set_media_paused(&mut self, handle: DomHandle, paused: bool) -> bool {
@@ -2319,10 +2290,12 @@ impl PageScriptHost {
                 ))
             })
             .collect::<Vec<_>>();
+        let validity = self.snapshot_select_validity(handle);
         let changed = unsafe {
             DocumentRuntime::set_select_value(&mut *self.document_runtime, handle, value)
         };
         if changed {
+            self.invalidate_validity_snapshots(validity);
             for (option, was_selected, old_state) in old_states {
                 let selected = self
                     .dom_host()
@@ -2527,6 +2500,30 @@ impl PageScriptHost {
             .collect()
     }
 
+    pub(crate) fn snapshot_select_validity(
+        &self,
+        select: DomHandle,
+    ) -> Vec<(DomHandle, StyloElementState)> {
+        let mut states = self.retained_old_states_for_validity_container_change(select);
+        if let Some(state) = self.retained_current_element_state(select) {
+            states.push((select, state));
+        }
+        states
+    }
+
+    pub(crate) fn invalidate_validity_snapshots(
+        &mut self,
+        snapshots: impl IntoIterator<Item = (DomHandle, StyloElementState)>,
+    ) {
+        for (element, state) in snapshots {
+            self.note_element_state_style_activity_with_old_state(
+                element,
+                StyloElementState::VALIDITY_STATES,
+                Some(state),
+            );
+        }
+    }
+
     fn retained_old_states_for_validity_container_change(
         &self,
         handle: DomHandle,
@@ -2601,14 +2598,8 @@ impl PageScriptHost {
         self.invalidate_published_frame_viewports(changed_iframe_attributes);
         let validity_containers = self.validity_containers_for_child_list_mutations(effects);
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
-        self.style_engine.invalidate_for_mutations_with_viewport(
-            unsafe { &*dom_host },
-            effects,
-            &emulated_media,
-            viewport,
-        );
+        self.style_engine
+            .invalidate_dom_mutations(unsafe { &*dom_host }, effects);
         for container in validity_containers {
             // Child-list effects are produced after the tree splice, so the
             // previous aggregate validity is unavailable. An absent old state

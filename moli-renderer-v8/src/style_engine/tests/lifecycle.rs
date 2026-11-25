@@ -203,335 +203,6 @@ fn disabled_author_styles_use_stylo_author_origin_gate() {
 }
 
 #[test]
-fn document_connected_shadow_scope_fallback_roots_include_shadow_roots() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let active_host = host.create_element("section");
-    let active_shadow_root = host
-        .attach_shadow_root(active_host, "open")
-        .expect("active section should host a shadow root");
-    let detached_document = host.create_detached_html_document();
-    let detached_host = host.create_element("section");
-    let detached_shadow_root = host
-        .attach_shadow_root(detached_host, "open")
-        .expect("detached section should host a shadow root");
-
-    assert!(host.append_child(document, active_host));
-    assert!(host.append_child(detached_document, detached_host));
-
-    let source_scope = StyleSourceScope::for_document_and_connected_shadow_roots(&host, document);
-    let fallback_roots = source_scope_fallback_roots_for_test(&host, &source_scope);
-
-    assert!(fallback_roots.contains(&document));
-    assert!(fallback_roots.contains(&active_host));
-    assert!(fallback_roots.contains(&active_shadow_root));
-    assert!(!fallback_roots.contains(&detached_document));
-    assert!(!fallback_roots.contains(&detached_host));
-    assert!(!fallback_roots.contains(&detached_shadow_root));
-}
-#[test]
-fn document_connected_shadow_source_scope_is_a_snapshot() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let active_host = host.create_element("section");
-    let active_shadow_root = host
-        .attach_shadow_root(active_host, "open")
-        .expect("active section should host a shadow root");
-    let active_shadow_style = host.create_element("style");
-    assert!(host.append_child(document, active_host));
-    assert!(host.append_child(active_shadow_root, active_shadow_style));
-
-    let mut engine = MoliStyleEngine::new();
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        active_shadow_style,
-        ".active { color: green; }".into(),
-    );
-
-    let source_scope = StyleSourceScope::for_document_and_connected_shadow_roots(&host, document);
-
-    let late_host = host.create_element("article");
-    let late_shadow_root = host
-        .attach_shadow_root(late_host, "open")
-        .expect("late article should host a shadow root");
-    let late_shadow_style = host.create_element("style");
-    assert!(host.append_child(document, late_host));
-    assert!(host.append_child(late_shadow_root, late_shadow_style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        late_shadow_style,
-        ".late { color: red; }".into(),
-    );
-
-    let fallback_roots = source_scope_fallback_roots_for_test(&host, &source_scope);
-    assert!(fallback_roots.contains(&document));
-    assert!(fallback_roots.contains(&active_host));
-    assert!(fallback_roots.contains(&active_shadow_root));
-    assert!(!fallback_roots.contains(&late_host));
-    assert!(!fallback_roots.contains(&late_shadow_root));
-
-    let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    let sources = engine.matching_dependency_source_ids_for_document_for_test(
-        &host,
-        document,
-        &source_scope,
-        &media,
-    );
-    let active_style_id = StyleSourceId {
-        scope_id: StyleScopeId::ShadowRoot(active_shadow_root),
-        kind: StyleSourceKind::OwnerStyleSheet {
-            owner: active_shadow_style,
-        },
-    };
-    let late_style_id = StyleSourceId {
-        scope_id: StyleScopeId::ShadowRoot(late_shadow_root),
-        kind: StyleSourceKind::OwnerStyleSheet {
-            owner: late_shadow_style,
-        },
-    };
-
-    assert!(
-        sources
-            .iter()
-            .any(|(source_id, _)| source_id == &active_style_id),
-        "snapshot should include active shadow source; sources={sources:?}"
-    );
-    assert!(
-        !sources
-            .iter()
-            .any(|(source_id, _)| source_id == &late_style_id),
-        "snapshot should not include shadow sources connected after scope creation; sources={sources:?}"
-    );
-}
-
-#[test]
-fn matching_dependency_sources_are_scoped_to_invalidation_document() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let active_style = host.create_element("style");
-    let active_target = host.create_element("main");
-    let detached_document = host.create_detached_html_document();
-    let detached_style = host.create_element("style");
-    let detached_target = host.create_element("main");
-    assert!(host.append_child(document, active_style));
-    assert!(host.append_child(document, active_target));
-    assert!(host.append_child(detached_document, detached_style));
-    assert!(host.append_child(detached_document, detached_target));
-
-    let mut engine = MoliStyleEngine::new();
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        active_style,
-        "main.active { color: green; }".into(),
-    );
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        detached_style,
-        "main.detached { color: red; }".into(),
-    );
-
-    let source_scope = StyleSourceScope::for_handles(&host, [active_target, detached_target]);
-    let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    let active_style_id =
-        StyleSourceId::owner_style_sheet(&host, active_style).expect("active source id");
-    let detached_style_id =
-        StyleSourceId::owner_style_sheet(&host, detached_style).expect("detached source id");
-
-    let active_sources = engine.matching_dependency_source_ids_for_document_for_test(
-        &host,
-        document,
-        &source_scope,
-        &media,
-    );
-    assert!(
-        active_sources
-            .iter()
-            .any(|(source_id, _)| source_id == &active_style_id),
-        "active document matching should keep the active document source"
-    );
-    assert!(
-        !active_sources
-            .iter()
-            .any(|(source_id, _)| source_id == &detached_style_id),
-        "active document matching must not scan detached document sources"
-    );
-
-    let detached_sources = engine.matching_dependency_source_ids_for_document_for_test(
-        &host,
-        detached_document,
-        &source_scope,
-        &media,
-    );
-    assert!(
-        detached_sources
-            .iter()
-            .any(|(source_id, _)| source_id == &detached_style_id),
-        "detached document matching should keep the detached document source"
-    );
-    assert!(
-        !detached_sources
-            .iter()
-            .any(|(source_id, _)| source_id == &active_style_id),
-        "detached document matching must not scan active document sources"
-    );
-}
-
-#[test]
-fn active_document_light_tree_mutation_matches_related_shadow_sources() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let descendant_host = host.create_element("article");
-    let descendant_shadow_root = host
-        .attach_shadow_root(descendant_host, "open")
-        .expect("descendant article should host a shadow root");
-    let descendant_shadow_style = host.create_element("style");
-    let descendant_target = host.create_element("span");
-    let light_child = host.create_element("em");
-    let sibling_host = host.create_element("aside");
-    let sibling_shadow_root = host
-        .attach_shadow_root(sibling_host, "open")
-        .expect("sibling aside should host a shadow root");
-    let sibling_shadow_style = host.create_element("style");
-    let sibling_target = host.create_element("span");
-
-    assert!(host.append_child(document, descendant_host));
-    assert!(host.append_child(descendant_host, light_child));
-    assert!(host.append_child(descendant_shadow_root, descendant_shadow_style));
-    assert!(host.append_child(descendant_shadow_root, descendant_target));
-    assert!(host.append_child(document, sibling_host));
-    assert!(host.append_child(sibling_shadow_root, sibling_shadow_style));
-    assert!(host.append_child(sibling_shadow_root, sibling_target));
-
-    let mut engine = MoliStyleEngine::new();
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        descendant_shadow_style,
-        ":host:has(.marker) span { color: green; }".into(),
-    );
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        sibling_shadow_style,
-        ":host:has(.marker) span { color: red; }".into(),
-    );
-
-    let effect = [StyleMutationEffect::Attribute {
-        element: light_child,
-        namespace: None,
-        name: "class".into(),
-        old_value: None,
-        new_value: Some("marker".into()),
-    }];
-    let source_scope =
-        source_scope_for_mutations(&host, &effect).expect("connected mutation scope");
-    let fallback_roots = source_scope_fallback_roots_for_test(&host, &source_scope);
-    assert!(fallback_roots.contains(&document));
-    assert!(fallback_roots.contains(&descendant_host));
-    assert!(fallback_roots.contains(&descendant_shadow_root));
-    assert!(!fallback_roots.contains(&sibling_host));
-    assert!(!fallback_roots.contains(&sibling_shadow_root));
-
-    let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    let sources = engine.matching_dependency_source_ids_for_document_for_test(
-        &host,
-        document,
-        &source_scope,
-        &media,
-    );
-    let descendant_style_id = StyleSourceId {
-        scope_id: StyleScopeId::ShadowRoot(descendant_shadow_root),
-        kind: StyleSourceKind::OwnerStyleSheet {
-            owner: descendant_shadow_style,
-        },
-    };
-    let sibling_style_id = StyleSourceId {
-        scope_id: StyleScopeId::ShadowRoot(sibling_shadow_root),
-        kind: StyleSourceKind::OwnerStyleSheet {
-            owner: sibling_shadow_style,
-        },
-    };
-
-    assert!(
-        sources
-            .iter()
-            .any(|(source_id, _)| source_id == &descendant_style_id),
-        "light-tree mutation should include related shadow sources; sources={sources:?}"
-    );
-    assert!(
-        !sources
-            .iter()
-            .any(|(source_id, _)| source_id == &sibling_style_id),
-        "light-tree mutation should not include sibling shadow sources; sources={sources:?}"
-    );
-    let target_queries = {
-        let world = engine.world_for_document(document);
-        let linked_sources = world.linked_stylesheet_sources.borrow();
-        let owner_sources = world.owner_style_sheet_sources.borrow();
-        let adopted_sources = world.adopted_style_sheet_sources.borrow();
-        super::planner::target_queries_for_pending_cause_with_adopted_sources(
-            &host,
-            &linked_sources,
-            &owner_sources,
-            &adopted_sources,
-            &engine.dom_adapter,
-            &media,
-            StyleViewport::default(),
-            host.document_handle(),
-            &PendingStyleInvalidationCause::Mutation(effect.to_vec()),
-            &source_scope,
-        )
-    };
-    assert!(
-        target_queries
-            .iter()
-            .any(|target_query| target_query.target().stylesheet_source_id()
-                == Some(&descendant_style_id)),
-        "light-tree mutation should produce target queries for related shadow source; target_queries={target_queries:?}"
-    );
-    assert!(
-        !target_queries
-            .iter()
-            .any(|target_query| target_query.target().stylesheet_source_id()
-                == Some(&sibling_style_id)),
-        "light-tree mutation should not produce target queries for sibling shadow source; target_queries={target_queries:?}"
-    );
-
-    let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
-    for handle in [descendant_target, sibling_target] {
-        assert!(
-            engine
-                .computed_style_property_value(
-                    &host,
-                    &document_url,
-                    handle,
-                    "display",
-                    None,
-                    &inputs,
-                    None,
-                )
-                .is_some()
-        );
-    }
-    assert_eq!(
-        engine.computed_style_cache_entry_count_for_document_for_test(document),
-        2
-    );
-
-    engine.invalidate_for_mutations(&host, &effect, &media);
-    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
-    assert!(
-        engine.computed_style_cache_contains_handle_for_document_for_test(
-            document,
-            descendant_target
-        ),
-        "the related shadow target stays published behind a lazy dirty root"
-    );
-    assert!(
-        engine.computed_style_cache_contains_handle_for_document_for_test(document, sibling_target)
-    );
-    assert!(engine.retained_style_invalidation_root_count_for_document_for_test(document) > 0);
-}
-#[test]
 fn author_stylesheet_sources_are_owned_by_style_engine() {
     let mut host = test_host();
     let mut engine = MoliStyleEngine::new();
@@ -1302,166 +973,6 @@ fn source_lifecycle_snapshot_distinguishes_trackable_and_retained_sources() {
         })
     );
 }
-#[test]
-fn source_lifecycle_context_distinguishes_child_and_detached_documents_in_outcome() {
-    let mut host = test_host();
-    let mut engine = MoliStyleEngine::new();
-    let child_document = host.create_detached_html_document();
-    let detached_document = host.create_detached_html_document();
-    let document = host.document_handle();
-    let document_context =
-        OwnedStyleSourceDocumentContext::new(document).with_child_documents([child_document]);
-    engine.set_document_adopted_style_sheet_sources(
-        child_document,
-        vec![StyloStylesheetSource::new(
-            ".child { color: green; }".into(),
-            url::Url::parse("https://example.test/child.css").unwrap(),
-        )],
-    );
-    engine.set_document_adopted_style_sheet_sources(
-        detached_document,
-        vec![StyloStylesheetSource::new(
-            ".detached { color: blue; }".into(),
-            url::Url::parse("https://example.test/detached.css").unwrap(),
-        )],
-    );
-
-    let child_report = source_lifecycle_report_for_document_for_test(
-        &engine,
-        &host,
-        child_document,
-        document_context.as_ref(),
-    );
-    let detached_report = source_lifecycle_report_for_document_for_test(
-        &engine,
-        &host,
-        detached_document,
-        document_context.as_ref(),
-    );
-    assert_eq!(
-        child_report
-            .snapshot()
-            .retained_child_document_source_count(),
-        1
-    );
-    assert_eq!(
-        detached_report
-            .snapshot()
-            .retained_detached_document_source_count(),
-        1
-    );
-    assert_eq!(
-        lifecycle_document_kind_for(
-            child_report.records(),
-            StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets {
-                document: child_document,
-            },
-        ),
-        Some(StyleSourceDocumentKind::Child)
-    );
-    assert_eq!(
-        lifecycle_document_kind_for(
-            detached_report.records(),
-            StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets {
-                document: detached_document,
-            },
-        ),
-        Some(StyleSourceDocumentKind::Detached)
-    );
-
-    let child_source = engine
-        .document_adopted_style_sheet_source_ids_for_test(child_document)
-        .into_iter()
-        .next()
-        .expect("child document should retain an adopted stylesheet source");
-    let detached_source = engine
-        .document_adopted_style_sheet_source_ids_for_test(detached_document)
-        .into_iter()
-        .next()
-        .expect("detached document should retain an adopted stylesheet source");
-    let child_target_queries = vec![PendingStyleInvalidationTargetQueries::retained_source(
-        child_source,
-        indexmap::IndexSet::from([RetainedStyleInvalidationQuery::universal(child_document)]),
-    )];
-    let child_application = retained_source_invalidation_outcome_for_document_for_test(
-        &engine,
-        &host,
-        child_document,
-        document_context.as_ref(),
-        None,
-        &child_target_queries,
-        false,
-    )
-    .finalize(&host);
-
-    assert_eq!(
-        child_application
-            .diagnostic_target_result_summary()
-            .child_document_source_target_count(),
-        1
-    );
-    assert_eq!(
-        child_application
-            .diagnostic_target_result_summary()
-            .detached_document_source_target_count(),
-        0
-    );
-    assert_eq!(
-        child_application
-            .diagnostic_target_results()
-            .iter()
-            .filter(|result| {
-                result
-                    .diagnostic_source_target_availability()
-                    .and_then(|availability| availability.document_kind())
-                    == Some(StyleSourceDocumentKind::Child)
-            })
-            .count(),
-        1
-    );
-
-    let detached_target_queries = vec![PendingStyleInvalidationTargetQueries::retained_source(
-        detached_source,
-        indexmap::IndexSet::from([RetainedStyleInvalidationQuery::universal(detached_document)]),
-    )];
-    let detached_application = retained_source_invalidation_outcome_for_document_for_test(
-        &engine,
-        &host,
-        detached_document,
-        document_context.as_ref(),
-        None,
-        &detached_target_queries,
-        false,
-    )
-    .finalize(&host);
-
-    assert_eq!(
-        detached_application
-            .diagnostic_target_result_summary()
-            .child_document_source_target_count(),
-        0
-    );
-    assert_eq!(
-        detached_application
-            .diagnostic_target_result_summary()
-            .detached_document_source_target_count(),
-        1
-    );
-    assert_eq!(
-        detached_application
-            .diagnostic_target_results()
-            .iter()
-            .filter(|result| {
-                result
-                    .diagnostic_source_target_availability()
-                    .and_then(|availability| availability.document_kind())
-                    == Some(StyleSourceDocumentKind::Detached)
-            })
-            .count(),
-        1
-    );
-}
-
 #[derive(Default)]
 struct SourceLifecycleOwnerDetailsForTest {
     details: Vec<StyleSourceLifecycleOwnerDetailTrace>,
@@ -2321,7 +1832,6 @@ fn linked_owner_keeps_processed_source_when_base_href_is_inserted() {
         parent: document,
         added_nodes: vec![base],
         removed_nodes: vec![],
-        removed_element_snapshots: vec![],
         previous_sibling: None,
         next_sibling: Some(link),
     }];
@@ -2335,51 +1845,6 @@ fn linked_owner_keeps_processed_source_when_base_href_is_inserted() {
     );
 }
 
-#[test]
-fn source_lifecycle_target_result_reports_missing_adopted_source_id() {
-    let host = test_host();
-    let mut engine = MoliStyleEngine::new();
-    let document = host.document_handle();
-    engine.set_document_adopted_style_sheet_sources(
-        document,
-        vec![StyloStylesheetSource::new(
-            ".existing { color: green; }".into(),
-            url::Url::parse("https://example.test/existing.css").unwrap(),
-        )],
-    );
-    let missing_source_id = StyleSourceId::document_adopted_style_sheet(document, u64::MAX);
-    let target_query = PendingStyleInvalidationTargetQueries::retained_source(
-        missing_source_id,
-        indexmap::IndexSet::from([RetainedStyleInvalidationQuery::universal(document)]),
-    );
-
-    let outcome = retained_source_invalidation_outcome_for_document_for_test(
-        &engine,
-        &host,
-        document,
-        StyleSourceDocumentContext::for_root_document(document),
-        None,
-        std::slice::from_ref(&target_query),
-        false,
-    );
-    let application = outcome.finalize(&host);
-
-    assert_eq!(application.diagnostic_target_results().len(), 1);
-    assert_eq!(
-        application.diagnostic_target_results()[0]
-            .diagnostic_source_target_availability()
-            .and_then(|availability| availability.lifecycle().cloned()),
-        Some(StyleSourceLifecycleAvailability::AvailableWithoutSource {
-            reason: StyleSourceLifecycleWithoutSourceReason::SourceIdMissing,
-        })
-    );
-    assert_eq!(
-        application
-            .diagnostic_target_result_summary()
-            .source_lifecycle_available_without_source_target_count(),
-        1
-    );
-}
 #[test]
 fn missing_document_adopted_sources_remain_trackable_without_retained_source() {
     let host = test_host();
@@ -2402,20 +1867,6 @@ fn missing_document_adopted_sources_remain_trackable_without_retained_source() {
         "missing document owner stays trackable for future wrapper sync"
     );
     assert!(engine.document_adopted_style_sheet_tracks_document_for_test(missing_document));
-
-    let source_scope = StyleSourceScope::for_document(host.document_handle());
-    let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    assert!(
-        engine
-            .matching_dependency_source_ids_for_document_for_test(
-                &host,
-                host.document_handle(),
-                &source_scope,
-                &media,
-            )
-            .is_empty(),
-        "missing document adopted sources should not participate in dependency matching"
-    );
 
     let inputs = FullStyleWorldSnapshot::default();
     engine.ensure_retained_style_system_for_document(
@@ -2606,18 +2057,6 @@ fn empty_adopted_sources_are_not_retained_but_shadow_roots_remain_trackable() {
             shadow_root
         )
     );
-    let source_scope = StyleSourceScope::for_document_and_connected_shadow_roots(&host, document);
-    let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    assert!(
-        engine
-            .matching_dependency_source_ids_for_document_for_test(
-                &host,
-                document,
-                &source_scope,
-                &media
-            )
-            .is_empty()
-    );
 }
 
 #[test]
@@ -2713,10 +2152,6 @@ fn lifecycle_retained_source_gate_ignores_unavailable_tracked_owners() {
 
     let document_world = engine.world_for_document(document);
     let source_stores = document_world.borrow_source_stores();
-    assert!(
-        !source_stores.has_document_retained_sources(&host),
-        "unavailable document-scope owners must not trigger document retained-source fallback"
-    );
 
     let report = source_stores.source_lifecycle_report(
         &host,
@@ -2802,15 +2237,6 @@ fn attribute_mutation_without_source_dependency_skips_style_invalidation() {
     let mut engine = MoliStyleEngine::new();
     engine.set_owner_style_sheet_text_with_host(&host, style, ".headline { color: red; }".into());
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
-    assert!(
-        !engine.test_author_sources_have_attribute_dependency_for_document(
-            &host,
-            document,
-            target,
-            "data-state",
-        ),
-        "the retained source has no dependency on data-state"
-    );
     let document_url = url::Url::parse("https://example.test/").unwrap();
     let inputs = FullStyleWorldSnapshot::default();
     assert!(
@@ -2872,14 +2298,14 @@ fn attribute_mutation_with_source_dependency_still_invalidates_style() {
         "script[async] { color: red; }".into(),
     );
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
-    assert!(
-        engine.test_author_sources_have_attribute_dependency_for_document(
-            &host, document, script, "async",
-        ),
-        "the retained source must report its script async dependency"
-    );
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs
+        .document_stylesheet_sources
+        .push(StyloStylesheetSource::new(
+            "script[async] { color: red; }".into(),
+            document_url.clone(),
+        ));
     assert!(
         engine
             .computed_style_property_value(
@@ -2916,58 +2342,6 @@ fn attribute_mutation_with_source_dependency_still_invalidates_style() {
 }
 
 #[test]
-fn attribute_dependency_change_extracts_class_token_delta() {
-    let effect = StyleMutationEffect::Attribute {
-        element: NativeNodeId::new(1),
-        namespace: None,
-        name: "class".into(),
-        old_value: Some("a b a kept".into()),
-        new_value: Some("kept c b c".into()),
-    };
-
-    let change = effect
-        .attribute_dependency_change()
-        .expect("attribute mutation should produce dependency change");
-
-    assert_eq!(change.attribute_name, "class");
-    assert_eq!(change.removed_class_tokens, vec!["a"]);
-    assert_eq!(change.added_class_tokens, vec!["c"]);
-    assert_eq!(change.removed_id, None);
-    assert_eq!(change.added_id, None);
-}
-#[test]
-fn attribute_dependency_change_requires_pre_normalized_class_and_id_names() {
-    let class_effect = StyleMutationEffect::Attribute {
-        element: NativeNodeId::new(1),
-        namespace: None,
-        name: "CLASS".into(),
-        old_value: Some("old".into()),
-        new_value: Some("new".into()),
-    };
-    let id_effect = StyleMutationEffect::Attribute {
-        element: NativeNodeId::new(1),
-        namespace: None,
-        name: "ID".into(),
-        old_value: Some("old".into()),
-        new_value: Some("new".into()),
-    };
-
-    let class_change = class_effect
-        .attribute_dependency_change()
-        .expect("attribute mutation should produce dependency change");
-    let id_change = id_effect
-        .attribute_dependency_change()
-        .expect("attribute mutation should produce dependency change");
-
-    assert_eq!(class_change.attribute_name, "CLASS");
-    assert!(class_change.removed_class_tokens.is_empty());
-    assert!(class_change.added_class_tokens.is_empty());
-    assert_eq!(id_change.attribute_name, "ID");
-    assert_eq!(id_change.removed_id, None);
-    assert_eq!(id_change.added_id, None);
-    assert!(!stylo_attribute_change_can_skip_fallback_without_dependency("DATA-State"));
-}
-#[test]
 fn direct_namespaced_attribute_style_effect_preserves_case_on_html_elements() {
     let mut host = test_host();
     let element = host.create_element("div");
@@ -2993,49 +2367,6 @@ fn direct_namespaced_attribute_style_effect_preserves_case_on_html_elements() {
     ));
 }
 #[test]
-fn removed_element_dependency_snapshot_dedupes_class_tokens() {
-    let mut host = test_host();
-    let element = host.create_element("div");
-    assert!(host.set_attribute(element, "class", "a b a c b"));
-
-    let snapshot =
-        style_element_dependency_snapshot(&host, element).expect("element should have snapshot");
-
-    assert_eq!(snapshot.class_tokens(), ["a", "b", "c"]);
-}
-#[test]
-fn attribute_dependency_change_keeps_id_delta_and_attribute_probe() {
-    let id_effect = StyleMutationEffect::Attribute {
-        element: NativeNodeId::new(1),
-        namespace: None,
-        name: "id".into(),
-        old_value: Some("old".into()),
-        new_value: Some("new".into()),
-    };
-    let data_effect = StyleMutationEffect::Attribute {
-        element: NativeNodeId::new(1),
-        namespace: None,
-        name: "data-state".into(),
-        old_value: Some("inactive".into()),
-        new_value: Some("active".into()),
-    };
-
-    let id_change = id_effect
-        .attribute_dependency_change()
-        .expect("id mutation should produce dependency change");
-    assert_eq!(id_change.removed_id.as_deref(), Some("old"));
-    assert_eq!(id_change.added_id.as_deref(), Some("new"));
-
-    let data_change = data_effect
-        .attribute_dependency_change()
-        .expect("ordinary attribute mutation should produce dependency change");
-    assert_eq!(data_change.attribute_name, "data-state");
-    assert!(data_change.removed_class_tokens.is_empty());
-    assert!(data_change.added_class_tokens.is_empty());
-    assert_eq!(data_change.removed_id, None);
-    assert_eq!(data_change.added_id, None);
-}
-#[test]
 fn typed_attribute_style_effect_captures_exact_new_value_without_observer_records() {
     let mut host = test_host();
     let element = host.create_element("div");
@@ -3057,11 +2388,6 @@ fn typed_attribute_style_effect_captures_exact_new_value_without_observer_record
             && old_value.is_none()
             && new_value.as_deref() == Some("marker target")
     )));
-    let change = style_effects
-        .iter()
-        .find_map(StyleMutationEffect::attribute_dependency_change)
-        .expect("attribute style effect should expose dependency change");
-    assert_eq!(change.added_class_tokens, ["marker", "target"]);
 }
 #[test]
 fn typed_attribute_style_effect_normalizes_html_attribute_name() {
@@ -3114,4 +2440,26 @@ fn typed_attribute_style_effect_preserves_namespaced_attribute_name() {
             && old_value.is_none()
             && new_value.as_deref() == Some("marker")
     )));
+}
+
+#[test]
+fn document_stylesheet_dirty_mark_advances_only_the_source_generation() {
+    let mut engine = MoliStyleEngine::new();
+    let host = test_host();
+    let document = host.document_handle();
+
+    assert_eq!(
+        engine.computed_cache_generation_for_document_for_test(document),
+        0
+    );
+    engine.mark_document_stylesheet_set_dirty(document);
+
+    assert_eq!(
+        engine.computed_cache_generation_for_document_for_test(document),
+        0
+    );
+    assert_eq!(
+        engine.source_set_generation_for_document_for_test(document),
+        1
+    );
 }

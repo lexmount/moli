@@ -2,34 +2,30 @@ use std::cell::RefCell;
 
 use indexmap::IndexSet;
 
-use crate::{document_runtime::DomHandle, protocol_types::EmulatedMediaOverrides};
+use crate::document_runtime::DomHandle;
 
-#[cfg(test)]
-use super::cause::PendingStyleInvalidationWorkKind;
-use super::{StyleMutationEffect, StyleViewport};
+use super::StyleMutationEffect;
 
 #[derive(Default)]
 pub(super) struct PendingStructuralStyleMutations {
-    groups: RefCell<Vec<PendingStructuralStyleMutationGroup>>,
-}
-
-pub(super) struct PendingStructuralStyleMutationGroup {
-    pub(super) effects: PendingStructuralStyleEffects,
-    pub(super) emulated_media: EmulatedMediaOverrides,
-    pub(super) viewport: StyleViewport,
+    effects: RefCell<PendingStructuralStyleEffects>,
 }
 
 #[derive(Default)]
-pub(super) struct PendingStructuralStyleEffects {
+struct PendingStructuralStyleEffects {
     history: Vec<StyleMutationEffect>,
     connected_roots: IndexSet<DomHandle>,
     disconnected_roots: IndexSet<DomHandle>,
+    #[cfg(test)]
     input_count: usize,
 }
 
 impl PendingStructuralStyleEffects {
     pub(super) fn extend(&mut self, effects: &[StyleMutationEffect]) {
-        self.input_count += effects.len();
+        #[cfg(test)]
+        {
+            self.input_count += effects.len();
+        }
         for effect in effects {
             match effect {
                 StyleMutationEffect::ConnectedSubtrees { roots } => {
@@ -44,7 +40,7 @@ impl PendingStructuralStyleEffects {
         }
     }
 
-    pub(super) fn into_effects(self) -> (Vec<StyleMutationEffect>, usize) {
+    fn into_effects(self) -> Vec<StyleMutationEffect> {
         let mut effects = self.history;
         if !self.connected_roots.is_empty() {
             effects.push(StyleMutationEffect::ConnectedSubtrees {
@@ -60,7 +56,7 @@ impl PendingStructuralStyleEffects {
                     .into(),
             });
         }
-        (effects, self.input_count)
+        effects
     }
 }
 
@@ -69,60 +65,26 @@ impl PendingStructuralStyleMutations {
         Self::default()
     }
 
-    pub(super) fn push(
-        &self,
-        effects: &[StyleMutationEffect],
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
-    ) {
-        if effects.is_empty() {
-            return;
-        }
-        let mut groups = self.groups.borrow_mut();
-        if let Some(group) = groups.last_mut()
-            && group.emulated_media == *emulated_media
-            && group.viewport == viewport
-        {
-            group.effects.extend(effects);
-            return;
-        }
-        let mut pending_effects = PendingStructuralStyleEffects::default();
-        pending_effects.extend(effects);
-        groups.push(PendingStructuralStyleMutationGroup {
-            effects: pending_effects,
-            emulated_media: emulated_media.clone(),
-            viewport,
-        });
+    pub(super) fn push(&self, effects: &[StyleMutationEffect]) {
+        self.effects.borrow_mut().extend(effects);
     }
 
-    pub(super) fn take(&self) -> Vec<PendingStructuralStyleMutationGroup> {
-        self.groups.take()
+    pub(super) fn take(&self) -> Option<Vec<StyleMutationEffect>> {
+        let effects = self.effects.take().into_effects();
+        (!effects.is_empty()).then_some(effects)
     }
 
     pub(super) fn clear(&self) {
-        self.groups.borrow_mut().clear();
+        self.effects.take();
     }
 
     #[cfg(test)]
     pub(super) fn work_item_count_for_test(&self) -> usize {
-        self.groups.borrow().len()
+        usize::from(self.effect_count_for_test() > 0)
     }
 
     #[cfg(test)]
     pub(super) fn effect_count_for_test(&self) -> usize {
-        self.groups
-            .borrow()
-            .iter()
-            .map(|group| group.effects.input_count)
-            .sum()
-    }
-
-    #[cfg(test)]
-    pub(super) fn work_kind_names_for_test(&self) -> Vec<&'static str> {
-        self.groups
-            .borrow()
-            .iter()
-            .map(|_| PendingStyleInvalidationWorkKind::Mutation.name_for_test())
-            .collect()
+        self.effects.borrow().input_count
     }
 }

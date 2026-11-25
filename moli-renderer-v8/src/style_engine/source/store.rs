@@ -7,7 +7,6 @@ use std::{
 };
 
 use moli_crypto::Sha256Context;
-use moli_selector::StyloSourceDependencySummary;
 use style_traits::ToCss;
 
 use super::super::{
@@ -72,11 +71,6 @@ enum StyloStylesheetSourceContents {
 pub(in crate::style_engine) enum LiveStylesheetCascadeUpdate {
     Full,
     Rules(Vec<crate::live_stylesheet::LiveStylesheetRuleMutation>),
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub(in crate::style_engine) struct StyleSourceMetadata {
-    pub(in crate::style_engine) dependency_summary: StyloSourceDependencySummary,
 }
 
 /// Immutable stylesheet source produced by processing an inline `<style>` owner.
@@ -386,28 +380,6 @@ impl StyloStylesheetSource {
         self.cache_key
     }
 
-    pub(in crate::style_engine) fn source_dependency_summary(
-        &self,
-    ) -> StdArc<StyloSourceDependencySummary> {
-        match &self.contents {
-            StyloStylesheetSourceContents::Text { shared } => shared.source_dependency_summary(),
-            StyloStylesheetSourceContents::Live {
-                stylesheet,
-                contents_revision,
-                cascade_generation,
-                derived_state,
-                ..
-            } => derived_state.source_dependency_summary(
-                *contents_revision,
-                *cascade_generation,
-                || {
-                    super::super::stylesheet::style_source_metadata_for_stylesheet(stylesheet)
-                        .dependency_summary
-                },
-            ),
-        }
-    }
-
     pub(crate) fn font_faces(&self) -> StdArc<[StylesheetFontFaceDescriptor]> {
         match &self.contents {
             StyloStylesheetSourceContents::Text { shared } => shared.font_faces(),
@@ -448,10 +420,6 @@ impl StyloStylesheetSource {
 
     pub(in crate::style_engine) fn media_text(&self) -> &str {
         self.media_text.as_ref()
-    }
-
-    pub(in crate::style_engine) fn has_authoritative_runtime_media(&self) -> bool {
-        matches!(&self.contents, StyloStylesheetSourceContents::Live { .. })
     }
 
     pub(in crate::style_engine) fn has_same_installation_identity(&self, other: &Self) -> bool {

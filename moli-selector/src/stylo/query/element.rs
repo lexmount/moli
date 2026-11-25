@@ -607,11 +607,7 @@ impl SelectorsElement for QueryElement<'_> {
             | NonTSPseudoClass::MozMeterSubOptimum
             | NonTSPseudoClass::MozMeterSubSubOptimum => false,
             NonTSPseudoClass::Autofill => self.element().autofilled(),
-            NonTSPseudoClass::Modal => {
-                self.element().dialog_modal()
-                    && self.element().attribute("open").is_some()
-                    && self.host.is_connected(self.handle)
-            }
+            NonTSPseudoClass::Modal => self.matches_modal_pseudo(),
             NonTSPseudoClass::Muted => {
                 self.element().is_html_media() && self.element().media_muted()
             }

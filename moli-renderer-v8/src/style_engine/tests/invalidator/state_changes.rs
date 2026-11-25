@@ -47,6 +47,7 @@ fn retained_stylo_invalidator_narrows_focus_sibling_cache_invalidation() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    host.set_active_element_handle(Some(source));
     engine.invalidate_for_focus_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -107,11 +108,13 @@ fn retained_stylo_invalidator_narrows_checked_sibling_cache_invalidation() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    let old_state = engine.retained_current_element_state(&host, source);
+    assert!(host.set_checked_state(source, true));
     engine.invalidate_for_element_state_change_with_old_state(
         &host,
         source,
         StyloElementState::CHECKED,
-        None,
+        old_state,
         &media,
     );
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
@@ -973,6 +976,7 @@ fn retained_stylo_invalidator_narrows_target_sibling_cache_invalidation() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    assert!(host.set_document_target_element(document, Some(source)));
     engine.invalidate_for_target_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 

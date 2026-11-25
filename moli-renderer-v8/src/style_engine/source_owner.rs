@@ -29,26 +29,6 @@ pub(crate) fn stylesheet_owner_type_is_supported(element: &Element) -> bool {
     false
 }
 
-pub(super) fn stylesheet_owner_is_stylesheet_source_enabled(
-    host: &DomHost,
-    handle: DomHandle,
-    media_text: &str,
-    environment: StyloStyleEnvironment,
-    viewport: StyleViewport,
-) -> bool {
-    host.node(handle).is_some_and(|node| {
-        node.as_element()
-            .is_some_and(|element| element.is_inline_style_element())
-            && style_element_is_stylesheet_source_enabled(
-                host,
-                handle,
-                media_text,
-                environment,
-                viewport,
-            )
-    })
-}
-
 pub(super) fn stylesheet_source_base_url(host: &DomHost, handle: DomHandle) -> url::Url {
     host.owner_document_handle(handle)
         .and_then(|document_handle| {
@@ -59,30 +39,6 @@ pub(super) fn stylesheet_source_base_url(host: &DomHost, handle: DomHandle) -> u
         .or_else(|| host.document_base_url())
         .or_else(|| host.document_url().cloned())
         .unwrap_or_else(|| url::Url::parse("about:blank").expect("static about:blank parses"))
-}
-
-fn style_element_is_stylesheet_source_enabled(
-    host: &DomHost,
-    handle: DomHandle,
-    media_text: &str,
-    environment: StyloStyleEnvironment,
-    viewport: StyleViewport,
-) -> bool {
-    let Some(element) = host.node(handle).and_then(Node::as_element) else {
-        return false;
-    };
-    element.is_inline_style_element()
-        && host.get_attribute(handle, "disabled").is_none()
-        && stylesheet_owner_type_is_supported(element)
-        && stylesheet_source_media_matches(media_text, environment, viewport)
-}
-
-pub(super) fn linked_stylesheet_media_matches_for_stylesheet_source(
-    media_text: &str,
-    environment: StyloStyleEnvironment,
-    viewport: StyleViewport,
-) -> bool {
-    stylesheet_source_media_matches(media_text, environment, viewport)
 }
 
 pub(super) fn stylesheet_source_media_matches(

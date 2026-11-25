@@ -44,15 +44,7 @@ fn source_local_fallback_roots_preserve_unrelated_document_cache_for_shadow_sour
         3
     );
 
-    let source_scope = StyleSourceScope::for_handle(&host, shadow_child);
-    let fallback_roots =
-        shadow_root_source_scope_fallback_roots_for_test(&host, shadow_root, &source_scope);
-    assert!(fallback_roots.contains(&shadow_root));
-    assert!(fallback_roots.contains(&shadow_host));
-    assert!(!fallback_roots.contains(&document));
-    assert!(!fallback_roots.contains(&sibling_shadow_root));
-    assert!(!fallback_roots.contains(&sibling_shadow_host));
-    assert!(engine.invalidate_style_subtrees(&host, fallback_roots.iter().copied()));
+    assert!(engine.invalidate_style_subtrees(&host, [shadow_root, shadow_host]));
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),

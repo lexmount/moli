@@ -4,7 +4,7 @@ use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::{
     source_dirty::StyleSourceDirtyReason,
-    source_id::{StyleInvalidationSourceTarget, StyleScopeId, StyleSourceId},
+    source_id::{StyleScopeId, StyleSourceId},
 };
 
 #[derive(Default)]
@@ -115,8 +115,7 @@ impl StyleSourceScopeCleanupPlan {
             self.add_full_document(document);
             return;
         };
-        let roots = StyleInvalidationSourceTarget::stylesheet(source_id.clone())
-            .source_scope_fallback_roots(host);
+        let roots = source_id.scope_id.style_roots(host);
         if roots.is_empty() {
             self.add_full_document(document);
         } else {

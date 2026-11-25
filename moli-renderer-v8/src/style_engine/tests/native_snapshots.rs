@@ -52,10 +52,12 @@ fn native_snapshot_can_invalidate_a_sibling_of_an_unstyled_source() {
     set_class(&mut engine, &mut host, trigger, "intermediate");
     set_class(&mut engine, &mut host, trigger, "active");
     assert!(
-        engine
+        !engine
             .world_for_document(document)
             .pending_invalidations
-            .has_native_snapshots_for_test()
+            .borrow()
+            .snapshots
+            .is_empty()
     );
     assert_eq!(color(&engine, &host), "rgb(255, 0, 0)");
     assert!(!engine.dom_adapter.has_element_data(trigger));
@@ -113,10 +115,12 @@ fn native_snapshot_pruning_preserves_sparse_reads_inside_hidden_subtrees() {
 
     set_class(&mut engine, &mut host, parent, "active");
     assert!(
-        engine
+        !engine
             .world_for_document(document)
             .pending_invalidations
-            .has_native_snapshots_for_test()
+            .borrow()
+            .snapshots
+            .is_empty()
     );
     assert_eq!(color(&engine, &host), "rgb(255, 0, 0)");
     assert_eq!(
@@ -217,7 +221,9 @@ fn namespaced_attribute_mutation_updates_a_cached_sibling() {
         !engine
             .world_for_document(document)
             .pending_invalidations
-            .has_native_snapshots_for_test()
+            .borrow()
+            .snapshots
+            .is_empty()
     );
     assert_eq!(color(&engine, &host), "rgb(255, 0, 0)");
 
@@ -264,10 +270,12 @@ fn mixed_native_snapshot_and_splice_preserve_unrelated_styles() {
 
     set_class(&mut engine, &mut host, target, "active");
     assert!(
-        engine
+        !engine
             .world_for_document(document)
             .pending_invalidations
-            .has_native_snapshots_for_test()
+            .borrow()
+            .snapshots
+            .is_empty()
     );
     let item = host.create_element("li");
     let append = host.append_child_effects(list, item);
@@ -283,4 +291,47 @@ fn mixed_native_snapshot_and_splice_preserve_unrelated_styles() {
         engine.element_style_resolution_count_for_document_for_test(document),
         resolutions
     );
+}
+
+#[test]
+fn removal_with_a_pending_attribute_snapshot_refreshes_relative_anchor() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let anchor = host.create_element("section");
+    let branch = host.create_element("div");
+    let marker = host.create_element("span");
+    let outside = host.create_element("aside");
+    assert!(host.set_attribute(marker, "class", "marker"));
+    assert!(host.append_child(document, anchor));
+    assert!(host.append_child(anchor, branch));
+    assert!(host.append_child(branch, marker));
+    assert!(host.append_child(document, outside));
+
+    let mut engine = MoliStyleEngine::new();
+    let url = url::Url::parse("https://example.test/").unwrap();
+    let inputs = FullStyleWorldSnapshot {
+        document_stylesheet_sources: vec![StyloStylesheetSource::new(
+            "section { color: blue } section:has(.marker) { color: red }".into(),
+            url.clone(),
+        )],
+        ..Default::default()
+    };
+    let color = |engine: &MoliStyleEngine, host: &DomHost, element| {
+        engine
+            .computed_style_property_value(host, &url, element, "color", None, &inputs, None)
+            .unwrap()
+    };
+    assert_eq!(color(&engine, &host, anchor), "rgb(255, 0, 0)");
+    let _ = color(&engine, &host, outside);
+
+    set_class(&mut engine, &mut host, marker, "inactive");
+    let removal = host.remove_child_effects(anchor, branch);
+    engine.invalidate_for_mutations(
+        &host,
+        &StyleMutationEffect::from_dom_mutation_effects(&host, &removal),
+        &crate::protocol_types::EmulatedMediaOverrides::default(),
+    );
+
+    assert_eq!(color(&engine, &host, anchor), "rgb(0, 0, 255)");
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));
 }

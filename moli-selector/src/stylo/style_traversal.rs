@@ -123,6 +123,7 @@ struct StyleDomState {
     shadow_cascade_data: ShadowCascadeDataStore,
     snapshot_handles: RefCell<HashMap<NodeId, bool>>,
     native_invalidation_targets: RefCell<Option<IndexMap<NodeId, RestyleHint>>>,
+    removed_element_position: Cell<Option<RemovedElementPosition>>,
 }
 
 #[derive(Clone, Copy)]
@@ -151,6 +152,22 @@ pub struct StyleDomHostBinding<'a> {
 struct SnapshotHandlesReset<'a> {
     state: &'a StyleDomState,
     previous: Option<HashMap<NodeId, bool>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RemovedElementPosition {
+    element: NodeId,
+    parent: NodeId,
+    previous: Option<NodeId>,
+    next: Option<NodeId>,
+}
+
+struct RemovedElementPositionReset<'a>(&'a Cell<Option<RemovedElementPosition>>);
+
+impl Drop for RemovedElementPositionReset<'_> {
+    fn drop(&mut self) {
+        self.0.take();
+    }
 }
 
 struct NativeInvalidationTargetsReset<'a>(&'a RefCell<Option<IndexMap<NodeId, RestyleHint>>>);
@@ -182,6 +199,7 @@ impl StyloDomStyleAdapter {
                 shadow_cascade_data: ShadowCascadeDataStore::default(),
                 snapshot_handles: RefCell::default(),
                 native_invalidation_targets: RefCell::default(),
+                removed_element_position: Cell::default(),
             }),
         }
     }
@@ -582,6 +600,47 @@ impl<'binding> StyleDomHostBinding<'binding> {
         let _reset = NativeInvalidationTargetsReset(targets);
         invalidate();
         targets.take().unwrap_or_default().into_iter().collect()
+    }
+
+    pub fn selector_flags(&self, host: &DomHost, handle: NodeId) -> ElementSelectorFlags {
+        self.ensure_bound_host(host);
+        host.owner_document_handle(handle)
+            .map_or_else(ElementSelectorFlags::empty, |document| {
+                self.state
+                    .element_data
+                    .selector_flags_for_document(document, handle)
+            })
+    }
+
+    pub fn with_removed_element_position<R>(
+        &self,
+        host: &DomHost,
+        element: NodeId,
+        parent: NodeId,
+        previous: Option<NodeId>,
+        next: Option<NodeId>,
+        invalidate: impl FnOnce(StyleElement<'_>) -> R,
+    ) -> Option<R> {
+        let target = self.element(host, element)?;
+        if host.parent_node(element).is_some()
+            || host.owner_document_handle(element) != host.owner_document_handle(parent)
+            || previous
+                .into_iter()
+                .chain(next)
+                .any(|sibling| host.parent_node(sibling) != Some(parent))
+        {
+            return None;
+        }
+        let slot = &self.state.removed_element_position;
+        assert!(slot.get().is_none(), "nested removed element invalidation");
+        slot.set(Some(RemovedElementPosition {
+            element,
+            parent,
+            previous,
+            next,
+        }));
+        let _reset = RemovedElementPositionReset(slot);
+        Some(invalidate(target))
     }
 
     fn ensure_bound_host(&self, host: &DomHost) {
@@ -1017,7 +1076,9 @@ impl StyloElementDataStore {
         let Some(parent) = host.node(handle).and_then(Node::parent_node) else {
             return;
         };
-        if host.node(parent).and_then(Node::as_element).is_none() && !host.is_shadow_root(parent) {
+        if !host.node(parent).is_some_and(|node| {
+            node.is_element() || node.as_document().is_some() || host.is_shadow_root(parent)
+        }) {
             return;
         }
         self.note_owner_document(parent, document);
@@ -1031,20 +1092,7 @@ impl StyloElementDataStore {
             .insert(parent_flags);
     }
 
-    fn has_selector_flags_for_document(
-        &self,
-        document: NodeId,
-        handle: NodeId,
-        flags: ElementSelectorFlags,
-    ) -> bool {
-        self.documents
-            .borrow()
-            .get(&document)
-            .and_then(|bucket| bucket.selector_flags.get(&handle))
-            .is_some_and(|stored| stored.contains(flags))
-    }
-
-    fn relative_selector_search_direction_for_document(
+    fn selector_flags_for_document(
         &self,
         document: NodeId,
         handle: NodeId,
@@ -1055,7 +1103,6 @@ impl StyloElementDataStore {
             .and_then(|bucket| bucket.selector_flags.get(&handle))
             .copied()
             .unwrap_or_else(ElementSelectorFlags::empty)
-            & ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR_SIBLING
     }
 
     pub(super) fn borrow_inline_style_for_host(
@@ -1456,6 +1503,36 @@ impl fmt::Debug for ShadowCascadeDataStore {
 }
 
 impl StyleDomState {
+    fn removed_position(&self, handle: NodeId) -> Option<RemovedElementPosition> {
+        self.removed_element_position
+            .get()
+            .filter(|position| position.element == handle)
+    }
+
+    fn dom_parent(&self, host: &DomHost, handle: NodeId) -> Option<NodeId> {
+        self.removed_position(handle)
+            .map(|position| position.parent)
+            .or_else(|| host.parent_node(handle))
+    }
+
+    fn containing_shadow_root(&self, host: &DomHost, handle: NodeId) -> Option<NodeId> {
+        if let Some(position) = self.removed_element_position.get()
+            && host.containing_shadow_root(handle).is_none()
+        {
+            let mut current = Some(handle);
+            while let Some(node) = current {
+                if node == position.element {
+                    return host
+                        .is_shadow_root(position.parent)
+                        .then_some(position.parent)
+                        .or_else(|| host.containing_shadow_root(position.parent));
+                }
+                current = host.parent_node(node);
+            }
+        }
+        host.containing_shadow_root(handle)
+    }
+
     fn host(&self) -> &DomHost {
         let host = self.host.get();
         assert!(!host.is_null(), "style adapter host should be bound");
@@ -1934,12 +2011,14 @@ impl<'a> TNode for StyleNode<'a> {
     type ConcreteShadowRoot = StyleShadowRoot<'a>;
 
     fn parent_node(&self) -> Option<Self> {
-        self.node().and_then(Node::parent_node).map(|handle| {
-            StyleNode(
-                self.style_state().node_data(handle, self.document()),
-                PhantomData,
-            )
-        })
+        self.style_state()
+            .dom_parent(self.host(), self.handle())
+            .map(|handle| {
+                StyleNode(
+                    self.style_state().node_data(handle, self.document()),
+                    PhantomData,
+                )
+            })
     }
 
     fn first_child(&self) -> Option<Self> {
@@ -1992,6 +2071,9 @@ impl<'a> TNode for StyleNode<'a> {
     }
 
     fn traversal_parent(&self) -> Option<Self::ConcreteElement> {
+        if let Some(slot) = self.host().assigned_slot_for_node(self.handle()) {
+            return StyleElement::from_handle(self.style_state(), slot);
+        }
         let parent = self.parent_node()?;
         if let Some(element) = parent.as_element() {
             return Some(element);
@@ -2296,8 +2378,8 @@ impl<'a> TElement for StyleElement<'a> {
     }
 
     fn containing_shadow(&self) -> Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot> {
-        self.host()
-            .containing_shadow_root(self.handle())
+        self.style_state()
+            .containing_shadow_root(self.host(), self.handle())
             .map(|handle| {
                 StyleShadowRoot(
                     self.style_state().node_data(handle, self.document()),
@@ -2367,13 +2449,15 @@ impl<'a> TElement for StyleElement<'a> {
     fn has_selector_flags(&self, flags: ElementSelectorFlags) -> bool {
         self.style_state()
             .element_data
-            .has_selector_flags_for_document(self.document(), self.handle(), flags)
+            .selector_flags_for_document(self.document(), self.handle())
+            .contains(flags)
     }
 
     fn relative_selector_search_direction(&self) -> ElementSelectorFlags {
         self.style_state()
             .element_data
-            .relative_selector_search_direction_for_document(self.document(), self.handle())
+            .selector_flags_for_document(self.document(), self.handle())
+            & ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR_SIBLING
     }
 }
 
@@ -2413,18 +2497,20 @@ impl SelectorsElement for StyleElement<'_> {
     }
 
     fn parent_element(&self) -> Option<Self> {
-        let parent = self.node().parent_node()?;
+        let parent = self.style_state().dom_parent(self.host(), self.handle())?;
         Self::from_handle(self.style_state(), parent)
     }
 
     fn parent_node_is_shadow_root(&self) -> bool {
-        self.node()
-            .parent_node()
+        self.style_state()
+            .dom_parent(self.host(), self.handle())
             .is_some_and(|parent| self.host().is_shadow_root(parent))
     }
 
     fn containing_shadow_host(&self) -> Option<Self> {
-        let root = self.host().containing_shadow_root(self.handle())?;
+        let root = self
+            .style_state()
+            .containing_shadow_root(self.host(), self.handle())?;
         let host = self.host().shadow_root_host(root)?;
         Self::from_handle(self.style_state(), host)
     }
@@ -2434,12 +2520,20 @@ impl SelectorsElement for StyleElement<'_> {
     }
 
     fn prev_sibling_element(&self) -> Option<Self> {
+        if let Some(position) = self.style_state().removed_position(self.handle()) {
+            return Self::from_handle(self.style_state(), position.previous?);
+        }
+
         self.node()
             .previous_element_sibling(self.host().dom())
             .and_then(|handle| Self::from_handle(self.style_state(), handle))
     }
 
     fn next_sibling_element(&self) -> Option<Self> {
+        if let Some(position) = self.style_state().removed_position(self.handle()) {
+            return Self::from_handle(self.style_state(), position.next?);
+        }
+
         self.node()
             .next_element_sibling(self.host().dom())
             .and_then(|handle| Self::from_handle(self.style_state(), handle))

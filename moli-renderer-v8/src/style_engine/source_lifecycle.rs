@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use indexmap::{IndexMap, IndexSet};
 use moli_selector::stylo_shadow_root_host_participates_in_style_scope as shadow_root_host_participates_in_style_scope;
 
@@ -8,14 +6,11 @@ use crate::{
     dom::native::{DomHost, Node},
 };
 
-use super::source_id::{
-    StyleInvalidationSourceTarget, StyleScopeId, StyleSourceId, StyleSourceKind,
-};
+use super::source_id::{StyleScopeId, StyleSourceId, StyleSourceKind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StyleSourceLifecycleReport {
     records: Vec<StyleSourceLifecycleRecord>,
-    record_indices: HashMap<StyleSourceLifecycleOwner, usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,29 +72,6 @@ pub(super) enum StyleSourceLifecycleAvailability {
     Unavailable {
         reason: StyleSourceLifecycleUnavailableReason,
     },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct StyleSourceLifecycleTargetAvailability {
-    document_kind: Option<StyleSourceDocumentKind>,
-    lifecycle: StyleSourceLifecycleAvailability,
-}
-
-pub(super) trait StyleSourceLifecycleTargetAvailabilitySummarySink {
-    fn record_source_lifecycle_available_without_source_target(&mut self);
-
-    fn record_source_lifecycle_unavailable_target(&mut self);
-
-    fn record_child_document_source_target(&mut self);
-
-    fn record_detached_document_source_target(&mut self);
-}
-
-pub(super) trait StyleSourceLifecycleTargetAvailabilitySink {
-    fn record_source_lifecycle_target_availability(
-        &mut self,
-        availability: StyleSourceLifecycleTargetAvailability,
-    );
 }
 
 pub(super) trait StyleSourceLifecycleSnapshotSink {
@@ -191,18 +163,7 @@ pub(super) struct StyleSourceLifecycleSnapshot {
 
 impl StyleSourceLifecycleReport {
     pub(super) fn from_records(records: Vec<StyleSourceLifecycleRecord>) -> Self {
-        let mut record_indices = HashMap::with_capacity(records.len());
-        for (index, record) in records.iter().enumerate() {
-            let previous_index = record_indices.insert(record.owner, index);
-            debug_assert!(
-                previous_index.is_none(),
-                "style source lifecycle owners should be unique"
-            );
-        }
-        Self {
-            records,
-            record_indices,
-        }
+        Self { records }
     }
 
     pub(super) fn from_tracked_entries(
@@ -263,42 +224,16 @@ impl StyleSourceLifecycleReport {
         }
     }
 
+    #[cfg(test)]
     fn record_for_source_id(
         &self,
         source_id: &StyleSourceId,
     ) -> Option<StyleSourceLifecycleRecord> {
         let owner = StyleSourceLifecycleOwner::from_source_id(source_id)?;
-        self.record_indices
-            .get(&owner)
-            .and_then(|index| self.records.get(*index))
+        self.records
+            .iter()
+            .find(|record| record.owner == owner)
             .map(|record| record.for_source_id(source_id))
-    }
-
-    fn target_availability_for_source_id(
-        &self,
-        source_id: &StyleSourceId,
-    ) -> Option<StyleSourceLifecycleTargetAvailability> {
-        self.record_for_source_id(source_id)
-            .map(StyleSourceLifecycleRecord::into_target_availability)
-    }
-
-    pub(super) fn record_target_availability_for_source_target_into(
-        &self,
-        target: &StyleInvalidationSourceTarget,
-        sink: &mut impl StyleSourceLifecycleTargetAvailabilitySink,
-    ) {
-        if let Some(availability) = self.target_availability_for_source_target(target) {
-            sink.record_source_lifecycle_target_availability(availability);
-        }
-    }
-
-    fn target_availability_for_source_target(
-        &self,
-        target: &StyleInvalidationSourceTarget,
-    ) -> Option<StyleSourceLifecycleTargetAvailability> {
-        target
-            .stylesheet_source_id()
-            .and_then(|source_id| self.target_availability_for_source_id(source_id))
     }
 
     #[cfg(test)]
@@ -470,6 +405,7 @@ impl StyleSourceLifecycleRecord {
         }
     }
 
+    #[cfg(test)]
     fn for_source_id(&self, source_id: &StyleSourceId) -> Self {
         let availability = match &self.availability {
             StyleSourceLifecycleAvailability::RetainedSources { source_ids } => {
@@ -491,13 +427,6 @@ impl StyleSourceLifecycleRecord {
             availability,
         }
     }
-
-    fn into_target_availability(self) -> StyleSourceLifecycleTargetAvailability {
-        StyleSourceLifecycleTargetAvailability {
-            document_kind: self.document_kind,
-            lifecycle: self.availability,
-        }
-    }
 }
 
 impl StyleSourceLifecycleOwnerDetailTrace {
@@ -514,42 +443,6 @@ impl StyleSourceLifecycleOwnerDetailTrace {
     #[cfg(test)]
     pub(super) fn availability(&self) -> &StyleSourceLifecycleAvailability {
         &self.availability
-    }
-}
-
-impl StyleSourceLifecycleTargetAvailability {
-    pub(super) fn record_summary_into(
-        &self,
-        summary: &mut impl StyleSourceLifecycleTargetAvailabilitySummarySink,
-    ) {
-        match &self.lifecycle {
-            StyleSourceLifecycleAvailability::AvailableWithoutSource { .. } => {
-                summary.record_source_lifecycle_available_without_source_target();
-            }
-            StyleSourceLifecycleAvailability::Unavailable { .. } => {
-                summary.record_source_lifecycle_unavailable_target();
-            }
-            StyleSourceLifecycleAvailability::RetainedSources { .. } => {}
-        }
-        match self.document_kind {
-            Some(StyleSourceDocumentKind::Child) => {
-                summary.record_child_document_source_target();
-            }
-            Some(StyleSourceDocumentKind::Detached) => {
-                summary.record_detached_document_source_target();
-            }
-            Some(StyleSourceDocumentKind::Root) | None => {}
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn document_kind(&self) -> Option<StyleSourceDocumentKind> {
-        self.document_kind
-    }
-
-    #[cfg(test)]
-    pub(super) fn lifecycle(&self) -> &StyleSourceLifecycleAvailability {
-        &self.lifecycle
     }
 }
 
@@ -808,11 +701,6 @@ impl StyleSourceLifecycleSnapshot {
     #[cfg(test)]
     pub(super) fn retained_root_document_source_count(&self) -> usize {
         self.retained_root_document_source_count
-    }
-
-    #[cfg(test)]
-    pub(super) fn retained_child_document_source_count(&self) -> usize {
-        self.retained_child_document_source_count
     }
 
     #[cfg(test)]

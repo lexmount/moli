@@ -86,6 +86,9 @@ impl<'a> QueryElement<'a> {
         if self.matches_target_pseudo() {
             state |= ElementState::URLTARGET;
         }
+        if self.matches_modal_pseudo() {
+            state |= ElementState::MODAL;
+        }
         if element.popover_open() && self.host.is_connected(self.handle) {
             state |= ElementState::POPOVER_OPEN;
         }
@@ -106,6 +109,12 @@ impl<'a> QueryElement<'a> {
             CssDirection::Rtl => state |= ElementState::RTL,
         }
         state
+    }
+
+    pub(super) fn matches_modal_pseudo(self) -> bool {
+        self.element().dialog_modal()
+            && self.element().has_attribute("open")
+            && self.host.is_connected(self.handle)
     }
 
     pub(super) fn heading_state(self) -> ElementState {

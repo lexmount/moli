@@ -180,8 +180,8 @@ fn refilling_consumed_fragment_before_drain_updates_both_live_scopes() {
 }
 
 #[test]
-fn batched_fragment_splices_update_computed_style_on_both_sides_of_cutoff() {
-    for (insertion_count, expect_scope_fallback) in [(255, false), (256, true)] {
+fn batched_fragment_splices_refresh_native_relative_selectors() {
+    for insertion_count in [255, 300] {
         let mut fixture = Fixture::new(
             "main { color: rgb(1, 2, 3); }
              main:has(span) .subject { color: rgb(4, 5, 6); }",
@@ -212,13 +212,6 @@ fn batched_fragment_splices_update_computed_style_on_both_sides_of_cutoff() {
             insertion_count * 5
         );
         fixture.drain();
-        assert_eq!(
-            fixture
-                .engine
-                .computed_style_cache_contains_handle_for_document_for_test(document, subject),
-            expect_scope_fallback,
-            "{insertion_count} retained child-list splices"
-        );
         assert_eq!(fixture.computed(subject, "color"), HAS_CHILD_COLOR);
     }
 }

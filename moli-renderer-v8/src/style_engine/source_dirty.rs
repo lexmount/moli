@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 
 use indexmap::IndexSet;
-use moli_selector::StyloSourceInvalidationFallbackReason;
 
 use crate::document_runtime::DomHandle;
 
@@ -18,7 +17,6 @@ pub(super) struct StyleSourceDirtyScopeRecord {
     reason: StyleSourceDirtyReason,
     source_ids: IndexSet<StyleSourceId>,
     scoped_roots: IndexSet<DomHandle>,
-    clear_all_fallback_reasons: IndexSet<StyloSourceInvalidationFallbackReason>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -29,7 +27,6 @@ pub(super) enum StyleSourceDirtyReason {
     LinkedStyleSheet,
     ShadowRootAdoptedStyleSheets,
     CustomPropertyRegistration,
-    InvalidationClearAllFallback,
 }
 
 #[derive(Default)]
@@ -51,30 +48,7 @@ impl StyleSourceDirtyScopes {
             reason,
             source_ids: source_ids.into_iter().collect(),
             scoped_roots,
-            clear_all_fallback_reasons: IndexSet::new(),
         });
-    }
-
-    pub(super) fn record_invalidation_clear_all_fallback_reasons(
-        &self,
-        reasons: impl IntoIterator<Item = StyloSourceInvalidationFallbackReason>,
-    ) {
-        let mut records = self.records.borrow_mut();
-        records
-            .retain(|record| record.reason != StyleSourceDirtyReason::InvalidationClearAllFallback);
-        records.push(StyleSourceDirtyScopeRecord {
-            scope_id: None,
-            reason: StyleSourceDirtyReason::InvalidationClearAllFallback,
-            source_ids: IndexSet::new(),
-            scoped_roots: IndexSet::new(),
-            clear_all_fallback_reasons: reasons.into_iter().collect(),
-        });
-    }
-
-    pub(super) fn clear_invalidation_clear_all_fallback_reasons(&self) {
-        self.records
-            .borrow_mut()
-            .retain(|record| record.reason != StyleSourceDirtyReason::InvalidationClearAllFallback);
     }
 
     pub(super) fn snapshot(&self) -> StyleSourceDirtyScopeSnapshot {
@@ -113,7 +87,6 @@ impl StyleSourceDirtyScopeSnapshot {
                     && !matches!(
                         record.reason,
                         StyleSourceDirtyReason::CustomPropertyRegistration
-                            | StyleSourceDirtyReason::InvalidationClearAllFallback
                     )
             })
             .filter_map(|record| record.scope_id)
@@ -138,7 +111,6 @@ impl StyleSourceDirtyScopeSnapshot {
                 && !matches!(
                     record.reason,
                     StyleSourceDirtyReason::CustomPropertyRegistration
-                        | StyleSourceDirtyReason::InvalidationClearAllFallback
                 )
         })
     }
@@ -158,15 +130,6 @@ impl StyleSourceDirtyScopeSnapshot {
             record.scope_id == Some(StyleScopeId::Document(document))
                 && record.reason == StyleSourceDirtyReason::CustomPropertyRegistration
         })
-    }
-
-    #[cfg(test)]
-    pub(super) fn invalidation_clear_all_fallback_reasons_vec(
-        &self,
-    ) -> Vec<StyloSourceInvalidationFallbackReason> {
-        self.invalidation_clear_all_fallback_reasons()
-            .into_iter()
-            .collect()
     }
 
     pub(super) fn scoped_roots(&self) -> IndexSet<DomHandle> {
@@ -192,15 +155,5 @@ impl StyleSourceDirtyScopeSnapshot {
 
     fn reasons(&self) -> IndexSet<StyleSourceDirtyReason> {
         self.records.iter().map(|record| record.reason).collect()
-    }
-
-    #[cfg(test)]
-    fn invalidation_clear_all_fallback_reasons(
-        &self,
-    ) -> IndexSet<StyloSourceInvalidationFallbackReason> {
-        self.records
-            .iter()
-            .flat_map(|record| record.clear_all_fallback_reasons.iter().copied())
-            .collect()
     }
 }
