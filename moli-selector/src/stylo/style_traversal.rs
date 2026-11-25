@@ -376,7 +376,7 @@ impl StyloDomStyleAdapter {
         host: &DomHost,
         roots: &[NodeId],
         invalidations: &StylesheetInvalidationSet,
-    ) -> Vec<NodeId> {
+    ) -> Vec<(NodeId, RestyleHint)> {
         self.with_bound_host(host, |binding| {
             let mut changed_roots = Vec::new();
             for root in roots.iter().filter_map(|root| binding.element(host, *root)) {
@@ -386,18 +386,20 @@ impl StyloDomStyleAdapter {
                     changed_roots.push(root);
                 }
             }
-            collect_dirty_style_roots(changed_roots)
+            collect_dirty_style_targets(changed_roots)
         })
     }
 
-    /// Collects the top-most dirty elements by following Stylo's retained
-    /// dirty-descendant breadcrumbs from the supplied scope roots.
-    ///
-    /// This is deliberately proportional to dirty branches. It replaces the
-    /// old document-wide scan over every published `ElementData` entry.
-    pub fn collect_dirty_style_roots(&self, host: &DomHost, roots: &[NodeId]) -> Vec<NodeId> {
+    /// Collects Stylo's restyle hints along dirty branches of each scope.
+    pub fn collect_dirty_style_targets(
+        &self,
+        host: &DomHost,
+        roots: &[NodeId],
+    ) -> Vec<(NodeId, RestyleHint)> {
         self.with_bound_host(host, |binding| {
-            collect_dirty_style_roots(roots.iter().filter_map(|root| binding.element(host, *root)))
+            collect_dirty_style_targets(
+                roots.iter().filter_map(|root| binding.element(host, *root)),
+            )
         })
     }
 
@@ -453,53 +455,46 @@ impl StyloDomStyleAdapter {
     }
 }
 
-fn collect_dirty_style_roots<'a>(roots: impl IntoIterator<Item = StyleElement<'a>>) -> Vec<NodeId> {
+fn collect_dirty_style_targets<'a>(
+    roots: impl IntoIterator<Item = StyleElement<'a>>,
+) -> Vec<(NodeId, RestyleHint)> {
     fn collect_from_element(
         element: StyleElement<'_>,
-        roots: &mut Vec<NodeId>,
+        targets: &mut Vec<(NodeId, RestyleHint)>,
         seen: &mut HashSet<NodeId>,
-        covered_by_dirty_ancestor: bool,
+        covered_by_subtree: bool,
     ) {
         let handle = element.handle();
         if !seen.insert(handle) {
             return;
         }
 
-        let self_is_dirty = element
+        let hint = element
             .borrow_data()
-            .is_some_and(|data| !data.hint.is_empty());
-        let descendants_are_dirty = element.has_dirty_descendants();
-        if self_is_dirty {
-            // Moli resolves demanded elements one at a time. Treating a dirty
-            // element as a lazy subtree root conservatively carries inherited
-            // changes to any descendant resolved after it.
-            if !covered_by_dirty_ancestor {
-                roots.push(handle);
-            }
+            .map_or(RestyleHint::empty(), |data| data.hint);
+        if !hint.is_empty() && !covered_by_subtree {
+            targets.push((handle, hint));
         }
 
-        if !descendants_are_dirty {
+        if !element.has_dirty_descendants() {
             return;
         }
+        let covered_by_subtree =
+            covered_by_subtree || hint.contains(RestyleHint::RESTYLE_DESCENDANTS);
         for child in element.traversal_children() {
             if let Some(child) = child.as_element() {
-                collect_from_element(
-                    child,
-                    roots,
-                    seen,
-                    covered_by_dirty_ancestor || self_is_dirty,
-                );
+                collect_from_element(child, targets, seen, covered_by_subtree);
             }
         }
         unsafe { element.unset_dirty_descendants() };
     }
 
-    let mut dirty_roots = Vec::new();
+    let mut targets = Vec::new();
     let mut seen = HashSet::new();
     for root in roots {
-        collect_from_element(root, &mut dirty_roots, &mut seen, false);
+        collect_from_element(root, &mut targets, &mut seen, false);
     }
-    dirty_roots
+    targets
 }
 
 impl<'binding> StyleDomHostBinding<'binding> {

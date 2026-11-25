@@ -1,6 +1,66 @@
 use super::*;
 
 #[test]
+fn stylesheet_element_hints_preserve_independent_child_styles() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let parent = host.create_element("div");
+    let changed_child = host.create_element("span");
+    let clean_child = host.create_element("span");
+    assert!(host.set_attribute(parent, "class", "parent"));
+    assert!(host.set_attribute(changed_child, "class", "changed"));
+    assert!(host.append_child(document, parent));
+    assert!(host.append_child(parent, changed_child));
+    assert!(host.append_child(parent, clean_child));
+
+    let engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let source = |slot, css: &str| {
+        StyloStylesheetSource::new(css.into(), document_url.clone()).with_source_id(Some(
+            StyleSourceId::document_adopted_style_sheet(document, slot),
+        ))
+    };
+    let original = source(1, ".parent { width: 10px } .changed { width: 20px }");
+    let initial = FullStyleWorldSnapshot {
+        document_stylesheet_sources: vec![original.clone()],
+        ..Default::default()
+    };
+    let before =
+        computed_style_snapshot_for_test(&engine, &host, &document_url, clean_child, &initial);
+    computed_style_snapshot_for_test(&engine, &host, &document_url, changed_child, &initial);
+
+    let changes = FullStyleWorldSnapshot {
+        document_stylesheet_sources: vec![
+            original,
+            source(2, ".parent { width: 30px } .changed { width: 40px }"),
+        ],
+        ..Default::default()
+    };
+    let after =
+        computed_style_snapshot_for_test(&engine, &host, &document_url, clean_child, &changes);
+    assert!(ServoArc::ptr_eq(
+        &before.computed_values(),
+        &after.computed_values()
+    ));
+    for (target, width) in [(parent, "30px"), (changed_child, "40px")] {
+        assert_eq!(
+            engine
+                .computed_style_property_value(
+                    &host,
+                    &document_url,
+                    target,
+                    "width",
+                    None,
+                    &changes,
+                    None,
+                )
+                .as_deref(),
+            Some(width)
+        );
+    }
+}
+
+#[test]
 fn document_stylesheet_fallback_updates_the_persistent_world_in_place() {
     let mut host = test_host();
     let document = host.document_handle();
