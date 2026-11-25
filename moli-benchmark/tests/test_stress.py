@@ -191,6 +191,30 @@ class StressTests(unittest.TestCase):
         self.assertNotIn("<script src=", document)
         self.assertNotIn("https://cdn.", document)
 
+    def test_report_preserves_failed_navigation_without_fabricating_latency(self) -> None:
+        for all_failed in (False, True):
+            with self.subTest(all_failed=all_failed), TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                binary = root / "moli"
+                binary.write_bytes(b"test-binary")
+                payload = stress_payload(binary)
+                result = payload["results"][0]
+                failed_rows = result["rows"] if all_failed else result["rows"][:1]
+                for row in failed_rows:
+                    row.update(ok=False, response_ms=None, dcl_ms=None, load_ms=None)
+                result["summary"].update(failures=len(failed_rows), observable_passes=4 - len(failed_rows))
+                result_path = root / "result.json"
+                report_path = root / "report.html"
+                result_path.write_text(json.dumps(payload), encoding="utf-8")
+                summary = write_stress_report(result_path, report_path)
+                document = report_path.read_text(encoding="utf-8")
+                self.assertEqual(summary["status"], "fail")
+                self.assertEqual(summary["navigation"]["failures"], len(failed_rows))
+                self.assertEqual(summary["latency"]["load_ms"]["count"], 4 - len(failed_rows))
+                self.assertEqual(summary["latency"]["load_ms"]["p50"], None if all_failed else 303.0)
+                self.assertIn('"load":null', document)
+                self.assertEqual(json.loads((root / "summary.json").read_text())["status"], "fail")
+
     def test_report_requires_retained_periodic_samples(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
