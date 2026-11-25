@@ -430,6 +430,11 @@ pub(crate) fn window_open_callback<'s>(
         let popup_id = opened_popup.popup_id;
         if opened_popup.created_new_browsing_context {
             host.set_lightweight_popup_is_popup(popup_id, parsed_features.is_popup());
+            host.initialize_lightweight_popup_screen_position(
+                scope,
+                opened_popup.window,
+                parsed_features.requested_position(),
+            );
         }
         let session_storage_store = host.lightweight_popup_session_storage_store(popup_id);
         let initial_empty_document_storage_key =
