@@ -82,13 +82,6 @@ struct StyloElementDocumentDataStore {
     data: HashMap<NodeId, Box<StoredElementStyle>>,
     inline_styles: HashMap<NodeId, InlineStyleSnapshot>,
     selector_flags: HashMap<NodeId, ElementSelectorFlags>,
-    /// Stylo's equivalent of Blink's `ChildNeedsStyleInvalidation` breadcrumb.
-    ///
-    /// Stylesheet invalidation already calls `TElement::set_dirty_descendants`
-    /// while unwinding from a matched descendant. Keeping that bit in the
-    /// document side table lets Moli follow only dirty branches later instead
-    /// of rediscovering them by scanning every published `ElementData` entry.
-    dirty_descendants: HashSet<NodeId>,
 }
 
 #[derive(Default)]
@@ -469,28 +462,11 @@ impl StyloDomStyleAdapter {
         invalidations: &StylesheetInvalidationSet,
     ) -> Vec<(NodeId, RestyleHint)> {
         self.with_bound_host(host, |binding| {
-            let mut changed_roots = Vec::new();
-            for root in roots.iter().filter_map(|root| binding.element(host, *root)) {
-                // Every root belongs to an independent Document/ShadowRoot
-                // scope and must be processed even after an earlier match.
-                if invalidations.process_style(root, None) {
-                    changed_roots.push(root);
+            binding.collect_native_invalidation_targets(|| {
+                for root in roots.iter().filter_map(|root| binding.element(host, *root)) {
+                    invalidations.process_style(root, None);
                 }
-            }
-            collect_dirty_style_targets(changed_roots)
-        })
-    }
-
-    /// Collects Stylo's restyle hints along dirty branches of each scope.
-    pub fn collect_dirty_style_targets(
-        &self,
-        host: &DomHost,
-        roots: &[NodeId],
-    ) -> Vec<(NodeId, RestyleHint)> {
-        self.with_bound_host(host, |binding| {
-            collect_dirty_style_targets(
-                roots.iter().filter_map(|root| binding.element(host, *root)),
-            )
+            })
         })
     }
 
@@ -544,48 +520,6 @@ impl StyloDomStyleAdapter {
         self.state.host.set(host as *const DomHost);
         self.state.clear_node_data();
     }
-}
-
-fn collect_dirty_style_targets<'a>(
-    roots: impl IntoIterator<Item = StyleElement<'a>>,
-) -> Vec<(NodeId, RestyleHint)> {
-    fn collect_from_element(
-        element: StyleElement<'_>,
-        targets: &mut Vec<(NodeId, RestyleHint)>,
-        seen: &mut HashSet<NodeId>,
-        covered_by_subtree: bool,
-    ) {
-        let handle = element.handle();
-        if !seen.insert(handle) {
-            return;
-        }
-
-        let hint = element
-            .borrow_data()
-            .map_or(RestyleHint::empty(), |data| data.hint);
-        if !hint.is_empty() && !covered_by_subtree {
-            targets.push((handle, hint));
-        }
-
-        if !element.has_dirty_descendants() {
-            return;
-        }
-        let covered_by_subtree =
-            covered_by_subtree || hint.contains(RestyleHint::RESTYLE_DESCENDANTS);
-        for child in element.traversal_children() {
-            if let Some(child) = child.as_element() {
-                collect_from_element(child, targets, seen, covered_by_subtree);
-            }
-        }
-        unsafe { element.unset_dirty_descendants() };
-    }
-
-    let mut targets = Vec::new();
-    let mut seen = HashSet::new();
-    for root in roots {
-        collect_from_element(root, &mut targets, &mut seen, false);
-    }
-    targets
 }
 
 impl<'binding> StyleDomHostBinding<'binding> {
@@ -649,7 +583,9 @@ impl<'binding> StyleDomHostBinding<'binding> {
         self.state.with_snapshot_handles(handles, f)
     }
 
-    pub(super) fn collect_native_invalidation_targets(
+    /// Captures the targets reported by Stylo while a native invalidator runs.
+    /// The invalidator can still hold each target's element data borrow.
+    pub fn collect_native_invalidation_targets(
         &self,
         invalidate: impl FnOnce(),
     ) -> Vec<(NodeId, RestyleHint)> {
@@ -747,24 +683,18 @@ impl StyloElementDataStore {
         let mut moved_data = None;
         let mut moved_inline_style = None;
         let mut moved_selector_flags = None;
-        let mut moved_dirty_descendants = false;
         let mut previous_is_empty = false;
         if let Some(previous_bucket) = documents.get_mut(&previous) {
             moved_data = previous_bucket.data.remove(&handle);
             moved_inline_style = previous_bucket.inline_styles.remove(&handle);
             moved_selector_flags = previous_bucket.selector_flags.remove(&handle);
-            moved_dirty_descendants = previous_bucket.dirty_descendants.remove(&handle);
             previous_is_empty = previous_bucket.is_empty();
         }
         if previous_is_empty {
             documents.remove(&previous);
         }
 
-        if moved_data.is_none()
-            && moved_inline_style.is_none()
-            && moved_selector_flags.is_none()
-            && !moved_dirty_descendants
-        {
+        if moved_data.is_none() && moved_inline_style.is_none() && moved_selector_flags.is_none() {
             return;
         }
 
@@ -780,9 +710,6 @@ impl StyloElementDataStore {
         }
         if let Some(selector_flags) = moved_selector_flags {
             bucket.selector_flags.insert(handle, selector_flags);
-        }
-        if moved_dirty_descendants {
-            bucket.dirty_descendants.insert(handle);
         }
     }
 
@@ -881,12 +808,10 @@ impl StyloElementDataStore {
                 .data
                 .keys()
                 .chain(bucket.selector_flags.keys())
-                .chain(bucket.dirty_descendants.iter())
                 .copied()
                 .collect::<HashSet<_>>();
             bucket.data.clear();
             bucket.selector_flags.clear();
-            bucket.dirty_descendants.clear();
             let orphaned_handles = affected_handles
                 .into_iter()
                 .filter(|handle| {
@@ -1086,29 +1011,6 @@ impl StyloElementDataStore {
             .get(&document)
             .map(|bucket| bucket.selector_flags.keys().copied().collect())
             .unwrap_or_default()
-    }
-
-    fn has_dirty_descendants_for_document(&self, document: NodeId, handle: NodeId) -> bool {
-        self.documents
-            .borrow()
-            .get(&document)
-            .is_some_and(|bucket| bucket.dirty_descendants.contains(&handle))
-    }
-
-    fn set_dirty_descendants_for_document(&self, document: NodeId, handle: NodeId) {
-        self.note_owner_document(handle, document);
-        self.documents
-            .borrow_mut()
-            .entry(document)
-            .or_default()
-            .dirty_descendants
-            .insert(handle);
-    }
-
-    fn unset_dirty_descendants_for_document(&self, document: NodeId, handle: NodeId) {
-        self.remove_from_document(document, handle, |bucket| {
-            bucket.dirty_descendants.remove(&handle);
-        });
     }
 
     fn clear_inline_style(&self, handle: NodeId) {
@@ -1377,17 +1279,13 @@ impl StyloElementDataStore {
 
 impl StyloElementDocumentDataStore {
     fn is_empty(&self) -> bool {
-        self.data.is_empty()
-            && self.inline_styles.is_empty()
-            && self.selector_flags.is_empty()
-            && self.dirty_descendants.is_empty()
+        self.data.is_empty() && self.inline_styles.is_empty() && self.selector_flags.is_empty()
     }
 
     fn contains_handle(&self, handle: NodeId) -> bool {
         self.data.contains_key(&handle)
             || self.inline_styles.contains_key(&handle)
             || self.selector_flags.contains_key(&handle)
-            || self.dirty_descendants.contains(&handle)
     }
 }
 
@@ -1415,13 +1313,6 @@ impl fmt::Debug for StyloElementDataStore {
                 &documents
                     .values()
                     .map(|bucket| bucket.selector_flags.len())
-                    .sum::<usize>(),
-            )
-            .field(
-                "dirty_descendants_len",
-                &documents
-                    .values()
-                    .map(|bucket| bucket.dirty_descendants.len())
                     .sum::<usize>(),
             )
             .finish()
@@ -2328,9 +2219,8 @@ impl<'a> TElement for StyleElement<'a> {
     }
 
     fn has_dirty_descendants(&self) -> bool {
-        self.style_state()
-            .element_data
-            .has_dirty_descendants_for_document(self.document(), self.handle())
+        // Moli schedules restyles directly from the reported targets.
+        false
     }
 
     fn has_snapshot(&self) -> bool {
@@ -2368,17 +2258,9 @@ impl<'a> TElement for StyleElement<'a> {
         }
     }
 
-    unsafe fn set_dirty_descendants(&self) {
-        self.style_state()
-            .element_data
-            .set_dirty_descendants_for_document(self.document(), self.handle());
-    }
+    unsafe fn set_dirty_descendants(&self) {}
 
-    unsafe fn unset_dirty_descendants(&self) {
-        self.style_state()
-            .element_data
-            .unset_dirty_descendants_for_document(self.document(), self.handle());
-    }
+    unsafe fn unset_dirty_descendants(&self) {}
 
     fn store_children_to_process(&self, _n: isize) {}
 
@@ -2854,27 +2736,6 @@ mod element_data_store_tests {
         store.clear_style_values(handle);
         assert_eq!(store.document_for_handle(handle), Some(new_document));
         store.clear_selector_flags(handle);
-        assert_eq!(store.document_for_handle(handle), None);
-        assert!(store.documents.borrow().is_empty());
-    }
-
-    #[test]
-    fn dirty_descendant_breadcrumb_moves_and_retires_with_its_owner() {
-        let store = StyloElementDataStore::default();
-        let old_document = NodeId::new(0);
-        let new_document = NodeId::new(1);
-        let handle = NodeId::new(2);
-
-        store.set_dirty_descendants_for_document(old_document, handle);
-        assert!(store.has_dirty_descendants_for_document(old_document, handle));
-        assert_eq!(store.document_for_handle(handle), Some(old_document));
-
-        store.note_owner_document(handle, new_document);
-        assert!(!store.has_dirty_descendants_for_document(old_document, handle));
-        assert!(store.has_dirty_descendants_for_document(new_document, handle));
-        assert_eq!(store.document_for_handle(handle), Some(new_document));
-
-        store.unset_dirty_descendants_for_document(new_document, handle);
         assert_eq!(store.document_for_handle(handle), None);
         assert!(store.documents.borrow().is_empty());
     }

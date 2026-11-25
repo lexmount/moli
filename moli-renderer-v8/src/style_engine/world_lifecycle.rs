@@ -320,16 +320,14 @@ fn invalidate_viewport_unit_styles(
                 .is_some_and(|node| node.as_element().is_some())
         }));
     }
-    let changed_roots = dom_adapter.with_bound_host(host, |binding| {
-        roots
-            .iter()
-            .copied()
-            .filter(|root| {
-                binding
-                    .element(host, *root)
-                    .is_some_and(style::invalidation::viewport_units::invalidate)
-            })
-            .collect::<Vec<_>>()
-    });
-    dom_adapter.collect_dirty_style_targets(host, &changed_roots)
+    dom_adapter.with_bound_host(host, |binding| {
+        binding.collect_native_invalidation_targets(|| {
+            for element in roots
+                .into_iter()
+                .filter_map(|root| binding.element(host, root))
+            {
+                style::invalidation::viewport_units::invalidate(element);
+            }
+        })
+    })
 }
