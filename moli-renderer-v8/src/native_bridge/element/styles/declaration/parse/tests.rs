@@ -4,14 +4,12 @@ use crate::native_bridge::element::styles::declaration::properties::known_style_
 use super::cssom_mutation::parse_style_property_entries_for_cssom_write;
 use super::declaration_parser::parse_style_property_entries_with_base;
 use super::inline_state::{
-    expand_unresolved_box_shorthand_entries_for_mutation, inline_css_text_pdb_storage_state,
-    inline_serialized_entries_can_seed_pdb_state_without_css_text_reparse,
+    expand_unresolved_box_shorthand_entries_for_mutation,
     inline_state_block_entries_for_property_mutation,
     inline_state_has_replaceable_side_entries_for_property,
     inline_state_has_unpreservable_side_entries_for_property,
     inline_state_property_priority_with_pdb, inline_state_property_value_with_pdb,
     inline_style_declaration_state_from_css_text, inline_style_declaration_state_from_entries,
-    inline_style_declaration_state_from_serialized_entries,
     refresh_inline_state_entries_after_pdb_mutation, unresolved_box_shorthand_longhands,
 };
 use super::pdb_compat::{
@@ -43,6 +41,51 @@ fn important_style_entry(name: &str, value: &str) -> StyleEntry {
         name: name.to_owned(),
         value: value.to_owned(),
         priority: true,
+    }
+}
+
+fn inline_css_text_pdb_storage_state(css_text: &str) -> Option<CssInlineStyleDeclarationState> {
+    super::inline_state::inline_css_text_pdb_storage_state(
+        css_text,
+        &crate::css_style::parse_css_declaration_list(css_text),
+    )
+}
+
+fn inline_style_declaration_state_from_serialized_entries(
+    entries: &[StyleEntry],
+    css_text: &str,
+    base: Option<&url::Url>,
+) -> CssInlineStyleDeclarationState {
+    super::inline_state::inline_style_declaration_state_from_serialized_entries(
+        inline_style_declaration_state_from_entries(entries),
+        css_text,
+        base,
+    )
+}
+
+fn inline_serialized_entries_can_seed_pdb_state_without_css_text_reparse(
+    entries: &[StyleEntry],
+) -> bool {
+    super::inline_state::inline_serialized_entries_can_seed_pdb_state_without_css_text_reparse(
+        &inline_style_declaration_state_from_entries(entries),
+    )
+}
+
+#[test]
+fn css_text_builder_matches_stylo_for_order_priority_and_shorthand_resets() {
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+    for css_text in [
+        "WIDTH: 1px; width: 2px !important; width: 3px; height: 4px;",
+        "margin: 1px 2px; margin-inline-start: 3px; margin-left: 4px;",
+        "border-image-source: url(example.png); border: 1px solid red; color: green;",
+        r#"content: "x;y"; --Empty:; --Variant: normal; --variant: hidden;"#,
+    ] {
+        let state = inline_css_text_pdb_storage_state(css_text).expect(css_text);
+        assert_eq!(
+            state.block,
+            moli_css_parse::parse_declaration_block(css_text),
+            "{css_text}"
+        );
     }
 }
 

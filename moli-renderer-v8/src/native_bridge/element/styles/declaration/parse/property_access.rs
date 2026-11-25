@@ -1,8 +1,9 @@
 use super::inline_state::unresolved_box_shorthand_longhands;
 use super::pdb_compat::{
     css_value_uses_unresolved_cssom_storage, cssom_style_property_query_uses_pdb,
-    pdb_block_from_style_entries, style_entry_affects_property_query, style_entry_is_pdb_safe,
-    style_entry_is_pdb_supplemental_side_entry, style_property_affected_names_with_pdb,
+    pdb_block_from_native_style_entries, style_entry_affects_property_query,
+    style_entry_is_pdb_safe, style_entry_is_pdb_supplemental_side_entry,
+    style_property_affected_names_with_pdb,
 };
 use super::*;
 pub(super) use crate::css_style::serialize_text_decoration_shorthand_value as serialize_pdb_text_decoration_shorthand;
@@ -116,12 +117,12 @@ pub(super) fn style_entries_pdb_with_supplemental(
     let mut pdb_entries = Vec::new();
     for entry in entries {
         if style_entry_is_pdb_safe(entry) && !style_entry_is_pdb_supplemental_side_entry(entry) {
-            pdb_entries.push(entry.clone());
+            pdb_entries.push(entry);
         } else if !style_entry_is_pdb_supplemental_side_entry(entry) {
             return None;
         }
     }
-    pdb_block_from_style_entries(&pdb_entries)
+    pdb_block_from_native_style_entries(&pdb_entries)
 }
 
 pub(super) fn style_entries_pdb_property_query_candidate(
@@ -186,7 +187,7 @@ pub(super) fn style_entries_pdb_for_property_query(
     let mut pdb_entries = Vec::new();
     for entry in entries {
         if style_entry_is_pdb_safe(entry) && !style_entry_is_pdb_supplemental_side_entry(entry) {
-            pdb_entries.push(entry.clone());
+            pdb_entries.push(entry);
             continue;
         }
         if style_entry_affects_property_query(entry, property, &affected_names) {
@@ -196,7 +197,7 @@ pub(super) fn style_entries_pdb_for_property_query(
     if pdb_entries.is_empty() {
         return None;
     }
-    pdb_block_from_style_entries(&pdb_entries)
+    pdb_block_from_native_style_entries(&pdb_entries)
 }
 
 pub(super) fn style_entries_pdb_for_property_query_with_supplemental(
@@ -207,7 +208,7 @@ pub(super) fn style_entries_pdb_for_property_query_with_supplemental(
     let mut pdb_entries = Vec::new();
     for entry in entries {
         if style_entry_is_pdb_safe(entry) && !style_entry_is_pdb_supplemental_side_entry(entry) {
-            pdb_entries.push(entry.clone());
+            pdb_entries.push(entry);
             continue;
         }
         if style_entry_affects_property_query(entry, property, &affected_names)
@@ -216,7 +217,7 @@ pub(super) fn style_entries_pdb_for_property_query_with_supplemental(
             return None;
         }
     }
-    pdb_block_from_style_entries(&pdb_entries)
+    pdb_block_from_native_style_entries(&pdb_entries)
 }
 
 pub(crate) fn pdb_property_value_for_cssom_query_with_side_entries(

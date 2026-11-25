@@ -22,8 +22,15 @@ pub(crate) fn parse_inline_css_text_with_base(
     style_text: &str,
     base_url: Option<&url::Url>,
 ) -> Vec<StyleEntry> {
+    parse_inline_declaration_entries(&parse_css_declaration_list(style_text), base_url)
+}
+
+pub(super) fn parse_inline_declaration_entries(
+    declarations: &[StyleEntry],
+    base_url: Option<&url::Url>,
+) -> Vec<StyleEntry> {
     let mut entries: Vec<StyleEntry> = Vec::new();
-    for declaration in parse_css_declaration_list(style_text) {
+    for declaration in declarations {
         let name = canonical_style_property_name(declaration.name.trim());
         if declaration.value.is_empty() && cssom_empty_specified_placeholder_property(&name) {
             entries.push(StyleEntry {
@@ -436,12 +443,15 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_
     css_text: &str,
 ) {
     crate::style_engine::ensure_stylo_browser_compat_prefs();
-    let mut state = if let Some(state) = inline_css_text_pdb_storage_state(css_text) {
+    let declarations = parse_css_declaration_list(css_text);
+    let mut state = if let Some(state) = inline_css_text_pdb_storage_state(css_text, &declarations)
+    {
         state
     } else {
         let runtime = unsafe { &*runtime_ptr };
         let base_url = runtime.element_inline_style_base_url(handle);
-        inline_style_declaration_state_from_css_text(css_text, Some(&base_url))
+        let entries = parse_inline_declaration_entries(&declarations, Some(&base_url));
+        super::inline_state::inline_style_declaration_state_from_entries(&entries)
     };
     state.refresh_pdb_entries();
     let (css_text, override_text) = state.css_text_and_style_resolution_override();
