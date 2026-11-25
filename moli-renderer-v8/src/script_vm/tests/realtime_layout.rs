@@ -196,6 +196,73 @@ async fn realtime_repaints_native_color_damage_without_rebuilding_geometry() {
         .await;
 }
 
+#[cfg(feature = "devtools")]
+#[tokio::test]
+async fn realtime_projects_transform_damage_until_auto_gutter_changes() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut vm = realtime_vm(concat!(
+                "<!doctype html><style>body{margin:0}",
+                "#target{width:20px;height:20px;transform:translateX(10px);background:red}",
+                "#target.shifted{transform:translateX(100px);opacity:.5}",
+                "#target.far{transform:translateX(2000px)}",
+                "</style><div id=target></div>",
+            ));
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let document = host.borrow().document_handle();
+            let viewport = host.borrow().layout_viewport_for_document(document);
+            let session = crate::runtime::RendererScreencastPaintSession::default();
+            let paint = |vm: &mut StandaloneScriptVmHarness| {
+                vm.paint_current_screen_layout(
+                    &session,
+                    viewport,
+                    moli_layout::PaintCaptureRequest::viewport(),
+                    moli_layout::LayoutFlushReason::Screenshot,
+                ).unwrap().unwrap()
+            };
+            let initial = paint(&mut vm);
+            let measure =
+                "JSON.stringify([target.getBoundingClientRect().left,document.elementFromPoint(110,5).id])";
+            assert_eq!(vm.eval(measure).unwrap(), "[10,\"\"]");
+
+            for (edit, geometry) in [
+                ("target.className='shifted'", "[100,\"target\"]"),
+                ("target.style.transform='translateX(40px)'", "[40,\"\"]"),
+            ] {
+                let publications = vm.layout_pass_observability_for_test().1;
+                vm.eval(edit).unwrap();
+                assert_eq!(vm.eval(measure).unwrap(), geometry, "{edit}");
+                assert_eq!(vm.layout_pass_observability_for_test().1, publications, "{edit}: geometry");
+                let projected = paint(&mut vm);
+                assert_eq!(vm.layout_pass_observability_for_test().1, publications, "{edit}: paint");
+                assert_ne!(projected, initial, "{edit}");
+                let fresh = host
+                    .borrow()
+                    .build_layout_pass_for_document(
+                        document,
+                        moli_layout::LayoutPassRequest::with_paint(
+                            viewport,
+                            moli_layout::LayoutFlushReason::Screenshot,
+                        ),
+                    )
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(Some(&projected), fresh.paint_snapshot(), "{edit}");
+            }
+
+            let publications = vm.layout_pass_observability_for_test().1;
+            vm.eval("target.style.transform=''; target.className='far'")
+                .unwrap();
+            assert_eq!(
+                vm.eval("String(target.getBoundingClientRect().left)")
+                    .unwrap(),
+                "2000",
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, publications + 1);
+        })
+        .await;
+}
+
 #[test]
 fn realtime_reuses_numeric_links_until_box_roles_change() {
     let mut vm = realtime_vm(concat!(

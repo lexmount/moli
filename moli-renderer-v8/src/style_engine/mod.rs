@@ -8,6 +8,14 @@ use dom::ElementState as StyloElementState;
 use moli_selector::{QueryContainerSizes, StyloDomStyleAdapter};
 use style::servo::restyle_damage::ServoRestyleDamage;
 
+pub(crate) struct ScreenProjectionStyleUpdates {
+    pub(crate) damage: ServoRestyleDamage,
+    pub(crate) styles: Vec<(
+        DomHandle,
+        style::servo_arc::Arc<style::properties::ComputedValues>,
+    )>,
+}
+
 mod active_stylesheets;
 #[cfg(test)]
 pub(crate) use active_stylesheets::{
@@ -241,57 +249,56 @@ impl MoliStyleEngine {
         &self,
         host: &DomHost,
         document: DomHandle,
-        allow_repaint: bool,
+        supported_damage: ServoRestyleDamage,
     ) -> Option<ScreenRestyleTargets> {
         let Some(world) = self.document_worlds.active_world(document) else {
             return Some(ScreenRestyleTargets::default());
         };
         let state = &world.document_state;
         state.finish_screen_style_invalidation();
-        if !allow_repaint && state.screen_needs_layout() {
+        if supported_damage.is_empty() && state.screen_needs_layout() {
             return None;
         }
         state.screen_restyle_targets(host, document)
     }
 
     /// Read canonical damage only after settling each affected path.
-    pub(crate) fn screen_repaint_styles(
+    pub(crate) fn screen_projection_style_updates(
         &self,
         document: DomHandle,
-    ) -> Option<
-        Vec<(
-            DomHandle,
-            style::servo_arc::Arc<style::properties::ComputedValues>,
-        )>,
-    > {
+        supported_damage: ServoRestyleDamage,
+    ) -> Option<ScreenProjectionStyleUpdates> {
+        let mut updates = ScreenProjectionStyleUpdates {
+            damage: ServoRestyleDamage::empty(),
+            styles: Vec::new(),
+        };
         let Some(world) = self.document_worlds.active_world(document) else {
-            return Some(Vec::new());
+            return Some(updates);
         };
         let state = &world.document_state;
         state.finish_screen_style_invalidation();
         if state.screen_restyle_is_full() {
             return None;
         }
-        state
-            .screen_damage_nodes
-            .borrow()
-            .iter()
-            .map(|&handle| {
-                let damage = self.dom_adapter.element_restyle_damage(document, handle)?;
-                if !ServoRestyleDamage::REPAINT.contains(damage) {
-                    return None;
-                }
-                let styles = self.dom_adapter.clone_clean_element_styles(
-                    document,
-                    handle,
-                    state.style_paths.generation(),
-                )?;
-                let (primary, before, after) =
-                    StyloComputedStyleSnapshot::from_element_styles(&styles)
-                        .into_element_computed_values();
-                (before.is_none() && after.is_none()).then_some((handle, primary))
-            })
-            .collect()
+        for &handle in &*state.screen_damage_nodes.borrow() {
+            let damage = self.dom_adapter.element_restyle_damage(document, handle)?;
+            if !supported_damage.contains(damage) {
+                return None;
+            }
+            let styles = self.dom_adapter.clone_clean_element_styles(
+                document,
+                handle,
+                state.style_paths.generation(),
+            )?;
+            let (primary, before, after) = StyloComputedStyleSnapshot::from_element_styles(&styles)
+                .into_element_computed_values();
+            if before.is_some() || after.is_some() {
+                return None;
+            }
+            updates.damage |= damage;
+            updates.styles.push((handle, primary));
+        }
+        Some(updates)
     }
 
     #[cfg(test)]

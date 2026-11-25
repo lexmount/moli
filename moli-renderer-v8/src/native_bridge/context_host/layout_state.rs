@@ -292,6 +292,32 @@ impl DocumentLayoutState {
             .is_some_and(|retained| retained.world.update_repaint_styles(styles))
     }
 
+    pub(super) fn update_screen_style_projection(
+        &mut self,
+        document: DomHandle,
+        styles: Vec<(
+            DomHandle,
+            style::servo_arc::Arc<style::properties::ComputedValues>,
+        )>,
+        scroll_offset: impl Fn(DomHandle) -> LayoutPoint,
+    ) -> bool {
+        let (Some(previous), Some(retained)) = (
+            self.latest_layout.get(document),
+            self.retained_layout.as_mut(),
+        ) else {
+            return false;
+        };
+        let Some(tree) = retained
+            .world
+            .project_screen_styles(previous, styles, scroll_offset)
+        else {
+            return false;
+        };
+        self.latest_layout.replace_projection(tree);
+        self.mark_visual_state_dirty();
+        true
+    }
+
     pub(super) fn has_reusable_layout(&self) -> bool {
         self.retained_layout
             .as_ref()

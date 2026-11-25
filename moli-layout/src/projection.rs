@@ -267,12 +267,70 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
         &mut self,
         styles: Vec<(N, style::servo_arc::Arc<style::properties::ComputedValues>)>,
     ) -> bool {
+        self.update_published_styles(styles, |_| Some(())).is_some()
+    }
+
+    /// Refresh coordinates, overflow, clips, and paint order over the same
+    /// numeric layout. Fall back if an automatic gutter or layout role would
+    /// change the known numeric geometry.
+    pub fn project_screen_styles(
+        &mut self,
+        old: &FrozenLayoutTree<N>,
+        styles: Vec<(N, style::servo_arc::Arc<style::properties::ComputedValues>)>,
+        scroll_offset: impl Fn(N) -> LayoutPoint,
+    ) -> Option<FrozenLayoutTree<N>> {
+        if !old.object_geometry.is_empty()
+            || old.embedded_frames().next().is_some()
+            || self
+                .world
+                .boxes
+                .iter()
+                .any(|layout_box| layout_box.style.display().is_grid_container())
+        {
+            return None;
+        }
+        let include_paint = self.paint.is_some();
+        let viewport = self.viewport;
+        let (tree, diagnostics, metadata) = self.update_published_styles(styles, |world| {
+            let overflow = OverflowProjection::new(world, viewport);
+            if !projection_preserves_scrollbar_layout(world, &overflow) {
+                return None;
+            }
+            let mut projection = OutputProjection::new(world, viewport);
+            projection.build_local_box_geometry(&overflow);
+            projection.build_scroll_extents(&overflow);
+            let scroll = projection.build_coordinate_spaces(false, true).ok()?;
+            projection.build_fragments();
+            projection.assign_clip_and_paint_order();
+            let size = projection.document_content_size();
+            let metadata = include_paint.then(|| std::mem::take(&mut projection.paint_metadata));
+            let diagnostics = include_paint.then(|| projection.diagnostics.clone());
+            let mut tree = projection.into_frozen_tree(
+                old.source_root(),
+                size,
+                Vec::new(),
+                Vec::new(),
+                scroll,
+            );
+            tree.refresh_scroll_projection(scroll_offset).ok()?;
+            Some((tree, diagnostics, metadata))
+        })?;
+        if let Some(paint) = &mut self.paint {
+            paint.diagnostics = diagnostics.expect("existing paint diagnostics");
+            paint.paint_metadata = metadata.expect("existing paint metadata");
+        }
+        Some(tree)
+    }
+
+    fn update_published_styles<T>(
+        &mut self,
+        styles: Vec<(N, style::servo_arc::Arc<style::properties::ComputedValues>)>,
+        project: impl FnOnce(&LayoutWorld<N>) -> Option<T>,
+    ) -> Option<T> {
         let world = &mut self.world;
         let mut replacements = HashMap::new();
         for (source, computed) in styles {
-            let Some(&id) = world.source_mapping.get(&source) else {
-                return false;
-            };
+            let &id = world.source_mapping.get(&source)?;
             let old = &world.boxes[id.index()];
             let next = crate::ResolvedLayoutStyle::from_stylo(computed);
             if old.element_semantics.as_ref().is_none_or(|element| {
@@ -283,7 +341,19 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
                 || old.kind == crate::LayoutBoxKind::TableCaption
                 || !old.style.can_repaint_with(&next)
             {
-                return false;
+                return None;
+            }
+            let containing_role = |style: &crate::ResolvedLayoutStyle| {
+                let root = world.is_document_element(id);
+                let css_box = old.is_css_box();
+                let eligible = old.is_eligible_for_paint_or_layout_containment();
+                (
+                    style.establishes_positioned_containing_block(root, css_box, eligible),
+                    style.establishes_fixed_containing_block(root, css_box, eligible),
+                )
+            };
+            if containing_role(&old.style) != containing_role(&next) {
+                return None;
             }
             replacements.insert(id, next);
         }
@@ -304,7 +374,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
                     .and_then(|node| world.source_mapping.get(&node))
                     .is_some_and(|owner| replacements.contains_key(owner))
             {
-                return false;
+                return None;
             }
             let Some(inline) = &layout_box.inline_layout else {
                 continue;
@@ -341,7 +411,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
                 colors_only.color = current.color;
                 colors_only.decoration.color = current.decoration.color;
                 if colors_only != current || inline.selection.is_some() {
-                    return false;
+                    return None;
                 }
                 match brushes.binary_search_by_key(&slot, |(index, _)| *index) {
                     Ok(index) => brushes[index].1 = current,
@@ -354,12 +424,20 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
             }
         }
 
-        for (id, replacement) in replacements {
+        for (&id, replacement) in &mut replacements {
+            std::mem::swap(&mut world.boxes[id.index()].style, replacement);
+        }
+        let Some(result) = project(world) else {
+            for (id, original) in replacements {
+                world.boxes[id.index()].style = original;
+            }
+            return None;
+        };
+        for (id, _previous) in replacements {
             world.clear_layout_caches(id);
             if let Some(numeric) = &mut world.inline_numeric_reuse {
                 numeric.discard_owner(id);
             }
-            world.boxes[id.index()].style = replacement;
         }
         for (index, replacement) in text_styles {
             world.boxes[index].style = replacement;
@@ -371,7 +449,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
                 .expect("validated inline context")
                 .repaint_brushes = Some(brushes);
         }
-        true
+        Some(result)
     }
 
     /// Projects the viewport of the paired tree, using its latest scroll offsets.
@@ -442,6 +520,41 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
         )
         .snapshot)
     }
+}
+
+fn projection_preserves_scrollbar_layout<N: Copy + Debug + Eq + Hash>(
+    world: &LayoutWorld<N>,
+    overflow: &OverflowProjection,
+) -> bool {
+    if world.environment.scrollbars_hidden {
+        return true;
+    }
+    let policy = world.viewport_scroll_policy;
+    for (index, layout_box) in world.boxes.iter().enumerate() {
+        let id = LayoutBoxId::from_index(index);
+        if world.is_viewport_defining_body(id) {
+            continue;
+        }
+        let (horizontal, vertical) = overflow.overflowing_axes(world, id);
+        for (axis, overflowing) in [
+            (crate::LayoutScrollbarAxis::Horizontal, horizontal),
+            (crate::LayoutScrollbarAxis::Vertical, vertical),
+        ] {
+            use crate::style::LayoutOverflowMode::Auto;
+            let auto_gutter = if id == world.root {
+                policy.overflow_mode(axis) == Auto && policy.has_scrollbar(axis, overflowing)
+            } else {
+                layout_box.style.overflow_mode(axis) == Auto
+                    && layout_box.style.has_scrollbar(axis, false, overflowing)
+            };
+            if auto_gutter {
+                // A cold numeric pass starts with no auto gutter. A
+                // previously admitted or newly required gutter needs that pass.
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// One coordinate space while output and paint projection are both live.

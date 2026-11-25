@@ -8,7 +8,6 @@ use moli_layout::{
     LayoutCssImageReference, LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult,
     LayoutSourceChange, LayoutViewport, ScrollProjectionRefresh,
 };
-#[cfg(test)]
 use style::servo::restyle_damage::ServoRestyleDamage;
 
 use super::realtime_animation_frames::RealtimeAnimationFrames;
@@ -661,15 +660,18 @@ impl PageScriptHost {
     }
 
     fn screen_styles_allow_layout_reuse(&self, inputs: &ScreenLayoutInputs) -> bool {
-        // Embedded worlds have their own paint publication, so settle the
-        // regular layout-only checks when the page owns embedded documents.
-        let allow_repaint = inputs.documents.len() == 1
-            && self.document_layout_state.borrow().has_reusable_layout();
+        let supported_damage = if inputs.documents.len() == 1
+            && self.document_layout_state.borrow().has_reusable_layout()
+        {
+            ServoRestyleDamage::RECALCULATE_OVERFLOW
+        } else {
+            ServoRestyleDamage::empty()
+        };
         if !inputs.documents.iter().all(|document| {
             let Some(restyles) = self.style_engine.screen_restyle_targets(
                 self.dom_host(),
                 document.document,
-                allow_repaint,
+                supported_damage,
             ) else {
                 return false;
             };
@@ -679,23 +681,42 @@ impl PageScriptHost {
                     document.document,
                     restyles.targets,
                     restyles.after,
-                    allow_repaint,
+                    supported_damage,
                 )
         }) {
             return false;
         }
-        if !allow_repaint {
+        if supported_damage.is_empty() {
             return true;
         }
-        self.style_engine
-            .screen_repaint_styles(self.document_handle())
-            .is_some_and(|styles| {
-                styles.is_empty()
-                    || self
-                        .document_layout_state
-                        .borrow_mut()
-                        .update_repaint_styles(styles)
-            })
+
+        let document = self.document_handle();
+        let Some(updates) = self
+            .style_engine
+            .screen_projection_style_updates(document, supported_damage)
+        else {
+            return false;
+        };
+        if updates.styles.is_empty() {
+            return true;
+        }
+        if ServoRestyleDamage::REPAINT.contains(updates.damage) {
+            return self
+                .document_layout_state
+                .borrow_mut()
+                .update_repaint_styles(updates.styles);
+        }
+
+        let reprojected = self
+            .document_layout_state
+            .borrow_mut()
+            .update_screen_style_projection(document, updates.styles, |source| {
+                crate::layout_renderer::native_scroll_offset(self.dom_host(), source)
+            });
+        if reprojected {
+            self.clear_layout_rect_cache();
+        }
+        reprojected
     }
 
     fn prepare_current_screen_styles(&self, inputs: &ScreenLayoutInputs) {

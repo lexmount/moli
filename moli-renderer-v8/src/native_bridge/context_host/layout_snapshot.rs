@@ -106,6 +106,14 @@ impl LatestLayoutTreeCache {
         });
     }
 
+    pub(super) fn replace_projection(&mut self, tree: FrozenLayoutTree<DomHandle>) {
+        let snapshot = self
+            .latest
+            .as_mut()
+            .expect("projection needs published layout");
+        *snapshot.tree = tree;
+    }
+
     pub(super) fn refresh_scroll_projection(
         &mut self,
         document: DomHandle,

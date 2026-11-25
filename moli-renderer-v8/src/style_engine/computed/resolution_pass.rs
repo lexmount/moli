@@ -203,17 +203,17 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         &mut self,
         handle: DomHandle,
         after: u64,
-        allow_repaint: bool,
+        supported_damage: ServoRestyleDamage,
     ) -> Option<RestyleHint> {
         let state = &self.context.world.document_state;
         if !state.screen_style_dependencies_are_current() || state.screen_uses_lazy_pseudo(handle) {
             return None;
         }
         let element = self.prepare(handle)?;
-        if allow_repaint
+        if !supported_damage.is_empty()
             && element
                 .borrow_data()
-                .is_some_and(|data| !ServoRestyleDamage::REPAINT.contains(data.damage))
+                .is_some_and(|data| !supported_damage.contains(data.damage))
         {
             return None;
         }
@@ -221,7 +221,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         // Resolving the target can also restyle ancestors or retire old branch
         // observations. Either event can require a new screen layout.
         if state.screen_restyle_is_full()
-            || (!allow_repaint && state.screen_needs_layout())
+            || (supported_damage.is_empty() && state.screen_needs_layout())
             || !invalidation.can_compare_after(after)
         {
             return None;
