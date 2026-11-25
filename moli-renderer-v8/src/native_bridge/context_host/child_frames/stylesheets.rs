@@ -1,8 +1,10 @@
 use super::PageScriptHost;
 use crate::{
+    context_bootstrap::{ResourcePerformanceEntry, record_resource_performance_entry},
     document_runtime::DomHandle,
     document_script_scheduler::FrameDocumentStylesheetAdmission,
     frame_owner_model::{DocumentLoadDelayTokenId, FrameDocumentTaskOwner},
+    native_bridge::{OwnerDispatchScope, WindowExecutionContextOwner},
     stylesheet_blocking::{
         DocumentBlockingStylesheetSignature, DocumentOwnedStylesheetDiscoveryInput,
         RendererStylesheetFetcher, ServiceWorkerStylesheetFetchContext, StylesheetFetcher,
@@ -242,6 +244,7 @@ impl PageScriptHost {
             return;
         };
         let load_delay_token = subscribers.load_delay_token;
+        self.record_child_parser_stylesheet_resource_timing(scope, &completion);
         if let Some((root_owner, target)) = self.current_main_document_task_owner().zip(
             self.current_window_document_task_target_for_dispatch_scope(
                 crate::native_bridge::OwnerDispatchScope::Child(completion.child_handle),
@@ -457,6 +460,54 @@ impl PageScriptHost {
             crate::document_runtime::live_stylesheet_import_responses(&completion.graph);
         for root in import_roots {
             let _ = self.install_and_refresh_live_stylesheet_import_graph(root, &responses);
+        }
+    }
+
+    fn record_child_parser_stylesheet_resource_timing(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        completion: &ChildBlockingStylesheetLoadCompletion,
+    ) {
+        let entries = completion.graph.network_results().iter().map(|result| {
+            let url = result.request_url();
+            let initiator_type = match completion.request_initiator_type(url) {
+                crate::types::SubresourceRequestInitiatorType::Css => "css",
+                _ => "link",
+            };
+            ResourcePerformanceEntry::from_network_result(
+                url.as_str(),
+                initiator_type,
+                Some(result.start_unix_millis()),
+                &result.terminal().physical().as_result(),
+            )
+        });
+        let dispatch_scope = OwnerDispatchScope::Child(completion.child_handle);
+        let execution_owner = WindowExecutionContextOwner::Frame(completion.owner.local_window_id);
+        if let Some((_, context)) =
+            self.window_execution_context(scope, execution_owner, dispatch_scope)
+        {
+            let scope = &mut v8::ContextScope::new(scope, context);
+            for entry in entries {
+                record_resource_performance_entry(scope, entry);
+            }
+        } else if let Some(child) = self
+            .child_browsing_contexts
+            .get_mut(&completion.child_handle)
+        {
+            child.pending_stylesheet_resource_timing.extend(entries);
+        }
+    }
+
+    pub(in crate::native_bridge::context_host) fn publish_pending_child_stylesheet_resource_timing(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        child_handle: DomHandle,
+    ) {
+        let Some(child) = self.child_browsing_contexts.get_mut(&child_handle) else {
+            return;
+        };
+        for entry in std::mem::take(&mut child.pending_stylesheet_resource_timing) {
+            record_resource_performance_entry(scope, entry);
         }
     }
 

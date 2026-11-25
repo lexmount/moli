@@ -180,6 +180,7 @@ fn resource_timing_content_type(headers: &[(String, Vec<u8>)]) -> String {
     }
 }
 
+#[derive(Clone, Debug)]
 pub(crate) struct ResourcePerformanceEntry {
     name: String,
     initiator_type: String,
