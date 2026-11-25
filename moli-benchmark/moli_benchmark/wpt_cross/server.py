@@ -89,6 +89,7 @@ FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 COMMON_ECHO_PATH = "/common/echo.py"
 SERVICE_WORKER_REQUEST_HEADERS_PATH = "/service-workers/service-worker/resources/request-headers.py"
 EVENTSOURCE_MESSAGE_PATH = "/eventsource/resources/message.py"
+CLEAR_SITE_DATA_COOKIE_PATH = "/clear-site-data/support/clear-site-data-cookie.py"
 IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
 DISPATCHER_PATH = "/common/dispatcher/dispatcher.py"
 REMOTE_CONTEXT_EXECUTOR_PATH = (
@@ -1878,6 +1879,25 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self._send_python_handler_response(IFRAME_STASH_PATH, parsed.query, body)
             return True
 
+        def _serve_clear_site_data_cookie(self, query: str) -> None:
+            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            if "location" not in params:
+                self.send_error(500)
+                return
+            target = params.get("target", ["*"])[0]
+            value = f'"{target}"'
+            if not _valid_static_response_header("Clear-Site-Data", value):
+                self.send_error(400)
+                return
+            clear = ("Clear-Site-Data", value)
+            cookie = ("Set-Cookie", "testSetWithClear=true")
+            ordered = (clear, cookie) if params["location"][0] == "after" else (cookie, clear)
+            self._send_python_handler_response(
+                CLEAR_SITE_DATA_COOKIE_PATH, query,
+                b'<script>window.opener.postMessage(document.cookie, "*");</script>',
+                headers=[("Content-Type", "text/html"), *ordered],
+            )
+
         def _send_python_handler_response(
             self, path: str, query: str, body: bytes | None,
             *, headers: list[tuple[str, str]] | None = None,
@@ -2620,6 +2640,9 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if path in FETCH_ABORT_RESOURCE_PATHS:
                 self._serve_fetch_abort_resource(path, parsed.query, emit_body=emit_body)
+                return
+            if path == CLEAR_SITE_DATA_COOKIE_PATH:
+                self._serve_clear_site_data_cookie(parsed.query)
                 return
             if path == FETCH_INSPECT_HEADERS_PATH:
                 self._serve_fetch_inspect_headers(parsed.query, emit_body=emit_body)
