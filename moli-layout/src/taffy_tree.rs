@@ -38,7 +38,6 @@ mod measurement;
 mod trampoline;
 use measurement::FullMeasurementTree;
 pub(crate) use trampoline::LayoutTrampoline;
-use trampoline::{TrampolineBlockContextKind, TrampolineCallKind};
 
 /// Prepared numeric relationships are indexed by the current construction
 /// boxes. Scrollbar feedback changes geometry without changing these links.
@@ -1885,14 +1884,28 @@ where
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
-        if let Some(output) =
-            self.trampoline_before_call(node_id, inputs, TrampolineCallKind::Child)
-        {
+        if let Some(output) = self.trampoline_before_child_call(node_id, inputs) {
+            if !self.trampoline_aborted() {
+                if self.trampoline.track_floats() {
+                    self.record_trampoline_block_float_meta(node_id, inputs, &output);
+                }
+                if self.trampoline.is_observing_open_strut() {
+                    self.observe_open_strut_child_exit(node_id, inputs);
+                }
+            }
             return output;
         }
         self.trampoline_enter();
         let output = self.compute_child_layout_inner(node_id, inputs);
         self.trampoline_exit();
+        if !self.trampoline_aborted() {
+            if self.trampoline.track_floats() {
+                self.record_trampoline_block_float_meta(node_id, inputs, &output);
+            }
+            if self.trampoline.is_observing_open_strut() {
+                self.observe_open_strut_child_exit(node_id, inputs);
+            }
+        }
         output
     }
 }
@@ -1997,7 +2010,7 @@ where
         &mut self,
         node_id: NodeId,
         inputs: LayoutInput,
-        block_context: Option<&mut BlockContext<'_>>,
+        mut block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
         if self.should_hide(node_id, inputs) {
             return compute_hidden_layout_iterative(self, node_id);
@@ -2012,9 +2025,40 @@ where
         if inputs.run_mode == RunMode::ComputeSize {
             return self.compute_child_layout_uncached(node_id, inputs, block_context);
         }
-        compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
-            world.compute_child_layout_uncached(node_id, inputs, block_context)
-        })
+        // A same-BFC block child that observes or mutates shared float state
+        // cannot be served from Taffy's `Cache` alone (which only stores
+        // `LayoutOutput` and omits `BlockContext` side effects). Bypass cache
+        // reads/writes for those calls so trampoline retries always replay
+        // sibling floats into the fresh parent BFC.
+        let shared_bfc = block_context
+            .as_deref()
+            .is_some_and(|ctx| !ctx.is_bfc_root());
+        let had_shared_floats = shared_bfc
+            && block_context
+                .as_deref()
+                .is_some_and(BlockContext::has_floats);
+        let before_mark = shared_bfc
+            .then(|| block_context.as_deref().map(BlockContext::float_mark))
+            .flatten();
+        let use_cache = inputs.sizing_purpose != SizingPurpose::ContentProbe;
+        if had_shared_floats && use_cache {
+            self.trampoline.set_skip_cache_get(node_id);
+        }
+        let output = compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
+            let output =
+                world.compute_child_layout_uncached(node_id, inputs, block_context.as_deref_mut());
+            let placed_shared_floats = before_mark.is_some_and(|mark| {
+                block_context
+                    .as_deref()
+                    .is_some_and(|ctx| ctx.float_mark() != mark)
+            });
+            if use_cache && (had_shared_floats || placed_shared_floats) {
+                world.trampoline.set_skip_cache_store(node_id);
+            }
+            output
+        });
+        self.trampoline.clear_skip_cache(node_id);
+        output
     }
 }
 
@@ -2023,6 +2067,9 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     fn cache_get(&mut self, node_id: NodeId, inputs: &LayoutInput) -> Option<LayoutOutput> {
+        if self.trampoline.take_skip_cache_get(node_id) {
+            return None;
+        }
         if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
             viewport.cache.get(inputs)
         } else {
@@ -2036,9 +2083,13 @@ where
     }
 
     fn cache_store(&mut self, node_id: NodeId, inputs: &LayoutInput, output: LayoutOutput) {
-        if self.trampoline_aborted() || inputs.run_mode == RunMode::PerformHiddenLayout {
+        if self.trampoline.take_skip_cache_store(node_id)
+            || self.trampoline_aborted()
+            || inputs.run_mode == RunMode::PerformHiddenLayout
+        {
             // Taffy's store ignores hidden layout; also never persist partial
-            // results while unwinding a suspended trampoline frame.
+            // results while unwinding a suspended trampoline frame or for
+            // same-BFC children whose float state cannot be replayed from Cache.
             return;
         }
         if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
@@ -2112,27 +2163,30 @@ where
         &mut self,
         node_id: NodeId,
         inputs: LayoutInput,
-        block_context: Option<&mut BlockContext<'_>>,
+        mut block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        let context_kind = block_context.as_deref().map(|ctx| {
-            if ctx.is_bfc_root() {
-                TrampolineBlockContextKind::Root
-            } else {
-                TrampolineBlockContextKind::Sub
+        if self.trampoline.is_observing_open_strut() {
+            self.observe_open_strut_block_child_enter(node_id, inputs, block_context.as_deref());
+        }
+        if let Some(output) =
+            self.trampoline_before_block_child_call(node_id, inputs, block_context.as_deref_mut())
+        {
+            if !self.trampoline_aborted() && self.trampoline.is_in_open_strut_scope() {
+                self.observe_open_strut_block_child_exit(
+                    node_id,
+                    block_context.as_deref(),
+                    &output,
+                );
             }
-        });
-        if let Some(output) = self.trampoline_before_call(
-            node_id,
-            inputs,
-            TrampolineCallKind::BlockChild {
-                block_context: context_kind,
-            },
-        ) {
             return output;
         }
         self.trampoline_enter();
-        let output = self.compute_block_child_layout_inner(node_id, inputs, block_context);
+        let output =
+            self.compute_block_child_layout_inner(node_id, inputs, block_context.as_deref_mut());
         self.trampoline_exit();
+        if !self.trampoline_aborted() && self.trampoline.is_in_open_strut_scope() {
+            self.observe_open_strut_block_child_exit(node_id, block_context.as_deref(), &output);
+        }
         output
     }
 }
@@ -2866,6 +2920,8 @@ where
                         return InlineMeasurement {
                             size: Size::ZERO,
                             alignment_block_size: 0.0,
+                            scrollable_block_size: 0.0,
+                            show_clamp_marker: false,
                             first_baseline: None,
                             last_baseline: None,
                             has_non_phantom_line: false,
@@ -3032,6 +3088,8 @@ where
                     return InlineMeasurement {
                         size: Size::ZERO,
                         alignment_block_size: 0.0,
+                        scrollable_block_size: 0.0,
+                        show_clamp_marker: false,
                         first_baseline: None,
                         last_baseline: None,
                         has_non_phantom_line: false,
@@ -3385,10 +3443,19 @@ where
                     if self.trampoline_aborted() {
                         break;
                     }
+                    let margin_box = output.size + margin.sum_axes();
+                    if self.trampoline.track_floats() {
+                        self.trampoline.record_float_meta(
+                            child.index() as u64,
+                            margin_box,
+                            direction,
+                            style.clear,
+                        );
+                    }
                     let state = breaker.state_mut();
                     let position = block_context.place_floated_box(
                         child.index() as u64,
-                        output.size + margin.sum_axes(),
+                        margin_box,
                         state.line_y() as f32,
                         direction,
                         style.clear,
@@ -3567,7 +3634,14 @@ fn inline_float_slot(
     minimum_width: f32,
 ) -> taffy::ContentSlot {
     loop {
-        let slot = context.find_content_slot(min_y, Clear::None, after);
+        let mut slot = context.find_content_slot(min_y, Clear::None, after);
+        if after.is_none() {
+            // Taffy's float segments partition `(-inf, last_end)` contiguously,
+            // so for `Clear::None` with `after: None`, `slot.y` is mathematically
+            // `min_y`. Avoid `(min_y + y_offset) - y_offset` 1-ULP rounding noise
+            // spuriously tripping `slot.y > line_y` clearance checks.
+            slot.y = min_y;
+        }
         if slot.segment_id.is_none() || slot.width >= minimum_width {
             return slot;
         }
@@ -4331,5 +4405,1203 @@ mod tests {
         let chunk_7 = run_with_limit(7);
         assert_eq!(chunk_16, baseline, "trampoline max_depth=16 diverged");
         assert_eq!(chunk_7, baseline, "trampoline max_depth=7 diverged");
+    }
+
+    #[test]
+    fn trampoline_preserves_bfc_floats_and_propagates_deep_floats_bit_for_bit() {
+        use super::{compute_prepared_world_layout, prepare_world_layout};
+        use crate::{
+            DocumentLayoutServices, LayoutAnonymousStyleContext, LayoutElementCategory,
+            LayoutElementSemantics, LayoutError, LayoutNamespace, LayoutSource, LayoutSourceKind,
+            LayoutStyleResolver, PaintViewport, ResolvedLayoutElementStyles, build_layout_world,
+            inline::prepare_inline_contexts,
+        };
+        use std::collections::HashMap;
+        use taffy::{Clear, Float, Overflow, Rect, style_helpers::length};
+
+        struct FloatTestNode {
+            kind: LayoutSourceKind,
+            text: Option<String>,
+            parent: Option<usize>,
+            children: Vec<usize>,
+        }
+
+        struct FloatTestSource {
+            nodes: Vec<FloatTestNode>,
+        }
+
+        impl FloatTestSource {
+            fn new_root() -> Self {
+                Self {
+                    nodes: vec![FloatTestNode {
+                        kind: LayoutSourceKind::Element,
+                        text: None,
+                        parent: None,
+                        children: Vec::new(),
+                    }],
+                }
+            }
+
+            fn push_el(&mut self, parent: usize) -> usize {
+                let id = self.nodes.len();
+                self.nodes.push(FloatTestNode {
+                    kind: LayoutSourceKind::Element,
+                    text: None,
+                    parent: Some(parent),
+                    children: Vec::new(),
+                });
+                self.nodes[parent].children.push(id);
+                id
+            }
+
+            fn push_text(&mut self, parent: usize, text: &str) -> usize {
+                let id = self.nodes.len();
+                self.nodes.push(FloatTestNode {
+                    kind: LayoutSourceKind::Text,
+                    text: Some(text.to_owned()),
+                    parent: Some(parent),
+                    children: Vec::new(),
+                });
+                self.nodes[parent].children.push(id);
+                id
+            }
+        }
+
+        impl LayoutSource for FloatTestSource {
+            type NodeId = usize;
+            type ChildIter<'a> = std::iter::Copied<std::slice::Iter<'a, usize>>;
+
+            fn root(&self) -> Self::NodeId {
+                0
+            }
+
+            fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {
+                self.nodes[node].parent
+            }
+
+            fn flat_children(&self, node: Self::NodeId) -> Self::ChildIter<'_> {
+                self.nodes[node].children.iter().copied()
+            }
+
+            fn node_kind(&self, node: Self::NodeId) -> LayoutSourceKind {
+                self.nodes[node].kind
+            }
+
+            fn element_semantics(&self, node: Self::NodeId) -> Option<LayoutElementSemantics> {
+                (self.nodes[node].kind == LayoutSourceKind::Element).then(|| {
+                    LayoutElementSemantics::new(
+                        LayoutNamespace::Html,
+                        "div",
+                        LayoutElementCategory::Generic,
+                        None,
+                    )
+                })
+            }
+
+            fn text(&self, node: Self::NodeId) -> Option<&str> {
+                self.nodes[node].text.as_deref()
+            }
+
+            fn label(&self, node: Self::NodeId) -> String {
+                format!("n{node}")
+            }
+        }
+
+        #[derive(Default)]
+        struct FloatTestStyles {
+            overrides: HashMap<usize, ResolvedLayoutStyle>,
+        }
+
+        impl LayoutStyleResolver<usize> for FloatTestStyles {
+            fn element_styles(
+                &mut self,
+                node: usize,
+            ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError> {
+                let style = self.overrides.get(&node).cloned().unwrap_or_else(|| {
+                    ResolvedLayoutStyle::synthetic(
+                        LayoutDisplay::Block,
+                        Style::default(),
+                        PaintColor::TRANSPARENT,
+                    )
+                });
+                Ok(Some(ResolvedLayoutElementStyles::from_primary(style)))
+            }
+
+            fn anonymous_style(
+                &mut self,
+                context: LayoutAnonymousStyleContext<'_, usize>,
+                display: LayoutDisplay,
+            ) -> Result<ResolvedLayoutStyle, LayoutError> {
+                Ok(ResolvedLayoutStyle::anonymous_from(
+                    context.parent_style(),
+                    display,
+                ))
+            }
+        }
+
+        fn sized_block(width: f32, height: f32) -> ResolvedLayoutStyle {
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: Dimension::length(width),
+                        height: Dimension::length(height),
+                    },
+                    ..Style::default()
+                },
+                PaintColor::TRANSPARENT,
+            )
+        }
+
+        fn build_bfc_float_scenario() -> (FloatTestSource, FloatTestStyles) {
+            let mut src = FloatTestSource::new_root();
+            let mut styles = FloatTestStyles::default();
+            // Root BFC container: definite width 240px, auto height (must contain all floats).
+            styles.overrides.insert(
+                0,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::length(240.0),
+                            height: Dimension::auto(),
+                        },
+                        padding: Rect {
+                            left: length(6.0),
+                            right: length(4.0),
+                            top: length(5.0),
+                            bottom: length(5.0),
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+
+            // 1. Direct earlier left float on the BFC root.
+            let early_left = src.push_el(0);
+            styles.overrides.insert(
+                early_left,
+                sized_block(70.0, 64.0).with_float(Float::Left, Clear::None),
+            );
+
+            // 2. Earlier right float wrapped inside a normal-flow sibling block
+            //    (tests sibling-float replay across trampoline retries).
+            let sibling_wrapper = src.push_el(0);
+            let early_right = src.push_el(sibling_wrapper);
+            styles.overrides.insert(
+                early_right,
+                sized_block(45.0, 48.0).with_float(Float::Right, Clear::None),
+            );
+
+            // 3. Deep normal-flow subtree sharing the same BFC (26 levels deep,
+            //    with padding/margins along the chain so accumulated offsets are non-zero).
+            let mut cur = src.push_el(0);
+            for level in 1..=26 {
+                if level == 5 {
+                    styles.overrides.insert(
+                        cur,
+                        ResolvedLayoutStyle::synthetic(
+                            LayoutDisplay::Block,
+                            Style {
+                                padding: Rect {
+                                    left: length(8.0),
+                                    right: length(6.0),
+                                    top: length(4.0),
+                                    bottom: length(0.0),
+                                },
+                                ..Style::default()
+                            },
+                            PaintColor::TRANSPARENT,
+                        ),
+                    );
+                }
+                cur = src.push_el(cur);
+            }
+
+            // 3a. Deep text that must wrap around both early_left and early_right.
+            let deep_text_box = src.push_el(cur);
+            src.push_text(
+                deep_text_box,
+                "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+            );
+
+            // 3b. Deep newly placed left float (plus a deep inline float) that must
+            //     propagate back out to the outer BFC when the parent retries.
+            let deep_float_left = src.push_el(cur);
+            styles.overrides.insert(
+                deep_float_left,
+                sized_block(80.0, 90.0).with_float(Float::Left, Clear::Left),
+            );
+
+            let deep_ifc_with_float = src.push_el(cur);
+            let inline_float = src.push_el(deep_ifc_with_float);
+            styles.overrides.insert(
+                inline_float,
+                sized_block(40.0, 50.0).with_float(Float::Right, Clear::None),
+            );
+            src.push_text(deep_ifc_with_float, "wrapped next to deep floats");
+
+            // 4. Outer siblings AFTER the deep subtree:
+            //    - text wrapping around deep_float_left & inline_float,
+            //    - an independent BFC box avoiding floats,
+            //    - a cleared block forced below deep_float_left.
+            let outer_after_text = src.push_el(0);
+            src.push_text(
+                outer_after_text,
+                "outer sibling text must respect propagated deep floats from subtree",
+            );
+
+            let outer_bfc_avoider = src.push_el(0);
+            styles.overrides.insert(
+                outer_bfc_avoider,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        overflow: taffy::Point {
+                            x: Overflow::Hidden,
+                            y: Overflow::Hidden,
+                        },
+                        size: Size {
+                            width: Dimension::length(80.0),
+                            height: Dimension::length(20.0),
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+
+            let outer_cleared = src.push_el(0);
+            styles.overrides.insert(
+                outer_cleared,
+                sized_block(60.0, 18.0).with_float(Float::None, Clear::Left),
+            );
+
+            (src, styles)
+        }
+
+        let viewport = PaintViewport::new(320, 400, 1.0);
+        let run_with_limit = |limit: u32| {
+            let (src, mut styles) = build_bfc_float_scenario();
+            let mut world = build_layout_world(&src, &mut styles).expect("build world");
+            let mut services = DocumentLayoutServices::new();
+            prepare_inline_contexts(&mut world, &mut services);
+            world.trampoline.set_max_depth_for_test(limit);
+            let mut prepared = prepare_world_layout(&mut world, viewport, false);
+            compute_prepared_world_layout(&mut world, viewport, &mut prepared);
+            world
+                .boxes
+                .into_iter()
+                .map(|b| {
+                    let lines = b
+                        .inline_layout
+                        .as_ref()
+                        .map(|ifc| ifc.fragments.lines.clone());
+                    (b.unrounded_layout, b.final_layout, lines)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let baseline = run_with_limit(512);
+        let chunk_12 = run_with_limit(12);
+        let chunk_7 = run_with_limit(7);
+        assert_eq!(
+            chunk_12, baseline,
+            "trampoline max_depth=12 diverged on BFC floats"
+        );
+        assert_eq!(
+            chunk_7, baseline,
+            "trampoline max_depth=7 diverged on BFC floats"
+        );
+    }
+
+    #[test]
+    fn trampoline_handles_multi_chunk_interleaved_floats_empty_bfc_and_cache_coherence() {
+        use super::{compute_prepared_world_layout, prepare_world_layout};
+        use crate::{
+            DocumentLayoutServices, LayoutAnonymousStyleContext, LayoutElementCategory,
+            LayoutElementSemantics, LayoutError, LayoutNamespace, LayoutSource, LayoutSourceKind,
+            LayoutStyleResolver, PaintViewport, ResolvedLayoutElementStyles, build_layout_world,
+            inline::prepare_inline_contexts,
+        };
+        use std::collections::HashMap;
+        use taffy::{
+            BlockFormattingContext, Clear, Float, FloatDirection, Rect, style_helpers::length,
+        };
+
+        struct Node {
+            kind: LayoutSourceKind,
+            text: Option<String>,
+            parent: Option<usize>,
+            children: Vec<usize>,
+        }
+        struct Src(Vec<Node>);
+        impl Src {
+            fn new() -> Self {
+                Self(vec![Node {
+                    kind: LayoutSourceKind::Element,
+                    text: None,
+                    parent: None,
+                    children: Vec::new(),
+                }])
+            }
+            fn el(&mut self, parent: usize) -> usize {
+                let id = self.0.len();
+                self.0.push(Node {
+                    kind: LayoutSourceKind::Element,
+                    text: None,
+                    parent: Some(parent),
+                    children: Vec::new(),
+                });
+                self.0[parent].children.push(id);
+                id
+            }
+            fn txt(&mut self, parent: usize, text: &str) -> usize {
+                let id = self.0.len();
+                self.0.push(Node {
+                    kind: LayoutSourceKind::Text,
+                    text: Some(text.to_owned()),
+                    parent: Some(parent),
+                    children: Vec::new(),
+                });
+                self.0[parent].children.push(id);
+                id
+            }
+        }
+        impl LayoutSource for Src {
+            type NodeId = usize;
+            type ChildIter<'a> = std::iter::Copied<std::slice::Iter<'a, usize>>;
+            fn root(&self) -> usize {
+                0
+            }
+            fn flat_parent(&self, node: usize) -> Option<usize> {
+                self.0[node].parent
+            }
+            fn flat_children(&self, node: usize) -> Self::ChildIter<'_> {
+                self.0[node].children.iter().copied()
+            }
+            fn node_kind(&self, node: usize) -> LayoutSourceKind {
+                self.0[node].kind
+            }
+            fn element_semantics(&self, node: usize) -> Option<LayoutElementSemantics> {
+                (self.0[node].kind == LayoutSourceKind::Element).then(|| {
+                    LayoutElementSemantics::new(
+                        LayoutNamespace::Html,
+                        "div",
+                        LayoutElementCategory::Generic,
+                        None,
+                    )
+                })
+            }
+            fn text(&self, node: usize) -> Option<&str> {
+                self.0[node].text.as_deref()
+            }
+            fn label(&self, node: usize) -> String {
+                format!("n{node}")
+            }
+        }
+        #[derive(Default)]
+        struct Styles(HashMap<usize, ResolvedLayoutStyle>);
+        impl LayoutStyleResolver<usize> for Styles {
+            fn element_styles(
+                &mut self,
+                node: usize,
+            ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError> {
+                let s = self.0.get(&node).cloned().unwrap_or_else(|| {
+                    ResolvedLayoutStyle::synthetic(
+                        LayoutDisplay::Block,
+                        Style::default(),
+                        PaintColor::TRANSPARENT,
+                    )
+                });
+                Ok(Some(ResolvedLayoutElementStyles::from_primary(s)))
+            }
+            fn anonymous_style(
+                &mut self,
+                context: LayoutAnonymousStyleContext<'_, usize>,
+                display: LayoutDisplay,
+            ) -> Result<ResolvedLayoutStyle, LayoutError> {
+                Ok(ResolvedLayoutStyle::anonymous_from(
+                    context.parent_style(),
+                    display,
+                ))
+            }
+        }
+        fn sized(w: f32, h: f32) -> ResolvedLayoutStyle {
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: Dimension::length(w),
+                        height: Dimension::length(h),
+                    },
+                    ..Style::default()
+                },
+                PaintColor::TRANSPARENT,
+            )
+        }
+
+        let run = |build: &dyn Fn() -> (Src, Styles), limit: u32| {
+            let (src, mut styles) = build();
+            let mut world = build_layout_world(&src, &mut styles).expect("build world");
+            let mut services = DocumentLayoutServices::new();
+            prepare_inline_contexts(&mut world, &mut services);
+            world.trampoline.set_max_depth_for_test(limit);
+            let viewport = PaintViewport::new(320, 400, 1.0);
+            let mut prepared = prepare_world_layout(&mut world, viewport, false);
+            compute_prepared_world_layout(&mut world, viewport, &mut prepared);
+            world
+                .boxes
+                .into_iter()
+                .map(|b| {
+                    let lines = b
+                        .inline_layout
+                        .as_ref()
+                        .map(|ifc| ifc.fragments.lines.clone());
+                    (b.unrounded_layout, b.final_layout, lines)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Case 1: Empty BFC at suspension boundary -> deep subtree places two
+        // side-by-side left floats + a right float + text, then outer siblings.
+        let build_empty_entry = || {
+            let mut src = Src::new();
+            let mut styles = Styles::default();
+            styles.0.insert(
+                0,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::length(240.0),
+                            height: Dimension::auto(),
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+            let mut cur = 0;
+            for _ in 0..20 {
+                cur = src.el(cur);
+            }
+            let f1 = src.el(cur);
+            styles
+                .0
+                .insert(f1, sized(60.0, 40.0).with_float(Float::Left, Clear::None));
+            let f2 = src.el(cur);
+            styles
+                .0
+                .insert(f2, sized(60.0, 70.0).with_float(Float::Left, Clear::None));
+            let f3 = src.el(cur);
+            styles
+                .0
+                .insert(f3, sized(50.0, 55.0).with_float(Float::Right, Clear::None));
+            let deep_txt = src.el(cur);
+            src.txt(
+                deep_txt,
+                "fits between side-by-side left floats and right float",
+            );
+            let outer_txt = src.el(0);
+            src.txt(
+                outer_txt,
+                "outer sibling text wrapped around propagated floats",
+            );
+            let outer_clear = src.el(0);
+            styles.0.insert(
+                outer_clear,
+                sized(40.0, 10.0).with_float(Float::None, Clear::Left),
+            );
+            (src, styles)
+        };
+        let base_empty = run(&build_empty_entry, 512);
+        assert_eq!(run(&build_empty_entry, 7), base_empty);
+
+        // Case 2: Multi-chunk interleaved floats (floats placed in chunk 0,
+        // chunk 1 before chunk 2, chunk 2 with clear + inner padding-right,
+        // and chunk 1 after chunk 2) + adjoining-strut float with clear sibling.
+        let build_interleaved = || {
+            let mut src = Src::new();
+            let mut styles = Styles::default();
+            styles.0.insert(
+                0,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::length(260.0),
+                            height: Dimension::auto(),
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+            let f0 = src.el(0);
+            styles
+                .0
+                .insert(f0, sized(50.0, 45.0).with_float(Float::Left, Clear::None));
+
+            let mut cur = src.el(0);
+            for _ in 0..8 {
+                cur = src.el(cur);
+            }
+            // Mid-chunk float placed BEFORE descending into deeper chunk.
+            let mid_sibling = src.el(cur);
+            let f_mid = src.el(mid_sibling);
+            styles.0.insert(
+                f_mid,
+                sized(55.0, 60.0).with_float(Float::Right, Clear::None),
+            );
+
+            // Deeper chain crossing another chunk boundary with inner padding-right.
+            let mut deep = src.el(cur);
+            for level in 0..14 {
+                if level == 10 {
+                    styles.0.insert(
+                        deep,
+                        ResolvedLayoutStyle::synthetic(
+                            LayoutDisplay::Block,
+                            Style {
+                                padding: Rect {
+                                    left: length(10.0),
+                                    right: length(24.0),
+                                    top: length(0.0),
+                                    bottom: length(0.0),
+                                },
+                                ..Style::default()
+                            },
+                            PaintColor::TRANSPARENT,
+                        ),
+                    );
+                }
+                deep = src.el(deep);
+            }
+            let f_deep_l = src.el(deep);
+            styles.0.insert(
+                f_deep_l,
+                sized(65.0, 80.0).with_float(Float::Left, Clear::Left),
+            );
+            let f_deep_r = src.el(deep);
+            styles.0.insert(
+                f_deep_r,
+                sized(40.0, 50.0).with_float(Float::Right, Clear::Right),
+            );
+
+            // Sibling in mid-chunk AFTER deeper chunk.
+            let after_deep_mid_float = src.el(cur);
+            styles.0.insert(
+                after_deep_mid_float,
+                sized(35.0, 30.0).with_float(Float::Right, Clear::None),
+            );
+            let after_deep_mid_txt = src.el(cur);
+            src.txt(after_deep_mid_txt, "mid chunk text after deep floats");
+
+            // Adjoining-strut float inside deep empty wrapper followed by cleared sibling.
+            let mut adj = src.el(0);
+            for _ in 0..10 {
+                adj = src.el(adj);
+            }
+            let f_adj = src.el(adj);
+            styles.0.insert(
+                f_adj,
+                sized(40.0, 35.0).with_float(Float::Left, Clear::None),
+            );
+            let cleared_after_adj = src.el(0);
+            styles.0.insert(
+                cleared_after_adj,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::length(40.0),
+                            height: Dimension::length(12.0),
+                        },
+                        margin: Rect {
+                            left: LengthPercentageAuto::length(0.0),
+                            right: LengthPercentageAuto::length(0.0),
+                            top: LengthPercentageAuto::length(10.0),
+                            bottom: LengthPercentageAuto::length(0.0),
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                )
+                .with_float(Float::None, Clear::Left),
+            );
+            (src, styles)
+        };
+        let base_interleaved = run(&build_interleaved, 512);
+        assert_eq!(run(&build_interleaved, 11), base_interleaved);
+        assert_eq!(run(&build_interleaved, 7), base_interleaved);
+
+        // Case 3: Cache coherence — verify memoized trampoline results for a
+        // node under one live BFC float state are never served under a
+        // different BFC float state.
+        let mut src = Src::new();
+        let styles_root = ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        );
+        let child = src.el(0);
+        let text_box = src.el(child);
+        src.txt(text_box, "alpha beta gamma delta epsilon zeta eta theta");
+        let mut styles = Styles::default();
+        styles.0.insert(0, styles_root);
+        let mut world = build_layout_world(&src, &mut styles).expect("build world");
+        let mut services = DocumentLayoutServices::new();
+        prepare_inline_contexts(&mut world, &mut services);
+        let _prepared = prepare_world_layout(&mut world, PaintViewport::new(200, 400, 1.0), false);
+        world.trampoline.set_max_depth_for_test(1);
+
+        let child_box = world.source_mapping[&child];
+        let inputs = LayoutInput {
+            run_mode: RunMode::PerformLayout,
+            sizing_mode: SizingMode::InherentSize,
+            sizing_purpose: SizingPurpose::Layout,
+            axis: RequestedAxis::Both,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
+            known_dimensions: Size {
+                width: Some(200.0),
+                height: None,
+            },
+            known_dimensions_are_definite: Size {
+                width: true,
+                height: false,
+            },
+            parent_size: Size {
+                width: Some(200.0),
+                height: None,
+            },
+            parent_writing_mode: WritingMode::HorizontalTb,
+            available_space: Size {
+                width: AvailableSpace::Definite(200.0),
+                height: AvailableSpace::MaxContent,
+            },
+            vertical_margins_are_collapsible: Line::TRUE,
+        };
+
+        let (height_no_float, height_with_float) = world.run_trampolined(|world| {
+            let mut bfc_empty = BlockFormattingContext::new();
+            let mut root_empty = bfc_empty.root_block_context();
+            root_empty.set_width(200.0);
+            let mut sub_empty = root_empty.sub_context(0.0, [0.0, 0.0]);
+            let out_empty = LayoutBlockContainer::compute_block_child_layout(
+                world,
+                child_box.to_taffy(),
+                inputs,
+                Some(&mut sub_empty),
+            );
+            if world.trampoline_aborted() {
+                return (0.0, 0.0);
+            }
+
+            let mut bfc_floated = BlockFormattingContext::new();
+            let mut root_floated = bfc_floated.root_block_context();
+            root_floated.set_width(200.0);
+            if world.trampoline.track_floats() {
+                world.trampoline.record_float_meta(
+                    999_999,
+                    Size {
+                        width: 140.0,
+                        height: 80.0,
+                    },
+                    FloatDirection::Left,
+                    Clear::None,
+                );
+            }
+            root_floated.place_floated_box(
+                999_999,
+                Size {
+                    width: 140.0,
+                    height: 80.0,
+                },
+                0.0,
+                FloatDirection::Left,
+                Clear::None,
+                false,
+            );
+            let mut sub_floated = root_floated.sub_context(0.0, [0.0, 0.0]);
+            let out_floated = LayoutBlockContainer::compute_block_child_layout(
+                world,
+                child_box.to_taffy(),
+                inputs,
+                Some(&mut sub_floated),
+            );
+            (out_empty.size.height, out_floated.size.height)
+        });
+        assert!(
+            height_with_float > height_no_float,
+            "narrowed BFC slot must wrap text taller than float-free cached result: no_float={height_no_float}, with_float={height_with_float}"
+        );
+    }
+
+    #[test]
+    fn trampoline_preserves_escaped_margin_float_height_and_nested_top_adjoining_floats_bit_for_bit()
+     {
+        use super::{compute_prepared_world_layout, prepare_world_layout};
+        use crate::{
+            DocumentLayoutServices, LayoutAnonymousStyleContext, LayoutElementCategory,
+            LayoutElementSemantics, LayoutError, LayoutNamespace, LayoutSource, LayoutSourceKind,
+            LayoutStyleResolver, PaintViewport, ResolvedLayoutElementStyles, build_layout_world,
+            inline::prepare_inline_contexts,
+        };
+        use std::collections::HashMap;
+        use taffy::{Clear, Float, Overflow, Rect};
+
+        struct Node {
+            parent: Option<usize>,
+            children: Vec<usize>,
+        }
+        struct Src(Vec<Node>);
+        impl Src {
+            fn new() -> Self {
+                Self(vec![Node {
+                    parent: None,
+                    children: Vec::new(),
+                }])
+            }
+            fn el(&mut self, parent: usize) -> usize {
+                let id = self.0.len();
+                self.0.push(Node {
+                    parent: Some(parent),
+                    children: Vec::new(),
+                });
+                self.0[parent].children.push(id);
+                id
+            }
+        }
+        impl LayoutSource for Src {
+            type NodeId = usize;
+            type ChildIter<'a> = std::iter::Copied<std::slice::Iter<'a, usize>>;
+            fn root(&self) -> usize {
+                0
+            }
+            fn flat_parent(&self, node: usize) -> Option<usize> {
+                self.0[node].parent
+            }
+            fn flat_children(&self, node: usize) -> Self::ChildIter<'_> {
+                self.0[node].children.iter().copied()
+            }
+            fn node_kind(&self, _: usize) -> LayoutSourceKind {
+                LayoutSourceKind::Element
+            }
+            fn element_semantics(&self, _: usize) -> Option<LayoutElementSemantics> {
+                Some(LayoutElementSemantics::new(
+                    LayoutNamespace::Html,
+                    "div",
+                    LayoutElementCategory::Generic,
+                    None,
+                ))
+            }
+            fn text(&self, _: usize) -> Option<&str> {
+                None
+            }
+            fn label(&self, node: usize) -> String {
+                format!("n{node}")
+            }
+        }
+        #[derive(Default)]
+        struct Styles(HashMap<usize, ResolvedLayoutStyle>);
+        impl LayoutStyleResolver<usize> for Styles {
+            fn element_styles(
+                &mut self,
+                node: usize,
+            ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError> {
+                let s = self.0.get(&node).cloned().unwrap_or_else(|| {
+                    ResolvedLayoutStyle::synthetic(
+                        LayoutDisplay::Block,
+                        Style::default(),
+                        PaintColor::TRANSPARENT,
+                    )
+                });
+                Ok(Some(ResolvedLayoutElementStyles::from_primary(s)))
+            }
+            fn anonymous_style(
+                &mut self,
+                context: LayoutAnonymousStyleContext<'_, usize>,
+                display: LayoutDisplay,
+            ) -> Result<ResolvedLayoutStyle, LayoutError> {
+                Ok(ResolvedLayoutStyle::anonymous_from(
+                    context.parent_style(),
+                    display,
+                ))
+            }
+        }
+        fn sized(w: f32, h: f32) -> ResolvedLayoutStyle {
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: Dimension::length(w),
+                        height: Dimension::length(h),
+                    },
+                    ..Style::default()
+                },
+                PaintColor::TRANSPARENT,
+            )
+        }
+        fn margin_top(top: f32) -> Style<Atom> {
+            Style {
+                margin: Rect {
+                    left: LengthPercentageAuto::length(0.0),
+                    right: LengthPercentageAuto::length(0.0),
+                    top: LengthPercentageAuto::length(top),
+                    bottom: LengthPercentageAuto::length(0.0),
+                },
+                ..Style::default()
+            }
+        }
+
+        let run = |build: &dyn Fn() -> (Src, Styles), limit: u32| {
+            let (src, mut styles) = build();
+            let mut world = build_layout_world(&src, &mut styles).expect("build world");
+            let mut services = DocumentLayoutServices::new();
+            prepare_inline_contexts(&mut world, &mut services);
+            world.trampoline.set_max_depth_for_test(limit);
+            let viewport = PaintViewport::new(320, 400, 1.0);
+            let mut prepared = prepare_world_layout(&mut world, viewport, false);
+            compute_prepared_world_layout(&mut world, viewport, &mut prepared);
+            world
+                .boxes
+                .into_iter()
+                .map(|b| (b.unrounded_layout, b.final_layout))
+                .collect::<Vec<_>>()
+        };
+
+        // Reproducer 1: Escaped positive margin-top inside a suspended subtree
+        // containing an adjoining float must not double-count margin-top into
+        // `float_content_contribution` (root BFC auto height must be 70px, not 90px).
+        let build_escaped_margin_float = || {
+            let mut src = Src::new();
+            let mut styles = Styles::default();
+            styles.0.insert(
+                0,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::length(300.0),
+                            height: Dimension::auto(),
+                        },
+                        overflow: taffy::Point {
+                            x: Overflow::Hidden,
+                            y: Overflow::Hidden,
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+            let mut cur = 0;
+            for _ in 0..10 {
+                cur = src.el(cur);
+            }
+            let inner = src.el(cur);
+            styles.0.insert(
+                inner,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    margin_top(20.0),
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+            let fl = src.el(inner);
+            styles
+                .0
+                .insert(fl, sized(50.0, 50.0).with_float(Float::Left, Clear::None));
+            (src, styles)
+        };
+        let base_1 = run(&build_escaped_margin_float, 512);
+        assert!(
+            (base_1[0].0.size.height - 70.0).abs() < 0.05,
+            "baseline escaped-margin float height should be 70px, got {}",
+            base_1[0].0.size.height
+        );
+        assert_eq!(
+            run(&build_escaped_margin_float, 7),
+            base_1,
+            "escaped-margin float height diverged at max_depth=7"
+        );
+        assert_eq!(
+            run(&build_escaped_margin_float, 5),
+            base_1,
+            "escaped-margin float height diverged at max_depth=5"
+        );
+
+        // Reproducer 2A: Nested child inside suspended block places a top-adjoining
+        // float and then commits its own strut (clearing its live adjoining_floats
+        // before returning). The outer cleared block must still receive forced
+        // clearance (y=20px instead of 60px).
+        let build_nested_strut_commit = || {
+            let mut src = Src::new();
+            let mut styles = Styles::default();
+            styles.0.insert(
+                0,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::length(300.0),
+                            height: Dimension::auto(),
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+            let mut parent = 0;
+            for _ in 0..6 {
+                parent = src.el(parent);
+            }
+            let prev_fl = src.el(parent);
+            styles.0.insert(
+                prev_fl,
+                sized(50.0, 20.0).with_float(Float::Left, Clear::None),
+            );
+            let prev_block = src.el(parent);
+            styles.0.insert(prev_block, sized(100.0, 10.0));
+
+            let suspended = src.el(parent);
+            styles.0.insert(
+                suspended,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    margin_top(50.0),
+                    PaintColor::TRANSPARENT,
+                )
+                .with_float(Float::None, Clear::Left),
+            );
+            // Nested wrapper (also crosses a second chunk boundary at max_depth=5).
+            let mut c = src.el(suspended);
+            for _ in 0..5 {
+                c = src.el(c);
+            }
+            let inner_fl = src.el(c);
+            styles.0.insert(
+                inner_fl,
+                sized(50.0, 30.0).with_float(Float::Left, Clear::None),
+            );
+            let inner_commit = src.el(c);
+            styles.0.insert(inner_commit, sized(100.0, 10.0));
+            // Trailing float after commit must NOT be treated as top-adjoining.
+            let trailing_right = src.el(c);
+            styles.0.insert(
+                trailing_right,
+                sized(40.0, 15.0).with_float(Float::Right, Clear::None),
+            );
+            (src, styles)
+        };
+        let base_2a = run(&build_nested_strut_commit, 512);
+        assert_eq!(
+            run(&build_nested_strut_commit, 7),
+            base_2a,
+            "nested strut-commit forced clearance diverged at max_depth=7"
+        );
+        assert_eq!(
+            run(&build_nested_strut_commit, 5),
+            base_2a,
+            "nested strut-commit forced clearance diverged at max_depth=5"
+        );
+
+        // Reproducer 2B: Leading empty self-collapsing block before direct float
+        // + overflow:hidden BFC child (which commits strut via compute_child_layout),
+        // plus a trailing right float after the BFC child (must NOT trigger right
+        // forced clearance).
+        let build_empty_then_float_then_bfc = || {
+            let mut src = Src::new();
+            let mut styles = Styles::default();
+            styles.0.insert(
+                0,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::length(300.0),
+                            height: Dimension::auto(),
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+            let mut parent = 0;
+            for _ in 0..6 {
+                parent = src.el(parent);
+            }
+            let prev_fl_l = src.el(parent);
+            styles.0.insert(
+                prev_fl_l,
+                sized(50.0, 20.0).with_float(Float::Left, Clear::None),
+            );
+            let prev_fl_r = src.el(parent);
+            styles.0.insert(
+                prev_fl_r,
+                sized(50.0, 25.0).with_float(Float::Right, Clear::None),
+            );
+            let prev_block = src.el(parent);
+            styles.0.insert(prev_block, sized(100.0, 10.0));
+
+            let suspended = src.el(parent);
+            styles.0.insert(
+                suspended,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    margin_top(50.0),
+                    PaintColor::TRANSPARENT,
+                )
+                .with_float(Float::None, Clear::Left),
+            );
+            let _empty_before = src.el(suspended);
+            let direct_fl = src.el(suspended);
+            styles.0.insert(
+                direct_fl,
+                sized(50.0, 30.0).with_float(Float::Left, Clear::None),
+            );
+            let bfc_commit = src.el(suspended);
+            styles.0.insert(
+                bfc_commit,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::length(100.0),
+                            height: Dimension::length(10.0),
+                        },
+                        overflow: taffy::Point {
+                            x: Overflow::Hidden,
+                            y: Overflow::Hidden,
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+            // Negative control: trailing right float after bfc_commit must NOT
+            // force clearance on a second block with `clear: right`.
+            let trailing_right = src.el(suspended);
+            styles.0.insert(
+                trailing_right,
+                sized(40.0, 15.0).with_float(Float::Right, Clear::None),
+            );
+
+            // Second suspended block testing negative control (only a trailing
+            // right float after overflow:hidden commit, with `clear: right`).
+            let suspended_neg = src.el(parent);
+            styles.0.insert(
+                suspended_neg,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    margin_top(50.0),
+                    PaintColor::TRANSPARENT,
+                )
+                .with_float(Float::None, Clear::Right),
+            );
+            let bfc_first = src.el(suspended_neg);
+            styles.0.insert(
+                bfc_first,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::length(100.0),
+                            height: Dimension::length(10.0),
+                        },
+                        overflow: taffy::Point {
+                            x: Overflow::Hidden,
+                            y: Overflow::Hidden,
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+            let fl_after_bfc = src.el(suspended_neg);
+            styles.0.insert(
+                fl_after_bfc,
+                sized(40.0, 15.0).with_float(Float::Right, Clear::None),
+            );
+            (src, styles)
+        };
+        let base_2b = run(&build_empty_then_float_then_bfc, 512);
+        assert_eq!(
+            run(&build_empty_then_float_then_bfc, 7),
+            base_2b,
+            "empty + direct float + BFC child forced clearance diverged at max_depth=7"
+        );
+        assert_eq!(
+            run(&build_empty_then_float_then_bfc, 5),
+            base_2b,
+            "empty + direct float + BFC child forced clearance diverged at max_depth=5"
+        );
+
+        // Negative control 2C: a top-padded suspended container wrapping an
+        // empty child + float commits its own top strut immediately, so its
+        // `top_adjoining_floats` stays false even though `ctx.adjoining_floats`
+        // becomes true after merging the empty child.
+        let build_padded_non_adjoining = || {
+            let mut src = Src::new();
+            let mut styles = Styles::default();
+            styles.0.insert(
+                0,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::length(300.0),
+                            height: Dimension::auto(),
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                ),
+            );
+            let mut parent = 0;
+            for _ in 0..6 {
+                parent = src.el(parent);
+            }
+            let prev_fl = src.el(parent);
+            styles.0.insert(
+                prev_fl,
+                sized(50.0, 20.0).with_float(Float::Left, Clear::None),
+            );
+            let prev_block = src.el(parent);
+            styles.0.insert(prev_block, sized(100.0, 10.0));
+
+            let padded = src.el(parent);
+            let mut padded_style = margin_top(50.0);
+            padded_style.padding.top = taffy::style_helpers::length(5.0);
+            styles.0.insert(
+                padded,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    padded_style,
+                    PaintColor::TRANSPARENT,
+                )
+                .with_float(Float::None, Clear::Left),
+            );
+            let empty_wrapper = src.el(padded);
+            let inner_fl = src.el(empty_wrapper);
+            styles.0.insert(
+                inner_fl,
+                sized(50.0, 30.0).with_float(Float::Left, Clear::None),
+            );
+            (src, styles)
+        };
+        let base_2c = run(&build_padded_non_adjoining, 512);
+        assert_eq!(
+            run(&build_padded_non_adjoining, 7),
+            base_2c,
+            "padded container with inner empty+float diverged at max_depth=7"
+        );
     }
 }
