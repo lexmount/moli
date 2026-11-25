@@ -47,6 +47,7 @@ from email import policy
 from email.parser import BytesParser
 from html import escape as html_escape
 from email.utils import formatdate
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import product
 from pathlib import Path
@@ -88,6 +89,11 @@ COMMON_REDIRECT_PATH = "/common/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 COMMON_ECHO_PATH = "/common/echo.py"
 SERVICE_WORKER_REQUEST_HEADERS_PATH = "/service-workers/service-worker/resources/request-headers.py"
+SERVICE_WORKER_ACCESS_CONTROL_PATH = "/service-workers/service-worker/resources/fetch-access-control.py"
+SERVICE_WORKER_REQUEST_RESOURCE_PATHS = {
+    SERVICE_WORKER_REQUEST_HEADERS_PATH,
+    SERVICE_WORKER_ACCESS_CONTROL_PATH,
+}
 EVENTSOURCE_MESSAGE_PATH = "/eventsource/resources/message.py"
 IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
 DISPATCHER_PATH = "/common/dispatcher/dispatcher.py"
@@ -1117,6 +1123,62 @@ def _fetch_redirect_form_status(method: str, content_type: str | None, body: byt
     return None
 
 
+def _service_worker_cors_headers(params: dict[str, list[str]]) -> list[tuple[str, str]]:
+    headers = []
+    if "ACAOrigin" in params:
+        headers.extend(
+            ("Access-Control-Allow-Origin", value)
+            for value in params["ACAOrigin"][0].split(",")
+        )
+    for suffix in ("Headers", "Methods", "Credentials"):
+        if "ACA" + suffix in params:
+            headers.append(("Access-Control-Allow-" + suffix, params["ACA" + suffix][0]))
+    if "ACEHeaders" in params:
+        headers.append(("Access-Control-Expose-Headers", params["ACEHeaders"][0]))
+    return headers
+
+
+def _service_worker_form_data(
+    method: str, content_type: str | None, body: bytes
+) -> tuple[dict[str, str], list[dict[str, str | int]]]:
+    if method in {"GET", "HEAD"}:
+        return {}, []
+    if content_type is None:
+        content_type = "application/x-www-form-urlencoded" if method == "POST" else "text/plain"
+    media_type = content_type.partition(";")[0].strip()
+    if media_type == "application/x-www-form-urlencoded":
+        fields = parse_qs(body.decode("latin-1"), keep_blank_values=True, encoding="latin-1")
+        if any(len(values) != 1 for values in fields.values()):
+            raise ValueError("Duplicate upload field")
+        return {name: values[0] for name, values in fields.items()}, []
+    if not media_type.startswith("multipart/"):
+        return {}, []
+
+    message = BytesParser(policy=policy.HTTP).parsebytes(
+        f"Content-Type: {content_type}\r\n\r\n".encode("latin-1") + body
+    )
+    fields, files, names = {}, [], set()
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if name is None or name in names:
+            raise ValueError("Invalid upload field")
+        names.add(name)
+        # Upstream FieldStorage preserves the part bytes and ignores transfer encodings.
+        del part["Content-Transfer-Encoding"]
+        content = part.get_payload(decode=True)
+        if content is None:
+            raise ValueError("Invalid upload body")
+        filename = part.get_param("filename", header="content-disposition")
+        if filename:
+            files.append({
+                "key": name, "name": filename, "type": part.get_content_type(),
+                "error": 0, "size": len(content), "content": content.decode("latin-1"),
+            })
+        else:
+            fields[name] = content.decode("latin-1")
+    return fields, files
+
+
 def _content_security_policy_resource_response() -> tuple[bytes, list[tuple[str, str]]]:
     """Return the minimal CSP resource.py fixture used by worker CSP WPT."""
 
@@ -2038,7 +2100,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_iframe_stash_resource():
                 return
-            if self._serve_service_worker_request_headers_resource():
+            if self._serve_service_worker_request_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2092,7 +2154,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_iframe_stash_resource():
                 return
-            if self._serve_service_worker_request_headers_resource():
+            if self._serve_service_worker_request_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2187,7 +2249,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_iframe_stash_resource():
                 return
-            if self._serve_service_worker_request_headers_resource():
+            if self._serve_service_worker_request_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2252,7 +2314,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_iframe_stash_resource():
                 return
-            if self._serve_service_worker_request_headers_resource():
+            if self._serve_service_worker_request_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2459,26 +2521,111 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
             return True
 
-        def _serve_service_worker_request_headers_resource(self) -> bool:
+        def _serve_service_worker_request_resource(self) -> bool:
             parsed = urlsplit(self.path)
-            if unquote(parsed.path) != SERVICE_WORKER_REQUEST_HEADERS_PATH:
+            path = unquote(parsed.path)
+            if path not in SERVICE_WORKER_REQUEST_RESOURCE_PATHS:
                 return False
             # wptserve's RequestHeaders lowercases names, preserves ByteString
             # values, and joins repeated fields after trimming each value.
             fields: dict[str, list[str]] = {}
             for name, value in self.headers.items():
                 fields.setdefault(name.lower(), []).append(value)
-            body = json.dumps({
+            request_headers = {
                 name: values[0] if len(values) == 1 else ", ".join(value.strip() for value in values)
                 for name, values in fields.items()
-            }).encode("utf-8")
-            # The upstream handler only reads headers, including for uploads.
+            }
+            # The Python responses close the connection even if the handler
+            # did not consume the request body.
             self.close_connection = True
-            self._send_python_handler_response(
-                SERVICE_WORKER_REQUEST_HEADERS_PATH, parsed.query, body,
-                headers=[("Content-Type", "application/json")],
-            )
+            if path == SERVICE_WORKER_ACCESS_CONTROL_PATH:
+                self._serve_service_worker_access_control(parsed.query, request_headers)
+            else:
+                self._send_python_handler_response(
+                    path, parsed.query, json.dumps(request_headers).encode("utf-8"),
+                    headers=[("Content-Type", "application/json")],
+                )
             return True
+
+        def _serve_service_worker_access_control(
+            self, query: str, request_headers: dict[str, str]
+        ) -> None:
+            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            headers = [
+                ("X-ServiceWorker-ServerHeader", "SetInTheServer"),
+                *_service_worker_cors_headers(params),
+            ]
+            status = 200
+            username, password = "", ""
+            try:
+                if any(not _valid_static_response_header(name, value) for name, value in headers):
+                    raise ValueError("Invalid CORS response header")
+                if "authorization" in request_headers:
+                    scheme, data = request_headers["authorization"].split(" ", 1)
+                    if scheme != "Basic":
+                        self.send_error(400)
+                        return
+                    username, password = base64.b64decode(data).decode("latin-1").split(":", 1)
+                if ("Auth" in params and not username) or "AuthFail" in params:
+                    status = 401
+                    headers.append(("WWW-Authenticate", 'Basic realm="Restricted"'))
+                    body = b"Authentication canceled"
+                elif "PNGIMAGE" in params:
+                    headers.append(("Content-Type", "image/png"))
+                    body = base64.b64decode(
+                        "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1B"
+                        "AACxjwv8YQUAAAAJcEhZcwAADsQAAA7EAZUrDhsAAAAhSURBVDhPY3wro/KfgQLABKXJBqMG"
+                        "jBoAAqMGDLwBDAwAEsoCTFWunmQAAAAASUVORK5CYII="
+                    )
+                elif "VIDEO" in params:
+                    extension = "mp4" if "mp4" in params else "webm"
+                    headers.append(("Content-Type", f"video/{extension}"))
+                    body = (wpt_root / "media" / f"movie_5.{extension}").read_bytes()
+                    if "PartialContent" in params:
+                        length = len(body)
+                        if length == 0:
+                            raise ValueError("File is too small for range requests")
+                        start, end = 0, length - 1
+                        if "range" in request_headers:
+                            match = re.fullmatch(r"bytes=([0-9]*)-([0-9]*)", request_headers["range"])
+                            if match is None:
+                                raise ValueError("Invalid range")
+                            first, last = match.groups()
+                            start = int(first) if first else 0
+                            if last:
+                                end = int(last)
+                            elif start == 0 and first == "0":
+                                end = 0
+                        status = 206
+                        headers.append(("Content-Range", f"bytes {start}-{end}/{length}"))
+                        body = body[start:end + 1]
+                else:
+                    raw_body = self._read_content_length_request_body(ignore_transfer_encoding=True)
+                    if raw_body is None:
+                        return
+                    fields, files = _service_worker_form_data(
+                        self.command, request_headers.get("content-type"), raw_body,
+                    )
+                    cookie = SimpleCookie(request_headers.get("cookie", "")).get("cookie")
+                    data = {
+                        "jsonpResult": "success",
+                        "method": self.command,
+                        "headers": request_headers,
+                        "body": raw_body.decode("latin-1"),
+                        "files": files,
+                        "GET": {name: values[0] for name, values in params.items()},
+                        "POST": fields,
+                        "username": username or "undefined",
+                        "password": password if username else "undefined",
+                        "cookie": cookie.value if cookie is not None else "undefined",
+                    }
+                    body = f"report( {json.dumps(data)} )".encode("utf-8")
+            except (CookieError, OSError, ValueError):
+                self.send_error(500)
+                return
+            self._send_python_handler_response(
+                SERVICE_WORKER_ACCESS_CONTROL_PATH, query, body, headers=headers, status_code=status,
+            )
 
         def _serve_common_echo_resource(self) -> bool:
             parsed = urlsplit(self.path)
@@ -2518,7 +2665,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_iframe_stash_resource():
                 return
-            if self._serve_service_worker_request_headers_resource():
+            if self._serve_service_worker_request_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -3095,19 +3242,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 if path.endswith("/redirect.py"):
                     status = int(params.get("Status", ["302"])[0])
                     headers.append(("Location", params["Redirect"][0]))
-                    if "ACAOrigin" in params:
-                        headers.extend(
-                            ("Access-Control-Allow-Origin", value)
-                            for value in params["ACAOrigin"][0].split(",")
-                        )
-                    for suffix in ("Headers", "Methods", "Credentials"):
-                        if "ACA" + suffix in params:
-                            headers.append((
-                                "Access-Control-Allow-" + suffix,
-                                params["ACA" + suffix][0],
-                            ))
-                    if "ACEHeaders" in params:
-                        headers.append(("Access-Control-Expose-Headers", params["ACEHeaders"][0]))
+                    headers.extend(_service_worker_cors_headers(params))
                 elif path.endswith("/mime-type-worker.py"):
                     if "mime" in params:
                         headers.append(("Content-Type", params["mime"][0]))
@@ -3457,8 +3592,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
         def __getattr__(self, name: str) -> Callable[[], None]:
             if name.startswith("do_"):
                 path = unquote(urlsplit(getattr(self, "path", "")).path)
-                if path == SERVICE_WORKER_REQUEST_HEADERS_PATH:
-                    return self._serve_service_worker_request_headers_resource
+                if path in SERVICE_WORKER_REQUEST_RESOURCE_PATHS:
+                    return self._serve_service_worker_request_resource
                 if path == COMMON_ECHO_PATH:
                     return self._serve_common_echo_resource
                 if path == COMMON_REDIRECT_PATH:
