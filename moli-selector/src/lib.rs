@@ -1554,6 +1554,24 @@ mod tests {
     }
 
     #[test]
+    fn auto_directionality_includes_cdata_text() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let element = host.create_element("div");
+        assert!(host.append_child(body, element));
+        assert!(host.set_attribute(element, "dir", "auto"));
+        let text = host.create_cdata_section("\u{05ea}");
+        assert!(host.append_child(element, text));
+        assert!(
+            QueryEngine
+                .matches_host(&host, element, ":dir(rtl)")
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn dom_api_selectors_dir_auto_tracks_clean_and_dirty_textarea_values() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));

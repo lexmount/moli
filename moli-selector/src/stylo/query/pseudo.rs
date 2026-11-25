@@ -619,11 +619,12 @@ fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirecti
         let Some(node) = host.node(handle) else {
             continue;
         };
-        if let Some(text) = node.as_text() {
-            if let Some(direction) = first_strong_text_direction(text.data()) {
-                return Some(direction);
-            }
-            continue;
+        let text = node
+            .as_text()
+            .map(|text| text.data())
+            .or_else(|| node.as_cdata_section().map(|section| section.data()));
+        if let Some(direction) = text.and_then(first_strong_text_direction) {
+            return Some(direction);
         }
         let Some(element) = node.as_element() else {
             continue;
