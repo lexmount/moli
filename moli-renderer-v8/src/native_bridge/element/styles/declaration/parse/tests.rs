@@ -138,7 +138,7 @@ fn preparsed_pdb_property_preserves_replacement_order_priority_and_shorthand_res
                     moli_css_parse::CssSetResult::ParseError
                 );
                 let mut actual = moli_css_parse::parse_declaration_block(seed);
-                native.apply(&mut actual, false);
+                actual.apply_parsed_property(native, false);
                 assert_eq!(
                     actual.css_text(),
                     expected.css_text(),

@@ -162,9 +162,6 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
     } else {
         existing_inline_base_url
     };
-    let Some(affected_names) = style_property_mutation_affected_names_with_pdb(name) else {
-        return InlineStylePropertyWrite::NeedsCompatibilityEntries;
-    };
     let current = cached
         .as_deref()
         .or(initial.as_ref())
@@ -195,25 +192,26 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                     url_data: UrlExtraData::from(base),
                     quirks_mode: mode,
                 });
-            moli_css_parse::ParsedCssomProperty::parse(
-                name,
-                value,
-                priority,
-                &context.url_data,
-                mode,
-            )
-            .filter(moli_css_parse::ParsedCssomProperty::is_ordinary_declaration_list)
-            .map(|declarations| (declarations, publishable.then_some(context)))
+            moli_css_parse::parse_cssom_property(name, value, priority, &context.url_data, mode)
+                .filter(moli_css_parse::ParsedCssomProperty::is_ordinary_declaration_list)
+                .map(|declarations| (declarations, publishable.then_some(context)))
         })
         .flatten();
         if value.is_empty() || parsed.is_some() {
-            if value.is_empty()
-                && !affected_names
+            let removal_names = if value.is_empty() {
+                let Some(names) = style_property_mutation_affected_names_with_pdb(name) else {
+                    return InlineStylePropertyWrite::NeedsCompatibilityEntries;
+                };
+                if !names
                     .iter()
                     .any(|property| current.block.property_is_declared(property))
-            {
-                return InlineStylePropertyWrite::NoAttributeWrite;
-            }
+                {
+                    return InlineStylePropertyWrite::NoAttributeWrite;
+                }
+                names
+            } else {
+                Vec::new()
+            };
             let cleanup_names = style_property_mutation_cleanup_names_with_pdb(name);
             let compare_longhand = cleanup_names.is_empty() && !update_inline_style_base;
             let can_defer = !blocked
@@ -228,7 +226,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                 && runtime.can_defer_cssom_attribute(handle);
             let mutate = |state: &mut CssInlineStyleDeclarationState| {
                 if let Some((parsed, context)) = parsed {
-                    if !parsed.apply(&mut state.block, compare_longhand) {
+                    if !state.block.apply_parsed_property(parsed, compare_longhand) {
                         return false;
                     }
                     state.parse_context = context;
@@ -236,7 +234,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                         state.block.remove_property(&property);
                     }
                 } else {
-                    for property in &affected_names {
+                    for property in &removal_names {
                         state.block.remove_property(property);
                     }
                 }
@@ -274,6 +272,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             ));
         }
     }
+    let Some(affected_names) = style_property_mutation_affected_names_with_pdb(name) else {
+        return InlineStylePropertyWrite::NeedsCompatibilityEntries;
+    };
     let mut state = initial
         .or_else(|| cached.as_deref().cloned())
         .expect("compatibility inline style declaration state");
@@ -337,7 +338,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             let uses_preferred_supplemental_entries =
                 cssom_style_property_uses_preferred_pdb_supplemental_entries(name, value, priority);
             let mut entries = if let Some(native) = native {
-                native.apply(&mut state.block, false);
+                state.block.apply_parsed_property(native, false);
                 parsed.entries.clone()
             } else {
                 let Some(entries) = set_pdb_block_property_collecting_entries(

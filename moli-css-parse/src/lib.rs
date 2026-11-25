@@ -25,7 +25,7 @@ pub use color::{
     parse_css_color_to_opaque_srgb_hex, parse_css_color_to_srgb_bytes,
 };
 pub use cssom_block::{CssDeclarationBlock, parse_declaration_block};
-pub use cssom_property::ParsedCssomProperty;
+pub use cssom_property::{parse_cssom_property, parse_cssom_property_without_document};
 pub use declaration::{
     CssDeclaration, DeclarationParseOptions, parse_declaration_list,
     parse_declaration_list_with_source_check,
@@ -53,7 +53,7 @@ pub use media::{
 };
 pub use root_margin::{normalize_root_margin, root_margin_components};
 pub use style::moli_declaration_block::{
-    CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult,
+    CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult, ParsedCssomProperty,
 };
 pub use stylesheet_imports::{
     StylesheetImportPlaceholderLoader, StylesheetImports,
