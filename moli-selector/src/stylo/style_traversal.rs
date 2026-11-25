@@ -20,6 +20,7 @@ use selectors::{
 };
 use style::{
     Atom, LocalName, Namespace,
+    computed_value_flags::ComputedValueFlags,
     context::{QuirksMode, SharedStyleContext},
     data::{ElementDataMut, ElementDataRef, ElementDataWrapper, ElementStyles},
     dom::{LayoutIterator, NodeInfo, OpaqueNode, TDocument, TElement, TNode, TShadowRoot},
@@ -208,6 +209,41 @@ impl StyloDomStyleAdapter {
         self.state.mark_element_style_dirty(handle)
     }
 
+    /// Queues inherited work on already styled children. A child without
+    /// cached styles will use its parent's current style on its first read.
+    pub fn mark_cached_child_styles_for_recascade(
+        &self,
+        document: NodeId,
+        children: impl Iterator<Item = NodeId>,
+        hint: RestyleHint,
+    ) -> bool {
+        let documents = self.state.element_data.documents.borrow();
+        let Some(bucket) = documents.get(&document) else {
+            return false;
+        };
+        let unconditional = hint.contains(RestyleHint::RECASCADE_SELF);
+        debug_assert!(
+            unconditional || hint.contains(RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE)
+        );
+        let mut marked = false;
+        for child in children {
+            let Some(child) = bucket.data.get(&child) else {
+                continue;
+            };
+            let mut data = child.borrow_mut();
+            if data.styles.get_primary().is_some_and(|style| {
+                unconditional
+                    || style
+                        .flags
+                        .contains(ComputedValueFlags::INHERITS_RESET_STYLE)
+            }) {
+                data.hint.insert(RestyleHint::RECASCADE_SELF);
+                marked = true;
+            }
+        }
+        marked
+    }
+
     /// Inspect stored attribute dependencies without a traversal binding,
     /// whose teardown retires transient shadow cascade data.
     pub fn element_styles_reference_attribute(
@@ -300,9 +336,19 @@ impl StyloDomStyleAdapter {
         document: NodeId,
         handle: NodeId,
     ) -> Option<ElementStyles> {
-        let documents = self.state.element_data.documents.borrow();
-        let data = documents.get(&document)?.data.get(&handle)?.borrow();
-        (data.has_styles() && data.hint.is_empty()).then(|| data.styles.clone())
+        Some(self.clean_element_data(document, handle)?.styles.clone())
+    }
+
+    pub fn has_clean_element_styles(&self, document: NodeId, handle: NodeId) -> bool {
+        self.clean_element_data(document, handle).is_some()
+    }
+
+    fn clean_element_data(&self, document: NodeId, handle: NodeId) -> Option<ElementDataRef<'_>> {
+        let data = self
+            .state
+            .element_data
+            .borrow_for_document(document, handle)?;
+        (data.has_styles() && data.hint.is_empty()).then_some(data)
     }
 
     pub fn inline_style_attribute_matches(

@@ -3,12 +3,9 @@ use std::{
     collections::HashMap,
 };
 
-use style::invalidation::element::restyle_hints::RestyleHint;
-
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 pub(super) const MAX_RETAINED_INVALIDATION_ROOTS: usize = 1_024;
-pub(super) const MAX_RETAINED_DESCENDANT_RESTYLES: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum StyleInvalidationScope {
@@ -20,24 +17,6 @@ pub(crate) enum StyleInvalidationScope {
 struct InvalidationGenerations {
     element: u64,
     subtree: u64,
-}
-
-#[derive(Clone, Copy, Default)]
-pub(super) struct DescendantRestyles {
-    pub(super) subtree: u64,
-    pub(super) children: u64,
-    pub(super) inheriting_reset: u64,
-}
-
-impl DescendantRestyles {
-    pub(super) fn child_requirement(self, inherits_reset: bool) -> u64 {
-        let explicit_inherit = if inherits_reset {
-            self.inheriting_reset
-        } else {
-            0
-        };
-        self.children.max(explicit_inherit)
-    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -56,7 +35,6 @@ pub(super) struct LazyStyleInvalidationRoots {
     generation: Cell<u64>,
     document_floor_generation: Cell<u64>,
     roots: RefCell<HashMap<DomHandle, InvalidationGenerations>>,
-    descendant_restyles: RefCell<HashMap<DomHandle, DescendantRestyles>>,
     checked_paths: RefCell<HashMap<DomHandle, CheckedStylePath>>,
     #[cfg(test)]
     path_node_visits: Cell<u64>,
@@ -130,50 +108,21 @@ impl LazyStyleInvalidationRoots {
         (self.document_floor_generation.get()..=self.generation()).contains(&generation)
     }
 
-    pub(super) fn record_descendant_restyle(
-        &self,
-        handle: DomHandle,
-        hint: RestyleHint,
-        generation: u64,
-        subtree_generation: u64,
-    ) {
-        if hint.is_empty() || generation <= subtree_generation {
-            return;
-        }
-        let mut restyles = self.descendant_restyles.borrow_mut();
-        let entry = restyles.entry(handle).or_default();
-        if hint.will_recascade_subtree() {
-            entry.subtree = entry.subtree.max(generation);
-        } else if hint.contains(RestyleHint::RECASCADE_SELF) {
-            entry.children = entry.children.max(generation);
-        } else {
-            debug_assert!(hint.contains(RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE));
-            entry.inheriting_reset = entry.inheriting_reset.max(generation);
-        }
-        if restyles.len() > MAX_RETAINED_DESCENDANT_RESTYLES {
-            drop(restyles);
+    pub(super) fn record_subtree_restyle(&self, handle: DomHandle, generation: u64) {
+        let mut roots = self.roots.borrow_mut();
+        let entry = roots.entry(handle).or_default();
+        entry.subtree = entry.subtree.max(generation);
+        if roots.len() > MAX_RETAINED_INVALIDATION_ROOTS {
+            drop(roots);
             self.coalesce_invalidation_history();
         }
     }
 
     fn coalesce_invalidation_history(&self) {
-        // A cascade can reach the limit midway through an observation. The
-        // floor covers every discarded entry, including newer selector targets.
+        // The floor also covers selector targets when a cascade fills the map
+        // midway through a style observation.
         self.document_floor_generation.set(self.generation());
         self.roots.borrow_mut().clear();
-        self.descendant_restyles.borrow_mut().clear();
-    }
-
-    pub(super) fn descendant_restyle_count(&self) -> usize {
-        self.descendant_restyles.borrow().len()
-    }
-
-    pub(super) fn descendant_restyles(&self, handle: DomHandle) -> DescendantRestyles {
-        self.descendant_restyles
-            .borrow()
-            .get(&handle)
-            .copied()
-            .unwrap_or_default()
     }
 
     pub(super) fn subtree_generation(&self, handle: DomHandle) -> u64 {
@@ -235,7 +184,6 @@ impl LazyStyleInvalidationRoots {
         self.generation.set(0);
         self.document_floor_generation.set(0);
         self.roots.borrow_mut().clear();
-        self.descendant_restyles.borrow_mut().clear();
         self.checked_paths.borrow_mut().clear();
         #[cfg(test)]
         self.path_node_visits.set(0);

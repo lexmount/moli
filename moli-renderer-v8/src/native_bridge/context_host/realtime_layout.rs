@@ -590,7 +590,7 @@ impl PageScriptHost {
             let changes = self
                 .style_engine
                 .screen_style_changes(self.dom_host(), document.document)?;
-            if !SUPPORTED_DAMAGE.contains(changes.observed_damage) {
+            if changes.child_restyles || !SUPPORTED_DAMAGE.contains(changes.observed_damage) {
                 return None;
             }
             let resolved = changes.targets.is_empty()

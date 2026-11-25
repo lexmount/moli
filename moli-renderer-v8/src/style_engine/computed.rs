@@ -802,7 +802,11 @@ fn with_resolved_style_in_current_world<R>(
                 handle,
                 pseudo_element: Some(pseudo_element.clone()),
             };
-            if let Some(style) = world.pseudo_style_cache.get_pseudo(&key) {
+            if let Some(style) = world.pseudo_style_cache.get_pseudo(&key)
+                && engine
+                    .dom_adapter
+                    .has_clean_element_styles(world.document, handle)
+            {
                 return callback(&style, None);
             }
         } else if let Some(styles) = engine

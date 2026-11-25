@@ -88,6 +88,7 @@ pub(super) enum ScreenStyleInvalidation {
     Pending {
         after: u64,
         damage: IndexMap<DomHandle, ServoRestyleDamage>,
+        child_restyles: bool,
     },
     Full,
 }
@@ -97,6 +98,7 @@ pub(crate) struct ScreenStyleChanges {
     pub(crate) after: u64,
     pub(crate) targets: Vec<(DomHandle, StyleInvalidationScope)>,
     pub(crate) observed_damage: ServoRestyleDamage,
+    pub(crate) child_restyles: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -224,6 +226,22 @@ impl StyleDocumentState {
         ScreenStyleInvalidation::Pending {
             after: self.lazy_invalidation_roots.generation(),
             damage: IndexMap::new(),
+            child_restyles: false,
+        }
+    }
+
+    pub(super) fn note_screen_child_restyles(&self) {
+        if !self.screen_style_dependencies_are_current() {
+            return;
+        }
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        if matches!(*change, ScreenStyleInvalidation::Clean) {
+            *change = self.pending_screen_style_invalidation();
+        }
+        if let ScreenStyleInvalidation::Pending { child_restyles, .. } = &mut *change {
+            // These node hints can be consumed by CSSOM before the next
+            // screen pass. Keep the screen's obligation until publication.
+            *child_restyles = true;
         }
     }
 
@@ -261,12 +279,20 @@ impl StyleDocumentState {
 
     pub(super) fn finish_screen_style_invalidation(&self) {
         let mut change = self.screen_style_invalidation.borrow_mut();
-        let ScreenStyleInvalidation::Pending { after, damage } = &*change else {
+        let ScreenStyleInvalidation::Pending {
+            after,
+            damage,
+            child_restyles,
+        } = &*change
+        else {
             return;
         };
         if !self.screen_style_dependencies_are_current() {
             *change = ScreenStyleInvalidation::Full;
-        } else if damage.is_empty() && *after == self.lazy_invalidation_roots.generation() {
+        } else if !child_restyles
+            && damage.is_empty()
+            && *after == self.lazy_invalidation_roots.generation()
+        {
             *change = ScreenStyleInvalidation::Clean;
         }
     }
@@ -336,9 +362,16 @@ impl StyleDocumentState {
         supported: ServoRestyleDamage,
     ) -> bool {
         match &*self.screen_style_invalidation.borrow() {
-            ScreenStyleInvalidation::Pending { damage, .. } => damage
-                .get(&handle)
-                .is_none_or(|&damage| supported.contains(damage)),
+            ScreenStyleInvalidation::Pending {
+                damage,
+                child_restyles,
+                ..
+            } => {
+                !child_restyles
+                    && damage
+                        .get(&handle)
+                        .is_none_or(|&damage| supported.contains(damage))
+            }
             ScreenStyleInvalidation::Clean => true,
             ScreenStyleInvalidation::Full => false,
         }
