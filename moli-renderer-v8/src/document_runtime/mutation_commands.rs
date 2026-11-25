@@ -613,6 +613,7 @@ impl DocumentRuntime {
         handle: DomHandle,
         source: crate::css_style::CssomStyleAttribute,
         value: &str,
+        base_url_changed: bool,
     ) {
         unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
         let was_cssom = unsafe { &*host_ptr }.element_inline_style_csp_state(handle)
@@ -621,12 +622,16 @@ impl DocumentRuntime {
             .dom_host
             .set_cssom_style_attribute(handle, Box::new(source), Some(value))
             .into_parts();
-        let changed = self.apply_cssom_style_attribute_effects(scope, host_ptr, handle, effects);
-        if !changed && !was_cssom {
-            // Assigning cssText can authorize an existing raw attribute even
-            // when the serialized text was already identical.
-            self.note_attribute_layout_activity(host_ptr, handle, "style");
-        }
+        // Same-value observer records can be queued without changing the style input.
+        let style_input_changed =
+            old_value.as_deref() != Some(value) || !was_cssom || base_url_changed;
+        let changed = self.apply_cssom_style_attribute_effects(
+            scope,
+            host_ptr,
+            handle,
+            effects,
+            style_input_changed,
+        );
         if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
             self.apply_attribute_changed_reaction_policy(
                 scope,
@@ -647,8 +652,9 @@ impl DocumentRuntime {
         host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         effects: DomMutationEffects,
+        style_input_changed: bool,
     ) -> bool {
-        if effects.did_change() {
+        if style_input_changed {
             self.note_attribute_layout_activity(host_ptr, handle, "style");
             // An iframe's inline style can change the viewport used by its child
             // document, including the result of its media queries.

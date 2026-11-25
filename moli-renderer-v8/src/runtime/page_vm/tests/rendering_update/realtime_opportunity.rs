@@ -693,6 +693,106 @@ probe.insertAdjacentHTML('beforeend', '<div class="item"></div>'.repeat(799));
 }
 
 #[test]
+fn realtime_same_css_text_observer_record_keeps_layout_current() {
+    run_page_vm_large_stack_async_test("realtime-cssom-same-value-observed", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.vm_mut()
+            .eval(
+                "document.body.innerHTML='<div id=target></div>'; target.style.cssText='width: 120px;'",
+            )
+            .unwrap();
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("String(target.offsetWidth)").unwrap(),
+            "120"
+        );
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        assert!(host.borrow().realtime_screen_layout_is_current());
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let resolutions = host.borrow().element_style_resolutions_for_test();
+
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    r#"
+const observer = new MutationObserver(() => {});
+observer.observe(target, { attributes: true, attributeOldValue: true });
+target.style.cssText = target.style.cssText;
+JSON.stringify(observer.takeRecords().map(record => [record.attributeName, record.oldValue]))
+"#,
+                )
+                .unwrap(),
+            r#"[["style","width: 120px;"]]"#
+        );
+        assert!(host.borrow().realtime_screen_layout_is_current());
+        assert_eq!(
+            page.vm_mut().eval("String(target.offsetWidth)").unwrap(),
+            "120"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(
+            host.borrow().element_style_resolutions_for_test(),
+            resolutions
+        );
+
+        page.vm_mut()
+            .eval("target.style.cssText = 'width: 150px;'")
+            .unwrap();
+        assert!(!host.borrow().realtime_screen_layout_is_current());
+        assert_eq!(
+            page.vm_mut().eval("String(target.offsetWidth)").unwrap(),
+            "150"
+        );
+    });
+}
+
+#[test]
+fn realtime_same_css_text_resolves_urls_against_the_new_base() {
+    run_page_vm_large_stack_async_test("realtime-cssom-base-change", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        let images = page
+            .vm_mut()
+            .eval(
+                r#"
+const base = document.head.appendChild(document.createElement('base'));
+base.href = '/a/';
+const target = document.body.appendChild(document.createElement('div'));
+target.style.cssText = 'background-image: url(image.png);';
+const original = getComputedStyle(target).backgroundImage;
+void target.offsetWidth;
+base.href = '/b/';
+const afterBase = getComputedStyle(target).backgroundImage;
+void target.offsetWidth;
+
+const observer = new MutationObserver(() => {});
+observer.observe(target, {attributes: true, attributeOldValue: true});
+target.style.cssText = target.style.cssText;
+[original, afterBase, getComputedStyle(target).backgroundImage].join('|')
+"#,
+            )
+            .unwrap();
+        assert_eq!(
+            images,
+            concat!(
+                r#"url("https://example.com/a/image.png")|"#,
+                r#"url("https://example.com/a/image.png")|"#,
+                r#"url("https://example.com/b/image.png")"#
+            )
+        );
+    });
+}
+
+#[test]
 fn realtime_synchronous_geometry_keeps_the_opportunity_but_avoids_another_build() {
     run_page_vm_large_stack_async_test("realtime-opportunity-after-getter", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

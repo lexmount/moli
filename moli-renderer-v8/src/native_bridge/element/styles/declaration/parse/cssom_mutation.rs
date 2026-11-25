@@ -420,7 +420,14 @@ fn commit_deferred_inline_property(
             .set_cssom_style_attribute(handle, Box::new(CssomStyleAttribute::new(state)), None)
             .into_effects()
     };
-    runtime.apply_cssom_style_attribute_effects(scope, runtime_ptr, handle, effects)
+    let style_input_changed = effects.did_change();
+    runtime.apply_cssom_style_attribute_effects(
+        scope,
+        runtime_ptr,
+        handle,
+        effects,
+        style_input_changed,
+    )
 }
 
 fn commit_inline_property_state(
@@ -450,6 +457,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     css_text: &str,
+    base_url: &url::Url,
 ) {
     crate::style_engine::ensure_stylo_browser_compat_prefs();
     let (declarations, source_preserved) = crate::css_style::scan_inline_css_text(css_text);
@@ -458,9 +466,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_
     {
         state
     } else {
-        let runtime = unsafe { &*runtime_ptr };
-        let base_url = runtime.element_inline_style_base_url(handle);
-        let entries = parse_inline_declaration_entries(&declarations, Some(&base_url));
+        let entries = parse_inline_declaration_entries(&declarations, Some(base_url));
         super::inline_state::inline_style_declaration_state_from_entries(&entries)
     };
     state.refresh_pdb_entries();
@@ -472,7 +478,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_
         state,
         Some(&css_text),
         override_text,
-        None,
+        Some(base_url),
     );
 }
 
@@ -500,12 +506,19 @@ pub(super) fn commit_inline_style_declaration(
     crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let runtime = unsafe { &mut *runtime_ptr };
         let source = CssomStyleAttribute::with_text(state, attribute_text.to_owned(), true);
+        let base_url_changed = base_url.is_some_and(|base_url| {
+            runtime
+                .existing_element_inline_style_base_url(handle)
+                .unwrap_or_else(|| runtime.element_inline_style_base_url(handle))
+                != *base_url
+        });
         runtime.set_style_attribute_from_cssom_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
             source,
             attribute_text,
+            base_url_changed,
         );
         // Publish the CSSOM and rendering views before the reaction scope
         // invokes attributeChangedCallback and permits another mutation.
