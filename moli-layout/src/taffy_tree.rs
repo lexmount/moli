@@ -2517,7 +2517,7 @@ where
                     + block_offset,
             );
             output.scrollable_overflow_rect.bottom = output.scrollable_overflow_rect.bottom.max(
-                measurement.alignment_block_size
+                measurement.scrollable_block_size
                     + padding.top
                     + padding.bottom
                     + block_offset.max(0.0),
@@ -2539,6 +2539,9 @@ where
                     .line_placements
                     .as_ref()
                     .expect("final inline layout must retain line placements");
+                if let Some(clamp) = inline_context.line_clamp.as_mut() {
+                    clamp.show_marker = measurement.show_clamp_marker;
+                }
                 let fragments =
                     build_inline_fragments(&inline_context, text_layout, line_placements);
                 self.position_inline_objects(
@@ -2907,6 +2910,7 @@ where
         let mut float_height = None;
         let mut alignment_float_height = 0.0;
         let mut float_line_clearances = Vec::new();
+        let mut show_clamp_marker = false;
         if has_inline_float
             || block_context
                 .as_ref()
@@ -2969,7 +2973,7 @@ where
                 float_height = Some(alignment_float_height);
             }
         } else {
-            break_inline_lines(context, layout, max_advance);
+            show_clamp_marker = break_inline_lines(context, layout, max_advance);
         }
         position_inline_edges(self, context, layout);
         layout.align(
@@ -3001,7 +3005,8 @@ where
                 None,
             )
         };
-        let mut height = layout.height() + line_metrics.line_expansion;
+        let full_height = layout.height() + line_metrics.line_expansion;
+        let mut height = line_metrics.clamped_block_size.unwrap_or(full_height);
         if let Some(float_height) = float_height {
             height = height.max(float_height);
         }
@@ -3012,6 +3017,8 @@ where
                 height: known_dimensions.height.unwrap_or(height),
             },
             alignment_block_size,
+            scrollable_block_size: full_height.max(alignment_block_size),
+            show_clamp_marker,
             first_baseline: line_metrics.first_baseline,
             last_baseline: line_metrics.last_baseline,
             has_non_phantom_line: line_metrics.has_non_phantom_line,
@@ -3355,6 +3362,8 @@ struct InlineMeasurement {
     /// subject. Unlike `size.height`, this includes non-contained floats
     /// without making them contribute to normal-flow auto height.
     alignment_block_size: f32,
+    scrollable_block_size: f32,
+    show_clamp_marker: bool,
     first_baseline: Option<f32>,
     last_baseline: Option<f32>,
     has_non_phantom_line: bool,
@@ -3435,6 +3444,7 @@ fn empty_inline_context() -> InlineFormattingContext {
         root_style: LayoutBoxId::from_index(0),
         measurement_layout: Some(parley::Layout::default()),
         laid_out: None,
+        line_clamp: None,
         content_widths: InlineContentWidthsMemo::default(),
         text_units: Vec::new(),
         source_map: Vec::new(),

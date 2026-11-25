@@ -2,6 +2,80 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn legacy_line_clamp_keeps_flex_playlist_titles_in_their_rows() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/playlist.html")?,
+        );
+        page
+            .vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+        let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.ttf"
+        )));
+        page.vm_mut().eval(&format!(
+            r#"document.head.innerHTML = `<style>
+              @font-face{{font-family:Fixture;src:url(data:font/ttf;base64,{font})}}
+              html,body{{margin:0}}
+              body{{font:20px/31px Fixture}}
+              .row{{display:flex;align-items:center;height:31px;margin-bottom:4px}}
+              .title{{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;
+                 width:80px;overflow:hidden;word-break:break-all;color:red}}
+              #short{{color:green}} #marker{{color:blue}}
+              </style>`;
+              document.body.innerHTML = `<div class=row><div id=long class=title>ABCDEFGHIJKLMNO</div></div>
+                <div class=row><div id=short class=title>AB</div></div><div id=marker>…</div>`;
+              'installed'"#
+        ))?;
+        page.vm_mut().prime_document_lifecycle_and_publish_stylesheets();
+        page.vm_mut().publish_layout_for_test()?;
+        assert_eq!(
+            page.vm_mut().eval(
+                "JSON.stringify([long.offsetTop, long.offsetHeight, long.scrollHeight, short.offsetTop, short.offsetHeight])"
+            )?,
+            "[0,31,93,35,31]"
+        );
+        let snapshot = page
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 110, 1.0))?
+            .expect("playlist paint");
+        let glyph_runs = |color| {
+            snapshot.fragments.iter().filter_map(move |fragment| match fragment {
+                moli_layout::PaintFragment::GlyphRun(run) if run.color == color => Some(run),
+                _ => None,
+            })
+        };
+        let red: Vec<_> = glyph_runs(moli_layout::PaintColor::new(1., 0., 0., 1.)).collect();
+        let reference = glyph_runs(moli_layout::PaintColor::new(0., 0., 1., 1.))
+            .next().expect("reference ellipsis");
+        let ellipsis = red.last().expect("long title ellipsis");
+        assert!(red.len() >= 2 && red.iter().flat_map(|run| &run.glyphs).all(|glyph| glyph.y < 31.));
+        assert_eq!(ellipsis.font, reference.font);
+        assert_eq!(
+            ellipsis.glyphs.iter().map(|glyph| glyph.id).collect::<Vec<_>>(),
+            reference.glyphs.iter().map(|glyph| glyph.id).collect::<Vec<_>>()
+        );
+
+        page.vm_mut().eval("long.style.setProperty('-webkit-line-clamp', '2')")?;
+        page.vm_mut().publish_layout_for_test()?;
+        assert_eq!(page.vm_mut().eval("String(long.offsetHeight)")?, "62");
+        page.vm_mut().eval("long.style.display = 'block'")?;
+        page.vm_mut().publish_layout_for_test()?;
+        assert_eq!(page.vm_mut().eval("String(long.offsetHeight)")?, "93");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("legacy clamping should constrain playlist title layout and paint");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn floated_min_width_text_aligns_in_the_constrained_content_box() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
