@@ -364,7 +364,7 @@ impl MoliStyleEngine {
                 })
                 != Some(false)
             {
-                pending.invalidate_subtrees([host.parent_node(element).unwrap_or(element)]);
+                pending.record_state_without_snapshot(host, element, state);
             }
             return;
         }
