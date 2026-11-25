@@ -280,6 +280,18 @@ impl DocumentLayoutState {
         Some((self.latest_layout(document)?, &retained.world))
     }
 
+    pub(super) fn update_repaint_styles(
+        &mut self,
+        styles: Vec<(
+            DomHandle,
+            style::servo_arc::Arc<style::properties::ComputedValues>,
+        )>,
+    ) -> bool {
+        self.retained_layout
+            .as_mut()
+            .is_some_and(|retained| retained.world.update_repaint_styles(styles))
+    }
+
     pub(super) fn has_reusable_layout(&self) -> bool {
         self.retained_layout
             .as_ref()

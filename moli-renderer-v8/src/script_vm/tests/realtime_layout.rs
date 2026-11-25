@@ -128,6 +128,74 @@ fn realtime_retained_numeric_layout_matches_fresh_geometry_and_paint() {
     }
 }
 
+#[cfg(feature = "devtools")]
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_repaints_native_color_damage_without_rebuilding_geometry() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut vm = realtime_vm(concat!(
+                "<!doctype html><style>p{background:red;color:black;border:1px solid green}",
+                ".colored{background:blue;color:yellow;border-color:purple}",
+                ".wider{width:70px;font-size:22px}</style>",
+                "<p id=target>Recolor <em>this text</em></p>",
+            ));
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let document = host.borrow().document_handle();
+            let viewport = host.borrow().layout_viewport_for_document(document);
+            let session = crate::runtime::RendererScreencastPaintSession::default();
+            let paint = |vm: &mut StandaloneScriptVmHarness| {
+                vm.paint_current_screen_layout(
+                    &session,
+                    viewport,
+                    moli_layout::PaintCaptureRequest::viewport(),
+                    moli_layout::LayoutFlushReason::Screenshot,
+                )
+                .unwrap()
+                .unwrap()
+            };
+            let before = paint(&mut vm);
+            for (edit, needs_layout) in [
+                ("target.classList.add('colored')", false),
+                ("target.classList.remove('colored')", false),
+                ("target.classList.add('colored')", false),
+                (
+                    "target.style.backgroundColor='purple'; target.style.color='white'",
+                    false,
+                ),
+                ("target.classList.add('wider')", true),
+            ] {
+                let publications = vm.layout_pass_observability_for_test().1;
+                vm.eval(&format!("{edit}; getComputedStyle(target).color"))
+                    .unwrap();
+                let snapshot = paint(&mut vm);
+                let expect_publications = publications + u64::from(needs_layout);
+                assert_eq!(
+                    vm.layout_pass_observability_for_test().1,
+                    expect_publications,
+                    "{edit}"
+                );
+                if !edit.contains("remove") {
+                    assert_ne!(snapshot, before, "{edit}");
+                } else {
+                    assert_eq!(snapshot, before, "{edit}");
+                }
+                let fresh = host
+                    .borrow()
+                    .build_layout_pass_for_document(
+                        document,
+                        moli_layout::LayoutPassRequest::with_paint(
+                            viewport,
+                            moli_layout::LayoutFlushReason::Screenshot,
+                        ),
+                    )
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(Some(&snapshot), fresh.paint_snapshot(), "{edit}");
+            }
+        })
+        .await;
+}
+
 #[test]
 fn realtime_reuses_numeric_links_until_box_roles_change() {
     let mut vm = realtime_vm(concat!(

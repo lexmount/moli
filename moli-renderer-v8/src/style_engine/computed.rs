@@ -179,7 +179,7 @@ impl StyloComputedStyleSnapshot {
         }
     }
 
-    fn from_element_styles(styles: &ElementStyles) -> Self {
+    pub(super) fn from_element_styles(styles: &ElementStyles) -> Self {
         Self {
             primary: styles.primary().clone(),
             before: styles.pseudos.get(&PseudoElement::Before).cloned(),

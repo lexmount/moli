@@ -216,12 +216,14 @@ impl DomHost {
             && document == Some(tracked.document)
         {
             tracked.targets.clear();
+            tracked.has_native_changes = false;
             return;
         }
         *tracking = document.map(|document| {
             Box::new(TrackedLayoutChanges {
                 document,
                 targets: IndexSet::new(),
+                has_native_changes: false,
             })
         });
     }
@@ -234,14 +236,38 @@ impl DomHost {
             .map(|tracked| tracked.targets.iter().copied().collect())
     }
 
+    pub fn tracked_layout_changes_are_inline_style_only(&self, document: DomHandle) -> bool {
+        self.tracked_layout_changes
+            .borrow()
+            .as_ref()
+            .is_some_and(|tracked| {
+                tracked.document == document
+                    && !tracked.targets.is_empty()
+                    && !tracked.has_native_changes
+            })
+    }
+
     /// A native source such as scrolling changed without a DOM mutation.
     pub fn note_tracked_layout_target(&self, target: DomHandle) {
+        self.note_tracked_target(target, false);
+    }
+
+    pub fn note_tracked_inline_style_target(&self, target: DomHandle) {
+        self.note_tracked_target(target, true);
+    }
+
+    fn note_tracked_target(&self, target: DomHandle, inline_style: bool) {
         if let Some(document) = self.layout_document_for_mutation_target(target) {
-            self.record_tracked_layout_target(document, target);
+            self.record_tracked_layout_target(document, target, inline_style);
         }
     }
 
-    fn record_tracked_layout_target(&self, document: DomHandle, target: DomHandle) {
+    fn record_tracked_layout_target(
+        &self,
+        document: DomHandle,
+        target: DomHandle,
+        inline_style: bool,
+    ) {
         const MAX_TRACKED_LAYOUT_TARGETS: usize = 1_024;
 
         let mut tracking = self.tracked_layout_changes.borrow_mut();
@@ -249,6 +275,7 @@ impl DomHost {
             && tracked.document == document
         {
             tracked.targets.insert(target);
+            tracked.has_native_changes |= !inline_style;
             if tracked.targets.len() > MAX_TRACKED_LAYOUT_TARGETS {
                 *tracking = None;
             }
@@ -286,6 +313,15 @@ impl DomHost {
         scope: MutationScope,
         layout_targets: impl IntoIterator<Item = DomHandle>,
     ) {
+        self.record_mutation_and_layout_input(scope, layout_targets, false);
+    }
+
+    pub(super) fn record_mutation_and_layout_input(
+        &self,
+        scope: MutationScope,
+        layout_targets: impl IntoIterator<Item = DomHandle>,
+        inline_style: bool,
+    ) {
         let revision = self.dom_version.get().saturating_add(1);
         self.dom_version.set(revision);
         for handle in layout_targets {
@@ -293,7 +329,7 @@ impl DomHost {
                 self.document_layout_versions
                     .borrow_mut()
                     .insert(document, revision);
-                self.record_tracked_layout_target(document, handle);
+                self.record_tracked_layout_target(document, handle, inline_style);
             }
         }
         if matches!(scope, MutationScope::QueryState) {

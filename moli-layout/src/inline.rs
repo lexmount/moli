@@ -208,6 +208,8 @@ pub(crate) struct InlineFormattingContext {
     /// in style deduplication prevents glyph runs from crossing a box-state
     /// boundary even when their paint/font properties are otherwise equal.
     pub(crate) style_parents: Vec<LayoutBoxId>,
+    /// Brush changes made after the current numeric layout was accepted.
+    pub(crate) repaint_brushes: Option<Box<[(usize, TextBrush)]>>,
     pub(crate) structural_boxes: Vec<InlineStructuralBox>,
     pub(crate) line_placements: Vec<InlineLinePlacement>,
     pub(crate) fragments: InlineFragments,
@@ -546,6 +548,18 @@ impl InlineFormattingContext {
         usize::try_from(id)
             .ok()
             .and_then(|index| self.objects.get(index))
+    }
+
+    pub(crate) fn paint_brush<'a>(&'a self, slot: usize, original: &'a TextBrush) -> &'a TextBrush {
+        self.repaint_brushes
+            .as_deref()
+            .and_then(|brushes| {
+                brushes
+                    .binary_search_by_key(&slot, |(index, _)| *index)
+                    .ok()
+                    .map(|index| &brushes[index].1)
+            })
+            .unwrap_or(original)
     }
 
     fn style_parent(&self, index: usize) -> LayoutBoxId {
@@ -2099,6 +2113,16 @@ where
         .as_ref()
         .is_some_and(|tree| tree.covers(world.boxes.len()));
     for (index, layout_box) in world.boxes.iter_mut().enumerate() {
+        if layout_box
+            .inline_layout
+            .as_ref()
+            .is_some_and(|context| context.repaint_brushes.is_some())
+        {
+            if let Some(numeric) = &mut world.inline_numeric_reuse {
+                numeric.discard_owner(LayoutBoxId::from_index(index));
+            }
+            layout_box.inline_layout = None;
+        }
         if retain_prepared {
             if let Some(context) = layout_box.inline_layout.as_mut() {
                 let preserve_numeric = world
@@ -2444,6 +2468,7 @@ impl InlineBuildInput {
                 .style
                 .includes_used_font_metrics(),
             style_parents,
+            repaint_brushes: None,
             structural_boxes,
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
@@ -3684,6 +3709,7 @@ mod tests {
             uses_quirks_line_height: false,
             root_includes_used_font_metrics: false,
             style_parents: vec![root],
+            repaint_brushes: None,
             structural_boxes: Vec::new(),
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
@@ -3800,6 +3826,7 @@ mod tests {
                     uses_quirks_line_height: false,
                     root_includes_used_font_metrics: false,
                     style_parents: Vec::new(),
+                    repaint_brushes: None,
                     structural_boxes: Vec::new(),
                     line_placements: Vec::new(),
                     fragments: InlineFragments::default(),

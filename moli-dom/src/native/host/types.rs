@@ -156,6 +156,7 @@ pub(super) struct ShadowSlotNameIndex {
 pub(super) struct TrackedLayoutChanges {
     pub(super) document: DomHandle,
     pub(super) targets: IndexSet<DomHandle>,
+    pub(super) has_native_changes: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -2612,7 +2612,7 @@ impl PageScriptHost {
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
         if self.dom_host().is_connected(root) {
-            self.dom_host().note_tracked_layout_target(root);
+            self.dom_host().note_tracked_inline_style_target(root);
             self.note_realtime_tracked_input_change();
         }
         self.clear_layout_rect_cache();

@@ -3445,6 +3445,7 @@ fn empty_inline_context() -> InlineFormattingContext {
         uses_quirks_line_height: false,
         root_includes_used_font_metrics: false,
         style_parents: Vec::new(),
+        repaint_brushes: None,
         structural_boxes: Vec::new(),
         line_placements: Vec::new(),
         fragments: InlineFragments::default(),

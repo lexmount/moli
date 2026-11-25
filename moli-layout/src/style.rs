@@ -1639,6 +1639,23 @@ impl ResolvedLayoutStyle {
         self.vertical_align
     }
 
+    /// Some paint damage can still change data baked into our published
+    /// geometry or resource references. Preserve those projection inputs.
+    pub(crate) fn can_repaint_with(&self, next: &Self) -> bool {
+        let (Some(old), Some(new)) = (&self.computed, &next.computed) else {
+            return false;
+        };
+        self.taffy == next.taffy
+            && self.display == next.display
+            && self.visible == next.visible
+            && self.pointer_events == next.pointer_events
+            && self.scrollbar_width == next.scrollbar_width
+            && self.scrollbar_gutter == next.scrollbar_gutter
+            && self.scrollbar_colors == next.scrollbar_colors
+            && self.generated_content == next.generated_content
+            && old.clone_background_image() == new.clone_background_image()
+    }
+
     pub(crate) fn parley_text_style(
         &self,
     ) -> parley::TextStyle<'static, 'static, crate::stylo_to_parley::TextBrush> {
