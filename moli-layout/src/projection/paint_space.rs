@@ -1,7 +1,7 @@
 //! Paint-only snapping and subpixel propagation. These values never feed CSSOM.
 
 use super::coordinates::{ProjectionAnchor, ResolvedPlacement};
-use crate::{LayoutPoint, LayoutRect, LayoutTransform2D};
+use crate::{LayoutPoint, LayoutRect, LayoutTransform2D, PaintTileGrid};
 
 /// Blink-like linear paint space for one projected coordinate space.
 ///
@@ -42,6 +42,13 @@ impl PaintSpace {
             rect.width,
             rect.height,
         )
+    }
+
+    pub(crate) fn pre_transform_tile_grid(self, mut grid: PaintTileGrid) -> PaintTileGrid {
+        grid.x.start += f64::from(self.paint_offset.x);
+        grid.y.start += f64::from(self.paint_offset.y);
+        grid.coverage = self.pre_transform_rect(grid.coverage);
+        grid
     }
 
     pub(crate) const fn property_transform(self) -> LayoutTransform2D {

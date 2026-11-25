@@ -216,9 +216,13 @@ impl<'a, 's> PdfPainter<'a, 's> {
                     self.clips.pop();
                     self.clip_shapes.pop();
                 }
-                PaintFragment::Image(image) if image.repeat_bounds.is_some() => {
-                    // PDF's native image command draws one tile. Reuse the bounded
-                    // raster fallback for a repeated brush without expanding tiles.
+                PaintFragment::Tiles(tiles)
+                    if matches!(tiles.source, moli_layout::PaintTileSource::Image(..))
+                        || (tiles.grid.x.count as usize)
+                            .saturating_mul(tiles.grid.y.count as usize)
+                            > crate::scene::tiles::MAX_VECTOR_TILES =>
+                {
+                    // Use the same constrained sampler inside the bounded PDF region.
                     self.rasterize(std::slice::from_ref(fragment))?;
                 }
                 PaintFragment::Image(image) => {
@@ -250,7 +254,14 @@ impl<'a, 's> PdfPainter<'a, 's> {
                     // Share the existing lowering of border styles, decorations,
                     // gradients and SVG paths. Text bypasses AnyRender entirely.
                     let mut scene = Scene::new();
-                    crate::scene::paint_fragment(&mut scene, self.snapshot, fragment, 1.0);
+                    crate::scene::paint_fragment(
+                        &mut scene,
+                        self.snapshot,
+                        fragment,
+                        1.0,
+                        self.source
+                            .intersect(*self.clips.last().expect("document clip")),
+                    );
                     if supported(&scene) {
                         self.commands(scene)?;
                     } else {
@@ -501,10 +512,13 @@ fn fragment_bounds(
             clip, transform, ..
         } => (super::rect(clip.bounds()), *transform),
         PaintFragment::SvgImage(image) => (super::rect(image.destination), image.transform),
-        PaintFragment::Image(image) => (
-            super::rect(image.repeat_bounds.unwrap_or(image.destination)),
-            image.transform,
-        ),
+        PaintFragment::Image(image) => (super::rect(image.destination), image.transform),
+        PaintFragment::Tiles(tiles) => {
+            let Some(bounds) = crate::scene::tiles::grid_coverage(tiles.grid) else {
+                return Ok(None);
+            };
+            (bounds, tiles.transform)
+        }
         PaintFragment::Border {
             rect, transform, ..
         } => (super::rect(*rect), *transform),
@@ -571,6 +585,7 @@ fn translate_fragment(fragment: &mut PaintFragment, translation: Affine) {
         PaintFragment::GlyphRun(run) => &mut run.transform,
         PaintFragment::Image(image) => &mut image.transform,
         PaintFragment::SvgImage(image) => &mut image.transform,
+        PaintFragment::Tiles(tiles) => &mut tiles.transform,
         PaintFragment::PopLayer => return,
     };
     *matrix = PaintTransform2D::new(

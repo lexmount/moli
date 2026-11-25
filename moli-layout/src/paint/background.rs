@@ -2,9 +2,8 @@
 //!
 //! Sizing, positioning, repeat modes, cyclic longhands, and reverse layer
 //! order and URL-image sizing are a DOM-neutral port of
-//! `blitz-paint/src/render/background.rs` at Blitz d788124a. Resource lookup
-//! is sampled during box construction; paint only consumes immutable pixels
-//! or parsed SVG trees already attached to the pass-local box.
+//! `blitz-paint/src/render/background.rs` at Blitz d788124a. URL layers refer
+//! to immutable resources and leave the execution of their tile grid to paint.
 
 use std::{fmt::Debug, hash::Hash};
 
@@ -26,9 +25,10 @@ use super::{
     push_diagnostic_once,
 };
 use crate::{
-    LayoutBox, LayoutImageResource, LayoutRect, LayoutTransform2D, PaintBlendMode, PaintBrush,
-    PaintColor, PaintCompositeMode, PaintFragment, PaintImage, PaintImageSampling, PaintShape,
-    PaintSnapshot, PaintSvgImage, gradient::project_gradient,
+    LayoutBox, LayoutImageResource, LayoutRect, LayoutSize, LayoutTransform2D, PaintBlendMode,
+    PaintBrush, PaintColor, PaintCompositeMode, PaintFragment, PaintImage, PaintImageSampling,
+    PaintShape, PaintSnapshot, PaintSvgImage, PaintTileAxis, PaintTileGrid, PaintTileSource,
+    PaintTiles, gradient::project_gradient,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,13 +42,6 @@ impl CssImageLayerKind {
         match self {
             Self::Background => "background-image-resource-unavailable",
             Self::Mask => "mask-image-resource-unavailable",
-        }
-    }
-
-    const fn repeat_budget_code(self) -> &'static str {
-        match self {
-            Self::Background => "background-repeat-budget-exceeded",
-            Self::Mask => "mask-repeat-budget-exceeded",
         }
     }
 
@@ -331,14 +324,32 @@ pub(super) fn background_tiles(
     areas: BoxAreas,
     layer: &ImageLayerStyles<'_>,
 ) -> Option<Vec<LayoutRect>> {
-    background_tiles_with_mode(areas, layer, BackgroundSizeComputeMode::Auto)
+    let Some(grid) = background_tile_grid(areas, layer, BackgroundSizeComputeMode::Auto) else {
+        return Some(Vec::new());
+    };
+    let count = grid.x.count.saturating_mul(grid.y.count);
+    if count > 500 {
+        return None;
+    }
+    let mut tiles = Vec::with_capacity(count as usize);
+    for row in 0..grid.y.count {
+        for column in 0..grid.x.count {
+            tiles.push(LayoutRect::new(
+                (grid.x.start + f64::from(column) * grid.x.step) as f32,
+                (grid.y.start + f64::from(row) * grid.y.step) as f32,
+                grid.x.size as f32,
+                grid.y.size as f32,
+            ));
+        }
+    }
+    Some(tiles)
 }
 
-fn background_tiles_with_mode(
+fn background_tile_grid(
     areas: BoxAreas,
     layer: &ImageLayerStyles<'_>,
     mode: BackgroundSizeComputeMode,
-) -> Option<Vec<LayoutRect>> {
+) -> Option<PaintTileGrid> {
     use BackgroundRepeatKeyword::{NoRepeat, Repeat, Round, Space};
 
     let origin = areas.rect(layer.origin);
@@ -348,100 +359,55 @@ fn background_tiles_with_mode(
     let height = size.height;
     if !width.is_finite() || !height.is_finite() || width <= f32::EPSILON || height <= f32::EPSILON
     {
-        return Some(Vec::new());
+        return None;
     }
     let BackgroundRepeat(repeat_x, repeat_y) = *layer.repeat;
 
-    let (start_x, width_count, width_gap) = match repeat_x {
-        Repeat | Round => {
-            let coverage = larger_clip_area(areas, layer.clip, layer.origin).unwrap_or(origin);
-            let leading_inset = (origin.x - coverage.x).max(0.0);
-            let extension = extend(leading_inset + position.x, width);
-            let count = ((coverage.width + extension) / width).ceil().max(1.0) as u32;
-            (coverage.x - extension, count, width)
-        }
-        Space => {
-            let (count, gap) = compute_space_count_and_gap(origin.width, width);
-            (
-                origin.x + if count == 1 { position.x } else { 0.0 },
+    let repeat_area = larger_clip_area(areas, layer.clip, layer.origin).unwrap_or(origin);
+    let axis =
+        |repeat, tile_size: f32, position, (origin, extent), (clip, clip_extent): (f32, f32)| {
+            let (start, count, step) = match repeat {
+                Repeat | Round => {
+                    let leading_inset = f32::max(origin - clip, 0.0);
+                    let extension = extend(leading_inset + position, tile_size);
+                    let count = ((clip_extent + extension) / tile_size).ceil().max(1.0) as u32;
+                    (clip - extension, count, tile_size)
+                }
+                Space => {
+                    let (count, step) = compute_space_count_and_gap(extent, tile_size);
+                    (
+                        origin + if count == 1 { position } else { 0.0 },
+                        count,
+                        step,
+                    )
+                }
+                NoRepeat => (origin + position, 1, 0.0),
+            };
+            PaintTileAxis::new(
+                f64::from(start),
+                f64::from(tile_size),
+                f64::from(step),
                 count,
-                gap,
             )
-        }
-        NoRepeat => (origin.x + position.x, 1, 0.0),
-    };
-    let (start_y, height_count, height_gap) = match repeat_y {
-        Repeat | Round => {
-            let coverage = larger_clip_area(areas, layer.clip, layer.origin).unwrap_or(origin);
-            let leading_inset = (origin.y - coverage.y).max(0.0);
-            // Blitz d788124a accidentally uses the X position in these Y-axis
-            // branches. This is the symmetric Y-axis correction to that port.
-            let extension = extend(leading_inset + position.y, height);
-            let count = ((coverage.height + extension) / height).ceil().max(1.0) as u32;
-            (coverage.y - extension, count, height)
-        }
-        Space => {
-            let (count, gap) = compute_space_count_and_gap(origin.height, height);
-            (
-                origin.y + if count == 1 { position.y } else { 0.0 },
-                count,
-                gap,
-            )
-        }
-        NoRepeat => (origin.y + position.y, 1, 0.0),
-    };
-
-    if width_count.saturating_mul(height_count) > 500 {
-        return None;
-    }
-    let mut tiles = Vec::with_capacity((width_count * height_count) as usize);
-    for row in 0..height_count {
-        for column in 0..width_count {
-            tiles.push(LayoutRect::new(
-                start_x + column as f32 * width_gap,
-                start_y + row as f32 * height_gap,
-                width,
-                height,
-            ));
-        }
-    }
-    Some(tiles)
-}
-
-/// Continuous raster tiling can be encoded as one bounded image brush.
-/// Keep the existing explicit-tile path for gaps, one-axis repetition, and SVG.
-fn continuous_background_tile(
-    areas: BoxAreas,
-    layer: &ImageLayerStyles<'_>,
-    mode: BackgroundSizeComputeMode,
-) -> Option<(LayoutRect, LayoutRect)> {
-    use BackgroundRepeatKeyword::{Repeat, Round};
-
-    let BackgroundRepeat(repeat_x, repeat_y) = *layer.repeat;
-    if !matches!(repeat_x, Repeat | Round) || !matches!(repeat_y, Repeat | Round) {
-        return None;
-    }
-    let origin = areas.rect(layer.origin);
-    let (position, size) =
-        compute_layer_position_and_size(layer, origin.width, origin.height, mode);
-    let tile = LayoutRect::new(
-        origin.x + position.x,
-        origin.y + position.y,
-        size.width,
-        size.height,
-    );
-    let bounds = larger_clip_area(areas, layer.clip, layer.origin).unwrap_or(origin);
-    if [tile, bounds].iter().any(|rect| {
-        !rect.x.is_finite()
-            || !rect.y.is_finite()
-            || !rect.width.is_finite()
-            || !rect.height.is_finite()
-            || rect.width <= f32::EPSILON
-            || rect.height <= f32::EPSILON
-    }) {
-        return None;
-    }
-    Some((tile, bounds))
+        };
+    Some(PaintTileGrid {
+        x: axis(
+            repeat_x,
+            width,
+            position.x,
+            (origin.x, origin.width),
+            (repeat_area.x, repeat_area.width),
+        ),
+        y: axis(
+            repeat_y,
+            height,
+            position.y,
+            (origin.y, origin.height),
+            (repeat_area.y, repeat_area.height),
+        ),
+        coverage: areas.rect(layer.clip),
+        snap_tiles: !(matches!(repeat_x, Repeat | Round) && matches!(repeat_y, Repeat | Round)),
+    })
 }
 
 pub(super) fn project_url_image_layer<N>(
@@ -481,31 +447,22 @@ pub(super) fn project_url_image_layer<N>(
         return;
     };
     let mode = BackgroundSizeComputeMode::Size(object_width, object_height);
-    let repeated = if kind == CssImageLayerKind::Background && resource.pixels.is_some() {
-        continuous_background_tile(areas, layer, mode)
-    } else {
-        None
+    let Some(mut grid) = background_tile_grid(areas, layer, mode) else {
+        return;
     };
-    let tiles = if repeated.is_some() {
-        // No allocation or work proportional to the number of repetitions.
-        Vec::new()
-    } else {
-        let Some(tiles) = background_tiles_with_mode(areas, layer, mode) else {
-            push_diagnostic_once(
-                snapshot,
-                kind.repeat_budget_code(),
-                format!(
-                    "{} exceeds the per-layer 500 tile software-paint budget",
-                    layout_box.source_label
-                ),
-            );
-            return;
-        };
-        if tiles.is_empty() {
-            return;
-        }
-        tiles
-    };
+    // Keep the existing snapping of SVG and mask tiles. The continuous raster
+    // background path retains fractional tile size and phase.
+    grid.snap_tiles |= kind == CssImageLayerKind::Mask || resource.svg.is_some();
+    let grid = paint_space.pre_transform_tile_grid(grid);
+    let transform = paint_space.property_transform();
+    let single_tile = (grid.snap_tiles && grid.x.count == 1 && grid.y.count == 1).then(|| {
+        LayoutRect::new(
+            grid.x.start as f32,
+            grid.y.start as f32,
+            grid.x.size as f32,
+            grid.y.size as f32,
+        )
+    });
 
     if push_clip {
         let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape) else {
@@ -517,6 +474,7 @@ pub(super) fn project_url_image_layer<N>(
         });
     }
     if let Some(pixels) = resource.pixels.clone() {
+        let source_rect = LayoutRect::new(0.0, 0.0, pixels.width as f32, pixels.height as f32);
         let image = snapshot.add_image(pixels);
         let sampling = layout_box.style.stylo_computed_values().map_or(
             PaintImageSampling::Linear,
@@ -527,33 +485,36 @@ pub(super) fn project_url_image_layer<N>(
                 }
             },
         );
-        if let Some((destination, bounds)) = repeated {
+        if let Some(destination) = single_tile {
             snapshot.push_fragment(PaintFragment::Image(PaintImage {
                 image,
-                destination: paint_space.pre_transform_rect(destination),
-                repeat_bounds: Some(paint_space.pre_transform_rect(bounds)),
+                destination,
                 sampling,
-                transform: paint_space.property_transform(),
+                transform,
             }));
         } else {
-            for destination in tiles {
-                snapshot.push_fragment(PaintFragment::Image(PaintImage {
-                    image,
-                    destination: paint_space.pre_transform_rect(destination),
-                    repeat_bounds: None,
-                    sampling,
-                    transform: paint_space.property_transform(),
-                }));
-            }
+            snapshot.push_fragment(PaintFragment::Tiles(Box::new(PaintTiles {
+                source: PaintTileSource::Image(image, sampling),
+                source_rect,
+                grid,
+                transform,
+            })));
         }
     } else if let Some(svg) = resource.svg.clone() {
         let image = snapshot.add_svg_image(svg);
-        for destination in tiles {
+        if let Some(destination) = single_tile {
             snapshot.push_fragment(PaintFragment::SvgImage(PaintSvgImage {
                 image,
-                destination: paint_space.pre_transform_rect(destination),
-                transform: paint_space.property_transform(),
+                destination,
+                transform,
             }));
+        } else {
+            snapshot.push_fragment(PaintFragment::Tiles(Box::new(PaintTiles {
+                source: PaintTileSource::Svg(image, LayoutSize::new(object_width, object_height)),
+                source_rect: LayoutRect::new(0.0, 0.0, object_width, object_height),
+                grid,
+                transform,
+            })));
         }
     }
     if push_clip {

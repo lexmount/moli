@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, fmt::Debug, hash::Hash, ops::Range, sync::Arc};
+use std::{fmt::Debug, hash::Hash};
 
 use style::values::{
     computed::{
@@ -8,11 +8,11 @@ use style::values::{
     specified::{border::BorderImageRepeatKeyword as Repeat, image::ImageRendering},
 };
 
-use super::{PaintSpace, background::css_image_concrete_object_size, push_diagnostic_once};
+use super::{PaintSpace, background::css_image_concrete_object_size};
 use crate::{
-    LayoutBox, LayoutCssImageState, LayoutRect, LayoutTransform2D, PaintBrush, PaintCornerRadii,
-    PaintEdgeSizes, PaintFillRule, PaintFragment, PaintImage, PaintImageId, PaintImageSampling,
-    PaintShape, PaintSnapshot, PaintSvgImage, PaintSvgImageId, ResolvedLayoutStyle,
+    LayoutBox, LayoutCssImageState, LayoutRect, LayoutSize, PaintCornerRadii, PaintEdgeSizes,
+    PaintFragment, PaintImageSampling, PaintSnapshot, PaintTileAxis, PaintTileGrid,
+    PaintTileSource, PaintTiles, ResolvedLayoutStyle,
     gradient::project_gradient,
     pixel_snap_paint_rect,
     source::{CssImageLookup, css_image_url},
@@ -40,7 +40,6 @@ pub(super) fn project_box_border<N>(
     paint_space: PaintSpace,
     css_images: &CssImageLookup<'_>,
     local_cull: impl FnOnce() -> Option<LayoutRect>,
-    rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -52,7 +51,6 @@ pub(super) fn project_box_border<N>(
             paint_space,
             css_images,
             local_cull,
-            rasters,
             snapshot,
         )
     {
@@ -129,7 +127,6 @@ fn project_border_image<N>(
     paint_space: PaintSpace,
     css_images: &CssImageLookup<'_>,
     local_cull: impl FnOnce() -> Option<LayoutRect>,
-    rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
 ) -> bool
 where
@@ -157,7 +154,7 @@ where
                     return false;
                 };
                 (
-                    BorderImageSource::Gradient(brush),
+                    PaintTileSource::Brush(brush),
                     area.width,
                     area.height,
                     false,
@@ -188,7 +185,7 @@ where
                     };
                     let image = snapshot.add_image(pixels.clone());
                     (
-                        BorderImageSource::Raster(image, sampling),
+                        PaintTileSource::Image(image, sampling),
                         width,
                         height,
                         true,
@@ -208,7 +205,7 @@ where
                         });
                     let image = snapshot.add_svg_image(svg.clone());
                     (
-                        BorderImageSource::Svg(image),
+                        PaintTileSource::Svg(image, LayoutSize::new(width, height)),
                         width,
                         height,
                         metadata.intrinsic_width.is_some(),
@@ -325,24 +322,15 @@ where
             } else {
                 (dst.height, Repeat::Stretch)
             };
-            let Some(visible) = intersect(dst, fragment_clip.unwrap_or(dst))
+            if intersect(dst, fragment_clip.unwrap_or(dst))
                 .and_then(|visible| intersect(visible, local_cull.unwrap_or(visible)))
-            else {
+                .is_none()
+            {
                 continue;
             };
-            let x = AxisTiles::new(dst.x, dst.width, tile_width, repeat_x);
-            let y = AxisTiles::new(dst.y, dst.height, tile_height, repeat_y);
-            let columns = x.visible_range(visible.x, visible.right());
-            let rows = y.visible_range(visible.y, visible.bottom());
-            if columns.len().saturating_mul(rows.len()) > 4096 {
-                push_diagnostic_once(
-                    snapshot,
-                    "border-image-repeat-budget-exceeded",
-                    format!(
-                        "{} exceeds the software-paint tile budget for a border image slice",
-                        layout_box.source_label
-                    ),
-                );
+            let x = border_tile_axis(dst.x, dst.width, tile_width, repeat_x);
+            let y = border_tile_axis(dst.y, dst.height, tile_height, repeat_y);
+            if x.count == 0 || y.count == 0 {
                 continue;
             }
             let Some(coverage) = pixel_snap_paint_rect(paint_space.pre_transform_rect(dst)) else {
@@ -351,36 +339,18 @@ where
             let Some(coverage) = intersect(coverage, fragment_coverage.unwrap_or(coverage)) else {
                 continue;
             };
-            if columns.is_empty() || rows.is_empty() {
-                continue;
-            }
-            let image_bounds = LayoutRect::new(0.0, 0.0, image_width, image_height);
-            let (source, image_bounds) = source.for_slice(src, image_bounds, rasters, snapshot);
-            for row in rows {
-                for column in columns.clone() {
-                    let tile = LayoutRect::new(
-                        x.position(column),
-                        y.position(row),
-                        x.size as f32,
-                        y.size as f32,
-                    );
-                    let Some(tile) = pixel_snap_paint_rect(paint_space.pre_transform_rect(tile))
-                    else {
-                        continue;
-                    };
-                    let Some(clip) = intersect(tile, coverage) else {
-                        continue;
-                    };
-                    source.project_tile(
-                        src,
-                        tile,
-                        clip,
-                        image_bounds,
-                        paint_space.property_transform(),
-                        snapshot,
-                    );
-                }
-            }
+            let grid = paint_space.pre_transform_tile_grid(PaintTileGrid {
+                x,
+                y,
+                coverage: dst,
+                snap_tiles: true,
+            });
+            snapshot.push_fragment(PaintFragment::Tiles(Box::new(PaintTiles {
+                source: source.clone(),
+                source_rect: src,
+                grid: PaintTileGrid { coverage, ..grid },
+                transform: paint_space.property_transform(),
+            })));
         }
     }
     true
@@ -406,203 +376,27 @@ fn intersect(a: LayoutRect, b: LayoutRect) -> Option<LayoutRect> {
     (width > 0.0 && height > 0.0).then_some(LayoutRect::new(x, y, width, height))
 }
 
-struct AxisTiles {
-    first: f64,
-    step: f64,
-    size: f64,
-    count: u32,
-}
-
-impl AxisTiles {
-    fn new(start: f32, extent: f32, size: f32, repeat: Repeat) -> Self {
-        let (start, extent, size) = (f64::from(start), f64::from(extent), f64::from(size));
-        if repeat == Repeat::Stretch || !size.is_finite() || size <= 0.0 {
-            return Self {
-                first: start,
-                step: extent,
-                size: extent,
-                count: 1,
-            };
-        }
-        let (offset, step, size, count) = match repeat {
-            Repeat::Stretch => unreachable!(),
-            Repeat::Round => {
-                let count = (extent / size).round().max(1.0);
-                let size = extent / count;
-                (0.0, size, size, count)
-            }
-            Repeat::Repeat => {
-                let offset = -((size - extent) * 0.5).rem_euclid(size);
-                (offset, size, size, ((extent - offset) / size).ceil())
-            }
-            Repeat::Space => {
-                let count = (extent / size).floor();
-                let gap = (extent - size * count) / (count + 1.0);
-                (gap, size + gap, size, count)
-            }
-        };
-        Self {
-            first: start + offset,
-            step,
-            size,
-            count: count as u32,
-        }
+fn border_tile_axis(start: f32, extent: f32, size: f32, repeat: Repeat) -> PaintTileAxis {
+    let (start, extent, size) = (f64::from(start), f64::from(extent), f64::from(size));
+    if repeat == Repeat::Stretch || !size.is_finite() || size <= 0.0 {
+        return PaintTileAxis::new(start, extent, 0.0, 1);
     }
-
-    fn visible_range(&self, start: f32, end: f32) -> Range<u32> {
-        let first = ((f64::from(start) - self.first - self.size) / self.step).ceil() as u32;
-        let end = ((f64::from(end) - self.first) / self.step).ceil() as u32;
-        first.min(self.count)..end.min(self.count)
-    }
-
-    fn position(&self, index: u32) -> f32 {
-        (self.first + f64::from(index) * self.step) as f32
-    }
-}
-
-#[derive(Clone)]
-enum BorderImageSource {
-    Gradient(PaintBrush),
-    Raster(PaintImageId, PaintImageSampling),
-    Svg(PaintSvgImageId),
-}
-
-impl BorderImageSource {
-    fn for_slice(
-        &self,
-        slice: LayoutRect,
-        image_bounds: LayoutRect,
-        rasters: &mut BorderImageRasters,
-        snapshot: &mut PaintSnapshot,
-    ) -> (Cow<'_, Self>, LayoutRect) {
-        let Self::Raster(id, sampling) = self else {
-            return (Cow::Borrowed(self), image_bounds);
-        };
-        if *sampling == PaintImageSampling::Nearest {
-            return (Cow::Borrowed(self), image_bounds);
+    let (offset, step, size, count) = match repeat {
+        Repeat::Stretch => unreachable!(),
+        Repeat::Round => {
+            let count = (extent / size).round().max(1.0);
+            let size = extent / count;
+            (0.0, size, size, count)
         }
-        match rasters.crop(*id, slice, snapshot) {
-            // A sliced image pads at the cuts when sampled with linear filtering.
-            Some((id, bounds)) => (Cow::Owned(Self::Raster(id, *sampling)), bounds),
-            None => (
-                Cow::Owned(Self::Raster(*id, PaintImageSampling::Nearest)),
-                image_bounds,
-            ),
+        Repeat::Repeat => {
+            let offset = -((size - extent) * 0.5).rem_euclid(size);
+            (offset, size, size, ((extent - offset) / size).ceil())
         }
-    }
-
-    fn project_tile(
-        &self,
-        slice: LayoutRect,
-        tile: LayoutRect,
-        clip: LayoutRect,
-        image_bounds: LayoutRect,
-        transform: LayoutTransform2D,
-        snapshot: &mut PaintSnapshot,
-    ) {
-        let scale_x = f64::from(tile.width) / f64::from(slice.width);
-        let scale_y = f64::from(tile.height) / f64::from(slice.height);
-        let image_to_tile = transform
-            .concatenate(LayoutTransform2D::translation(tile.x, tile.y))
-            .concatenate(LayoutTransform2D::scale(scale_x, scale_y))
-            .concatenate(LayoutTransform2D::translation(-slice.x, -slice.y));
-        if let Self::Gradient(brush) = self {
-            // Resolve stops in the complete source and draw only the clipped
-            // part of this slice, preserving the gradient across the cuts.
-            let source_clip = LayoutRect::new(
-                slice.x + (f64::from(clip.x - tile.x) / scale_x) as f32,
-                slice.y + (f64::from(clip.y - tile.y) / scale_y) as f32,
-                (f64::from(clip.width) / scale_x) as f32,
-                (f64::from(clip.height) / scale_y) as f32,
-            );
-            snapshot.push_fragment(PaintFragment::Fill {
-                shape: PaintShape::Rect(source_clip),
-                brush: brush.clone(),
-                fill_rule: PaintFillRule::NonZero,
-                transform: image_to_tile,
-            });
-            return;
+        Repeat::Space => {
+            let count = (extent / size).floor();
+            let gap = (extent - size * count) / (count + 1.0);
+            (gap, size + gap, size, count)
         }
-        snapshot.push_fragment(PaintFragment::PushClip {
-            shape: PaintShape::Rect(clip),
-            transform,
-        });
-        // An integral unit box keeps image destination snapping from changing
-        // the source size under the slice transform.
-        let destination = LayoutRect::new(0.0, 0.0, 1.0, 1.0);
-        let transform = image_to_tile
-            .concatenate(LayoutTransform2D::translation(
-                image_bounds.x,
-                image_bounds.y,
-            ))
-            .concatenate(LayoutTransform2D::scale(
-                f64::from(image_bounds.width),
-                f64::from(image_bounds.height),
-            ));
-        let fragment = match self {
-            Self::Raster(image, sampling) => PaintFragment::Image(PaintImage {
-                image: *image,
-                destination,
-                sampling: *sampling,
-                repeat_bounds: None,
-                transform,
-            }),
-            Self::Svg(image) => PaintFragment::SvgImage(PaintSvgImage {
-                image: *image,
-                destination,
-                transform,
-            }),
-            Self::Gradient(_) => unreachable!(),
-        };
-        snapshot.push_fragment(fragment);
-        snapshot.push_fragment(PaintFragment::PopLayer);
-    }
-}
-
-/// Shares immutable raster cuts within one paint projection.
-#[derive(Default)]
-pub(super) struct BorderImageRasters {
-    crops: HashMap<(*const moli_image::RgbaImage, [u32; 4]), PaintImageId>,
-    bytes: usize,
-}
-
-impl BorderImageRasters {
-    fn crop(
-        &mut self,
-        id: PaintImageId,
-        slice: LayoutRect,
-        snapshot: &mut PaintSnapshot,
-    ) -> Option<(PaintImageId, LayoutRect)> {
-        let source = &snapshot.image(id)?.image;
-        let left = slice.x.floor() as u32;
-        let top = slice.y.floor() as u32;
-        let right = (slice.right().ceil() as u32).min(source.width);
-        let bottom = (slice.bottom().ceil() as u32).min(source.height);
-        let width = right.checked_sub(left)?;
-        let height = bottom.checked_sub(top)?;
-        let bounds = LayoutRect::new(left as f32, top as f32, width as f32, height as f32);
-        if width == source.width && height == source.height {
-            return Some((id, bounds));
-        }
-        let key = (Arc::as_ptr(source), [left, top, right, bottom]);
-        if let Some(id) = self.crops.get(&key) {
-            return Some((*id, bounds));
-        }
-        let row_bytes = (width as usize).checked_mul(4)?;
-        let bytes = row_bytes.checked_mul(height as usize)?;
-        if bytes == 0 || bytes > moli_image::MAX_DECODED_RGBA_BYTES - self.bytes {
-            return None;
-        }
-        let source_stride = (source.width as usize).checked_mul(4)?;
-        let mut pixels = Vec::with_capacity(bytes);
-        for row in top..bottom {
-            let start = (row as usize).checked_mul(source_stride)? + left as usize * 4;
-            pixels.extend_from_slice(source.rgba.get(start..start + row_bytes)?);
-        }
-        let image = moli_image::RgbaImage::try_new(width, height, pixels).ok()?;
-        let id = snapshot.add_image(Arc::new(image));
-        self.crops.insert(key, id);
-        self.bytes += bytes;
-        Some((id, bounds))
-    }
+    };
+    PaintTileAxis::new(start + offset, size, step, count as u32)
 }

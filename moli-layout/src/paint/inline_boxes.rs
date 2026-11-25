@@ -14,8 +14,7 @@ use super::{
     PaintSpace,
     background::{project_background_color, project_background_layers},
     border::{
-        BorderImageGeometry, BorderImageRasters, border_image_outsets, outset_border_image_rect,
-        project_box_border,
+        BorderImageGeometry, border_image_outsets, outset_border_image_rect, project_box_border,
     },
     geometry::{BoxAreas, inset_radii},
     text::TextClipMaskScope,
@@ -114,7 +113,6 @@ pub(super) fn project_inline_box_fragments<N>(
     paint_space: PaintSpace,
     include_backgrounds: bool,
     border_images: &InlineBorderImages,
-    border_rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
     local_cull: Option<LayoutRect>,
     text_clip_mask: &mut impl FnMut(TextClipMaskScope, &mut PaintSnapshot),
@@ -269,7 +267,6 @@ pub(super) fn project_inline_box_fragments<N>(
             paint_space,
             projection.css_images,
             || local_cull,
-            border_rasters,
             snapshot,
         );
     }

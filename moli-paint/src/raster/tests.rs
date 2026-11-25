@@ -210,7 +210,6 @@ fn snapshot_image_resource_rasterizes_without_copying_the_owned_pixels() {
     snapshot.push_fragment(PaintFragment::Image(PaintImage {
         image,
         destination: PaintRect::new(0.0, 0.0, 4.0, 2.0),
-        repeat_bounds: None,
         sampling: PaintImageSampling::Nearest,
         transform: PaintTransform2D::IDENTITY,
     }));
@@ -235,13 +234,17 @@ fn repeated_snapshot_image_preserves_fractional_period_and_finite_bounds() {
     let image = snapshot.add_image(Arc::new(
         moli_image::RgbaImage::try_new(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]).unwrap(),
     ));
-    snapshot.push_fragment(PaintFragment::Image(PaintImage {
-        image,
-        destination: PaintRect::new(-0.5, 0.0, 3.5, 2.0),
-        repeat_bounds: Some(PaintRect::new(0.0, 0.0, 21.0, 6.0)),
-        sampling: PaintImageSampling::Nearest,
+    snapshot.push_fragment(PaintFragment::Tiles(Box::new(moli_layout::PaintTiles {
+        source: moli_layout::PaintTileSource::Image(image, PaintImageSampling::Nearest),
+        source_rect: PaintRect::new(0.0, 0.0, 2.0, 1.0),
+        grid: moli_layout::PaintTileGrid {
+            x: moli_layout::PaintTileAxis::new(-0.5, 3.5, 3.5, 7),
+            y: moli_layout::PaintTileAxis::new(0.0, 2.0, 2.0, 3),
+            coverage: PaintRect::new(0.0, 0.0, 21.0, 6.0),
+            snap_tiles: false,
+        },
         transform: PaintTransform2D::IDENTITY,
-    }));
+    })));
     let rendered = raster_snapshot(&snapshot).expect("fractional repeated image");
     for x in [0, 3, 7, 10, 14, 17] {
         assert_eq!(pixel(&rendered, x, 1), [255, 0, 0, 255], "red at {x}");
@@ -252,6 +255,49 @@ fn repeated_snapshot_image_preserves_fractional_period_and_finite_bounds() {
     assert_eq!(pixel(&rendered, 21, 1), [255; 4]);
     assert_eq!(pixel(&rendered, 1, 6), [255; 4]);
     assert_eq!(snapshot.fragments.len(), 1);
+}
+
+#[test]
+fn source_rectangle_clamps_linear_sampling_across_a_spaced_tile_grid() {
+    use moli_layout::{PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles};
+
+    let mut snapshot = snapshot(28, 9, 1.0);
+    let image = snapshot.add_image(Arc::new(
+        moli_image::RgbaImage::try_new(
+            4,
+            1,
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255,
+            ],
+        )
+        .unwrap(),
+    ));
+    snapshot.push_fragment(PaintFragment::Tiles(Box::new(PaintTiles {
+        source: PaintTileSource::Image(image, PaintImageSampling::Linear),
+        source_rect: PaintRect::new(1.25, 0.0, 1.5, 1.0),
+        grid: PaintTileGrid {
+            x: PaintTileAxis::new(0.0, 8.0, 11.0, 3),
+            y: PaintTileAxis::new(2.0, 4.0, 0.0, 1),
+            coverage: PaintRect::new(1.0, 1.0, 24.0, 7.0),
+            snap_tiles: true,
+        },
+        transform: PaintTransform2D::translation(1.0, 1.0),
+    })));
+    let result = raster_snapshot(&snapshot).unwrap();
+    assert_eq!(pixel(&result, 2, 3), [0, 247, 8, 255]);
+    for x in [12, 23] {
+        assert_eq!(pixel(&result, x, 3), [0, 255, 0, 255]);
+    }
+    for x in [8, 19] {
+        assert_eq!(pixel(&result, x, 6), [0, 0, 255, 255]);
+    }
+    for (x, y) in [(1, 3), (9, 3), (11, 3), (20, 6), (26, 3), (3, 7)] {
+        assert_eq!(pixel(&result, x, y), [255; 4], "gap or clip at ({x}, {y})");
+    }
+    for x in 2..=8 {
+        assert_eq!(pixel(&result, x, 3)[0], 0, "neighbor texel at {x}");
+    }
+    assert_eq!(snapshot.images.len(), 1);
 }
 
 #[test]
@@ -361,7 +407,6 @@ fn missing_snapshot_image_resource_is_rejected_before_backend_creation() {
     snapshot.push_fragment(PaintFragment::Image(PaintImage {
         image: moli_layout::PaintImageId::from_index(0),
         destination: PaintRect::new(0.0, 0.0, 1.0, 1.0),
-        repeat_bounds: None,
         sampling: PaintImageSampling::Linear,
         transform: PaintTransform2D::IDENTITY,
     }));
@@ -980,7 +1025,6 @@ fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
     first.push_fragment(PaintFragment::Image(PaintImage {
         image,
         destination: PaintRect::new(3.0, 30.0, 80.0, 30.0),
-        repeat_bounds: None,
         sampling: PaintImageSampling::Linear,
         transform: PaintTransform2D::IDENTITY,
     }));

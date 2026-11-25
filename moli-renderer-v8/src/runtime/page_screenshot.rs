@@ -59,6 +59,11 @@ impl PaintFragmentProfile {
                 }
                 moli_layout::PaintFragment::Image(_) => profile.image += 1,
                 moli_layout::PaintFragment::SvgImage(_) => profile.svg_image += 1,
+                moli_layout::PaintFragment::Tiles(tiles) => match tiles.source {
+                    moli_layout::PaintTileSource::Image(..) => profile.image += 1,
+                    moli_layout::PaintTileSource::Svg(..) => profile.svg_image += 1,
+                    moli_layout::PaintTileSource::Brush(_) => profile.fill += 1,
+                },
             }
         }
         profile
