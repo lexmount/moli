@@ -253,6 +253,10 @@ impl ChildImportServer {
                                     <script>globalThis.afterInlineStylesheet = true;</script></head><body>Inline policy"#))
                                 }
                                 "/child-import-inline-allowed.css" => ("text/css", ":root { --inline-import: applied; }".to_owned()),
+                                "/child-import-timing-parent" => (
+                                    "text/html",
+                                    format!("<!doctype html><iframe src='/child-import-page?kind=linked&amp;token={token}&amp;timing={}'></iframe>", query.get("timing").map_or("eager", String::as_str)),
+                                ),
                                 "/child-import-parent" => {
                                     let kind = query.get("kind").map(String::as_str).unwrap_or("linked");
                                     let scenario = query.get("scenario").map(String::as_str).unwrap_or("nested");
@@ -277,7 +281,12 @@ impl ChildImportServer {
                                                     leafOwner: !!leaf && leaf.ownerRule === leafRule && leaf.parentStyleSheet === branch,
                                                     text: leaf ? Array.from(leaf.cssRules).find(rule => rule.type === 1)?.cssText ?? null : null};
                                             })}; } catch (error) { globalThis.parserSheetSnapshot = {error: String(error)}; } parent.postMessage({childImportProbe: true, href: location.href}, '*');"#;
-                                    ("text/html", format!("<!doctype html>{style}<script>{probe}</script><body>Child imports"))
+                                    let script = if query.get("timing").is_some_and(|mode| mode == "late") {
+                                        String::new()
+                                    } else {
+                                        format!("<script>{probe}</script>")
+                                    };
+                                    ("text/html", format!("<!doctype html>{style}{script}<body>Child imports"))
                                 }
                                 "/child-import-root.css" | "/child-import-branch.css" | "/child-import-leaf.css" => {
                                     let scenario = query.get("scenario").map(String::as_str).unwrap_or("nested");
@@ -1013,6 +1022,35 @@ async fn child_imports_check_redirect_siblings_under_their_own_csp() -> Result<(
                 .map_or(0, |asset| asset.count.load(Ordering::Acquire));
             assert_eq!(count, 1, "{mode}, {name}: {result}");
         }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_parser_stylesheet_resource_timing_uses_its_document() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    for mode in ["eager", "late"] {
+        let mut page = browser
+            .fetch(&format!(
+                "{}/child-import-timing-parent?token=timing-{mode}&timing={mode}",
+                server.origin,
+            ))
+            .await?;
+        let result = page
+            .evaluate_runtime_expression_with_await_async(
+                r#"(() => {
+                const child = document.querySelector('iframe').contentWindow;
+                const entries = child.performance.getEntriesByType('resource');
+                return ['root', 'branch', 'leaf'].map(name =>
+                    entries.filter(entry =>
+                        new URL(entry.name).pathname === '/child-import-' + name + '.css'
+                    ).map(entry => entry.initiatorType).join(',')).join('|');
+            })()"#,
+                true,
+            )
+            .await?;
+        assert_eq!(result["value"].as_str(), Some("link|css|css"), "{mode}");
     }
     Ok(())
 }
