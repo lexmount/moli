@@ -649,8 +649,9 @@ impl StyloElementDataStore {
 
         let bucket = documents.entry(document).or_default();
         if let Some(data) = moved_data {
-            // Layout damage is tied to the publication in the previous world.
-            data.borrow_mut().damage = ServoRestyleDamage::empty();
+            // Recompute with the new document's cascade, even if its style
+            // world was initialized before this entry left the old bucket.
+            *data.borrow_mut() = Default::default();
             bucket.data.insert(handle, data);
         }
         if let Some(inline_style) = moved_inline_style {

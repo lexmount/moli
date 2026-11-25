@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn cross_document_adoption_recomputes_styles_in_an_unstyled_document() {
+    let mut vm = new_parsed_test_vm(
+        "https://adopted-stylesheet-document.test/",
+        "<!doctype html><body>",
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+                for (const explicitAdoption of [true, false]) {
+                    const root = document.body.appendChild(document.createElement('div'));
+                    const host = root.appendChild(document.createElement('div'));
+                    const shadow = host.attachShadow({mode: 'open'});
+                    const child = shadow.appendChild(document.createElement('span'));
+                    const sheet = new CSSStyleSheet();
+                    sheet.replaceSync('span { color: red }');
+                    shadow.adoptedStyleSheets = [sheet];
+                    if (getComputedStyle(child).color !== 'rgb(255, 0, 0)')
+                        throw Error('the adopted stylesheet did not apply');
+
+                    document.adoptNode(root);
+                    if (shadow.adoptedStyleSheets[0] !== sheet)
+                        throw Error('same-document adoption removed the stylesheet');
+
+                    const frame = document.body.appendChild(document.createElement('iframe'));
+                    const target = frame.contentDocument;
+                    if (explicitAdoption)
+                        target.adoptNode(root);
+                    target.body.appendChild(root);
+
+                    if (shadow.adoptedStyleSheets.length !== 0)
+                        throw Error('cross-document adoption kept the stylesheet');
+                    const color = getComputedStyle(child).color;
+                    if (color !== 'rgb(0, 0, 0)')
+                        throw Error('cross-document adoption kept the old color: ' + color);
+                }
+                return true;
+            })()"#,
+        )
+        .expect("adopted styles should follow the current document");
+    assert_eq!(result, "true");
+}
+
+#[test]
 fn adopted_stylesheet_setters_convert_iterables_and_preserve_conversion_exceptions() {
     let mut vm = new_parsed_test_vm(
         "https://adopted-stylesheet-iterables.test/",
