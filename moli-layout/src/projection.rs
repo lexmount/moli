@@ -61,6 +61,7 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) numeric_layout_pass_count: usize,
     pub(crate) numeric_feedback_invalidated_node_count: usize,
     pub(crate) numeric_feedback_overflow_recomputed_node_count: usize,
+    pub(crate) retained_box_count: usize,
 }
 
 pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
@@ -72,6 +73,7 @@ pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
     paint_capture: Option<PaintCaptureRequest>,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
+    retain_layout_world: bool,
     mut object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
     mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
     phase_metrics: LayoutPassPhaseMetrics,
@@ -166,6 +168,7 @@ where
         numeric_feedback_overflow_recomputed_node_count: phase_metrics
             .numeric_feedback_overflow_recomputed_node_count,
         box_count: projection.boxes.len(),
+        retained_box_count: phase_metrics.retained_box_count,
         fragment_count: projection.fragments.len(),
         paint_event_count: paint_projection_metrics.event_count,
         paint_culled_event_count: paint_projection_metrics.culled_event_count,
@@ -205,18 +208,35 @@ where
         embedded_frames,
         scroll_projection,
     );
-    let screen_paint = screen_paint_inputs.map(|(paint_metadata, diagnostics)| {
-        world.box_caches = Vec::new();
+    let (screen_paint, retained_layout) = if let Some((paint_metadata, diagnostics)) =
+        screen_paint_inputs
+    {
+        world.release_numeric_cache_storage();
         world.native_grid_details = HashMap::new();
         world.resolved_grid_tracks = HashMap::new();
         world.table_structures = HashMap::new();
-        Box::new(ScreenPaintLayout {
-            world,
-            frames: screen_frames,
-            diagnostics,
-            paint_metadata,
-        })
-    });
+        (
+            Some(Box::new(ScreenPaintLayout {
+                world,
+                frames: screen_frames,
+                diagnostics,
+                paint_metadata,
+            })),
+            None,
+        )
+    } else if retain_layout_world && crate::builder::can_retain_world(&world) {
+        world.release_numeric_cache_storage();
+        for layout_box in &mut world.boxes {
+            layout_box.inline_layout = None;
+        }
+        let estimated_bytes = world.boxes.capacity() * std::mem::size_of::<crate::LayoutBox<N>>()
+            + tree.retention_metrics().estimated_geometry_bytes;
+        let retained = (estimated_bytes <= crate::MAX_RETAINED_LAYOUT_TREE_BYTES)
+            .then(|| Box::new(crate::RetainedLayoutWorld { world, viewport }));
+        (None, retained)
+    } else {
+        (None, None)
+    };
     Ok(LayoutPassResult::new(
         tree,
         diagnostics,
@@ -224,6 +244,7 @@ where
         paint_snapshot,
         css_image_references,
         screen_paint,
+        retained_layout,
     ))
 }
 

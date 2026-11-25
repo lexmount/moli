@@ -99,6 +99,7 @@ pub struct LayoutPassRequest {
     frame_coverage: LayoutFrameCoverage,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
+    retain_layout_world: bool,
 }
 
 impl LayoutPassRequest {
@@ -113,6 +114,7 @@ impl LayoutPassRequest {
             frame_coverage: LayoutFrameCoverage::PositiveViewport,
             retain_scroll_projection: false,
             retain_screen_paint: false,
+            retain_layout_world: false,
         }
     }
 
@@ -166,6 +168,17 @@ impl LayoutPassRequest {
 
     pub const fn retains_screen_paint(self) -> bool {
         self.retain_screen_paint
+    }
+
+    /// Keep an owned working tree for a subsequent screen publication. Paint
+    /// publications already own their working tree for the screencast lease.
+    pub const fn with_retained_layout_world(mut self) -> Self {
+        self.retain_layout_world = true;
+        self
+    }
+
+    pub const fn retains_layout_world(self) -> bool {
+        self.retain_layout_world && !self.retain_screen_paint
     }
 
     /// Whether this demand also needs immutable software-paint input.
@@ -279,6 +292,16 @@ where
     box_tree_elapsed: Duration,
     list_marker_elapsed: Duration,
     form_control_elapsed: Duration,
+    retained_box_count: usize,
+}
+
+/// Document-owned construction state with no borrows into the live source.
+pub struct RetainedLayoutWorld<N>
+where
+    N: Copy + std::fmt::Debug + Eq + Hash,
+{
+    pub(crate) world: LayoutWorld<N>,
+    pub(crate) viewport: LayoutViewport,
 }
 
 /// Pass-local numeric layout, before embedded frames and paint are projected.
@@ -438,9 +461,38 @@ where
     S: LayoutSource,
     R: LayoutStyleResolver<S::NodeId>,
 {
+    prepare_layout_pass_reusing(source, styles, request, None)
+}
+
+pub fn prepare_layout_pass_reusing<S, R>(
+    source: &S,
+    styles: &mut R,
+    request: LayoutPassRequest,
+    retained: Option<Box<RetainedLayoutWorld<S::NodeId>>>,
+) -> Result<PreparedLayoutPass<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    R: LayoutStyleResolver<S::NodeId>,
+{
     let started = Instant::now();
     let phase_started = Instant::now();
-    let mut world = build_layout_world(source, styles)?;
+    let mut retained_box_count = 0;
+    let retained = if let Some(mut retained) = retained
+        && request.retains_layout_world()
+        && retained.viewport == request.viewport
+        && retained.world.environment == request.environment
+        && let Some(count) =
+            crate::builder::update_layout_world(source, styles, &mut retained.world)?
+    {
+        retained_box_count = count;
+        Some(retained.world)
+    } else {
+        None
+    };
+    let mut world = match retained {
+        Some(world) => world,
+        None => build_layout_world(source, styles)?,
+    };
     world.environment = request.environment;
     if request.viewport.mobile_frame_size().is_some() {
         // Mobile viewport scrollbars overlay content. Classic scrollbar
@@ -468,6 +520,7 @@ where
         box_tree_elapsed,
         list_marker_elapsed,
         form_control_elapsed,
+        retained_box_count,
     })
 }
 
@@ -556,6 +609,7 @@ where
                 box_tree_elapsed,
                 list_marker_elapsed,
                 form_control_elapsed,
+                retained_box_count,
             },
         inline_preparation_elapsed,
         numeric_layout_elapsed,
@@ -613,6 +667,7 @@ where
         request.paint_capture,
         request.retains_scroll_projection(),
         request.retains_screen_paint(),
+        request.retains_layout_world(),
         object_geometry,
         embedded_frames,
         crate::projection::LayoutPassPhaseMetrics {
@@ -631,6 +686,7 @@ where
                 .feedback_invalidated_node_count,
             numeric_feedback_overflow_recomputed_node_count: numeric_metrics
                 .feedback_overflow_recomputed_node_count,
+            retained_box_count,
         },
     )
 }

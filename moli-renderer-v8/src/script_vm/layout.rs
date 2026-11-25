@@ -629,6 +629,7 @@ impl ScriptVm {
             request,
             None,
             false,
+            None,
         )
         .map(|(pass, _)| pass)
     }

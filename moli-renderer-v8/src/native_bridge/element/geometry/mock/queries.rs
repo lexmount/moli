@@ -46,6 +46,7 @@ pub(crate) fn answer_queries(
             numeric_feedback_invalidated_node_count: 0,
             numeric_feedback_overflow_recomputed_node_count: 0,
             box_count: 0,
+            retained_box_count: 0,
             fragment_count: 0,
             paint_event_count: 0,
             paint_culled_event_count: 0,

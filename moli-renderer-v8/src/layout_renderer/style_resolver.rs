@@ -128,6 +128,16 @@ fn layout_style_viewport(runtime: &PageScriptHost, viewport: LayoutViewport) -> 
 }
 
 impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
+    fn can_reuse_element_style(&mut self, node: DomHandle, previous: &ResolvedLayoutStyle) -> bool {
+        self.pass.element_styles(node).is_some_and(|styles| {
+            let (primary, before, after) = styles.into_element_computed_values();
+            before.is_none()
+                && after.is_none()
+                && previous.has_stylo_style(&primary)
+                && !suppresses_noscript_box(self.runtime.dom_host(), node, self.scripting_enabled)
+        })
+    }
+
     fn element_styles(
         &mut self,
         node: DomHandle,

@@ -724,6 +724,12 @@ where
         node: N,
     ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError>;
 
+    /// Whether the published primary style is still current and the element
+    /// generates the same principal box without eager pseudo children.
+    fn can_reuse_element_style(&mut self, _node: N, _previous: &ResolvedLayoutStyle) -> bool {
+        false
+    }
+
     /// Returns the style for a marker that generates a box on this list item.
     fn marker_style(&mut self, _node: N) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
         Ok(None)

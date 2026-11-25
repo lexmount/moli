@@ -23,6 +23,8 @@ fn realtime_layout_writes_and_reads_in_one_call_share_only_current_inputs() {
         "[100,200,200,300]"
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 3);
+    let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+    assert_eq!(metrics.retained_box_count, metrics.box_count - 1);
     vm.eval("getComputedStyle(target).color;target.getBoundingClientRect();target.offsetWidth")
         .unwrap();
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 3);
@@ -33,6 +35,39 @@ fn realtime_layout_writes_and_reads_in_one_call_share_only_current_inputs() {
             .paint_operation_count,
         0
     );
+}
+
+#[test]
+fn retained_layout_world_belongs_to_realtime_screen_publication() {
+    for mode in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://realtime-layout.test/",
+            "<!doctype html><div id=target style='width:100px'></div>",
+        );
+        vm.set_layout_policy(mode);
+        vm.publish_layout_for_test().unwrap();
+        let host = vm.context_host_weak_for_test().upgrade().unwrap();
+        let host = host.borrow();
+        assert_eq!(host.has_retained_layout_for_test(), mode.is_realtime());
+        let document = host.document_handle();
+        let viewport = host.layout_viewport_for_document(document);
+        let mut capture = host
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::with_paint(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Print,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(capture.take_retained_layout().is_none());
+        assert_eq!(host.has_retained_layout_for_test(), mode.is_realtime());
+    }
 }
 
 #[test]
