@@ -1,6 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use dom::ElementState as StyloElementState;
+use indexmap::IndexSet;
 use moli_selector::{CssDirection, html_auto_directionality_root, html_directionality};
 use smallvec::SmallVec;
 
@@ -9,13 +10,8 @@ use crate::protocol_types::EmulatedMediaOverrides;
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::{
-    MoliStyleEngine, StyleMutationEffect,
-    cause::PendingStyleInvalidationCause,
-    document_world::DocumentStyleWorld,
-    mutation_effect::{
-        detached_style_subtree_roots_for_mutations, retain_live_structural_mutation_effects,
-    },
-    snapshot::snapshot_state_change,
+    MoliStyleEngine, StyleMutationEffect, cause::PendingStyleInvalidationCause,
+    document_world::DocumentStyleWorld, snapshot::snapshot_state_change,
 };
 
 type StyleMutationGroups<'a> = SmallVec<[(DomHandle, Cow<'a, [StyleMutationEffect]>); 1]>;
@@ -60,34 +56,23 @@ impl MoliStyleEngine {
                 continue;
             }
             world.document_state.note_style_input_change();
-            if should_defer_structural_mutations(&effects) {
-                world.pending_structural_mutations.push(&effects);
-                continue;
+            let defer_cleanup = should_defer_structural_cleanup(&effects);
+            if !defer_cleanup {
+                self.invalidate_mutation_dependent_subtrees(&world, host, &effects);
+                let detached_roots = effects
+                    .iter()
+                    .flat_map(StyleMutationEffect::detached_roots)
+                    .copied()
+                    .collect::<IndexSet<_>>();
+                self.invalidate_detached_style_subtrees(host, detached_roots);
             }
-            self.invalidate_mutation_dependent_subtrees(&world, host, &effects);
-            self.invalidate_detached_style_subtrees_for_mutations(host, &effects);
-            world
-                .pending_invalidations
-                .borrow_mut()
-                .record_mutations(&world, host, &effects);
+            world.pending_invalidations.borrow_mut().record_mutations(
+                &world,
+                host,
+                &effects,
+                defer_cleanup,
+            );
         }
-    }
-
-    pub(super) fn flush_pending_structural_mutations_for_world(
-        &self,
-        host: &DomHost,
-        world: &DocumentStyleWorld,
-    ) {
-        let Some(mut effects) = world.pending_structural_mutations.take() else {
-            return;
-        };
-        self.invalidate_detached_style_subtrees_for_mutations(host, &effects);
-        self.invalidate_mutation_dependent_subtrees(world, host, &effects);
-        retain_live_structural_mutation_effects(host, &mut effects);
-        world
-            .pending_invalidations
-            .borrow_mut()
-            .record_mutations(world, host, &effects);
     }
 
     fn invalidate_mutation_dependent_subtrees(
@@ -135,13 +120,13 @@ impl MoliStyleEngine {
         }
     }
 
-    pub(super) fn invalidate_detached_style_subtrees_for_mutations(
+    pub(super) fn invalidate_detached_style_subtrees(
         &self,
         host: &DomHost,
-        effects: &[StyleMutationEffect],
+        roots: impl IntoIterator<Item = DomHandle>,
     ) {
         let mut roots_by_document = HashMap::<DomHandle, Vec<DomHandle>>::new();
-        for root in detached_style_subtree_roots_for_mutations(effects) {
+        for root in roots {
             let Some(document) = owner_document_for_handle(host, root) else {
                 continue;
             };
@@ -414,8 +399,21 @@ fn world_has_style_state(engine: &MoliStyleEngine, world: &DocumentStyleWorld) -
         || !world.pseudo_style_cache.is_empty()
 }
 
-fn should_defer_structural_mutations(effects: &[StyleMutationEffect]) -> bool {
-    super::mutation_effect::style_mutation_effects_are_child_list_structural(effects)
+/// Pure child-list batches can wait for the final tree. Other effects can need
+/// to retire detached style data or resolve attribute dependencies immediately.
+fn should_defer_structural_cleanup(effects: &[StyleMutationEffect]) -> bool {
+    effects
+        .iter()
+        .any(|effect| matches!(effect, StyleMutationEffect::ChildList { .. }))
+        && effects.iter().all(|effect| {
+            matches!(
+                effect,
+                StyleMutationEffect::ChildList { .. }
+                    | StyleMutationEffect::ConnectedSubtrees { .. }
+                    | StyleMutationEffect::DisconnectedSubtrees { .. }
+                    | StyleMutationEffect::SlotAssignment { .. }
+            )
+        })
 }
 
 #[inline]
