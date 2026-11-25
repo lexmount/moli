@@ -41,6 +41,14 @@ pub(crate) enum StyleMutationEffect {
 }
 
 impl StyleMutationEffect {
+    pub(super) fn detached_roots(&self) -> &[DomHandle] {
+        match self {
+            Self::DisconnectedSubtrees { roots } => roots,
+            Self::ChildList { removed_nodes, .. } => removed_nodes,
+            _ => &[],
+        }
+    }
+
     pub(crate) fn touches_connected_tree(&self, host: &DomHost) -> bool {
         match self {
             Self::Attribute { element: node, .. }
@@ -276,47 +284,6 @@ fn is_empty_ordinary_fragment_child_list(host: &DomHost, effect: &StyleMutationE
         && !host.is_shadow_root(*parent)
 }
 
-pub(super) fn detached_style_subtree_roots_for_mutations(
-    effects: &[StyleMutationEffect],
-) -> IndexSet<DomHandle> {
-    let mut roots = IndexSet::new();
-    for effect in effects {
-        match effect {
-            StyleMutationEffect::DisconnectedSubtrees {
-                roots: disconnected_roots,
-            } => {
-                roots.extend(disconnected_roots.iter().copied());
-            }
-            StyleMutationEffect::ChildList { removed_nodes, .. } => {
-                roots.extend(removed_nodes.iter().copied());
-            }
-            StyleMutationEffect::Attribute { .. }
-            | StyleMutationEffect::ConnectedSubtrees { .. }
-            | StyleMutationEffect::SlotAssignment { .. }
-            | StyleMutationEffect::CharacterData { .. } => {}
-        }
-    }
-    roots
-}
-
-pub(super) fn style_mutation_effects_are_child_list_structural(
-    effects: &[StyleMutationEffect],
-) -> bool {
-    !effects.is_empty()
-        && effects.iter().all(|effect| {
-            matches!(
-                effect,
-                StyleMutationEffect::ChildList { .. }
-                    | StyleMutationEffect::ConnectedSubtrees { .. }
-                    | StyleMutationEffect::DisconnectedSubtrees { .. }
-                    | StyleMutationEffect::SlotAssignment { .. }
-            )
-        })
-        && effects
-            .iter()
-            .any(|effect| matches!(effect, StyleMutationEffect::ChildList { .. }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,24 +340,12 @@ mod tests {
         ));
     }
 
-    fn merged_structural_effects(effects: &[StyleMutationEffect]) -> Vec<StyleMutationEffect> {
-        use crate::style_engine::pending_mutation::PendingStructuralStyleMutations;
-
-        let pending = PendingStructuralStyleMutations::new();
-        for effect in effects {
-            pending.push(std::slice::from_ref(effect));
-        }
-        assert_eq!(pending.effect_count_for_test(), effects.len());
-        pending.take().expect("pending structural mutations")
-    }
-
     #[test]
-    fn consumed_fragment_preparation_preserves_real_splices_and_the_effect_limit() {
+    fn consumed_fragment_preparation_preserves_the_order_of_real_splices() {
         let mut host = test_host();
         let parent = host.create_element("div");
         assert!(host.append_child(host.document_handle(), parent));
         let mut effects = Vec::new();
-        let mut inserted = Vec::new();
         let mut fragments = Vec::new();
         // Match textContent + ParentNode.append's native commits, including
         // the staging insertion and fragment consumption as separate facts.
@@ -403,38 +358,10 @@ mod tests {
             collect_native_effects(&mut effects, &host, &staged);
             let consumed = host.append_child_effects(parent, fragment);
             collect_native_effects(&mut effects, &host, &consumed);
-            inserted.push(child);
             fragments.push(fragment);
         }
-        assert!(effects.len() > 256);
-        assert_eq!(
-            detached_style_subtree_roots_for_mutations(&effects)
-                .into_iter()
-                .collect::<Vec<_>>(),
-            inserted,
-            "cleanup must see the original removed roots before normalization"
-        );
-        let mut normalized = merged_structural_effects(&effects);
-        let connected_batches = normalized
-            .iter()
-            .filter_map(|effect| match effect {
-                StyleMutationEffect::ConnectedSubtrees { roots } => Some(roots.as_ref()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let connected_roots = effects
-            .iter()
-            .filter_map(|effect| match effect {
-                StyleMutationEffect::ConnectedSubtrees { roots } => Some(roots.iter().copied()),
-                _ => None,
-            })
-            .flatten()
-            .collect::<IndexSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(connected_batches, [connected_roots.as_slice()]);
+        let mut normalized = effects.clone();
         retain_live_structural_mutation_effects(&host, &mut normalized);
-        assert!(normalized.len() <= 256);
         let real_splices = effects
             .iter()
             .filter(|effect| match effect {
@@ -450,25 +377,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(real_splices.len(), 128);
         assert_eq!(kept_splices, real_splices);
-        drop(normalized);
-
-        // Normalization must not turn an actually large structural history
-        // into a small batch. These are 300 distinct, selector-visible splices.
-        for _ in 0..300 {
-            let child = host.create_element("span");
-            let added = host.append_child_effects(parent, child);
-            collect_native_effects(&mut effects, &host, &added);
-        }
-        let mut normalized = merged_structural_effects(&effects);
-        retain_live_structural_mutation_effects(&host, &mut normalized);
-        assert_eq!(
-            normalized
-                .iter()
-                .filter(|effect| matches!(effect, StyleMutationEffect::ChildList { .. }))
-                .count(),
-            428
-        );
-        assert!(normalized.len() > 256);
     }
 
     #[test]
@@ -499,7 +407,7 @@ mod tests {
                 StyleMutationEffect::ChildList { parent, removed_nodes, .. }
                     if *parent == old_parent && removed_nodes == &[moved]
             )));
-            let mut normalized = merged_structural_effects(&effects);
+            let mut normalized = effects.clone();
             if parent_kind == "refilled-fragment" {
                 let remaining = host.create_element("span");
                 assert!(host.append_child(old_parent, remaining));
@@ -526,7 +434,7 @@ mod tests {
         collect_native_effects(&mut effects, &host, &staged);
         let consumed = host.append_child_effects(destination, fragment);
         collect_native_effects(&mut effects, &host, &consumed);
-        let mut normalized = merged_structural_effects(&effects);
+        let mut normalized = effects.clone();
         retain_live_structural_mutation_effects(&host, &mut normalized);
         assert!(normalized.iter().any(|effect| matches!(
             effect,

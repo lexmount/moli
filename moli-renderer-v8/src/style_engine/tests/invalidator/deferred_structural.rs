@@ -215,3 +215,47 @@ fn batched_fragment_splices_refresh_native_relative_selectors() {
         assert_eq!(fixture.computed(subject, "color"), HAS_CHILD_COLOR);
     }
 }
+
+#[test]
+fn consecutive_insertions_and_attribute_changes_share_one_pending_invalidation() {
+    let mut fixture = Fixture::new(
+        ".anchor, #target { color: rgb(1, 2, 3); }
+         .anchor:has(+ .marker), #target[data-active] { color: rgb(4, 5, 6); }",
+    );
+    let document = fixture.host.document_handle();
+    let main = fixture.host.create_element("main");
+    let parent = fixture.host.create_element("section");
+    let anchor = fixture.host.create_element("div");
+    let marker = fixture.host.create_element("div");
+    let target = fixture.host.create_element("div");
+    assert!(fixture.host.set_attribute(anchor, "class", "anchor"));
+    assert!(fixture.host.set_attribute(marker, "class", "marker"));
+    assert!(fixture.host.set_attribute(target, "id", "target"));
+    assert!(fixture.host.append_child(document, main));
+    assert!(fixture.host.append_child(main, parent));
+    assert!(fixture.host.append_child(main, target));
+    for child in [anchor, marker] {
+        assert!(fixture.host.append_child(parent, child));
+    }
+    assert_eq!(fixture.computed(anchor, "color"), HAS_CHILD_COLOR);
+    assert_eq!(fixture.computed(target, "color"), BASE_COLOR);
+
+    let first = fixture.host.create_element("div");
+    let second = fixture.host.create_element("div");
+    let insertion = fixture
+        .host
+        .insert_before_effects(parent, first, Some(marker));
+    fixture.invalidate(&insertion);
+    let attribute = fixture
+        .host
+        .set_attribute_effects(target, "data-active", "");
+    fixture.invalidate(&attribute);
+    let insertion = fixture
+        .host
+        .insert_before_effects(parent, second, Some(marker));
+    fixture.invalidate(&insertion);
+    fixture.drain();
+
+    assert_eq!(fixture.computed(anchor, "color"), BASE_COLOR);
+    assert_eq!(fixture.computed(target, "color"), HAS_CHILD_COLOR);
+}

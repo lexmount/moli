@@ -581,7 +581,7 @@ fn detached_subtree_invalidation_clears_relative_selector_flags() {
     assert!(host.append_child(document, anchor));
     assert!(host.append_child(anchor, marker));
 
-    let engine = MoliStyleEngine::new();
+    let mut engine = MoliStyleEngine::new();
     let document_url = url::Url::parse("https://example.test/").unwrap();
     let source = StyloStylesheetSource::new(
         ".anchor:has(.marker) { color: red; }".into(),
@@ -615,17 +615,10 @@ fn detached_subtree_invalidation_clears_relative_selector_flags() {
         );
     });
 
-    assert!(host.remove_child(document, anchor));
-    engine.invalidate_detached_style_subtrees_for_mutations(
-        &host,
-        &[StyleMutationEffect::ChildList {
-            parent: document,
-            added_nodes: Vec::new(),
-            removed_nodes: vec![anchor],
-            previous_sibling: None,
-            next_sibling: None,
-        }],
-    );
+    let removal = host.remove_child_effects(document, anchor);
+    let effects = StyleMutationEffect::from_dom_mutation_effects(&host, &removal);
+    engine.invalidate_dom_mutations(&host, &effects);
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
     engine.dom_adapter.with_bound_host(&host, |binding| {
         let anchor_element = binding.element(&host, anchor).unwrap();

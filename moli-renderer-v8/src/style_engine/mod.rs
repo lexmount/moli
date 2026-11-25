@@ -26,7 +26,6 @@ mod invalidation;
 pub(crate) mod media_list;
 mod mutation_effect;
 mod native_invalidation;
-mod pending_mutation;
 mod property_metadata;
 mod registered_properties;
 mod retained;
@@ -729,9 +728,6 @@ impl MoliStyleEngine {
     ) -> usize {
         let world = self.world_for_document(document);
         usize::from(!world.pending_invalidations.borrow().is_empty())
-            + world
-                .pending_structural_mutations
-                .work_item_count_for_test()
     }
 
     #[cfg(test)]
@@ -740,8 +736,9 @@ impl MoliStyleEngine {
         document: DomHandle,
     ) -> usize {
         self.world_for_document(document)
-            .pending_structural_mutations
-            .effect_count_for_test()
+            .pending_invalidations
+            .borrow()
+            .structural_effect_count_for_test()
     }
 
     pub(in crate::style_engine) fn invalidation_cleanup_for_world<'a>(
@@ -911,17 +908,11 @@ impl MoliStyleEngine {
         boundary: StyleInvalidationDrainBoundary,
     ) {
         let world = self.world_for_document(document);
-        self.flush_pending_structural_mutations_for_world(host, &world);
         let pending = world.pending_invalidations.take();
         if !pending.is_empty() && moli_trace::style_invalidation_trace_enabled() {
             tracing::info!(target: "moli_style_invalidation", ?document, ?boundary, "drain DOM invalidation");
         }
-        pending.drain(
-            &self.dom_adapter,
-            &world,
-            self.invalidation_cleanup_for_world(&world),
-            host,
-        );
+        pending.drain(self, &world, host);
         world.document_state.finish_screen_style_invalidation();
     }
 

@@ -1,7 +1,7 @@
 use dom::ElementState;
 use indexmap::{IndexMap, IndexSet};
 use moli_selector::{
-    StyleMutationSnapshots, StyloDomHostBinding, StyloDomStyleAdapter, StyloElement,
+    StyleMutationSnapshots, StyloDomHostBinding, StyloElement, html_auto_directionality_root,
 };
 use selectors::{Element, matching::ElementSelectorFlags};
 use style::{
@@ -21,8 +21,8 @@ use crate::{
 };
 
 use super::{
-    StyleMutationEffect, cleanup::StyleInvalidationCleanup,
-    computed::with_resolution_context_and_snapshots, document_world::DocumentStyleWorld,
+    MoliStyleEngine, StyleMutationEffect, computed::with_resolution_context_and_snapshots,
+    document_world::DocumentStyleWorld, mutation_effect::retain_live_structural_mutation_effects,
 };
 
 #[derive(Default)]
@@ -30,6 +30,11 @@ pub(super) struct PendingNativeInvalidation {
     pub(super) snapshots: StyleMutationSnapshots,
     original_parents: IndexSet<DomHandle>,
     structures: Vec<StyleMutationEffect>,
+    connected_roots: IndexSet<DomHandle>,
+    detached_roots: IndexSet<DomHandle>,
+    deferred_child_list_parents: IndexSet<DomHandle>,
+    #[cfg(test)]
+    structural_effect_count: usize,
     subtrees: IndexSet<DomHandle>,
     states_without_snapshots: IndexMap<DomHandle, ElementState>,
 }
@@ -49,9 +54,24 @@ impl PendingNativeInvalidation {
         world: &DocumentStyleWorld,
         host: &DomHost,
         effects: &[StyleMutationEffect],
+        defer_structural_cleanup: bool,
     ) {
         let mut snapshots = StyleMutationSnapshots::default();
         for effect in effects {
+            if defer_structural_cleanup {
+                self.detached_roots
+                    .extend(effect.detached_roots().iter().copied());
+                if let StyleMutationEffect::ChildList { parent, .. } = effect {
+                    self.deferred_child_list_parents.insert(*parent);
+                }
+            }
+            #[cfg(test)]
+            if !matches!(
+                effect,
+                StyleMutationEffect::Attribute { .. } | StyleMutationEffect::CharacterData { .. }
+            ) {
+                self.structural_effect_count += 1;
+            }
             match effect {
                 StyleMutationEffect::Attribute {
                     element,
@@ -94,6 +114,9 @@ impl PendingNativeInvalidation {
                         );
                     }
                 }
+                StyleMutationEffect::ConnectedSubtrees { roots } => {
+                    self.connected_roots.extend(roots.iter().copied());
+                }
                 StyleMutationEffect::DisconnectedSubtrees { .. } => {}
                 effect => self.structures.push(effect.clone()),
             }
@@ -116,20 +139,40 @@ impl PendingNativeInvalidation {
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.snapshots.is_empty() && self.structures.is_empty() && self.subtrees.is_empty()
+        self.snapshots.is_empty()
+            && self.structures.is_empty()
+            && self.connected_roots.is_empty()
+            && self.detached_roots.is_empty()
+            && self.subtrees.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(super) fn structural_effect_count_for_test(&self) -> usize {
+        self.structural_effect_count
     }
 
     pub(super) fn drain(
-        self,
-        dom_adapter: &StyloDomStyleAdapter,
+        mut self,
+        engine: &MoliStyleEngine,
         world: &DocumentStyleWorld,
-        cleanup: StyleInvalidationCleanup<'_>,
         host: &DomHost,
     ) {
         if self.is_empty() {
             return;
         }
 
+        // Retire removed roots before dropping history for consumed fragments.
+        engine.invalidate_detached_style_subtrees(host, self.detached_roots);
+        let cleanup = engine.invalidation_cleanup_for_world(world);
+        cleanup.invalidate_subtrees(
+            host,
+            self.deferred_child_list_parents
+                .into_iter()
+                .filter_map(|parent| html_auto_directionality_root(host, parent)),
+        );
+        retain_live_structural_mutation_effects(host, &mut self.structures);
+
+        let dom_adapter = &engine.dom_adapter;
         let mut subtrees = self.subtrees;
         let has_relative_selectors =
             |data: &style::stylist::CascadeData| data.relative_invalidation_map_attributes().used;
@@ -167,6 +210,12 @@ impl PendingNativeInvalidation {
                 .take(2)
                 .count()
                 == 1;
+
+        let splice_fallbacks = if relative_selectors {
+            relative_splice_fallback_parents(host, &self.structures)
+        } else {
+            IndexSet::new()
+        };
 
         let targets = dom_adapter.with_bound_host(host, |adapter| {
             adapter.with_mutation_snapshots(host, &self.snapshots, |map, handles| {
@@ -206,11 +255,18 @@ impl PendingNativeInvalidation {
                             }
                         }
 
+                        for &parent in &splice_fallbacks {
+                            subtrees.insert(parent);
+                            invalidate_relative_boundaries(host, adapter, parent, &mut subtrees);
+                        }
                         for mutation in &self.structures {
+                            let replay_relative = relative_selectors
+                                && !mutation_root(mutation)
+                                    .is_some_and(|root| splice_fallbacks.contains(&root));
                             invalidate_structure(
                                 host,
                                 adapter,
-                                relative_selectors.then_some(stylist),
+                                replay_relative.then_some(stylist),
                                 replay_removal,
                                 mutation,
                                 &mut subtrees,
@@ -221,8 +277,46 @@ impl PendingNativeInvalidation {
             })
         });
         cleanup.retain_native_invalidation_targets(host, targets);
+        subtrees.extend(self.connected_roots);
         cleanup.invalidate_subtrees(host, subtrees);
     }
+}
+
+/// A series of splices can hide an original adjacent pair from the single-node
+/// replay. Recheck the affected parent once when its history includes more
+/// than one splice and at least one is a removal or an insertion in the middle.
+fn relative_splice_fallback_parents(
+    host: &DomHost,
+    structures: &[StyleMutationEffect],
+) -> IndexSet<DomHandle> {
+    let mut parents = IndexMap::new();
+    for effect in structures {
+        if let StyleMutationEffect::ChildList {
+            parent,
+            added_nodes,
+            removed_nodes,
+            next_sibling,
+            ..
+        } = effect
+            && added_nodes
+                .iter()
+                .chain(removed_nodes)
+                .any(|&node| host.node(node).is_some_and(Node::is_element))
+        {
+            let append = next_sibling.is_none() && removed_nodes.is_empty();
+            parents
+                .entry(*parent)
+                .and_modify(|(single, append_only)| {
+                    *single = false;
+                    *append_only &= append;
+                })
+                .or_insert((true, append));
+        }
+    }
+    parents
+        .into_iter()
+        .filter_map(|(parent, (single, append_only))| (!single && !append_only).then_some(parent))
+        .collect()
 }
 
 fn mutation_root(effect: &StyleMutationEffect) -> Option<DomHandle> {
@@ -414,7 +508,6 @@ fn invalidate_structure(
                 subtrees.insert(host_element);
             }
         }
-        StyleMutationEffect::ConnectedSubtrees { roots } => subtrees.extend(roots.iter().copied()),
         _ => {}
     }
 }

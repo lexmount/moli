@@ -9,7 +9,6 @@ use crate::document_runtime::DomHandle;
 use super::{
     cache::PseudoStyleCache,
     native_invalidation::PendingNativeInvalidation,
-    pending_mutation::PendingStructuralStyleMutations,
     registered_properties::CssCustomPropertyRegistry,
     source::{
         adopted::AdoptedStyleSheetSources, inline::InlineStyleMetadataStore,
@@ -24,7 +23,6 @@ pub(super) struct DocumentStyleWorld {
     pub(super) registered_custom_properties: CssCustomPropertyRegistry,
     pub(super) document_state: StyleDocumentState,
     pub(super) pending_invalidations: RefCell<PendingNativeInvalidation>,
-    pub(super) pending_structural_mutations: PendingStructuralStyleMutations,
     pub(super) pseudo_style_cache: PseudoStyleCache,
     pub(super) owner_style_sheet_sources: RefCell<OwnerStyleSheetSources>,
     pub(super) linked_stylesheet_sources: RefCell<LinkedStylesheetSources>,
@@ -47,7 +45,6 @@ impl DocumentStyleWorld {
             registered_custom_properties: CssCustomPropertyRegistry::new(),
             document_state: StyleDocumentState::new(),
             pending_invalidations: RefCell::default(),
-            pending_structural_mutations: PendingStructuralStyleMutations::new(),
             pseudo_style_cache: PseudoStyleCache::new(),
             owner_style_sheet_sources: RefCell::new(OwnerStyleSheetSources::default()),
             linked_stylesheet_sources: RefCell::new(LinkedStylesheetSources::default()),
@@ -59,7 +56,6 @@ impl DocumentStyleWorld {
     pub(super) fn clear_for_document_replacement(&self) {
         self.registered_custom_properties.clear();
         self.pending_invalidations.take();
-        self.pending_structural_mutations.clear();
         self.pseudo_style_cache.clear();
         self.document_state.clear_retained_style_system();
         self.document_state.bump_source_set_generation();
