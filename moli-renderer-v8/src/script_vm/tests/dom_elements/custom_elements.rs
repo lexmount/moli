@@ -3,6 +3,7 @@ use crate::custom_elements::CustomElementRegistryKey;
 
 mod insertion;
 mod parser;
+mod retired_iframe_wrappers;
 mod upgrade_reentry;
 
 async fn assert_popup_custom_element_microtask_order(javascript_url: bool) {
