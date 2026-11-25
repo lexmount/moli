@@ -59,7 +59,7 @@ pub(in crate::native_bridge::element::styles) fn set_style_entries_with_inline_b
     let state = inline_style_declaration_state_from_entries(entries);
     let (css_text, override_text) = state.css_text_and_style_resolution_override();
     let state =
-        inline_style_declaration_state_from_serialized_entries(entries, &css_text, inline_base_url);
+        inline_style_declaration_state_from_serialized_entries(state, &css_text, inline_base_url);
     commit_inline_style_declaration(
         scope,
         runtime_ptr,
@@ -82,7 +82,7 @@ pub(in crate::native_bridge::element::styles) fn set_style_entries_if_changed_wi
     let (css_text, override_text) = state.css_text_and_style_resolution_override();
     let attribute_changed = style_string(unsafe { &*runtime_ptr }, handle) != css_text;
     let state =
-        inline_style_declaration_state_from_serialized_entries(entries, &css_text, inline_base_url);
+        inline_style_declaration_state_from_serialized_entries(state, &css_text, inline_base_url);
     commit_inline_style_declaration(
         scope,
         runtime_ptr,

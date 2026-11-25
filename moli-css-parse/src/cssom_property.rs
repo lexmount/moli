@@ -124,6 +124,10 @@ impl ParsedCssomProperty {
         self.source.declarations.len() == 1
     }
 
+    pub fn append_to_declaration_list(mut self, target: &mut PropertyDeclarationBlock) {
+        target.extend(self.source.drain(), self.importance);
+    }
+
     pub fn apply(
         mut self,
         target: &mut CssDeclarationBlock,

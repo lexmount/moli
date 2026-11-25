@@ -105,28 +105,26 @@ pub(super) fn prefixed_style_entry_is_independent_of_unprefixed_property(
     entry_name.starts_with("-webkit-") && !property.starts_with("-webkit-")
 }
 
-pub(super) fn pdb_block_from_style_entries(
-    entries: &[StyleEntry],
+/// Build a block after the caller has classified native and compatibility entries.
+pub(super) fn pdb_block_from_native_style_entries(
+    entries: &[&StyleEntry],
 ) -> Option<moli_css_parse::CssDeclarationBlock> {
     crate::style_engine::ensure_stylo_browser_compat_prefs();
     let mut block = moli_css_parse::CssDeclarationBlock::default();
     let mut previous_important_entries = Vec::new();
     for entry in entries {
-        if !style_entry_is_pdb_safe(entry) || style_entry_is_pdb_supplemental_side_entry(entry) {
-            return None;
-        }
-        let restore_important_entries = if entry.priority {
-            Vec::new()
-        } else {
-            style_entries_affecting_property(&previous_important_entries, &entry.name)
-        };
         if !set_pdb_block_property_from_style_entry(&mut block, entry) {
             return None;
         }
         if entry.priority {
-            previous_important_entries.push(entry.clone());
+            previous_important_entries.push(*entry);
+            continue;
         }
-        for important_entry in &restore_important_entries {
+        let affected_names =
+            style_property_mutation_affected_names_with_pdb(&entry.name).unwrap_or_default();
+        for important_entry in previous_important_entries.iter().filter(|important_entry| {
+            style_entry_affects_property_query(important_entry, &entry.name, &affected_names)
+        }) {
             if !set_pdb_block_property_from_style_entry(&mut block, important_entry) {
                 return None;
             }
@@ -135,7 +133,7 @@ pub(super) fn pdb_block_from_style_entries(
     Some(block)
 }
 
-pub(super) fn set_pdb_block_property_from_style_entry(
+fn set_pdb_block_property_from_style_entry(
     block: &mut moli_css_parse::CssDeclarationBlock,
     entry: &StyleEntry,
 ) -> bool {
@@ -179,21 +177,6 @@ pub(crate) fn set_pdb_block_property_collecting_entries(
         entries.extend(projection.entries.into_iter().map(StyleEntry::from));
     }
     Some(entries)
-}
-
-pub(super) fn style_entries_affecting_property(
-    entries: &[StyleEntry],
-    property: &str,
-) -> Vec<StyleEntry> {
-    let affected_names =
-        style_property_mutation_affected_names_with_pdb(property).unwrap_or_default();
-    entries
-        .iter()
-        .filter(|entry| {
-            entry.priority && style_entry_affects_property_query(entry, property, &affected_names)
-        })
-        .cloned()
-        .collect()
 }
 
 pub(super) fn cssom_style_property_write_uses_pdb(name: &str, value: &str) -> bool {
