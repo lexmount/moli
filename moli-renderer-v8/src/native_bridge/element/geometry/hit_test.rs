@@ -16,9 +16,16 @@ const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
 pub(crate) struct InputSurfaceHit {
     pub(crate) target: Option<DomHandle>,
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
+    pub(crate) viewport_document: Option<DomHandle>,
     /// The painted source before mapping it to an element for DOM events.
     #[cfg(feature = "molio")]
     pub(crate) painted_source: Option<PaintedInputSource>,
+}
+
+impl InputSurfaceHit {
+    pub(crate) fn document_or_element(self) -> Option<DomHandle> {
+        self.target.or(self.viewport_document)
+    }
 }
 
 #[cfg(feature = "molio")]
@@ -67,7 +74,14 @@ pub(crate) fn observable_input_hit_test(
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    observable_deep_hit_test(runtime, document, point, InputHitTestPolicy::INTERACTIVE)
+    Ok(input_surface_hit_test(
+        runtime,
+        document,
+        point,
+        InputHitTestPolicy::INTERACTIVE,
+        InputHitTestMode::Dom,
+    )?
+    .target)
 }
 
 /// Hit tests within an already routed frame. The mouse press can keep that
@@ -140,9 +154,7 @@ pub(crate) fn input_surface_hit_test(
                     use_viewport_fallback: policy.use_viewport_fallback,
                 },
             ),
-            control: None,
-            #[cfg(feature = "molio")]
-            painted_source: None,
+            ..InputSurfaceHit::default()
         });
     }
     runtime.ensure_observable_layout()?;
@@ -168,7 +180,10 @@ pub(crate) fn observable_deep_hit_test(
     point: LayoutPoint,
     policy: InputHitTestPolicy,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(input_surface_hit_test(runtime, document, point, policy, InputHitTestMode::Dom)?.target)
+    Ok(
+        input_surface_hit_test(runtime, document, point, policy, InputHitTestMode::Dom)?
+            .document_or_element(),
+    )
 }
 
 fn input_surface_hit_test_in_tree(
@@ -205,10 +220,8 @@ fn input_surface_hit_test_in_tree(
                         }
                     }
                     return Ok(InputSurfaceHit {
-                        target: None,
                         control: Some(control),
-                        #[cfg(feature = "molio")]
-                        painted_source: None,
+                        ..InputSurfaceHit::default()
                     });
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
@@ -233,14 +246,11 @@ fn input_surface_hit_test_in_tree(
             && (mode == InputHitTestMode::Wheel || tree.viewport.contains(point));
         return Ok(InputSurfaceHit {
             target: use_viewport_target.then_some(tree.source_root()),
-            control: None,
-            #[cfg(feature = "molio")]
-            painted_source: None,
+            ..InputSurfaceHit::default()
         });
     };
     let target_hit = InputSurfaceHit {
         target: Some(target),
-        control: None,
         #[cfg(feature = "molio")]
         painted_source: Some(PaintedInputSource {
             node: layout_hit.source,
@@ -249,6 +259,7 @@ fn input_surface_hit_test_in_tree(
                 .and_then(|fragment| tree.fragment_pseudo(fragment)),
             is_text: layout_hit.is_text,
         }),
+        ..InputSurfaceHit::default()
     };
     if depth >= CHILD_FRAME_DEPTH_LIMIT {
         return Ok(target_hit);
@@ -263,15 +274,20 @@ fn input_surface_hit_test_in_tree(
         .dom_host()
         .dom()
         .document_element_handle_for_document(child_document);
-    if runtime.layout_policy().is_realtime() && child_root.is_none() {
-        // A frame can have an outer box while its new Document has no
-        // layout root. Keep the hit on the frame until it has contents.
-        return Ok(target_hit);
-    }
+    let Some(child_root) = child_root else {
+        if runtime.layout_policy().is_realtime() {
+            // The frame can keep its outer box while its document has no layout root.
+            return Ok(target_hit);
+        }
+        return Ok(InputSurfaceHit {
+            viewport_document: Some(child_document),
+            ..InputSurfaceHit::default()
+        });
+    };
     let child_tree = tree
         .embedded_frame_tree(target)
         .ok_or(LayoutError::NoLayoutSnapshot)?;
-    if child_root != Some(child_tree.source_root()) {
+    if child_root != child_tree.source_root() {
         return Err(LayoutError::NoLayoutSnapshot);
     }
     let child_hit = input_surface_hit_test_in_tree(
@@ -283,7 +299,7 @@ fn input_surface_hit_test_in_tree(
         mode,
         depth + 1,
     )?;
-    if child_hit.target.is_some() || child_hit.control.is_some() {
+    if child_hit.document_or_element().is_some() || child_hit.control.is_some() {
         Ok(child_hit)
     } else {
         Ok(target_hit)
