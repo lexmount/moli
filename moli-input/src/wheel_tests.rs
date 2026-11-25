@@ -250,6 +250,82 @@ fn platform_end_releases_both_targets_and_the_inferred_deadline() {
 }
 
 #[test]
+fn canceling_a_synthetic_round_releases_only_its_document_and_round() {
+    let now = Instant::now();
+    let input = WheelInput {
+        source: WheelSource::Synthetic(1),
+        ..wheel(now, 10.0)
+    };
+    let mut controller = Controller::default();
+    let first = PreparedWheel {
+        event_target: Some(7),
+        scroll_target: Some(8),
+        ..controller.prepare(input, DOCUMENT)
+    };
+    controller.acknowledge(first, Some(WheelDispatchOutcome::Scrolled), Some(DOCUMENT));
+
+    controller.cancel_synthetic_round(Document(2), 1);
+    controller.cancel_synthetic_round(DOCUMENT, 2);
+    let next = controller.prepare(input, DOCUMENT);
+    assert_eq!(next.phase, WheelPhase::Changed);
+    assert!(!next.cancelable);
+    assert_eq!(next.event_target, Some(7));
+    assert_eq!(next.scroll_target, Some(8));
+
+    controller.cancel_synthetic_round(DOCUMENT, 1);
+    assert_eq!(controller.next_deadline(), None);
+    let restarted = controller.prepare(
+        WheelInput {
+            source: WheelSource::Synthetic(2),
+            ..input
+        },
+        DOCUMENT,
+    );
+    assert_eq!(restarted.phase, WheelPhase::Began);
+    assert!(restarted.cancelable);
+    assert_eq!(restarted.event_target, None);
+    assert_eq!(restarted.scroll_target, None);
+}
+
+#[test]
+fn stale_synthetic_cancellation_preserves_a_later_platform_update() {
+    let now = Instant::now();
+    for (source, phase) in [
+        (WheelSource::Platform, WheelPhase::Changed),
+        (WheelSource::Synthetic(2), WheelPhase::Unspecified),
+    ] {
+        let mut controller = Controller::default();
+        let first = controller.prepare(
+            WheelInput {
+                source: WheelSource::Synthetic(1),
+                ..wheel(now, 10.0)
+            },
+            DOCUMENT,
+        );
+        controller.acknowledge(first, Some(WheelDispatchOutcome::Scrolled), Some(DOCUMENT));
+        let later_input = WheelInput {
+            source,
+            phase,
+            ..wheel(now + Duration::from_millis(10), 10.0)
+        };
+        let later = PreparedWheel {
+            event_target: Some(7),
+            scroll_target: Some(8),
+            ..controller.prepare(later_input, DOCUMENT)
+        };
+        controller.acknowledge(later, Some(WheelDispatchOutcome::Scrolled), Some(DOCUMENT));
+        let deadline = controller.next_deadline();
+        controller.cancel_synthetic_round(DOCUMENT, 1);
+        assert_eq!(controller.next_deadline(), deadline);
+        let next = controller.prepare(later_input, DOCUMENT);
+        assert_eq!(next.phase, WheelPhase::Changed);
+        assert!(!next.cancelable);
+        assert_eq!(next.event_target, Some(7));
+        assert_eq!(next.scroll_target, Some(8));
+    }
+}
+
+#[test]
 fn document_retirement_discards_old_targets_and_preserves_the_current_ack() {
     let now = Instant::now();
     let replacement = Document(2);

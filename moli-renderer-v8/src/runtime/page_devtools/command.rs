@@ -50,6 +50,7 @@ pub enum RendererDevToolsPageCommand {
         end: bool,
         intercept_drags: bool,
     },
+    CancelSyntheticWheel(crate::runtime::RendererSyntheticWheelGesture),
     DispatchTouchEvent {
         points: Vec<RendererTouchPoint>,
         event_name: String,

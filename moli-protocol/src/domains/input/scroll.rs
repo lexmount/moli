@@ -214,35 +214,41 @@ impl SyntheticWheel {
         driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandDispatchContext,
     ) -> Result<bool, DevToolsError> {
-        let Some(pending) = driver
+        let Some((pending, keep_producing)) = driver
             .with_state(move |state| state.prepare_synthetic_wheel(self))
             .map_err(input_workflow_error)??
         else {
             return Ok(false);
         };
         complete_wheel(driver, pending.wait().await, context).await?;
-        Ok(true)
+        Ok(keep_producing)
     }
 
     pub(crate) fn prepare(
         self,
         conn: &mut CdpConnection,
-    ) -> Result<Option<PendingInputCommandDispatch>, DevToolsError> {
+    ) -> Result<Option<(PendingInputCommandDispatch, bool)>, DevToolsError> {
         if conn
             .target_page_residence_identity_for_owner(&self.owner)
             .as_ref()
             != Some(&self.page)
-            || input_events_ignored_for_owner(conn, &self.owner)
         {
             return Ok(None);
         }
-        let intercept_drags = drag::intercept_drags_enabled(conn, &self.owner);
-        start_page_input_command(
+        let ignored = input_events_ignored_for_owner(conn, &self.owner);
+        let intercept_drags = !ignored && drag::intercept_drags_enabled(conn, &self.owner);
+        // Cleanup can reach the outgoing Document during navigation. The
+        // renderer checks the exact Document and the round before clearing it.
+        start_page_input_command_with_access(
             conn,
             None,
             &self.owner,
             PendingInputCommandKind::DispatchMouseEvent,
+            ignored,
             |page| {
+                if ignored {
+                    return page.start_cancel_synthetic_wheel(self.gesture);
+                }
                 page.start_dispatch_synthetic_wheel(
                     self.position.0,
                     self.position.1,
@@ -254,6 +260,7 @@ impl SyntheticWheel {
                 )
             },
         )
+        .map(|pending| pending.map(|pending| (pending, !ignored)))
         .map_err(devtools_error_from_input_start_error)
     }
 }

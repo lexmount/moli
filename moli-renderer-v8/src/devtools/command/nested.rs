@@ -182,6 +182,7 @@ impl RendererDevToolsPageCommand {
             | Self::DispatchPreparedElementClick(..)
             | Self::DispatchMouseEventAtPoint { .. }
             | Self::DispatchSyntheticWheel { .. }
+            | Self::CancelSyntheticWheel(..)
             | Self::DispatchTouchEvent { .. }
             | Self::DispatchDragEventAtPoint { .. }
             | Self::CancelDragging
