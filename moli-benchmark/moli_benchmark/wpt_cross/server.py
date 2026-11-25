@@ -87,6 +87,17 @@ MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 COMMON_REDIRECT_PATH = "/common/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 COMMON_ECHO_PATH = "/common/echo.py"
+CLEAR_SITE_DATA_ECHO_PATH = "/clear-site-data/support/echo-clear-site-data.py"
+CLEAR_SITE_DATA_CONTROLLED_PATH = "/clear-site-data/support/controlled-endpoint.py"
+CLEAR_SITE_DATA_ECHO_BODY = b"""<!doctype html>
+<title>Clear-Site-Data</title>
+<script src="test_utils.sub.js"></script>
+<script>
+Promise.all(TestUtils.DATATYPES.map(async datatype => [
+  datatype.name, await datatype.isEmpty()
+])).then(entries => window.top.postMessage(Object.fromEntries(entries), "*"));
+</script>
+"""
 SERVICE_WORKER_REQUEST_HEADERS_PATH = "/service-workers/service-worker/resources/request-headers.py"
 EVENTSOURCE_MESSAGE_PATH = "/eventsource/resources/message.py"
 IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
@@ -2505,6 +2516,18 @@ requestExecutor("{executor_uuid}", {start_on_js});
             except WptPipeError:
                 self.send_error(500, "Invalid WPT template or pipe")
 
+        def _serve_clear_site_data_echo(self, query: str) -> None:
+            # wptserve uses the unique query names, including bare names such as ?storage.
+            directives = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            value = ",".join(f'"{name}"' for name in directives)
+            if not _valid_static_response_header("Clear-Site-Data", value):
+                self.send_error(400)
+                return
+            self._send_python_handler_response(
+                CLEAR_SITE_DATA_ECHO_PATH, query, CLEAR_SITE_DATA_ECHO_BODY,
+                headers=[("Content-Type", "text/html"), ("Clear-Site-Data", value)],
+            )
+
         def _serve_response(self, *, emit_body: bool) -> None:
             if self._serve_remote_context_resource():
                 return
@@ -2524,6 +2547,15 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == CLEAR_SITE_DATA_CONTROLLED_PATH:
+                self._send_python_handler_response(
+                    path, parsed.query, b"FROM_NETWORK",
+                    headers=[("Content-Type", "text/html")],
+                )
+                return
+            if path == CLEAR_SITE_DATA_ECHO_PATH:
+                self._serve_clear_site_data_echo(parsed.query)
+                return
             if path == EVENTSOURCE_MESSAGE_PATH:
                 params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
                 mime = params.get("mime", ["text/event-stream"])[0]
