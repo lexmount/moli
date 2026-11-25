@@ -5,7 +5,9 @@ mod rare_data;
 #[cfg(test)]
 mod tests;
 
-pub use attribute::{Attribute, InlineStyleAttribute};
+use std::sync::Arc;
+
+pub use attribute::{Attribute, DeferredStyleAttribute, InlineStyleAttribute};
 pub use control_state::{ElementControlState, SelectedFile};
 pub use interface_names::{
     html_element_interface_name, is_mathml_namespace, mathml_element_interface_name,
@@ -222,6 +224,33 @@ impl Element {
         self.attributes.iter().find(|attribute| {
             attribute.namespace() == namespace && attribute.local_name() == local_name
         })
+    }
+
+    pub(super) fn deferred_style_attribute_mut(
+        &mut self,
+    ) -> Option<&mut Arc<InlineStyleAttribute>> {
+        self.style_attribute_mut()?.deferred_style_mut()
+    }
+
+    pub(super) fn set_deferred_style_attribute(&mut self, source: Box<dyn DeferredStyleAttribute>) {
+        if let Some(attribute) = self.style_attribute_mut() {
+            attribute.set_deferred_style(source);
+        } else {
+            self.attributes.push(Attribute::new_deferred_style(source));
+        }
+    }
+
+    pub(super) fn materialize_deferred_style_attribute(
+        &mut self,
+    ) -> Option<Arc<InlineStyleAttribute>> {
+        self.style_attribute_mut()?.materialize_deferred_style()
+    }
+
+    fn style_attribute_mut(&mut self) -> Option<&mut Attribute> {
+        self.attributes
+            .iter_mut()
+            .find(|attribute| attribute.name_matches("style"))
+            .filter(|attribute| attribute.namespace().is_empty())
     }
 
     pub fn attribute(&self, name: &str) -> Option<&str> {

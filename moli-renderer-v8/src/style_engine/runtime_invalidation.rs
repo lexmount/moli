@@ -550,7 +550,7 @@ impl MoliStyleEngine {
     }
 
     pub(crate) fn invalidate_inline_style_subtree(&mut self, host: &DomHost, root: DomHandle) {
-        let Some(world) = self.owner_document_world(host, root) else {
+        let Some(world) = self.active_owner_document_world(host, root) else {
             return;
         };
         world.document_state.note_visual_input_change();

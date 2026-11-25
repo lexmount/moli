@@ -544,6 +544,8 @@ fn repeated_iframe_navigation_retires_each_previous_document_style_world() {
 (() => {{
   const frame = document.getElementById('style-world-churn-frame');
   globalThis.__heldChurnStyle = frame.contentWindow.getComputedStyle(frame.contentDocument.body);
+  globalThis.__heldChurnInlineStyle = frame.contentDocument.createElement('div').style;
+  globalThis.__heldChurnInlineStyle.width = '17px';
   frame.srcdoc = '<body data-generation="{generation}">next</body>';
 }})()
 "#
@@ -569,13 +571,14 @@ fn repeated_iframe_navigation_retires_each_previous_document_style_world() {
   const frame = document.getElementById('style-world-churn-frame');
   const held = globalThis.__heldChurnStyle;
   const stale = `${held.length}:${held.color}`;
+  const inline = globalThis.__heldChurnInlineStyle;
   const fresh = frame.contentWindow.getComputedStyle(frame.contentDocument.body).display;
-  return `${stale}|${fresh}|${frame.contentDocument.body.dataset.generation}`;
+  return `${stale}|${inline.cssText}|${fresh}|${frame.contentDocument.body.dataset.generation}`;
 })()
 "#,
             )
             .expect("stale and current child styles should remain distinguishable"),
-            format!("0:|block|{generation}")
+            format!("0:|width: 17px;|block|{generation}")
         );
         assert!(
             !vm.document_style_world_is_active_for_test(previous_document),

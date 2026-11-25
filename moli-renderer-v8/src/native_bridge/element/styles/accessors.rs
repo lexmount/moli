@@ -65,15 +65,24 @@ fn set_style_css_text<'s>(
         return;
     }
     let value = if mode == StyleMode::Computed {
-        style_css_text_for_computed(unsafe { &*runtime_ptr }, handle)
+        std::borrow::Cow::Owned(style_css_text_for_computed(
+            unsafe { &*runtime_ptr },
+            handle,
+        ))
     } else {
         let runtime = unsafe { &*runtime_ptr };
-        if let Some(state) = runtime.element_inline_style_declaration_state(handle) {
-            state.css_text()
+        if let Some(attribute) = runtime.dom_host().dom().find_attribute(handle, "style")
+            && attribute.deferred_style().is_some()
+        {
+            std::borrow::Cow::Borrowed(attribute.value())
+        } else if let Some(state) = runtime.element_inline_style_declaration_state(handle) {
+            std::borrow::Cow::Owned(state.css_text())
         } else {
             let entries = style_entries(runtime, handle);
-            style_entries_css_text_with_pdb(&entries)
-                .unwrap_or_else(|| serialize_css_style_entries(&entries))
+            std::borrow::Cow::Owned(
+                style_entries_css_text_with_pdb(&entries)
+                    .unwrap_or_else(|| serialize_css_style_entries(&entries)),
+            )
         }
     };
     let Some(value) = v8_string(scope, &value) else {

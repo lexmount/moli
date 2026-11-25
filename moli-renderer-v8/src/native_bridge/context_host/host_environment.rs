@@ -2728,15 +2728,33 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
     ) -> crate::style_engine::InlineStyleCspState {
+        if self.element_deferred_cssom_style(handle).is_some() {
+            return crate::style_engine::InlineStyleCspState::Cssom;
+        }
         self.style_engine
             .inline_style_csp_state_with_host(self.dom_host(), handle)
+    }
+
+    pub(crate) fn element_deferred_cssom_style(
+        &self,
+        handle: DomHandle,
+    ) -> Option<&crate::css_style::CssomStyleAttribute> {
+        crate::css_style::CssomStyleAttribute::from_attribute(
+            self.dom_host().dom().find_attribute(handle, "style")?,
+        )
     }
 
     pub(crate) fn element_inline_style_declaration_state(
         &self,
         handle: DomHandle,
-    ) -> Option<std::cell::Ref<'_, crate::css_style::CssInlineStyleDeclarationState>> {
-        self.style_engine.cssom_inline_style(handle)
+    ) -> Option<crate::css_style::InlineStyleStateRef<'_>> {
+        use crate::css_style::InlineStyleStateRef;
+        if let Some(style) = self.element_deferred_cssom_style(handle) {
+            return Some(InlineStyleStateRef::Deferred(style.read()));
+        }
+        self.style_engine
+            .cssom_inline_style(handle)
+            .map(InlineStyleStateRef::Cached)
     }
 
     pub(crate) fn set_element_inline_style_declaration_state(
@@ -2744,6 +2762,10 @@ impl PageScriptHost {
         handle: DomHandle,
         state: crate::css_style::CssInlineStyleDeclarationState,
     ) {
+        if self.element_deferred_cssom_style(handle).is_some() {
+            self.dom_host_mut()
+                .materialize_deferred_style_attribute(handle);
+        }
         let source = self
             .dom_host()
             .dom()
@@ -2757,7 +2779,27 @@ impl PageScriptHost {
         &mut self,
         handle: DomHandle,
     ) -> Option<crate::css_style::CssInlineStyleDeclarationState> {
+        if self.element_deferred_cssom_style(handle).is_some()
+            && let Some(deferred) = self
+                .dom_host_mut()
+                .materialize_deferred_style_attribute(handle)
+        {
+            return Some(crate::css_style::CssomStyleAttribute::take_state(deferred));
+        }
         self.style_engine.take_cssom_inline_style(handle)
+    }
+
+    pub(crate) fn can_defer_cssom_attribute(&self, handle: DomHandle) -> bool {
+        let dom = self.dom_host();
+        dom.dom()
+            .find_attribute(handle, "style")
+            .is_none_or(|attribute| attribute.namespace().is_empty())
+            && !dom.devtools_mutation_records_enabled()
+            && !self.has_dom_debugger_dom_breakpoints()
+            && (!dom.is_connected(handle)
+                || !self
+                    .style_engine
+                    .has_retained_style_attribute_selector(dom, handle))
     }
 
     pub(crate) fn clear_element_inline_style_declaration_state(&mut self, handle: DomHandle) {

@@ -1354,24 +1354,41 @@ fn populate_inline_style_attribute_for_resolution(
     let Some(world) = engine.owner_document_world(host, node) else {
         return;
     };
-    if world.inline_style_metadata.csp_state(node) == super::InlineStyleCspState::BlockedAttribute {
+    let attribute = host.dom().find_attribute(node, "style");
+    let deferred = attribute.and_then(crate::css_style::CssomStyleAttribute::from_attribute);
+    if deferred.is_none()
+        && world.inline_style_metadata.csp_state(node)
+            == super::InlineStyleCspState::BlockedAttribute
+    {
         engine.dom_adapter.clear_inline_style_attribute(node);
         return;
     }
-    let override_text = world.inline_style_metadata.resolution_text(node);
-    let has_override = override_text.is_some();
-    let Some(source) = override_text.or_else(|| {
-        host.dom()
-            .find_attribute(node, "style")?
-            .shared_style_value()
-    }) else {
-        engine.dom_adapter.clear_inline_style_attribute(node);
-        return;
-    };
     let base_url = world
         .inline_style_metadata
         .base_url(node)
         .unwrap_or_else(|| style_resolution_base_url(host, document_url, node));
+    if let Some(deferred) = deferred
+        && let Some((url_data, declarations)) =
+            deferred.publish(world.document, &base_url, quirks_mode)
+    {
+        engine.dom_adapter.set_inline_style_attribute(
+            node,
+            InlineStyleSnapshot {
+                document: world.document,
+                source: None,
+                url_data,
+                quirks_mode,
+                declarations,
+            },
+        );
+        return;
+    }
+    let override_text = world.inline_style_metadata.resolution_text(node);
+    let has_override = override_text.is_some();
+    let Some(source) = override_text.or_else(|| attribute?.shared_style_value()) else {
+        engine.dom_adapter.clear_inline_style_attribute(node);
+        return;
+    };
     let typed = (!has_override).then(|| {
         let mut sources = engine.cssom_inline_styles.borrow_mut();
         let inline = sources.get_mut(&node)?;
@@ -1416,7 +1433,7 @@ fn populate_inline_style_attribute_for_resolution(
         node,
         InlineStyleSnapshot {
             document: world.document,
-            source,
+            source: Some(source),
             url_data,
             quirks_mode,
             declarations,

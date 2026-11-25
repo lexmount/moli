@@ -5,9 +5,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use dom::ElementState as StyloElementState;
-#[cfg(test)]
 use indexmap::IndexSet;
-#[cfg(test)]
 use moli_selector::StyloRetainedStyleInvalidationQuery as RetainedStyleInvalidationQuery;
 #[cfg(test)]
 use moli_selector::StyloStyleSourceScope as StyleSourceScope;
@@ -922,6 +920,24 @@ impl MoliStyleEngine {
         element: DomHandle,
     ) -> Option<StyloElementState> {
         computed::retained_current_element_state(self, host, element)
+    }
+
+    pub(crate) fn has_retained_style_attribute_selector(
+        &self,
+        host: &DomHost,
+        handle: DomHandle,
+    ) -> bool {
+        let Some(world) = self.active_owner_document_world(host, handle) else {
+            return false;
+        };
+        let queries = IndexSet::from([RetainedStyleInvalidationQuery::attribute(
+            handle,
+            "style".into(),
+        )]);
+        let request = request::RetainedSourceDependencyRequestPlan::exact(queries);
+        world
+            .borrow_source_stores()
+            .has_dependency_match_for_request_plan(host, &request)
     }
 
     #[cfg(test)]

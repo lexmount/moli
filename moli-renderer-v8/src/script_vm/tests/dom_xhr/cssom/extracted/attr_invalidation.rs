@@ -197,3 +197,31 @@ fn dir_mutation_refreshes_auto_ancestor_and_attr_dependent_pseudo() {
         .expect("dir mutation should update both style dependencies");
     assert_eq!(result, r#"rtl:"unset"|ltr:"ltr"|rtl:"unset""#);
 }
+#[test]
+fn cssom_style_attribute_updates_value_selectors_after_retained_resolution() {
+    let mut vm = new_parsed_test_vm(
+        "https://cssom-style-attribute-selector.test/",
+        r#"<!doctype html>
+        <style>
+          #probe { color: red; }
+          #parent:has(#box[style*="blue"]) > #probe { color: green; }
+        </style>
+        <div id="parent"><div id="box"></div><span id="probe">text</span></div>"#,
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+            const box = document.getElementById('box');
+            const probe = document.getElementById('probe');
+            const colors = [getComputedStyle(probe).color];
+            box.style.color = 'blue';
+            colors.push(getComputedStyle(probe).color);
+            box.style.color = 'red';
+            colors.push(getComputedStyle(probe).color);
+            colors.join('/')
+        "#
+        )
+        .unwrap(),
+        "rgb(255, 0, 0)/rgb(0, 128, 0)/rgb(255, 0, 0)",
+    );
+}

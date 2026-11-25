@@ -17,7 +17,7 @@ use super::pdb_compat::{
     style_property_mutation_cleanup_names_with_pdb,
 };
 use super::*;
-use crate::css_style::InlineStyleParseContext;
+use crate::css_style::{CssomStyleAttribute, InlineStyleParseContext};
 
 pub(crate) fn parse_inline_css_text_with_base(
     style_text: &str,
@@ -188,33 +188,65 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             {
                 return Some(false);
             }
+            let cleanup_names = style_property_mutation_cleanup_names_with_pdb(name);
+            let compare_longhand = cleanup_names.is_empty() && !update_inline_style_base;
+            let can_defer = !blocked
+                && compare_longhand
+                && parsed.as_ref().map_or(current.parse_context.is_some(), |(property, context)| {
+                    property.is_single_longhand() && context.is_some()
+                })
+                // Raw attribute text can have different spelling even when its
+                // declarations equal the newly serialized CSSOM block.
+                && (current.parse_context.is_some()
+                    || !runtime.dom_host().dom().has_attribute(handle, "style"))
+                && runtime.can_defer_cssom_attribute(handle);
             // Parsing is complete. Move the block out until publication so no
             // borrow of the declaration store spans an author callback.
             drop(cached);
+            let mutate = |state: &mut CssInlineStyleDeclarationState| {
+                if let Some((parsed, context)) = parsed {
+                    if !parsed.apply(&mut state.block, compare_longhand) {
+                        return false;
+                    }
+                    state.parse_context = context;
+                    for property in cleanup_names {
+                        state.block.remove_property(&property);
+                    }
+                } else {
+                    for property in &affected_names {
+                        state.block.remove_property(property);
+                    }
+                }
+                true
+            };
+            if can_defer
+                && !crate::custom_elements::observes_attribute_change(runtime_ptr, handle, "style")
+                && !crate::observer_runtime::observes_attribute_old_value(
+                    runtime_ptr,
+                    handle,
+                    "style",
+                )
+            {
+                return Some(commit_deferred_inline_property(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    initial,
+                    mutate,
+                ));
+            }
             let had_cached_state = initial.is_none();
             let mut state = initial.unwrap_or_else(|| {
                 unsafe { &mut *runtime_ptr }
                     .take_element_inline_style_declaration_state(handle)
                     .expect("cached inline style declaration state")
             });
-            if let Some((parsed, context)) = parsed {
-                let cleanup_names = style_property_mutation_cleanup_names_with_pdb(name);
-                let compare_longhand = cleanup_names.is_empty() && !update_inline_style_base;
-                if !parsed.apply(&mut state.block, compare_longhand) {
-                    if had_cached_state {
-                        unsafe { &mut *runtime_ptr }
-                            .set_element_inline_style_declaration_state(handle, state);
-                    }
-                    return Some(false);
+            if !mutate(&mut state) {
+                if had_cached_state {
+                    unsafe { &mut *runtime_ptr }
+                        .set_element_inline_style_declaration_state(handle, state);
                 }
-                state.parse_context = context;
-                for property in cleanup_names {
-                    state.block.remove_property(&property);
-                }
-            } else {
-                for property in &affected_names {
-                    state.block.remove_property(property);
-                }
+                return Some(false);
             }
             return Some(commit_inline_property_state(
                 scope,
@@ -342,6 +374,40 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         inline_base_url.as_ref(),
         update_inline_style_base,
     ))
+}
+
+fn commit_deferred_inline_property(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    initial: Option<CssInlineStyleDeclarationState>,
+    mutate: impl FnOnce(&mut CssInlineStyleDeclarationState) -> bool,
+) -> bool {
+    let runtime = unsafe { &mut *runtime_ptr };
+    let effects = if runtime.element_deferred_cssom_style(handle).is_some() {
+        runtime
+            .dom_host_mut()
+            .edit_deferred_style_attribute(handle, |source| {
+                CssomStyleAttribute::edit_shared(source, mutate)
+            })
+    } else {
+        let had_cached_state = initial.is_none();
+        let mut state = initial.unwrap_or_else(|| {
+            runtime
+                .take_element_inline_style_declaration_state(handle)
+                .expect("cached inline style declaration state")
+        });
+        if !mutate(&mut state) {
+            if had_cached_state {
+                runtime.set_element_inline_style_declaration_state(handle, state);
+            }
+            return false;
+        }
+        runtime
+            .dom_host_mut()
+            .set_deferred_style_attribute(handle, Box::new(CssomStyleAttribute::new(state)))
+    };
+    runtime.apply_deferred_style_attribute_effects(scope, runtime_ptr, handle, effects)
 }
 
 fn commit_inline_property_state(

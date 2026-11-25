@@ -6,21 +6,29 @@ use super::reactions::{
     with_custom_element_reaction_scope,
 };
 
+pub(crate) fn observes_attribute_change(
+    host_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    name: &str,
+) -> bool {
+    unsafe { &*host_ptr }
+        .custom_elements_for_node_handle(handle)
+        .is_some_and(|store| {
+            store.is_upgraded_handle(handle)
+                && store.observes_attribute_for_handle(host_ptr, handle, name)
+        })
+}
+
 pub(crate) fn dispatch_unchanged_attribute_changed_callback(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) {
-    let host = unsafe { &*host_ptr };
-    let observed = host
-        .custom_elements_for_node_handle(handle)
-        .is_some_and(|store| {
-            store.is_upgraded_handle(handle)
-                && store.observes_attribute_for_handle(host_ptr, handle, name)
-        });
-    if observed {
-        let value = host.dom_host().get_attribute_ns(handle, None, name);
+    if observes_attribute_change(host_ptr, handle, name) {
+        let value = unsafe { &*host_ptr }
+            .dom_host()
+            .get_attribute_ns(handle, None, name);
         dispatch_attribute_changed_callback(
             scope,
             host_ptr,
@@ -42,16 +50,7 @@ pub(crate) fn enqueue_attribute_changed_callback(
     old_value: Option<&str>,
     new_value: Option<&str>,
 ) -> bool {
-    if !unsafe { &*host_ptr }
-        .custom_elements_for_node_handle(handle)
-        .is_some_and(|store| store.is_upgraded_handle(handle))
-    {
-        return false;
-    }
-    let observed = unsafe { &*host_ptr }
-        .custom_elements_for_node_handle(handle)
-        .is_some_and(|store| store.observes_attribute_for_handle(host_ptr, handle, name));
-    if !observed {
+    if !observes_attribute_change(host_ptr, handle, name) {
         return false;
     }
     if unsafe { &*host_ptr }

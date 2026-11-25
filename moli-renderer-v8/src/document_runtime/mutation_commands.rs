@@ -624,6 +624,30 @@ impl DocumentRuntime {
         )
     }
 
+    pub(crate) fn apply_deferred_style_attribute_effects(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        handle: DomHandle,
+        effects: DomMutationEffects,
+    ) -> bool {
+        if !effects.did_change() {
+            return false;
+        }
+        self.note_attribute_layout_activity(host_ptr, handle, "style");
+        // An iframe's inline style can change the viewport used by its child
+        // document, including the result of its media queries.
+        if self.dom_host.is_html_element_named(handle, "iframe") {
+            unsafe { &*host_ptr }.invalidate_published_frame_viewports([handle]);
+        }
+        self.apply_runtime_mutation_effects(
+            scope,
+            host_ptr,
+            effects,
+            RuntimeMutationOptions::js_dom_api().with_inline_style_csp_check(false),
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn set_attribute_with_reaction_policy_and_options(
         &mut self,

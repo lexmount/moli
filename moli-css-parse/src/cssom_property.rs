@@ -61,13 +61,17 @@ impl ParsedCssomProperty {
         })
     }
 
+    pub fn is_single_longhand(&self) -> bool {
+        self.source.declarations.len() == 1
+    }
+
     pub fn apply(
         mut self,
         target: &mut CssDeclarationBlock,
         compare_single_longhand: bool,
     ) -> bool {
         let mut updates = SourcePropertyDeclarationUpdate::default();
-        if compare_single_longhand && self.source.declarations.len() == 1 {
+        if compare_single_longhand && self.is_single_longhand() {
             let in_place = target.with_declarations(|block| {
                 block.prepare_for_update(&self.source, self.importance, &mut updates)
             });

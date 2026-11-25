@@ -1,4 +1,12 @@
+use std::{
+    cell::Ref,
+    fmt,
+    ops::Deref,
+    sync::{Arc, OnceLock},
+};
+
 use crate::webidl;
+use parking_lot::{RwLock, RwLockReadGuard};
 
 use cssparser::{ParseError, Parser, SourcePosition, ToCss, Token, TokenSerializationType};
 use moli_css_parse::{
@@ -107,6 +115,139 @@ pub(crate) struct CssInlineStyleDeclarationState {
     pub(crate) entries: Vec<CssStyleEntry>,
     pub(crate) side_entries: Vec<CssStyleEntry>,
     pub(crate) parse_context: Option<InlineStyleParseContext>,
+}
+
+pub(crate) enum InlineStyleStateRef<'a> {
+    Cached(Ref<'a, CssInlineStyleDeclarationState>),
+    Deferred(RwLockReadGuard<'a, CssInlineStyleDeclarationState>),
+}
+
+impl Deref for InlineStyleStateRef<'_> {
+    type Target = CssInlineStyleDeclarationState;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Cached(state) => state,
+            Self::Deferred(state) => state,
+        }
+    }
+}
+
+pub(crate) struct CssomStyleAttribute {
+    state: RwLock<CssInlineStyleDeclarationState>,
+    text: OnceLock<Box<str>>,
+}
+
+impl CssomStyleAttribute {
+    pub(crate) fn new(state: CssInlineStyleDeclarationState) -> Self {
+        Self {
+            state: RwLock::new(state),
+            text: OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn from_attribute(attribute: &moli_dom::native::Attribute) -> Option<&Self> {
+        (attribute.deferred_style()? as &dyn std::any::Any).downcast_ref()
+    }
+
+    pub(crate) fn from_source(source: &moli_dom::native::InlineStyleAttribute) -> Option<&Self> {
+        (source.deferred()? as &dyn std::any::Any).downcast_ref()
+    }
+
+    pub(crate) fn read(&self) -> RwLockReadGuard<'_, CssInlineStyleDeclarationState> {
+        self.state.read()
+    }
+
+    pub(crate) fn publish(
+        &self,
+        document: crate::document_runtime::DomHandle,
+        base: &url::Url,
+        quirks_mode: style::context::QuirksMode,
+    ) -> Option<(
+        style::stylesheets::UrlExtraData,
+        style::servo_arc::Arc<
+            style::shared_lock::Locked<style::properties::PropertyDeclarationBlock>,
+        >,
+    )> {
+        let mut state = self.state.write();
+        let context = state.parse_context.as_ref()?;
+        if !context.matches(document, base, quirks_mode) {
+            return None;
+        }
+        Some((context.url_data.clone(), state.block.publish()))
+    }
+
+    pub(crate) fn edit(
+        &mut self,
+        mutate: impl FnOnce(&mut CssInlineStyleDeclarationState) -> bool,
+    ) -> bool {
+        if !mutate(self.state.get_mut()) {
+            return false;
+        }
+        self.text.take();
+        true
+    }
+
+    pub(crate) fn edit_shared(
+        source: &mut Arc<moli_dom::native::InlineStyleAttribute>,
+        mutate: impl FnOnce(&mut CssInlineStyleDeclarationState) -> bool,
+    ) -> bool {
+        use moli_dom::native::InlineStyleAttribute;
+        if let Some(InlineStyleAttribute::Deferred(unique)) = Arc::get_mut(source) {
+            let style = (unique.as_mut() as &mut dyn std::any::Any)
+                .downcast_mut::<Self>()
+                .expect("CSSOM style attribute");
+            return style.edit(mutate);
+        }
+        // A retained DOM snapshot still uses the original attribute.
+        let shared = Self::from_source(source).expect("CSSOM style attribute");
+        let mut next = Self::new(shared.read().clone());
+        if !next.edit(mutate) {
+            return false;
+        }
+        *source = Arc::new(InlineStyleAttribute::Deferred(Box::new(next)));
+        true
+    }
+
+    pub(crate) fn take_state(
+        source: Arc<moli_dom::native::InlineStyleAttribute>,
+    ) -> CssInlineStyleDeclarationState {
+        use moli_dom::native::InlineStyleAttribute;
+        match Arc::try_unwrap(source) {
+            Ok(InlineStyleAttribute::Deferred(style)) => {
+                let style: Box<dyn std::any::Any> = style;
+                style
+                    .downcast::<Self>()
+                    .expect("CSSOM style attribute")
+                    .state
+                    .into_inner()
+            }
+            Ok(InlineStyleAttribute::Text(_)) => unreachable!("expected a deferred attribute"),
+            Err(shared) => Self::from_source(&shared)
+                .expect("CSSOM style attribute")
+                .read()
+                .clone(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_serialized(&self) -> bool {
+        self.text.get().is_some()
+    }
+}
+
+impl fmt::Debug for CssomStyleAttribute {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CssomStyleAttribute")
+            .finish_non_exhaustive()
+    }
+}
+
+impl moli_dom::native::DeferredStyleAttribute for CssomStyleAttribute {
+    fn serialized(&self) -> &str {
+        self.text
+            .get_or_init(|| self.read().css_text().into_boxed_str())
+    }
 }
 
 #[derive(Clone)]
