@@ -781,6 +781,7 @@ where
             retained_box_count,
             pruned_source_count,
             retained_numeric_layout_hits: numeric_metrics.retained_layout_hits,
+            retained_numeric_tree: numeric_metrics.reused_tree,
         },
     )
 }
@@ -859,6 +860,7 @@ struct NumericLayoutMetrics {
     feedback_invalidated_node_count: usize,
     feedback_overflow_recomputed_node_count: usize,
     retained_layout_hits: usize,
+    reused_tree: bool,
 }
 
 impl NumericLayoutMetrics {
@@ -943,6 +945,7 @@ where
         // the viewport's initial gutter state, which can differ between passes.
         prepared.invalidate_cached_layout_paths(world, &invalidated, true);
     }
+    metrics.reused_tree = prepared.reused_tree;
     let preparation_elapsed = phase_started.elapsed();
     let mut overflow_projection: Option<OverflowProjection> = None;
     let mut pending_feedback_seeds = Vec::new();
@@ -1039,6 +1042,9 @@ where
         if !changed {
             break;
         }
+    }
+    if world.inline_numeric_reuse.is_some() {
+        world.numeric_tree = Some(prepared.tree);
     }
     metrics.retained_layout_hits = world.finish_retained_cache_reads();
     metrics

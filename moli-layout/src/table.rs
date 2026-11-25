@@ -99,12 +99,11 @@ impl TableIntrinsicInlineSizes {
     }
 }
 
-pub(crate) fn prepare_tables<N>(world: &mut LayoutWorld<N>, mut tables: Vec<LayoutBoxId>)
+pub(crate) fn prepare_tables<N>(world: &mut LayoutWorld<N>, tables: &[LayoutBoxId])
 where
     N: Copy + Debug + Eq + Hash,
 {
-    tables.sort_unstable_by_key(|id| id.index());
-    for root in tables {
+    for &root in tables {
         let table = &world.boxes[root.index()];
         let collapsed = table.style.table_border_is_collapsed();
         let fixed = table.style.uses_fixed_table_layout();

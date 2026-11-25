@@ -561,6 +561,7 @@ impl PageScriptHost {
                 retained_box_count = metrics.retained_box_count,
                 pruned_source_count = metrics.pruned_source_count,
                 retained_numeric_layout_hits = metrics.retained_numeric_layout_hits,
+                retained_numeric_tree = metrics.retained_numeric_tree,
                 fragment_count = metrics.fragment_count,
                 paint_event_count = metrics.paint_event_count,
                 paint_culled_event_count = metrics.paint_culled_event_count,

@@ -1153,6 +1153,7 @@ mod tests {
             retained_box_count: 0,
             pruned_source_count: 0,
             retained_numeric_layout_hits: 0,
+            retained_numeric_tree: false,
             fragment_count: 0,
             paint_event_count: 0,
             paint_culled_event_count: 0,
