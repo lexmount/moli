@@ -1405,3 +1405,88 @@ closed:frame.contentWindow.__views.every(dt=>dt.types.length===0&&dt.items.lengt
         }
     }
 }
+
+fn wheel_child_boundary_vm() -> StandaloneScriptVmHarness {
+    let mut vm = new_storage_test_vm("https://viewport-input.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        outer_width: 800,
+        outer_height: 600,
+        device_pixel_ratio: 1.0,
+        screen_width: 800,
+        screen_height: 600,
+        screen_avail_width: 800,
+        screen_avail_height: 600,
+        ..Default::default()
+    }))
+    .unwrap();
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.eval(
+        r#"
+        if (!document.documentElement) document.appendChild(document.createElement('html'));
+        if (!document.head) document.documentElement.appendChild(document.createElement('head'));
+        if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+        document.documentElement.style.cssText = 'margin:0;padding:0;height:0';
+        document.body.style.cssText = 'margin:0;padding:0;height:0';
+        "#,
+    )
+    .unwrap();
+    vm
+}
+
+#[test]
+fn iframe_wheel_chains_to_parent_unless_the_child_stops_overscroll() {
+    for (setup, target, parent_scroll, child_scroll) in [
+        ("", "HTML", 120, 0),
+        ("child.documentElement.inert = true", "HTML", 120, 0),
+        (
+            "child.documentElement.style.overscrollBehavior = 'contain'",
+            "HTML",
+            0,
+            0,
+        ),
+        (
+            "child.documentElement.style.overscrollBehavior = 'none'",
+            "HTML",
+            0,
+            0,
+        ),
+    ] {
+        let mut vm = wheel_child_boundary_vm();
+        vm.eval(
+            r#"
+            document.body.style.height = '2000px';
+            globalThis.frame = document.createElement('iframe');
+            frame.style.cssText = 'position:fixed;left:40px;top:40px;width:200px;height:50px;border:4px solid black';
+            document.body.appendChild(frame);
+            globalThis.child = frame.contentDocument;
+            child.documentElement.style.cssText = 'margin:0;padding:0;height:0';
+            child.body.style.cssText = 'margin:0;padding:0;height:0';
+            globalThis.viewportWheels = [];
+            for (const [targetWindow, name] of [[window, 'parent'], [frame.contentWindow, 'child']]) {
+                targetWindow.addEventListener('wheel', event => viewportWheels.push([
+                    name, event.target.nodeName, event.clientX, event.clientY,
+                    event.deltaY, event.isTrusted
+                ]));
+            }
+            "#,
+        )
+        .unwrap();
+        vm.eval(setup).unwrap();
+        vm.dispatch_mouse_event_at_point(80.0, 80.0, "wheel", -1, Some(0), 0.0, 120.0)
+            .unwrap();
+        let actual = vm
+            .eval("JSON.stringify({events:viewportWheels,scrollY,childScrollY:frame.contentWindow.scrollY})")
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+            serde_json::json!({
+                "events": [["child", target, 36, 36, 120, true]],
+                "scrollY": parent_scroll,
+                "childScrollY": child_scroll,
+            }),
+            "wheel setup: {setup}"
+        );
+    }
+}
