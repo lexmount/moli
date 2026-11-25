@@ -5,6 +5,7 @@ mod document;
 mod element;
 mod host;
 mod html_serialization;
+pub mod inline_style;
 mod interaction;
 mod markdown;
 mod node;
@@ -21,8 +22,8 @@ pub use document::{
     Document, DocumentFragment, DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
 };
 pub use element::{
-    Attribute, CustomElementState, DeferredStyleAttribute, Element, InlineStyleAttribute,
-    SelectedFile, html_element_interface_name, svg_element_interface_name,
+    Attribute, CustomElementState, Element, InlineStyleAttribute, SelectedFile,
+    html_element_interface_name, svg_element_interface_name,
 };
 use host::StylesheetCandidateRegistries;
 pub use host::{
@@ -1104,6 +1105,7 @@ mod tests {
             "Attribute common record grew to {} bytes",
             size_of::<Attribute>()
         );
+        assert!(size_of::<InlineStyleAttribute>() <= 24);
         assert!(
             size_of::<Element>() <= 40,
             "Element common record grew to {} bytes",

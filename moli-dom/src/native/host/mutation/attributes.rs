@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::native::{DeferredStyleAttribute, InlineStyleAttribute};
+use crate::native::inline_style::{CssInlineStyleDeclarationState, CssomStyleAttribute};
 
 struct AttributeBeforeMutation {
     local_name: String,
@@ -64,7 +64,7 @@ impl DomHost {
     pub fn set_cssom_style_attribute(
         &mut self,
         handle: DomHandle,
-        source: Box<dyn DeferredStyleAttribute>,
+        source: Box<CssomStyleAttribute>,
         text: Option<&str>,
     ) -> DomAttributeMutationOutcome {
         let before = text.and_then(|_| self.qualified_attribute_before_mutation(handle, "style"));
@@ -103,16 +103,16 @@ impl DomHost {
         DomAttributeMutationOutcome::new(effects, old_value)
     }
 
-    pub fn edit_deferred_style_attribute(
+    pub fn edit_cssom_style_attribute(
         &mut self,
         handle: DomHandle,
-        edit: impl FnOnce(&mut Arc<InlineStyleAttribute>) -> bool,
+        edit: impl FnOnce(&mut CssInlineStyleDeclarationState) -> bool,
     ) -> DomMutationEffects {
         let changed = self
             .node_mut(handle)
             .and_then(|node| node.data_mut().as_element_mut())
-            .and_then(Element::deferred_style_attribute_mut)
-            .is_some_and(edit);
+            .and_then(Element::style_attribute_mut)
+            .is_some_and(|attribute| attribute.edit_cssom_style(edit));
         if changed {
             return self.cssom_style_attribute_effects(handle, None);
         }
@@ -123,7 +123,7 @@ impl DomHost {
     pub fn replace_style_attribute_source(
         &mut self,
         handle: DomHandle,
-        source: Box<dyn DeferredStyleAttribute>,
+        source: Box<CssomStyleAttribute>,
     ) {
         if let Some(element) = self
             .node_mut(handle)

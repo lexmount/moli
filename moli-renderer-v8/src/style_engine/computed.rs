@@ -1383,7 +1383,7 @@ fn populate_inline_style_attribute_for_resolution(
         return;
     };
     let attribute = host.dom().find_attribute(node, "style");
-    let cssom = attribute.and_then(crate::css_style::CssomStyleAttribute::from_attribute);
+    let cssom = attribute.and_then(moli_dom::native::Attribute::cssom_style);
     if !cssom.is_some_and(crate::css_style::CssomStyleAttribute::is_cssom_authored)
         && world.inline_style_metadata.csp_state(node)
             == super::InlineStyleCspState::BlockedAttribute

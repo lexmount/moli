@@ -14,6 +14,7 @@ mod math;
 mod media;
 mod root_margin;
 mod stylesheet_imports;
+mod stylo_prefs;
 mod stylo_stylesheet;
 mod transform;
 mod util;
@@ -60,6 +61,7 @@ pub use stylesheet_imports::{
     parse_detached_author_stylesheet_with_stylo, stylesheet_import_urls_with_stylo,
     stylesheet_imports_from_native_with_stylo,
 };
+pub use stylo_prefs::ensure_stylo_browser_compat_prefs;
 pub use stylo_stylesheet::{
     CssConditionRuleView, CssCounterStyleRuleView, CssDetachedRuleListMutation,
     CssFontFaceDescriptorEntryView, CssFontFaceRuleView, CssFontFeatureValueEntryView,

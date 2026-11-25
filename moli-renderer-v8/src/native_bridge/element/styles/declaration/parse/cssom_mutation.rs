@@ -408,9 +408,7 @@ fn commit_deferred_inline_property(
     let effects = if runtime.element_cssom_style(handle).is_some() {
         runtime
             .dom_host_mut()
-            .edit_deferred_style_attribute(handle, |source| {
-                CssomStyleAttribute::edit_shared(source, mutate)
-            })
+            .edit_cssom_style_attribute(handle, mutate)
     } else {
         let mut state = initial.expect("uncached inline style declaration state");
         if !mutate(&mut state) {

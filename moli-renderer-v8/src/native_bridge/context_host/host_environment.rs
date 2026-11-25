@@ -2722,9 +2722,10 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
     ) -> Option<&crate::css_style::CssomStyleAttribute> {
-        crate::css_style::CssomStyleAttribute::from_attribute(
-            self.dom_host().dom().find_attribute(handle, "style")?,
-        )
+        self.dom_host()
+            .dom()
+            .find_attribute(handle, "style")?
+            .cssom_style()
     }
 
     pub(crate) fn element_inline_style_declaration_state(

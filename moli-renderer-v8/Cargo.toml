@@ -45,7 +45,6 @@ read-fonts = "0.41.0"
 percent-encoding = "2.3"
 selectors = "0.41"
 stylo = "0.22"
-stylo_static_prefs = "0.22"
 moli-action-window = { path = "../moli-action-window" }
 moli-input = { path = "../moli-input" }
 moli-broadcast-channel = { path = "../moli-broadcast-channel" }

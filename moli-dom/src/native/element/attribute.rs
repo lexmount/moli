@@ -1,6 +1,7 @@
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::sync::Arc;
 
 use super::super::NativeDom;
+use super::super::inline_style::{CssInlineStyleDeclarationState, CssomStyleAttribute};
 use super::super::node::{NativeNodeId, NodeData};
 use html5ever::{LocalName, Namespace, Prefix};
 
@@ -22,7 +23,7 @@ enum AttributeValue {
 #[derive(Debug)]
 pub enum InlineStyleAttribute {
     Text(Box<str>),
-    Deferred(Box<dyn DeferredStyleAttribute>),
+    Cssom(Box<CssomStyleAttribute>),
 }
 
 impl InlineStyleAttribute {
@@ -33,22 +34,16 @@ impl InlineStyleAttribute {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Text(text) => text,
-            Self::Deferred(source) => source.serialized(),
+            Self::Cssom(source) => source.serialized(),
         }
     }
 
-    pub fn deferred(&self) -> Option<&dyn DeferredStyleAttribute> {
+    fn cssom(&self) -> Option<&CssomStyleAttribute> {
         match self {
-            Self::Deferred(source) => Some(source.as_ref()),
+            Self::Cssom(source) => Some(source),
             Self::Text(_) => None,
         }
     }
-}
-
-/// A node-owned CSSOM source whose serialized value is available to any DOM
-/// reader, including immutable DOM snapshots and readers outside V8.
-pub trait DeferredStyleAttribute: Any + Debug + Send + Sync {
-    fn serialized(&self) -> &str;
 }
 
 impl AttributeValue {
@@ -145,30 +140,45 @@ impl Attribute {
         }
     }
 
-    pub fn deferred_style(&self) -> Option<&dyn DeferredStyleAttribute> {
+    pub fn cssom_style(&self) -> Option<&CssomStyleAttribute> {
         match &self.value {
-            AttributeValue::Style(value) => value.deferred(),
+            AttributeValue::Style(value) => value.cssom(),
             AttributeValue::Text(_) => None,
         }
     }
 
-    pub(super) fn deferred_style_mut(&mut self) -> Option<&mut Arc<InlineStyleAttribute>> {
-        match &mut self.value {
-            AttributeValue::Style(source) if source.deferred().is_some() => Some(source),
-            _ => None,
+    pub(in crate::native) fn edit_cssom_style(
+        &mut self,
+        mutate: impl FnOnce(&mut CssInlineStyleDeclarationState) -> bool,
+    ) -> bool {
+        let AttributeValue::Style(source) = &mut self.value else {
+            return false;
+        };
+        if let Some(InlineStyleAttribute::Cssom(unique)) = Arc::get_mut(source) {
+            return unique.edit(mutate);
         }
+        let Some(shared) = source.cssom() else {
+            return false;
+        };
+        // A retained DOM snapshot still uses the original attribute.
+        let mut next = CssomStyleAttribute::new(shared.read().clone());
+        if !next.edit(mutate) {
+            return false;
+        }
+        *source = Arc::new(InlineStyleAttribute::Cssom(Box::new(next)));
+        true
     }
 
-    pub(super) fn set_deferred_style(&mut self, source: Box<dyn DeferredStyleAttribute>) {
-        self.value = AttributeValue::Style(Arc::new(InlineStyleAttribute::Deferred(source)));
+    pub(super) fn set_cssom_style(&mut self, source: Box<CssomStyleAttribute>) {
+        self.value = AttributeValue::Style(Arc::new(InlineStyleAttribute::Cssom(source)));
     }
 
-    pub(super) fn new_deferred_style(source: Box<dyn DeferredStyleAttribute>) -> Self {
+    pub(super) fn new_cssom_style(source: Box<CssomStyleAttribute>) -> Self {
         Self {
             local_name: html5ever::local_name!("style"),
             namespace: Namespace::default(),
             prefix: None,
-            value: AttributeValue::Style(Arc::new(InlineStyleAttribute::Deferred(source))),
+            value: AttributeValue::Style(Arc::new(InlineStyleAttribute::Cssom(source))),
         }
     }
 

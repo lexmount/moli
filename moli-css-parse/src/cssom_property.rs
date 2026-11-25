@@ -24,8 +24,13 @@ pub struct ParsedCssomProperty {
 
 impl ParsedCssomProperty {
     pub fn parse_without_document(name: &str, value: &str, important: bool) -> Option<Self> {
-        let url_data = UrlExtraData::from(url::Url::parse("about:blank").unwrap());
-        Self::parse(name, value, important, &url_data, QuirksMode::NoQuirks)
+        if !cssom_value_allowed(value) {
+            return None;
+        }
+        with_detached_style_context(|context| {
+            let property = PropertyId::parse(name, context).ok()?;
+            Self::parse_value(property, value, important, context)
+        })
     }
 
     pub fn parse(
@@ -35,28 +40,24 @@ impl ParsedCssomProperty {
         url_data: &UrlExtraData,
         quirks_mode: QuirksMode,
     ) -> Option<Self> {
-        if value.is_empty()
-            || (value.contains(';') && crate::escape_top_level_semicolons(value) != value)
-            || split_declaration_priority(value).is_some_and(|(_, important)| important)
-        {
+        if !cssom_value_allowed(value) {
             return None;
         }
-        let context = ParserContext::new(
-            Origin::Author,
-            url_data,
-            Some(CssRuleType::Style),
-            ParsingMode::DEFAULT,
-            quirks_mode,
-            Default::default(),
-            None,
-            None,
-            Default::default(),
-        );
+        let context = style_context(url_data, quirks_mode);
         let property = PropertyId::parse(name, &context).ok()?;
+        Self::parse_value(property, value, important, &context)
+    }
+
+    pub(crate) fn parse_value(
+        property: PropertyId,
+        value: &str,
+        important: bool,
+        context: &ParserContext<'_>,
+    ) -> Option<Self> {
         let mut source = SourcePropertyDeclaration::default();
         Parser::new(value)
             .parse_entirely(|input| {
-                PropertyDeclaration::parse_into(&mut source, property.clone(), &context, input)
+                PropertyDeclaration::parse_into(&mut source, property.clone(), context, input)
             })
             .ok()?;
         Some(Self {
@@ -125,6 +126,15 @@ impl ParsedCssomProperty {
         target.extend(self.source.drain(), self.importance);
     }
 
+    pub(crate) fn property(&self) -> &PropertyId {
+        &self.property
+    }
+
+    pub(crate) fn replace_in_declaration_list(self, target: &mut PropertyDeclarationBlock) {
+        remove(target, &self.property);
+        self.append_to_declaration_list(target);
+    }
+
     pub fn apply(
         mut self,
         target: &mut CssDeclarationBlock,
@@ -175,6 +185,33 @@ impl ParsedCssomProperty {
         *target = CssDeclarationBlock::new(block);
         true
     }
+}
+
+fn cssom_value_allowed(value: &str) -> bool {
+    !value.is_empty()
+        && (!value.contains(';') || crate::escape_top_level_semicolons(value) == value)
+        && !split_declaration_priority(value).is_some_and(|(_, important)| important)
+}
+
+pub(crate) fn with_detached_style_context<T>(
+    use_context: impl FnOnce(&ParserContext<'_>) -> T,
+) -> T {
+    let url_data = UrlExtraData::from(url::Url::parse("about:blank").unwrap());
+    use_context(&style_context(&url_data, QuirksMode::NoQuirks))
+}
+
+fn style_context(url_data: &UrlExtraData, quirks_mode: QuirksMode) -> ParserContext<'_> {
+    ParserContext::new(
+        Origin::Author,
+        url_data,
+        Some(CssRuleType::Style),
+        ParsingMode::DEFAULT,
+        quirks_mode,
+        Default::default(),
+        None,
+        None,
+        Default::default(),
+    )
 }
 
 fn remove(block: &mut PropertyDeclarationBlock, property: &PropertyId) {

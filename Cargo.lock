@@ -5067,6 +5067,7 @@ dependencies = [
  "cssparser",
  "euclid",
  "stylo",
+ "stylo_static_prefs",
  "stylo_traits",
  "unicode-case-mapping",
  "url",
@@ -5115,6 +5116,7 @@ dependencies = [
 name = "moli-dom"
 version = "0.1.0"
 dependencies = [
+ "cssparser",
  "html5ever 0.40.1",
  "indexmap",
  "moli-css-parse",
@@ -5122,12 +5124,14 @@ dependencies = [
  "moli-html-input-temporal",
  "moli-html-input-type",
  "moli-html2md",
+ "parking_lot",
  "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "selectors",
  "serde",
  "serde_json",
  "servo_arc",
  "strum 0.28.0",
+ "stylo",
  "thin-vec",
  "url",
 ]
@@ -5752,7 +5756,6 @@ dependencies = [
  "strum 0.28.0",
  "stylo",
  "stylo_dom",
- "stylo_static_prefs",
  "stylo_traits",
  "tempfile",
  "thiserror 2.0.18",
