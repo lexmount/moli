@@ -1415,3 +1415,26 @@ fn tab_index_getter_uses_the_spec_default_element_set() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn processing_instruction_validates_the_original_target_code_units() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+    let result = vm
+        .eval(
+            r#"(function () {
+                const xml = new DOMParser().parseFromString("<root/>", "application/xml");
+                return JSON.stringify([document, xml].map(doc => {
+                    const pi = doc.createProcessingInstruction("p", "data");
+                    let error;
+                    try { doc.createProcessingInstruction("\uD800", "data"); }
+                    catch (caught) { error = caught.name; }
+                    return [pi.target, pi.data, error];
+                }));
+            })()"#,
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        r#"[["p","data","InvalidCharacterError"],["p","data","InvalidCharacterError"]]"#,
+    );
+}
