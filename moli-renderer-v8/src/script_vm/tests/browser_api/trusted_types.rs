@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+fn trusted_types_csp_applies_duplicate_policy_rules_to_an_existing_name() {
+    for (policies, expected) in [
+        (vec![], "allowed"),
+        (vec!["trusted-types example"], "TypeError"),
+        (vec!["trusted-types *"], "TypeError"),
+        (vec!["trusted-types example 'allow-duplicates'"], "allowed"),
+        (
+            vec![
+                "trusted-types example 'allow-duplicates'",
+                "trusted-types example",
+            ],
+            "TypeError",
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://trusted-policy-duplicates.test/");
+        vm.set_response_content_security_policies(
+            &policies
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
+        );
+        let result = vm
+            .eval(
+                r#"
+            trustedTypes.createPolicy("example", {});
+            try {
+              trustedTypes.createPolicy("example", {});
+              "allowed";
+            } catch (error) {
+              error.name;
+            }
+            "#,
+            )
+            .unwrap();
+        assert_eq!(result, expected);
+    }
+}
+
+#[test]
 fn trusted_types_csp_policy_creation_matches_only_valid_name_tokens() {
     for (policy, name, expected) in [
         ("trusted-types valid policy*name", "valid", "allowed"),

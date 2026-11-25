@@ -6,7 +6,7 @@ use crate::content_security_policy::{
     ContentSecurityPolicyResourceKind, ContentSecurityPolicyScriptElementRequest,
     ContentSecurityPolicyStyleElementRequest, ContentSecurityPolicyUrlViolation,
     ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
-    content_security_policy_allows_trusted_type_policy_name,
+    content_security_policy_allows_trusted_type_policy_creation,
     content_security_policy_allows_trusted_types_eval,
     content_security_policy_frame_ancestors_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_headers,
@@ -1732,13 +1732,14 @@ impl DocumentRuntime {
         response_policies: &[ContentSecurityPolicy],
         response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
         policy_name: &str,
+        is_duplicate: bool,
     ) -> bool {
         let policies = self.document_content_security_policies_for_optional_document(
             document_handle,
             response_policies,
             response_reporting_endpoints,
         );
-        document_policies_allow_trusted_type_policy_name(policies, policy_name)
+        document_policies_allow_trusted_type_policy_name(policies, policy_name, is_duplicate)
     }
 
     pub(crate) fn queue_content_security_policy_violation_event_best_effort<'s>(
@@ -2440,9 +2441,14 @@ fn iter_document_trusted_types_sink_policy_violations<'a>(
 fn document_policies_allow_trusted_type_policy_name(
     policies: Vec<DocumentContentSecurityPolicy>,
     policy_name: &str,
+    is_duplicate: bool,
 ) -> bool {
     policies.into_iter().all(|policy| {
-        content_security_policy_allows_trusted_type_policy_name(&[policy.policy], policy_name)
+        content_security_policy_allows_trusted_type_policy_creation(
+            &[policy.policy],
+            policy_name,
+            is_duplicate,
+        )
     })
 }
 

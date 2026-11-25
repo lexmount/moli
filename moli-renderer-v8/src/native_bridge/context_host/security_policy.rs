@@ -1174,6 +1174,7 @@ impl PageScriptHost {
         &self,
         scope: &mut v8::PinScope<'_, '_>,
         policy_name: &str,
+        is_duplicate: bool,
     ) -> bool {
         let Some(snapshot) =
             self.owner_document_policy_snapshot(policy_owner_dispatch_scope(scope))
@@ -1188,6 +1189,7 @@ impl PageScriptHost {
                 .policy_container
                 .content_security_reporting_endpoints,
             policy_name,
+            is_duplicate,
         )
     }
 

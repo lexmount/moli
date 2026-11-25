@@ -54,9 +54,17 @@ pub fn content_security_policy_allows_trusted_type_policy_name(
     policies: &[ContentSecurityPolicy],
     policy_name: &str,
 ) -> bool {
+    content_security_policy_allows_trusted_type_policy_creation(policies, policy_name, false)
+}
+
+pub fn content_security_policy_allows_trusted_type_policy_creation(
+    policies: &[ContentSecurityPolicy],
+    policy_name: &str,
+    is_duplicate: bool,
+) -> bool {
     policies
         .iter()
-        .all(|policy| policy_allows_trusted_type_policy_name(policy, policy_name))
+        .all(|policy| policy_allows_trusted_type_policy_name(policy, policy_name, is_duplicate))
 }
 
 pub fn content_security_policy_sandboxes_document_domain(
@@ -620,11 +628,12 @@ fn policy_allows_trusted_types_eval(policy: &ContentSecurityPolicy) -> bool {
 fn policy_allows_trusted_type_policy_name(
     policy: &ContentSecurityPolicy,
     policy_name: &str,
+    is_duplicate: bool,
 ) -> bool {
     let Some(sources) = directive_source_list(policy, TRUSTED_TYPES) else {
         return true;
     };
-    sources.iter().any(|source| {
+    let name_is_allowed = sources.iter().any(|source| {
         let source = *source;
         source == "*"
             || (!source.is_empty()
@@ -633,7 +642,12 @@ fn policy_allows_trusted_type_policy_name(
                     byte.is_ascii_alphanumeric()
                         || matches!(byte, b'-' | b'#' | b'=' | b'_' | b'/' | b'@' | b'.' | b'%')
                 }))
-    })
+    });
+    name_is_allowed
+        && (!is_duplicate
+            || sources
+                .iter()
+                .any(|source| csp_keyword_eq(source, "allow-duplicates")))
 }
 
 fn policy_sandboxes_document_domain(policy: &ContentSecurityPolicy) -> bool {
