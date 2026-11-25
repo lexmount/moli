@@ -1,4 +1,5 @@
-use indexmap::IndexSet;
+use dom::ElementState;
+use indexmap::{IndexMap, IndexSet};
 use moli_selector::{
     StyleMutationSnapshots, StyloDomHostBinding, StyloDomStyleAdapter, StyloElement,
 };
@@ -30,6 +31,7 @@ pub(super) struct PendingNativeInvalidation {
     original_parents: IndexSet<DomHandle>,
     structures: Vec<StyleMutationEffect>,
     subtrees: IndexSet<DomHandle>,
+    states_without_snapshots: IndexMap<DomHandle, ElementState>,
 }
 
 impl PendingNativeInvalidation {
@@ -99,8 +101,18 @@ impl PendingNativeInvalidation {
         self.extend_snapshots(host, snapshots);
     }
 
-    pub(super) fn invalidate_subtrees(&mut self, roots: impl IntoIterator<Item = DomHandle>) {
-        self.subtrees.extend(roots);
+    pub(super) fn record_state_without_snapshot(
+        &mut self,
+        host: &DomHost,
+        element: DomHandle,
+        state: ElementState,
+    ) {
+        self.subtrees
+            .insert(host.parent_node(element).unwrap_or(element));
+        self.states_without_snapshots
+            .entry(element)
+            .or_insert(ElementState::empty())
+            .insert(state);
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -182,6 +194,16 @@ impl PendingNativeInvalidation {
                                     Some(&context.thread_local.stack_limit_checker),
                                     &mut context.thread_local.selector_caches,
                                 );
+                        }
+
+                        if relative_selectors {
+                            for (handle, state) in self.states_without_snapshots {
+                                if host.owner_document_handle(handle) == Some(world.document)
+                                    && let Some(element) = adapter.element(host, handle)
+                                {
+                                    invalidate_relative_state(stylist, element, state);
+                                }
+                            }
                         }
 
                         for mutation in &self.structures {
@@ -281,6 +303,19 @@ fn invalidate_structure(
             let Some(stylist) = stylist else {
                 return;
             };
+            if next_sibling.is_some()
+                && added_nodes
+                    .iter()
+                    .filter(|&&node| host.node(node).is_some_and(Node::is_element))
+                    .nth(1)
+                    .is_some()
+            {
+                // A fragment can break the old adjacency across the entire
+                // splice. No individual inserted node can replay that pair.
+                subtrees.insert(*parent);
+                invalidate_relative_boundaries(host, adapter, *parent, subtrees);
+                return;
+            }
             for &node in added_nodes {
                 if host.parent_node(node) == Some(*parent)
                     && let Some(element) = adapter.element(host, node)
@@ -435,6 +470,37 @@ fn adjacent_element(
 ) -> Option<DomHandle> {
     std::iter::successors(start, |&handle| step(host, handle))
         .find(|&node| host.node(node).is_some_and(Node::is_element))
+}
+
+fn invalidate_relative_state(
+    stylist: &style::stylist::Stylist,
+    element: StyloElement<'_>,
+    state: ElementState,
+) {
+    RelativeSelectorInvalidator {
+        element,
+        quirks_mode: stylist.quirks_mode(),
+        snapshot_table: None,
+        invalidated: |_, _| {},
+        affected: None,
+        sibling_traversal_map: SiblingTraversalMap::default(),
+        _marker: std::marker::PhantomData,
+    }
+    .invalidate_relative_selectors_for_this(
+        stylist,
+        |element, host, data, quirks, collector| {
+            // Aggregate states can change during a splice before the host can
+            // observe their old bits. Consider every matching state dependency.
+            data.relative_selector_invalidation_map()
+                .state_affecting_selectors
+                .lookup_with_additional(*element, quirks, None, &[], state, |dependency| {
+                    if dependency.state.intersects(state) {
+                        collector.add_dependency(&dependency.dep, *element, host);
+                    }
+                    true
+                });
+        },
+    );
 }
 
 fn invalidate_relative_splice(

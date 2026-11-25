@@ -2409,6 +2409,70 @@ fn has_selector_child_list_mutation_invalidates_ancestor_dependent_styles() {
     assert_eq!(result, "rgb(255, 0, 0)|rgb(0, 128, 0)");
 }
 #[test]
+fn relative_validity_selector_tracks_controls_added_to_form() {
+    let mut vm = new_parsed_test_vm(
+        "https://relative-validity.test/",
+        r#"<!doctype html>
+<style>
+#outside { color: rgb(10, 20, 30) }
+body:has(form:invalid) #outside { color: rgb(40, 50, 60) }
+</style>
+<div id="outside"></div>
+<section><form id="form"></form></section>"#,
+    );
+    let colors = vm
+        .eval(
+            r#"(() => {
+  const outside = document.getElementById('outside');
+  const form = document.getElementById('form');
+  const color = () => getComputedStyle(outside).color;
+  const before = color();
+  const input = document.createElement('input');
+  input.required = true;
+  form.append(input);
+  const inserted = color();
+  input.remove();
+  return [before, inserted, color()].join('|');
+})()"#,
+        )
+        .unwrap();
+    assert_eq!(colors, "rgb(10, 20, 30)|rgb(40, 50, 60)|rgb(10, 20, 30)");
+}
+
+#[test]
+fn relative_adjacent_selector_detects_a_fragment_inserted_at_its_boundary() {
+    let mut vm = new_parsed_test_vm(
+        "https://relative-fragment-adjacency.test/",
+        r#"<!doctype html>
+<style>
+#anchor { color: rgb(10, 20, 30) }
+#anchor:has(+ .target) { color: rgb(40, 50, 60) }
+</style>
+<div><div id="anchor"></div><div id="target" class="target"></div></div>"#,
+    );
+    let colors = vm
+        .eval(
+            r#"(() => {
+  const anchor = document.getElementById('anchor');
+  const target = document.getElementById('target');
+  const color = () => getComputedStyle(anchor).color;
+  const before = color();
+  const first = document.createElement('i');
+  const second = document.createElement('b');
+  const fragment = document.createDocumentFragment();
+  fragment.append(first, second);
+  target.parentNode.insertBefore(fragment, target);
+  const inserted = color();
+  first.remove();
+  second.remove();
+  return [before, inserted, color()].join('|');
+})()"#,
+        )
+        .unwrap();
+    assert_eq!(colors, "rgb(40, 50, 60)|rgb(10, 20, 30)|rgb(40, 50, 60)");
+}
+
+#[test]
 fn uppercase_has_selector_child_list_mutation_invalidates_ancestor_dependent_styles() {
     let mut vm = new_storage_test_vm("https://uppercase-has-selector-child-list-style.test/");
     let document = vm.document_handle_for_test();
