@@ -21,8 +21,6 @@ use style::{
     traversal_flags::TraversalFlags,
 };
 
-use super::super::ScreenStyleInvalidation;
-
 #[cfg(test)]
 use super::STYLE_RESOLUTION_CONTEXTS;
 use super::{
@@ -193,11 +191,10 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         self.context.world.document_state.screen_style_coverage()
     }
 
-    pub(crate) fn resolve_screen_style_target(
+    pub(crate) fn resolve_screen_target_for_reuse(
         &mut self,
         handle: DomHandle,
         after: u64,
-        supported: ServoRestyleDamage,
     ) -> Option<RestyleHint> {
         let state = &self.context.world.document_state;
         if !state.screen_style_dependencies_are_current() || state.screen_uses_lazy_pseudo(handle) {
@@ -205,18 +202,9 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         }
         self.prepare(handle)?;
         let invalidation = &state.style_paths;
-        // Preparing a target can coalesce the history this traversal read.
-        if !invalidation.can_compare_after(after)
-            || matches!(
-                *state.screen_style_invalidation.borrow(),
-                ScreenStyleInvalidation::Full
-            )
-            || self
-                .engine
-                .dom_adapter
-                .element_restyle_damage(self.document(), handle)
-                .is_some_and(|damage| !supported.contains(damage))
-        {
+        // Resolving the target can also restyle ancestors or retire old branch
+        // observations. Either event can require a new screen layout.
+        if state.screen_needs_layout() || !invalidation.can_compare_after(after) {
             return None;
         }
         Some(
@@ -244,10 +232,19 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         &mut self,
         handle: DomHandle,
     ) -> Option<StyloComputedStyleSnapshot> {
+        self.element_styles_with_damage(handle)
+            .map(|(styles, _)| styles)
+    }
+
+    pub(crate) fn element_styles_with_damage(
+        &mut self,
+        handle: DomHandle,
+    ) -> Option<(StyloComputedStyleSnapshot, ServoRestyleDamage)> {
         let element = self.prepare(handle)?;
         let data = element.borrow_data()?;
-        Some(StyloComputedStyleSnapshot::from_element_styles(
-            &data.styles,
+        Some((
+            StyloComputedStyleSnapshot::from_element_styles(&data.styles),
+            data.damage,
         ))
     }
 

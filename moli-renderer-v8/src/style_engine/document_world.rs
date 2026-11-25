@@ -61,6 +61,7 @@ impl DocumentStyleWorld {
         self.pending_invalidations.clear();
         self.pending_structural_mutations.clear();
         self.pseudo_style_cache.clear();
+        self.document_state.retire_screen_style_publication();
         self.document_state.clear_retained_style_system();
         self.document_state.bump_source_set_generation();
         self.document_state.bump_computed_cache_generation();

@@ -84,10 +84,23 @@ fn realtime_retained_numeric_layout_matches_fresh_geometry_and_paint() {
     vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
 
     // Changing the content height removes and restores the automatic gutter.
+    let target = vm.document_runtime.get_element_by_id("target").unwrap();
     for height in [2, 70] {
-        vm.eval(&format!("target.style.height='{height}px'"))
-            .unwrap();
+        vm.eval(&format!(
+            "target.style.height='{height}px';getComputedStyle(target).color"
+        ))
+        .unwrap();
+        assert!(
+            host.borrow()
+                .screen_style_damage_for_node_for_test(target)
+                .is_some_and(|damage| damage
+                    .contains(style::servo::restyle_damage::ServoRestyleDamage::RELAYOUT))
+        );
         let incremental = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+        assert_eq!(
+            host.borrow().screen_style_damage_for_node_for_test(target),
+            None
+        );
         let metrics = vm.layout_pass_observability_for_test().3.unwrap();
         assert!(metrics.retained_box_count > 0);
         assert!(metrics.retained_numeric_layout_hits > 0);

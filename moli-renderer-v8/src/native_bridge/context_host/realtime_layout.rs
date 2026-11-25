@@ -7,6 +7,7 @@ use moli_layout::{
     LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, LayoutViewport,
     ScrollProjectionRefresh,
 };
+#[cfg(test)]
 use style::servo::restyle_damage::ServoRestyleDamage;
 
 use super::realtime_animation_frames::RealtimeAnimationFrames;
@@ -20,7 +21,7 @@ use super::screencast_paint::{
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
-    layout_renderer::{LayoutPassFeedback, resolve_screen_style_targets},
+    layout_renderer::{LayoutPassFeedback, screen_targets_allow_layout_reuse},
     style_engine::{ScreenStyleCoverage, StyloStyleEnvironment},
 };
 
@@ -449,18 +450,17 @@ impl PageScriptHost {
             self.prepare_current_screen_styles(&inputs);
         }
         if self.screen_layout_matches_inputs(state, &inputs)
-            && let Some(checked_documents) = if resolve_style_changes {
-                self.validate_reusable_screen_styles(&inputs)
-            } else {
-                Some(Vec::new())
-            }
+            && (!resolve_style_changes || self.screen_styles_allow_layout_reuse(&inputs))
             && (inputs.documents[0].root.is_none()
                 || !state.scroll_projection_dirty.get()
                 || self.refresh_published_scroll_projection()?
                     != ScrollProjectionRefresh::Unavailable)
         {
-            for document in checked_documents {
-                self.style_engine.consume_screen_style_work(document);
+            if resolve_style_changes {
+                for document in &inputs.documents {
+                    self.style_engine
+                        .consume_screen_style_work(document.document);
+                }
             }
             state.scroll_projection_dirty.set(false);
             return Ok(());
@@ -536,9 +536,7 @@ impl PageScriptHost {
     #[cfg(test)]
     pub(crate) fn observed_screen_style_damage_for_test(&self) -> ServoRestyleDamage {
         self.style_engine
-            .screen_style_changes(self.dom_host(), self.document_handle())
-            .expect("complete screen style invalidation")
-            .observed_damage
+            .observed_screen_damage_for_test(self.document_handle())
     }
 
     #[cfg(test)]
@@ -578,40 +576,22 @@ impl PageScriptHost {
         })
     }
 
-    fn validate_reusable_screen_styles(
-        &self,
-        inputs: &ScreenLayoutInputs,
-    ) -> Option<Vec<DomHandle>> {
-        // The frozen tree and retained paint inputs share a publication.
-        // Changes that require refreshing either one still use a full pass.
-        const SUPPORTED_DAMAGE: ServoRestyleDamage = ServoRestyleDamage::empty();
-        let mut checked_documents = Vec::new();
-        for document in &inputs.documents {
-            let changes = self
+    fn screen_styles_allow_layout_reuse(&self, inputs: &ScreenLayoutInputs) -> bool {
+        inputs.documents.iter().all(|document| {
+            let Some(restyles) = self
                 .style_engine
-                .screen_style_changes(self.dom_host(), document.document)?;
-            if !SUPPORTED_DAMAGE.contains(changes.observed_damage) {
-                return None;
-            }
-            let resolved = changes.targets.is_empty()
-                || resolve_screen_style_targets(
+                .screen_restyle_targets(self.dom_host(), document.document)
+            else {
+                return false;
+            };
+            restyles.targets.is_empty()
+                || screen_targets_allow_layout_reuse(
                     self,
                     document.document,
-                    changes.targets,
-                    changes.after,
-                    SUPPORTED_DAMAGE,
-                );
-            // Resolving a target can also publish damage on its ancestors.
-            if !resolved
-                || !self
-                    .style_engine
-                    .has_supported_screen_style_damage(document.document, SUPPORTED_DAMAGE)
-            {
-                return None;
-            }
-            checked_documents.push(document.document);
-        }
-        Some(checked_documents)
+                    restyles.targets,
+                    restyles.after,
+                )
+        })
     }
 
     fn prepare_current_screen_styles(&self, inputs: &ScreenLayoutInputs) {

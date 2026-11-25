@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use style::{
-    invalidation::element::restyle_hints::RestyleHint, servo::restyle_damage::ServoRestyleDamage,
-};
+use style::invalidation::element::restyle_hints::RestyleHint;
 
 use crate::{
     document_runtime::DomHandle, native_bridge::PageScriptHost,
@@ -11,14 +9,13 @@ use crate::{
 
 use super::style_resolver::layout_style_read_scope;
 
-/// Resolve pending targets through the canonical style commit. Unsupported
-/// scopes and damage are left for a full screen layout.
-pub(crate) fn resolve_screen_style_targets(
+/// Settle outstanding selector work while the current screen layout may still
+/// be reused. Canonical damage produced anywhere on the path ends this check.
+pub(crate) fn screen_targets_allow_layout_reuse(
     runtime: &PageScriptHost,
     document: DomHandle,
     targets: Vec<(DomHandle, StyleInvalidationScope)>,
     after: u64,
-    supported: ServoRestyleDamage,
 ) -> bool {
     let host = runtime.dom_host();
     // Affected subtrees may cross slot inheritance and have lazy pseudos
@@ -45,8 +42,7 @@ pub(crate) fn resolve_screen_style_targets(
             {
                 return false;
             }
-            let Some(child_hint) = pass.resolve_screen_style_target(handle, after, supported)
-            else {
+            let Some(child_hint) = pass.resolve_screen_target_for_reuse(handle, after) else {
                 return false;
             };
             let subtree =
