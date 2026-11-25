@@ -1,6 +1,68 @@
 use super::*;
 
 #[test]
+fn retained_inline_style_refreshes_only_when_its_parsing_input_changes() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let parent = host.create_element("section");
+    let target = host.create_element("span");
+    assert!(host.append_child(document, parent));
+    assert!(host.append_child(parent, target));
+    assert!(host.set_attribute(target, "style", "background-image: url(icon.png)"));
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let inputs = FullStyleWorldSnapshot::default();
+    let read = |engine: &MoliStyleEngine, host: &DomHost| {
+        engine.computed_style_property_value(
+            host,
+            &document_url,
+            target,
+            "background-image",
+            None,
+            &inputs,
+            None,
+        )
+    };
+    let snapshot = |engine: &MoliStyleEngine, host: &DomHost| {
+        engine.dom_adapter.with_bound_host(host, |binding| {
+            binding
+                .element(host, target)?
+                .style_attribute()
+                .map(|value| value.clone_arc())
+        })
+    };
+
+    assert_eq!(
+        read(&engine, &host).as_deref(),
+        Some("url(\"https://example.test/icon.png\")")
+    );
+    let initial = snapshot(&engine, &host).unwrap();
+    engine.invalidate_style_subtree(&host, parent);
+    read(&engine, &host).unwrap();
+    assert!(ServoArc::ptr_eq(
+        &initial,
+        &snapshot(&engine, &host).unwrap()
+    ));
+
+    let new_base = url::Url::parse("https://example.test/new/").unwrap();
+    engine.set_inline_style_base_url_with_host(&host, target, new_base);
+    engine.invalidate_style_subtree(&host, parent);
+    assert_eq!(
+        read(&engine, &host).as_deref(),
+        Some("url(\"https://example.test/new/icon.png\")")
+    );
+    assert!(!ServoArc::ptr_eq(
+        &initial,
+        &snapshot(&engine, &host).unwrap()
+    ));
+
+    assert!(host.remove_attribute(target, "style"));
+    engine.invalidate_style_subtree(&host, parent);
+    assert_eq!(read(&engine, &host).as_deref(), Some("none"));
+    assert!(snapshot(&engine, &host).is_none());
+}
+
+#[test]
 fn detached_document_inline_style_metadata_uses_owner_document_world() {
     let mut host = test_host();
     let document = host.document_handle();

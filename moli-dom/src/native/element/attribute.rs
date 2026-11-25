@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::super::NativeDom;
 use super::super::node::{NativeNodeId, NodeData};
 use html5ever::{LocalName, Namespace, Prefix};
@@ -7,7 +9,37 @@ pub struct Attribute {
     pub(super) local_name: LocalName,
     pub(super) namespace: Namespace,
     pub(super) prefix: Option<Prefix>,
-    value: Box<str>,
+    value: AttributeValue,
+}
+
+#[derive(Debug, Clone)]
+enum AttributeValue {
+    Text(Box<str>),
+    Style(Arc<InlineStyleAttribute>),
+}
+
+/// The shared text and identity of a style attribute or its CSSOM projection.
+#[derive(Debug)]
+pub struct InlineStyleAttribute(Box<str>);
+
+impl InlineStyleAttribute {
+    pub fn new(text: String) -> Self {
+        Self(text.into_boxed_str())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AttributeValue {
+    fn new(value: String, is_style: bool) -> Self {
+        if is_style {
+            Self::Style(Arc::new(InlineStyleAttribute::new(value)))
+        } else {
+            Self::Text(value.into_boxed_str())
+        }
+    }
 }
 
 impl Attribute {
@@ -21,11 +53,12 @@ impl Attribute {
         prefix: Option<String>,
         value: String,
     ) -> Self {
+        let is_style = local_name == "style" && prefix.as_deref().is_none_or(str::is_empty);
         Self {
             local_name: LocalName::from(local_name),
             namespace: Namespace::from(namespace),
             prefix: prefix.map(Prefix::from),
-            value: value.into_boxed_str(),
+            value: AttributeValue::new(value, is_style),
         }
     }
 
@@ -79,11 +112,22 @@ impl Attribute {
     }
 
     pub fn value(&self) -> &str {
-        self.value.as_ref()
+        match &self.value {
+            AttributeValue::Text(value) => value,
+            AttributeValue::Style(value) => value.as_str(),
+        }
+    }
+
+    /// Shares the same backing used by the DOM value for a `style` attribute.
+    pub fn shared_style_value(&self) -> Option<Arc<InlineStyleAttribute>> {
+        match &self.value {
+            AttributeValue::Style(value) => Some(Arc::clone(value)),
+            AttributeValue::Text(_) => None,
+        }
     }
 
     pub(super) fn set_value(&mut self, value: String) {
-        self.value = value.into_boxed_str();
+        self.value = AttributeValue::new(value, self.name_matches("style"));
     }
 }
 

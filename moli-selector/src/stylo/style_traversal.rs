@@ -5,6 +5,7 @@ use std::{
     hash::{Hash, Hasher},
     marker::PhantomData,
     ptr::NonNull,
+    sync::Arc as SharedArc,
     vec,
 };
 
@@ -29,6 +30,7 @@ use style::{
     selector_parser::{AttrValue as SelectorAttrValue, Lang, PseudoElement, SelectorImpl},
     servo_arc::{Arc, ArcBorrow},
     shared_lock::{Locked, SharedRwLock},
+    stylesheets::UrlExtraData,
     stylist::CascadeData,
     values::AtomIdent,
 };
@@ -75,7 +77,7 @@ pub struct StyloElementDataStore {
 #[derive(Default)]
 struct StyloElementDocumentDataStore {
     data: HashMap<NodeId, Box<ElementDataWrapper>>,
-    inline_styles: HashMap<NodeId, Arc<Locked<PropertyDeclarationBlock>>>,
+    inline_styles: HashMap<NodeId, InlineStyleSnapshot>,
     selector_flags: HashMap<NodeId, ElementSelectorFlags>,
     /// Stylo's equivalent of Blink's `ChildNeedsStyleInvalidation` breadcrumb.
     ///
@@ -84,6 +86,14 @@ struct StyloElementDocumentDataStore {
     /// document side table lets Moli follow only dirty branches later instead
     /// of rediscovering them by scanning every published `ElementData` entry.
     dirty_descendants: HashSet<NodeId>,
+}
+
+pub struct InlineStyleSnapshot {
+    pub document: NodeId,
+    pub source: SharedArc<moli_dom::native::InlineStyleAttribute>,
+    pub url_data: UrlExtraData,
+    pub quirks_mode: QuirksMode,
+    pub declarations: Arc<Locked<PropertyDeclarationBlock>>,
 }
 
 #[derive(Default)]
@@ -295,12 +305,30 @@ impl StyloDomStyleAdapter {
         (data.has_styles() && data.hint.is_empty()).then(|| data.styles.clone())
     }
 
-    pub fn set_inline_style_attribute(
+    pub fn inline_style_attribute_matches(
         &self,
+        document: NodeId,
         handle: NodeId,
-        declarations: Arc<Locked<PropertyDeclarationBlock>>,
-    ) {
-        self.state.set_inline_style_attribute(handle, declarations);
+        source: &SharedArc<moli_dom::native::InlineStyleAttribute>,
+        base_url: &url::Url,
+        quirks_mode: QuirksMode,
+    ) -> bool {
+        self.state
+            .element_data
+            .documents
+            .borrow()
+            .get(&document)
+            .and_then(|bucket| bucket.inline_styles.get(&handle))
+            .is_some_and(|style| {
+                style.document == document
+                    && style.quirks_mode == quirks_mode
+                    && style.url_data.0.as_ref() == base_url
+                    && SharedArc::ptr_eq(&style.source, source)
+            })
+    }
+
+    pub fn set_inline_style_attribute(&self, handle: NodeId, snapshot: InlineStyleSnapshot) {
+        self.state.set_inline_style_attribute(handle, snapshot);
     }
 
     pub fn clear_inline_style_attribute(&self, handle: NodeId) {
@@ -827,7 +855,7 @@ impl StyloElementDataStore {
         &self,
         host: &DomHost,
         handle: NodeId,
-        declarations: Arc<Locked<PropertyDeclarationBlock>>,
+        snapshot: InlineStyleSnapshot,
     ) {
         let document = self
             .note_owner_document_for_host(host, handle)
@@ -837,14 +865,10 @@ impl StyloElementDataStore {
             .entry(document)
             .or_default()
             .inline_styles
-            .insert(handle, declarations);
+            .insert(handle, snapshot);
     }
 
-    fn set_inline_style_for_indexed_handle(
-        &self,
-        handle: NodeId,
-        declarations: Arc<Locked<PropertyDeclarationBlock>>,
-    ) {
+    fn set_inline_style_for_indexed_handle(&self, handle: NodeId, snapshot: InlineStyleSnapshot) {
         let document = self
             .document_for_handle(handle)
             .expect("inline style side table requires an indexed owner document");
@@ -853,7 +877,7 @@ impl StyloElementDataStore {
             .entry(document)
             .or_default()
             .inline_styles
-            .insert(handle, declarations);
+            .insert(handle, snapshot);
     }
 
     fn clear_inline_styles_for_document(&self, document: NodeId) {
@@ -1002,7 +1026,7 @@ impl StyloElementDataStore {
             documents
                 .get(&document)
                 .and_then(|bucket| bucket.inline_styles.get(&handle))
-                .map(|declarations| &**declarations as *const Locked<PropertyDeclarationBlock>)
+                .map(|style| &*style.declarations as *const Locked<PropertyDeclarationBlock>)
         }?;
         // SAFETY: The pointed-to allocation is owned by a servo_arc::Arc. The
         // TElement contract already requires callers not to clear style data
@@ -1017,7 +1041,7 @@ impl StyloElementDataStore {
         let declarations = {
             let documents = self.documents.borrow();
             self.find_inline_style(&documents, handle)
-                .map(|declarations| &**declarations as *const Locked<PropertyDeclarationBlock>)
+                .map(|style| &*style.declarations as *const Locked<PropertyDeclarationBlock>)
         }?;
         // SAFETY: The pointed-to allocation is owned by a servo_arc::Arc. The
         // TElement contract already requires callers not to clear style data
@@ -1171,7 +1195,7 @@ impl StyloElementDataStore {
         &self,
         documents: &'a HashMap<NodeId, StyloElementDocumentDataStore>,
         handle: NodeId,
-    ) -> Option<&'a Arc<Locked<PropertyDeclarationBlock>>> {
+    ) -> Option<&'a InlineStyleSnapshot> {
         if let Some(document) = self.document_for_handle(handle)
             && let Some(declarations) = documents
                 .get(&document)
@@ -1477,17 +1501,13 @@ impl StyleDomState {
         self.element_data.has_style_values_for_document(document)
     }
 
-    fn set_inline_style_attribute(
-        &self,
-        handle: NodeId,
-        declarations: Arc<Locked<PropertyDeclarationBlock>>,
-    ) {
+    fn set_inline_style_attribute(&self, handle: NodeId, snapshot: InlineStyleSnapshot) {
         if let Some(host) = self.try_host() {
             self.element_data
-                .set_inline_style_for_host(host, handle, declarations);
+                .set_inline_style_for_host(host, handle, snapshot);
         } else {
             self.element_data
-                .set_inline_style_for_indexed_handle(handle, declarations);
+                .set_inline_style_for_indexed_handle(handle, snapshot);
         }
     }
 
@@ -2490,9 +2510,15 @@ impl SelectorsElement for StyleElement<'_> {
 mod element_data_store_tests {
     use super::*;
 
-    fn empty_inline_style() -> Arc<Locked<PropertyDeclarationBlock>> {
+    fn empty_inline_style() -> InlineStyleSnapshot {
         let lock = SharedRwLock::read_only();
-        Arc::new(lock.wrap(PropertyDeclarationBlock::new()))
+        InlineStyleSnapshot {
+            document: NodeId::new(0),
+            source: SharedArc::new(moli_dom::native::InlineStyleAttribute::new(String::new())),
+            url_data: UrlExtraData::from(url::Url::parse("about:blank").unwrap()),
+            quirks_mode: QuirksMode::NoQuirks,
+            declarations: Arc::new(lock.wrap(PropertyDeclarationBlock::new())),
+        }
     }
 
     #[test]

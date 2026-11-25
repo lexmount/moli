@@ -42,7 +42,7 @@ use crate::{
     dom::native::{DomHost, Node},
 };
 
-use moli_selector::StyloElement;
+use moli_selector::{InlineStyleSnapshot, StyloElement};
 
 use super::{
     FullStyleWorldSnapshot, MoliStyleEngine, PreparedStyleWorldUpdate, StyleViewport,
@@ -1358,28 +1358,49 @@ fn populate_inline_style_attribute_for_resolution(
         engine.dom_adapter.clear_inline_style_attribute(node);
         return;
     }
-    if let Some(style_attribute) = world
+    let Some(source) = world
         .inline_style_metadata
         .resolution_text(node)
-        .or_else(|| host.get_attribute(node, "style"))
-    {
-        let base_url = world
-            .inline_style_metadata
-            .base_url(node)
-            .unwrap_or_else(|| style_resolution_base_url(host, document_url, node));
-        let url_data = UrlExtraData::from(base_url);
-        let declarations = parse_style_attribute(
-            &style_attribute,
-            &url_data,
-            None,
-            quirks_mode,
-            CssRuleType::Style,
-        );
-        engine.dom_adapter.set_inline_style_attribute(
-            node,
-            ServoArc::new(engine.dom_adapter.shared_lock().wrap(declarations)),
-        );
+        .or_else(|| {
+            host.dom()
+                .find_attribute(node, "style")?
+                .shared_style_value()
+        })
+    else {
+        engine.dom_adapter.clear_inline_style_attribute(node);
+        return;
+    };
+    let base_url = world
+        .inline_style_metadata
+        .base_url(node)
+        .unwrap_or_else(|| style_resolution_base_url(host, document_url, node));
+    if engine.dom_adapter.inline_style_attribute_matches(
+        world.document,
+        node,
+        &source,
+        &base_url,
+        quirks_mode,
+    ) {
+        return;
     }
+    let url_data = UrlExtraData::from(base_url);
+    let declarations = parse_style_attribute(
+        source.as_str(),
+        &url_data,
+        None,
+        quirks_mode,
+        CssRuleType::Style,
+    );
+    engine.dom_adapter.set_inline_style_attribute(
+        node,
+        InlineStyleSnapshot {
+            document: world.document,
+            source,
+            url_data,
+            quirks_mode,
+            declarations: ServoArc::new(engine.dom_adapter.shared_lock().wrap(declarations)),
+        },
+    );
 }
 
 fn style_resolution_base_url(

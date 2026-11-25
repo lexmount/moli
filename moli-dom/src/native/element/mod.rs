@@ -5,7 +5,7 @@ mod rare_data;
 #[cfg(test)]
 mod tests;
 
-pub use attribute::Attribute;
+pub use attribute::{Attribute, InlineStyleAttribute};
 pub use control_state::{ElementControlState, SelectedFile};
 pub use interface_names::{
     html_element_interface_name, is_mathml_namespace, mathml_element_interface_name,

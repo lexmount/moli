@@ -1,4 +1,5 @@
-use std::{cell::RefCell, collections::HashMap};
+use moli_dom::native::InlineStyleAttribute;
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use crate::document_runtime::DomHandle;
 
@@ -10,7 +11,7 @@ pub(in crate::style_engine) struct InlineStyleMetadataStore {
 #[derive(Clone, Debug, Default)]
 pub(in crate::style_engine) struct InlineStyleMetadata {
     base_url: Option<url::Url>,
-    resolution_text: Option<String>,
+    resolution_text: Option<Arc<InlineStyleAttribute>>,
     csp_state: InlineStyleCspState,
 }
 
@@ -55,11 +56,16 @@ impl InlineStyleMetadataStore {
     }
 
     pub(in crate::style_engine) fn set_resolution_text(&self, handle: DomHandle, text: String) {
-        self.metadata_by_handle
-            .borrow_mut()
-            .entry(handle)
-            .or_default()
-            .resolution_text = Some(text);
+        let mut entries = self.metadata_by_handle.borrow_mut();
+        let metadata = entries.entry(handle).or_default();
+        if metadata
+            .resolution_text
+            .as_ref()
+            .map(|source| source.as_str())
+            != Some(text.as_str())
+        {
+            metadata.resolution_text = Some(Arc::new(InlineStyleAttribute::new(text)));
+        }
     }
 
     pub(in crate::style_engine) fn clear_resolution_text(&self, handle: DomHandle) {
@@ -68,7 +74,10 @@ impl InlineStyleMetadataStore {
         });
     }
 
-    pub(in crate::style_engine) fn resolution_text(&self, handle: DomHandle) -> Option<String> {
+    pub(in crate::style_engine) fn resolution_text(
+        &self,
+        handle: DomHandle,
+    ) -> Option<Arc<InlineStyleAttribute>> {
         self.metadata_by_handle
             .borrow()
             .get(&handle)
