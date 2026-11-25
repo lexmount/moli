@@ -2094,6 +2094,10 @@ where
     let mut prepared_context_count = 0usize;
     let mut text_unit_count = 0usize;
     let mut reused_context_count = 0usize;
+    let reuse_roles = world
+        .numeric_tree
+        .as_ref()
+        .is_some_and(|tree| tree.covers(world.boxes.len()));
     for (index, layout_box) in world.boxes.iter_mut().enumerate() {
         if retain_prepared {
             if let Some(context) = layout_box.inline_layout.as_mut() {
@@ -2106,8 +2110,10 @@ where
         } else {
             layout_box.inline_layout = None;
         }
-        layout_box.inline_context_owner = None;
-        layout_box.inline_flattened = false;
+        if !reuse_roles {
+            layout_box.inline_context_owner = None;
+            layout_box.inline_flattened = false;
+        }
         layout_box.inline_static_position = None;
     }
 
@@ -2128,7 +2134,9 @@ where
             // normalization which was discarded, plus these mutable roles.
             // Preserve the latter for current numeric traversal and objects.
             let role_update_started = profile_started.map(|_| std::time::Instant::now());
-            restore_inline_roles(world, owner);
+            if !reuse_roles {
+                restore_inline_roles(world, owner);
+            }
             if let Some(started) = role_update_started {
                 role_update_elapsed += started.elapsed();
             }

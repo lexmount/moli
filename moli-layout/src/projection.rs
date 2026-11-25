@@ -65,6 +65,7 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) retained_box_count: usize,
     pub(crate) pruned_source_count: usize,
     pub(crate) retained_numeric_layout_hits: usize,
+    pub(crate) retained_numeric_tree: bool,
 }
 
 pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
@@ -176,6 +177,7 @@ where
         retained_box_count: phase_metrics.retained_box_count,
         pruned_source_count: phase_metrics.pruned_source_count,
         retained_numeric_layout_hits: phase_metrics.retained_numeric_layout_hits,
+        retained_numeric_tree: phase_metrics.retained_numeric_tree,
         fragment_count: projection.fragments.len(),
         paint_event_count: paint_projection_metrics.event_count,
         paint_culled_event_count: paint_projection_metrics.culled_event_count,
@@ -220,7 +222,9 @@ where
     let retained_layout = (reusable_layout || paint.is_some()).then(|| {
         world.native_grid_details = HashMap::new();
         world.resolved_grid_tracks = HashMap::new();
-        world.table_structures = HashMap::new();
+        if !reusable_layout || world.numeric_tree.is_none() {
+            world.table_structures = HashMap::new();
+        }
         if !reusable_layout {
             world.release_numeric_cache_storage();
         }

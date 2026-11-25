@@ -361,9 +361,15 @@ where
         if reattach || children != world.boxes[id.index()].children {
             let old_children = std::mem::take(&mut world.boxes[id.index()].children);
             let style = world.boxes[id.index()].style.clone();
+            let was_ifc = world.boxes[id.index()].inline_formatting_context;
             let roots =
                 self.attach_children(world, id, node, &style, children, id != world.root)?;
-            changed |= roots.len() != 1 || world.boxes[id.index()].children != old_children;
+            let structure_changed =
+                roots.as_slice() != [id] || world.boxes[id.index()].children != old_children;
+            if structure_changed || world.boxes[id.index()].inline_formatting_context != was_ifc {
+                world.numeric_tree = None;
+            }
+            changed |= structure_changed;
             parent_children.extend(roots);
         } else {
             parent_children.push(id);

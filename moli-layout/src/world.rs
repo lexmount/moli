@@ -672,7 +672,7 @@ where
     /// Winning collapsed-table edges, computed and consumed in this pass.
     /// Empty slots are not embedded in boxes that do not own a table.
     pub(crate) collapsed_table_borders: HashMap<LayoutBoxId, crate::table::CollapsedTableBorders>,
-    /// Row and column structure stays valid throughout one numeric pass.
+    /// Row and column structure shares the lifetime of the numeric topology.
     pub(crate) table_structures: HashMap<LayoutBoxId, std::sync::Arc<crate::table::TableStructure>>,
     /// Used Grid tracks for actual owners. Their canonical result is frozen
     /// for CSSOM before this pass-local map is released.
@@ -689,6 +689,7 @@ where
     pub(crate) environment: crate::LayoutEnvironment,
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
+    pub(crate) numeric_tree: Option<crate::taffy_tree::NumericTree>,
     pub(crate) fixed_viewport_layout: Option<Box<ViewportLayoutState>>,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
     pub(crate) inline_numeric_reuse: Option<Box<crate::inline::InlineNumericReuse>>,
@@ -729,6 +730,7 @@ where
             environment: crate::LayoutEnvironment::default(),
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
+            numeric_tree: None,
             fixed_viewport_layout: None,
             css_image_references: Vec::new(),
             inline_numeric_reuse: None,
@@ -778,6 +780,7 @@ where
 
     pub(crate) fn release_numeric_cache_storage(&mut self) {
         self.inline_numeric_reuse = None;
+        self.numeric_tree = None;
         self.retained_inline_fonts = None;
         self.box_caches = Vec::new();
         for layout_box in &mut self.boxes {
@@ -820,12 +823,24 @@ where
     pub(crate) fn replace_retained_box(&mut self, id: LayoutBoxId, mut replacement: LayoutBox<N>) {
         self.invalidate_retained_inline(id);
         self.clear_layout_caches(id);
+        let is_document_element = self.is_document_element(id);
         let old = &mut self.boxes[id.index()];
         replacement.structural_parent = old.structural_parent;
         replacement.parent = old.parent;
         replacement.cache_slot = old.cache_slot;
         replacement.children = std::mem::take(&mut old.children);
         replacement.inline_formatting_context = old.inline_formatting_context;
+        if self.numeric_tree.is_some() {
+            replacement.inline_context_owner = old.inline_context_owner;
+            replacement.inline_flattened = old.inline_flattened;
+            if crate::taffy_tree::same_numeric_box_role(old, &replacement, is_document_element) {
+                replacement.layout_parent = old.layout_parent;
+                replacement.layout_children = std::mem::take(&mut old.layout_children);
+                replacement.positioned_containing_block = old.positioned_containing_block;
+            } else {
+                self.numeric_tree = None;
+            }
+        }
         self.boxes[id.index()] = replacement;
     }
 
@@ -1037,7 +1052,7 @@ where
     }
 
     /// Keeps the existing box allocation and restores dense source order.
-    /// The numeric relationships are recomputed before the next measurement.
+    /// Changed IDs or discarded numeric placeholders retire the old topology.
     pub(crate) fn compact_for_reuse(&mut self, order: Vec<LayoutBoxId>) {
         let previous_len = self.boxes.len();
         if order.len() == previous_len
@@ -1048,6 +1063,7 @@ where
         {
             return;
         }
+        self.numeric_tree = None;
         let live_count = order.len();
         let mut remap = vec![None; previous_len];
         let mut positions: Vec<_> = (0..previous_len).collect();

@@ -38,8 +38,25 @@ use crate::{
 mod measurement;
 use measurement::FullMeasurementTree;
 
-pub(crate) struct PreparedWorldLayout {
+/// Prepared numeric relationships are indexed by the current construction
+/// boxes. Scrollbar feedback changes geometry without changing these links.
+#[derive(Debug)]
+pub(crate) struct NumericTree {
+    box_count: usize,
+    separate_fixed_viewport: bool,
     positioned_static_sources: Vec<PositionedStaticSource>,
+    table_roots: Vec<LayoutBoxId>,
+}
+
+impl NumericTree {
+    pub(crate) fn covers(&self, box_count: usize) -> bool {
+        self.box_count == box_count
+    }
+}
+
+pub(crate) struct PreparedWorldLayout {
+    pub(crate) tree: NumericTree,
+    pub(crate) reused_tree: bool,
     // Post-layout adapters change box geometry before the next feedback pass.
     numeric_unrounded_layouts: Vec<Layout>,
     feedback_invalidation_marks: Vec<bool>,
@@ -141,9 +158,15 @@ pub(crate) fn prepare_world_layout<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
+    let separate_fixed_viewport =
+        viewport.frame_size() != (viewport.css_width, viewport.css_height);
+    let retained_tree = world.numeric_tree.take().filter(|tree| {
+        tree.covers(world.boxes.len()) && tree.separate_fixed_viewport == separate_fixed_viewport
+    });
+    let reused_tree = retained_tree.is_some();
+
     world.resolved_grid_tracks.clear();
     world.native_grid_details.clear();
-    world.table_structures.clear();
     for index in 0..world.boxes.len() {
         if !reuse_numeric_layout {
             world.clear_layout_caches(LayoutBoxId::from_index(index));
@@ -151,23 +174,38 @@ where
         }
         let layout_box = &mut world.boxes[index];
         layout_box.final_layout = Layout::with_order(0);
-        layout_box.layout_parent = None;
-        layout_box.layout_children.clear();
-        layout_box.positioned_containing_block = None;
         layout_box.inline_static_position = None;
+        if !reused_tree {
+            layout_box.layout_parent = None;
+            layout_box.layout_children.clear();
+            layout_box.positioned_containing_block = None;
+        }
     }
 
-    world.viewport_layout.children.clear();
     world.viewport_layout.cache.clear();
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
-    world.fixed_viewport_layout = None;
-    let separate_fixed_viewport =
-        viewport.frame_size() != (viewport.css_width, viewport.css_height);
-    let (positioned_static_sources, tables) = prepare_layout_tree(world, separate_fixed_viewport);
+    let tree = retained_tree.unwrap_or_else(|| {
+        world.table_structures.clear();
+        world.viewport_layout.children.clear();
+        world.fixed_viewport_layout = None;
+        let (positioned_static_sources, table_roots) =
+            prepare_layout_tree(world, separate_fixed_viewport);
+        NumericTree {
+            box_count: world.boxes.len(),
+            separate_fixed_viewport,
+            positioned_static_sources,
+            table_roots,
+        }
+    });
+    if let Some(layout) = &mut world.fixed_viewport_layout {
+        layout.cache.clear();
+        layout.unrounded_layout = Layout::with_order(0);
+    }
     update_viewport_layout_styles(world, viewport);
-    prepare_tables(world, tables);
+    prepare_tables(world, &tree.table_roots);
     let mut prepared = PreparedWorldLayout {
-        positioned_static_sources,
+        tree,
+        reused_tree,
         numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
         feedback_invalidation_marks: vec![false; world.boxes.len()],
         feedback_invalidation_worklist: Vec::new(),
@@ -258,7 +296,7 @@ where
     }
     prepared.capture_numeric_geometry(world);
     physicalize_vertical_block_flow(world);
-    finish_positioned_static_layout(world, viewport, &prepared.positioned_static_sources);
+    finish_positioned_static_layout(world, viewport, &prepared.tree.positioned_static_sources);
     finish_inline_positioned_layout(world, viewport);
     finish_form_control_contents(world);
     finish_outside_list_markers(world);
@@ -651,7 +689,44 @@ where
     for (table, child) in table_children {
         world.boxes[table.index()].layout_children.push(child);
     }
+    tables.sort_unstable_by_key(|id| id.index());
     (positioned_static_sources, tables)
+}
+
+/// Compares the roles used by numeric tree preparation for an in-place
+/// replacement. Equal roles allow the existing links to keep their IDs.
+pub(crate) fn same_numeric_box_role<N>(
+    old: &crate::LayoutBox<N>,
+    replacement: &crate::LayoutBox<N>,
+    is_document_element: bool,
+) -> bool {
+    let fixed_containing_block = |layout_box: &crate::LayoutBox<N>| {
+        layout_box.style.establishes_fixed_containing_block(
+            is_document_element,
+            layout_box.is_css_box(),
+            layout_box.is_eligible_for_paint_or_layout_containment(),
+        )
+    };
+    let positioned_containing_block = |layout_box: &crate::LayoutBox<N>| {
+        layout_box.style.establishes_positioned_containing_block(
+            is_document_element,
+            layout_box.is_css_box(),
+            layout_box.is_eligible_for_paint_or_layout_containment(),
+        )
+    };
+
+    old.kind == replacement.kind
+        && old.style.display() == replacement.style.display()
+        && old.style.position() == replacement.style.position()
+        && old.style.order() == replacement.style.order()
+        && old.style.is_floated() == replacement.style.is_floated()
+        && old.outside_list_marker == replacement.outside_list_marker
+        && (!old.style.is_out_of_flow()
+            || old.style.has_auto_inset_axis() == replacement.style.has_auto_inset_axis())
+        && fixed_containing_block(old) == fixed_containing_block(replacement)
+        && positioned_containing_block(old) == positioned_containing_block(replacement)
+        && (!old.kind.is_internal_table_box()
+            || old.element_semantics == replacement.element_semantics)
 }
 
 fn accepts_numeric_children<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> bool

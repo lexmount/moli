@@ -129,6 +129,56 @@ fn realtime_retained_numeric_layout_matches_fresh_geometry_and_paint() {
 }
 
 #[test]
+fn realtime_reuses_numeric_links_until_box_roles_change() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;overflow:hidden}",
+        "#flex{display:flex}#first,#second{flex:none}#first{width:40px}",
+        "#second{width:30px}#context{margin-left:100px;position:relative}",
+        "#positioned{position:absolute;left:7px;top:4px;width:4px;height:4px;background:red}",
+        "</style><div id=flex><div id=first>First</div><div id=second>Second</div></div>",
+        "<div id=context><div id=positioned></div></div>",
+    ));
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+
+    for (edit, reused_tree, geometry) in [
+        ("first.style.width='60px'", true, "[0,60,107]"),
+        ("first.style.order='2'", false, "[30,0,107]"),
+        ("context.style.position='static'", false, "[30,0,7]"),
+        ("second.style.width='34px'", true, "[34,0,7]"),
+    ] {
+        vm.eval(edit).unwrap();
+        let retained = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+        let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+        assert_eq!(
+            metrics.retained_numeric_tree, reused_tree,
+            "{edit}: {metrics:?}"
+        );
+        assert_eq!(
+            vm.eval(
+                "JSON.stringify([first,second,positioned].map(node=>node.getBoundingClientRect().left))"
+            ).unwrap(),
+            geometry,
+            "{edit}",
+        );
+        let fresh = host
+            .borrow()
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::with_paint(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Screenshot,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(&retained), fresh.paint_snapshot(), "{edit}");
+    }
+}
+
+#[test]
 fn realtime_retained_inline_roles_match_fresh_geometry_and_paint() {
     let mut vm = realtime_vm(concat!(
         "<!doctype html><style>body{margin:0}p{margin:0;width:180px}",
