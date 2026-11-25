@@ -7,11 +7,10 @@ use super::inline_state::{
     style_entry_is_preservable_for_pdb_property, style_entry_is_replaceable_by_pdb_property,
 };
 use super::pdb_compat::{
-    ParsedPdbStyleProperty, apply_preparsed_pdb_property, css_value_uses_unresolved_cssom_storage,
-    cssom_empty_specified_placeholder_property,
+    css_value_uses_unresolved_cssom_storage, cssom_empty_specified_placeholder_property,
     cssom_style_property_uses_preferred_pdb_supplemental_entries,
     cssom_style_property_write_uses_pdb, inline_style_property_write_can_use_pdb_storage,
-    parse_style_property_entries_with_pdb, parse_style_property_entries_with_pdb_block,
+    parse_pdb_style_property, parse_style_property_entries_with_pdb,
     set_pdb_block_property_collecting_entries, style_entry_affects_property_query,
     style_entry_is_pdb_supplemental_side_entry, style_property_mutation_affected_names_with_pdb,
     style_property_mutation_cleanup_names_with_pdb,
@@ -177,6 +176,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                 &context.url_data,
                 mode,
             )
+            .filter(moli_css_parse::ParsedCssomProperty::is_resolved_longhand_list)
             .map(|declarations| (declarations, publishable.then_some(context)))
         })
         .flatten();
@@ -296,10 +296,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             (parsed.entries, Vec::new())
         }
     } else {
-        let ParsedPdbStyleProperty {
-            entries: parsed,
-            native_block,
-        } = parse_style_property_entries_with_pdb_block(name, value, priority)?;
+        let (parsed, native) = parse_pdb_style_property(name, value, priority)?;
         if parsed
             .entries
             .iter()
@@ -318,8 +315,8 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                 .collect::<Vec<_>>();
             let uses_preferred_supplemental_entries =
                 cssom_style_property_uses_preferred_pdb_supplemental_entries(name, value, priority);
-            let mut entries = if let Some(native_block) = native_block {
-                apply_preparsed_pdb_property(&mut state.block, native_block);
+            let mut entries = if let Some(native) = native {
+                native.apply(&mut state.block, false);
                 parsed.entries.clone()
             } else {
                 set_pdb_block_property_collecting_entries(

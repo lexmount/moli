@@ -48,9 +48,7 @@ fn important_style_entry(name: &str, value: &str) -> StyleEntry {
 
 #[test]
 fn preparsed_pdb_property_preserves_replacement_order_priority_and_shorthand_resets() {
-    use super::pdb_compat::{
-        apply_preparsed_pdb_property, parse_style_property_entries_with_pdb_block,
-    };
+    use super::pdb_compat::parse_pdb_style_property;
 
     crate::style_engine::ensure_stylo_browser_compat_prefs();
     for seed in [
@@ -74,11 +72,9 @@ fn preparsed_pdb_property_preserves_replacement_order_priority_and_shorthand_res
             ("--token", "new"),
         ] {
             for priority in [false, true] {
-                let parsed = parse_style_property_entries_with_pdb_block(name, value, priority)
+                let (_, native) = parse_pdb_style_property(name, value, priority)
                     .expect("ordinary property should parse");
-                let native = parsed
-                    .native_block
-                    .expect("ordinary property should retain typed declarations");
+                let native = native.expect("ordinary property should retain typed declarations");
                 let mut expected = moli_css_parse::parse_declaration_block(seed);
                 assert_ne!(
                     expected
@@ -87,7 +83,7 @@ fn preparsed_pdb_property_preserves_replacement_order_priority_and_shorthand_res
                     moli_css_parse::CssSetResult::ParseError
                 );
                 let mut actual = moli_css_parse::parse_declaration_block(seed);
-                apply_preparsed_pdb_property(&mut actual, native);
+                native.apply(&mut actual, false);
                 assert_eq!(
                     actual.css_text(),
                     expected.css_text(),
@@ -104,7 +100,7 @@ fn preparsed_pdb_property_preserves_replacement_order_priority_and_shorthand_res
 
 #[test]
 fn preparsed_pdb_property_keeps_unresolved_and_compatibility_adapters() {
-    use super::pdb_compat::parse_style_property_entries_with_pdb_block;
+    use super::pdb_compat::parse_pdb_style_property;
 
     for (name, value) in [
         ("all", "initial"),
@@ -113,10 +109,10 @@ fn preparsed_pdb_property_keeps_unresolved_and_compatibility_adapters() {
         ("--token", "var(--other)"),
         ("overflow", "overlay"),
     ] {
-        let parsed = parse_style_property_entries_with_pdb_block(name, value, false)
+        let (_, native) = parse_pdb_style_property(name, value, false)
             .expect("adapter value should remain accepted");
         assert!(
-            parsed.native_block.is_none(),
+            native.is_none(),
             "{name}: {value} needs the adapter write path"
         );
     }
