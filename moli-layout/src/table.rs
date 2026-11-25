@@ -1495,6 +1495,7 @@ mod tests {
         let mut prepared = crate::taffy_tree::prepare_world_layout(
             &mut world,
             crate::PaintViewport::new(800, 600, 1.0),
+            false,
         );
         let inputs = LayoutInput {
             known_dimensions: Size {
@@ -1566,7 +1567,7 @@ mod tests {
             60.0
         );
         world.boxes[group.index()].style.taffy.size.height = Dimension::length(120.0);
-        prepared.invalidate_scrollbar_feedback(&mut world, &[group], false);
+        prepared.invalidate_cached_layout_paths(&mut world, &[group], false);
         let changed = world.compute_child_layout(root.to_taffy(), inputs);
         assert_eq!(changed.size.height, 140.0);
         assert_eq!(changed.baselines.first, Some(50.0));
@@ -1658,6 +1659,7 @@ mod tests {
             crate::taffy_tree::prepare_world_layout(
                 &mut world,
                 crate::PaintViewport::new(800, 600, 1.0),
+                false,
             );
             let inputs = LayoutInput {
                 run_mode: RunMode::ComputeSize,

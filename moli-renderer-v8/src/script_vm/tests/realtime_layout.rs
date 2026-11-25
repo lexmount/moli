@@ -71,6 +71,51 @@ fn retained_layout_world_belongs_to_realtime_screen_publication() {
 }
 
 #[test]
+fn realtime_retained_numeric_layout_matches_fresh_geometry_and_paint() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;display:flex}section{flex:none}p{margin:0}</style>",
+        "<section id=panel style='overflow:auto;width:140px;height:36px'>",
+        "<div id=target style='height:70px;background:blue'></div><p>Some text</p></section>",
+        "<section id=stable style='width:110px'><div style='height:48px;background:red'></div></section>",
+    ));
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+
+    // Changing the content height removes and restores the automatic gutter.
+    for height in [2, 70] {
+        vm.eval(&format!("target.style.height='{height}px'"))
+            .unwrap();
+        let incremental = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+        let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+        assert!(metrics.retained_box_count > 0);
+        assert!(metrics.retained_numeric_layout_hits > 0);
+        let host = host.borrow();
+        let fresh = host
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::with_paint(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Screenshot,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(&incremental), fresh.paint_snapshot());
+        for name in ["panel", "target", "stable"] {
+            let node = vm.document_runtime.get_element_by_id(name).unwrap();
+            let retained = host
+                .with_latest_layout_tree_for_document(document, |tree| {
+                    tree.client_rects_for_source(node)
+                })
+                .unwrap();
+            assert_eq!(retained, fresh.client_rects_for_source(node));
+        }
+    }
+}
+
+#[test]
 fn realtime_layout_observes_cssom_sources_without_dom_attribute_mutations() {
     let mut vm = realtime_vm(
         "<!doctype html><style>#target{width:100px;height:10px}</style><div id=target></div>",

@@ -77,7 +77,7 @@ impl PreparedWorldLayout {
         );
     }
 
-    /// Clears only the cache entries on changed scrollbar boxes and their
+    /// Clears only the cache entries on changed boxes and their
     /// numeric ancestors. The reusable mark table makes this proportional to
     /// the affected paths rather than to every box in the document.
     ///
@@ -86,7 +86,7 @@ impl PreparedWorldLayout {
     /// `LayoutOutput`. Thus a second scrollbar-feedback iteration is a local
     /// corrective relayout in cost and invalidation scope, not a second full
     /// document layout.
-    pub(crate) fn invalidate_scrollbar_feedback<N>(
+    pub(crate) fn invalidate_cached_layout_paths<N>(
         &mut self,
         world: &mut LayoutWorld<N>,
         changed_boxes: &[LayoutBoxId],
@@ -135,6 +135,7 @@ impl PreparedWorldLayout {
 pub(crate) fn prepare_world_layout<N>(
     world: &mut LayoutWorld<N>,
     viewport: PaintViewport,
+    reuse_numeric_layout: bool,
 ) -> PreparedWorldLayout
 where
     N: Copy + Debug + Eq + Hash,
@@ -143,9 +144,11 @@ where
     world.native_grid_details.clear();
     world.table_structures.clear();
     for index in 0..world.boxes.len() {
-        world.clear_layout_caches(LayoutBoxId::from_index(index));
+        if !reuse_numeric_layout {
+            world.clear_layout_caches(LayoutBoxId::from_index(index));
+            world.boxes[index].unrounded_layout = Layout::with_order(0);
+        }
         let layout_box = &mut world.boxes[index];
-        layout_box.unrounded_layout = Layout::with_order(0);
         layout_box.final_layout = Layout::with_order(0);
         layout_box.layout_parent = None;
         layout_box.layout_children.clear();
@@ -1784,8 +1787,12 @@ where
         if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
             viewport.cache.get(inputs)
         } else {
-            self.numeric_cache(LayoutBoxId::from_taffy(node_id))
-                .and_then(|cache| cache.get(inputs))
+            let id = LayoutBoxId::from_taffy(node_id);
+            let cached = self.numeric_cache(id).and_then(|cache| cache.get(inputs));
+            if inputs.run_mode == RunMode::PerformLayout && cached.is_some() {
+                self.note_retained_cache_access(id, true);
+            }
+            cached
         }
     }
 
@@ -1799,6 +1806,7 @@ where
         } else {
             let id = LayoutBoxId::from_taffy(node_id);
             if inputs.run_mode == RunMode::PerformLayout {
+                self.note_retained_cache_access(id, false);
                 // A cache miss may rebuild inline fragments without changing
                 // the outer numeric rectangle, so final-layout stores are also
                 // first-class overflow dependencies.
