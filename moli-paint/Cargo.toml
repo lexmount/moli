@@ -5,7 +5,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [features]
-molio = []
+molio = ["moli-layout/molio"]
 
 [dependencies]
 krilla = { git = "https://github.com/lexmount/krilla", rev = "c1f42beeb7fcefd958c27e3a72c5f120eba071b7", default-features = false, features = ["raster-images"] }

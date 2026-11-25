@@ -15,6 +15,25 @@ impl moli_dom::accessibility::AccessibilityStyleSource
 }
 
 impl ScriptVm {
+    #[cfg(all(feature = "molio", target_os = "macos"))]
+    pub(crate) fn viewport_video_sources(&self) -> Vec<moli_image::VideoFrameSource> {
+        #[cfg(feature = "media-ext")]
+        return self._context_host.borrow().viewport_video_sources();
+        #[cfg(not(feature = "media-ext"))]
+        Vec::new()
+    }
+
+    #[cfg(feature = "molio")]
+    pub(crate) fn viewport_visual_state_token(
+        &self,
+        document: crate::runtime::RendererDocumentLifecycleIdentity,
+        viewport: moli_layout::PaintViewport,
+    ) -> crate::runtime::RendererVisualStateToken {
+        self._context_host
+            .borrow()
+            .viewport_visual_state_token(document, viewport)
+    }
+
     #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_payloads(
         &self,

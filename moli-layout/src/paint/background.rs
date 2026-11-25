@@ -474,7 +474,8 @@ pub(super) fn project_url_image_layer<N>(
         });
     }
     if let Some(pixels) = resource.pixels.clone() {
-        let source_rect = LayoutRect::new(0.0, 0.0, pixels.width as f32, pixels.height as f32);
+        let (width, height) = pixels.dimensions();
+        let source_rect = LayoutRect::new(0.0, 0.0, width as f32, height as f32);
         let image = snapshot.add_image(pixels);
         let sampling = layout_box.style.stylo_computed_values().map_or(
             PaintImageSampling::Linear,

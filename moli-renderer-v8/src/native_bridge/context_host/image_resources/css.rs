@@ -311,7 +311,7 @@ impl CssImageResourceStore {
                     LayoutCssImageState::Ready(LayoutImageResource {
                         intrinsic_width,
                         intrinsic_height,
-                        pixels: resource.pixels.clone(),
+                        pixels: resource.pixels.clone().map(Into::into),
                         svg: resource.svg.clone(),
                     })
                 }
@@ -520,7 +520,12 @@ mod tests {
             panic!("replacement ready resource");
         };
         assert_eq!(
-            replacement.pixels.expect("decoded raster").rgba,
+            replacement
+                .pixels
+                .expect("decoded raster")
+                .rgba()
+                .unwrap()
+                .rgba,
             [255, 0, 0, 255]
         );
 

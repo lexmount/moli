@@ -72,10 +72,10 @@ pub(super) fn project_replaced_image<N>(
         || container.height <= 0.0
         || object.width <= 0.0
         || object.height <= 0.0
-        || resource
-            .pixels
-            .as_ref()
-            .is_some_and(|pixels| pixels.width == 0 || pixels.height == 0)
+        || resource.pixels.as_ref().is_some_and(|pixels| {
+            let (width, height) = pixels.dimensions();
+            width == 0 || height == 0
+        })
     {
         return;
     }

@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow, ensure};
-use moli_image::RgbaImage;
+use moli_image::{ImagePixels, RgbaImage};
 use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecParameters, AVPacket};
 use rsmpeg::avutil::AVFrame;
 use rsmpeg::error::RsmpegError;
@@ -7,21 +7,27 @@ use rsmpeg::ffi;
 use rsmpeg::swscale::SwsContext;
 use std::sync::Arc;
 
+#[cfg(all(feature = "molio", target_os = "macos"))]
+mod macos;
+
 pub(super) const MICROSECONDS: ffi::AVRational = ffi::AVRational {
     num: 1,
     den: 1_000_000,
 };
 const MAX_FRAME_PIXELS: i64 = 4096 * 2304;
+const FRAME_BUFFER_ALIGNMENT: usize = 64;
 
 pub struct VideoFrame {
     pub timestamp: f64,
     pub duration: f64,
-    pub image: Arc<RgbaImage>,
+    pub image: ImagePixels,
 }
 
 pub(super) struct H264Decoder {
     codec: AVCodecContext,
     scaler: SwsContext,
+    #[cfg(all(feature = "molio", target_os = "macos"))]
+    surfaces: Box<macos::DecodeSurfaces>,
 }
 
 pub(super) enum Decoded {
@@ -45,9 +51,17 @@ impl H264Decoder {
             thread_type |= ffi::FF_THREAD_FRAME;
         }
         codec.set_thread_type(thread_type as i32);
-        codec.open(None)?;
         let scaler = SwsContext::for_frames().ok_or_else(|| anyhow!("allocate video scaler"))?;
-        Ok(Self { codec, scaler })
+        #[cfg(all(feature = "molio", target_os = "macos"))]
+        let surfaces = macos::DecodeSurfaces::install(&mut codec);
+        let mut decoder = Self {
+            codec,
+            scaler,
+            #[cfg(all(feature = "molio", target_os = "macos"))]
+            surfaces,
+        };
+        decoder.codec.open(None)?;
+        Ok(decoder)
     }
 
     pub(super) fn receive(&mut self) -> Result<Decoded> {
@@ -86,16 +100,37 @@ impl H264Decoder {
         Ok(VideoFrame {
             timestamp,
             duration,
-            image: self.convert_pixels(&frame)?,
+            image: self.frame_pixels(frame)?,
         })
     }
 
-    fn convert_pixels(&mut self, frame: &AVFrame) -> Result<Arc<RgbaImage>> {
+    fn frame_pixels(&mut self, frame: AVFrame) -> Result<ImagePixels> {
+        #[cfg(all(feature = "molio", target_os = "macos"))]
+        if let Some(surface) = self.surfaces.describe(&frame) {
+            return Ok(surface.into_image(frame));
+        }
+        Self::convert_pixels(&mut self.scaler, &frame).map(Into::into)
+    }
+
+    fn convert_pixels(scaler: &mut SwsContext, frame: &AVFrame) -> Result<Arc<RgbaImage>> {
         let (width, height) = (frame.width, frame.height);
         ensure!(
             width > 0 && height > 0 && i64::from(width) * i64::from(height) <= MAX_FRAME_PIXELS,
             "unsupported video dimensions {width}x{height}"
         );
+        ensure!(!frame.data[0].is_null(), "missing FFmpeg video plane");
+
+        let row_bytes = width as usize * 4;
+        let len = row_bytes * height as usize;
+        let aligned_stride = row_bytes.is_multiple_of(FRAME_BUFFER_ALIGNMENT);
+        let mut pixels = if aligned_stride {
+            // Match the alignment and trailing space of FFmpeg's packed frame allocation.
+            let padded_rows = (height as usize).next_multiple_of(32);
+            vec![0; row_bytes * padded_rows + FRAME_BUFFER_ALIGNMENT]
+        } else {
+            Vec::with_capacity(len)
+        };
+
         let mut rgba = AVFrame::new();
         rgba.set_width(width);
         rgba.set_height(height);
@@ -104,21 +139,38 @@ impl H264Decoder {
         rgba.set_color_range(ffi::AVCOL_RANGE_JPEG);
         rgba.set_color_primaries(frame.color_primaries);
         rgba.set_color_trc(frame.color_trc);
-        self.scaler.convert_frame(frame, &mut rgba)?;
+        let write_directly =
+            aligned_stride && pixels.as_ptr().align_offset(FRAME_BUFFER_ALIGNMENT) == 0;
+        if write_directly {
+            // The frame borrows an aligned, padded plane from pixels. The
+            // synchronous swscale call writes to it without taking ownership.
+            // pixels outlives rgba and is not resized while borrowed.
+            unsafe {
+                let dst = &mut *rgba.as_mut_ptr();
+                dst.data[0] = pixels.as_mut_ptr();
+                dst.linesize[0] = row_bytes as i32;
+            }
+        }
+        scaler.convert_frame(frame, &mut rgba)?;
 
-        let row_bytes = width as usize * 4;
-        let stride = usize::try_from(rgba.linesize[0])?;
-        ensure!(
-            !rgba.data[0].is_null() && stride >= row_bytes,
-            "invalid FFmpeg RGBA plane"
-        );
-        let mut pixels = Vec::with_capacity(row_bytes * height as usize);
-        for row in 0..height as usize {
-            // FFmpeg owns the packed RGBA plane and keeps it live until
-            // `rgba` is dropped. Each row contains at least width * 4 bytes.
-            let source =
-                unsafe { std::slice::from_raw_parts(rgba.data[0].add(row * stride), row_bytes) };
-            pixels.extend_from_slice(source);
+        if write_directly {
+            drop(rgba);
+            pixels.truncate(len);
+        } else {
+            let stride = usize::try_from(rgba.linesize[0])?;
+            ensure!(
+                !rgba.data[0].is_null() && stride >= row_bytes,
+                "invalid FFmpeg RGBA plane"
+            );
+            pixels.clear();
+            for row in 0..height as usize {
+                // FFmpeg keeps the plane live until rgba is dropped. Each
+                // row contains at least width * 4 bytes.
+                let source = unsafe {
+                    std::slice::from_raw_parts(rgba.data[0].add(row * stride), row_bytes)
+                };
+                pixels.extend_from_slice(source);
+            }
         }
         Ok(Arc::new(RgbaImage::try_new(
             width as u32,

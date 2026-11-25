@@ -3085,7 +3085,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3162,7 +3162,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_apple"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "anyhow",
  "block",
@@ -3188,7 +3188,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_collections"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "gpui_ce_util",
  "indexmap",
@@ -3198,7 +3198,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_derive_refineable"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3208,7 +3208,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_linux"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3257,7 +3257,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macos"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3309,7 +3309,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macros"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3320,7 +3320,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_media"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "anyhow",
  "bindgen 0.72.1",
@@ -3334,7 +3334,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_parley"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "anyhow",
  "fontique 0.12.0",
@@ -3348,7 +3348,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_platform"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "console_error_panic_hook",
  "gpui-ce",
@@ -3362,7 +3362,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_refineable"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "gpui_ce_derive_refineable",
 ]
@@ -3370,7 +3370,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_render"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "anyhow",
  "gpui-ce",
@@ -3387,7 +3387,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_scheduler"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "async-task",
  "backtrace",
@@ -3402,7 +3402,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_shared_string"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "schemars",
  "serde",
@@ -3412,7 +3412,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_sum_tree"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "heapless",
  "log",
@@ -3423,7 +3423,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_util"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "anyhow",
  "log",
@@ -3433,7 +3433,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_web"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3458,7 +3458,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "anyhow",
  "core-foundation",
@@ -3490,7 +3490,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_windows"
 version = "0.4.0"
-source = "git+https://github.com/lexmount/gpui-ce?rev=1d433ddc675f9946ca91e0c705e4bc9b0360a78c#1d433ddc675f9946ca91e0c705e4bc9b0360a78c"
+source = "git+https://github.com/lexmount/gpui-ce?rev=6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7#6f1ed271ffe6acf0b3ef54d96db8d2ca2c8d06d7"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5010,6 +5010,7 @@ dependencies = [
  "moli-fetch",
  "moli-file-api",
  "moli-header-field",
+ "moli-image",
  "moli-indexeddb",
  "moli-page-types",
  "moli-paint",
@@ -5285,11 +5286,14 @@ dependencies = [
 name = "moli-image"
 version = "0.1.0"
 dependencies = [
+ "core-video",
  "image",
  "libjpeg-turbo-rs",
  "moli-system-fonts",
+ "parking_lot",
  "png",
  "thiserror 2.0.18",
+ "tokio",
  "usvg",
  "xmlparser",
 ]
@@ -5998,6 +6002,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "core-foundation",
+ "core-video",
  "coreaudio-rs",
  "moli-image",
  "moli-web-mime",

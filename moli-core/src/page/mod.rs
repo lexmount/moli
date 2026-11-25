@@ -49,6 +49,8 @@ pub use devtools::{
     decode_element_click_dispatch_completion, decode_element_click_preparation_completion,
     decode_input_dispatch_outcome_completion, decode_insert_text_completion,
 };
+#[cfg(all(feature = "molio", target_os = "macos"))]
+pub use moli_paint::ViewportVideoLayer;
 pub use moli_renderer_v8::RendererPageRequestPolicyUpdate;
 #[cfg(feature = "molio")]
 pub use viewport::ViewportFrames;

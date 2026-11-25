@@ -291,8 +291,8 @@ mod tests {
             }
         }
         assert_eq!(frames.len(), 8);
-        assert!(frames[0].image.rgba[0] > 240);
-        assert!(frames[7].image.rgba[2] > 240);
+        assert!(frames[0].image.rgba().unwrap().rgba[0] > 240);
+        assert!(frames[7].image.rgba().unwrap().rgba[2] > 240);
         assert!(
             frames
                 .windows(2)

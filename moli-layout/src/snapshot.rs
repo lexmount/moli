@@ -485,6 +485,7 @@ pub enum PaintBlendMode {
 pub enum PaintCompositeMode {
     #[default]
     SrcOver,
+    DestOut,
     DestIn,
     SrcOut,
     SrcIn,
@@ -569,7 +570,7 @@ impl PaintImageId {
 /// One immutable decoded image shared with the renderer resource owner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintImageResource {
-    pub image: std::sync::Arc<moli_image::RgbaImage>,
+    pub image: moli_image::ImagePixels,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1076,9 +1077,11 @@ impl PaintSnapshot {
     /// reference, so an O(n) interning scan would cost CPU without eliminating
     /// table entries. Callers that emit repeated fragments should reuse the
     /// returned identifier themselves.
-    pub fn add_image(&mut self, image: std::sync::Arc<moli_image::RgbaImage>) -> PaintImageId {
+    pub fn add_image(&mut self, image: impl Into<moli_image::ImagePixels>) -> PaintImageId {
         let id = PaintImageId::from_index(self.images.len());
-        self.images.push(PaintImageResource { image });
+        self.images.push(PaintImageResource {
+            image: image.into(),
+        });
         id
     }
 

@@ -365,7 +365,7 @@ async fn media_source_appends_h264_and_paints_the_seeked_frame() {
         );
 
         let pixels = &snapshot.image(image.image).unwrap().image;
-        let pixel = &pixels.rgba[..4];
+        let pixel = &pixels.rgba().expect("decoded video frame").rgba[..4];
         assert!(pixel[0] < 12 && pixel[1] < 12 && pixel[2] > 240 && pixel[3] == 255);
     }
 }

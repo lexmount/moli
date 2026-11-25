@@ -30,6 +30,8 @@ pub struct RendererViewportFrame {
     pub sequence: u64,
     pub editor: Option<RendererViewportEditor>,
     pub snapshot: Option<Arc<PaintSnapshot>>,
+    #[cfg(target_os = "macos")]
+    pub video_sources: Vec<moli_image::VideoFrameSource>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -636,7 +638,7 @@ impl PageVm {
         let viewport = layout_viewport_for_surface(surface);
         let paint_session = state.paint_session.clone();
         let document = self.document_lifecycle.identity();
-        let before = self.vm().visual_state_token(document, viewport, [255; 4]);
+        let before = self.vm().viewport_visual_state_token(document, viewport);
         let pixels_current = state.painted.as_ref() == Some(&before);
         let pointer_to_sample = state
             .pointer
@@ -689,8 +691,10 @@ impl PageVm {
             self.wake_viewport_frames();
             return;
         }
-        let after = self.vm().visual_state_token(document, viewport, [255; 4]);
+        let after = self.vm().viewport_visual_state_token(document, viewport);
         let editor = self.read_viewport_editor();
+        #[cfg(target_os = "macos")]
+        let video_sources = self.vm().viewport_video_sources();
         let state = self
             .viewport_frames
             .as_mut()
@@ -708,6 +712,8 @@ impl PageVm {
                 sequence: state.sequence,
                 editor,
                 snapshot: snapshot.map(Arc::new),
+                #[cfg(target_os = "macos")]
+                video_sources,
             }));
     }
 }
