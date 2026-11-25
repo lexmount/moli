@@ -11,7 +11,7 @@ use parking_lot::{Condvar, Mutex};
 use tokio::sync::mpsc;
 
 mod browser;
-#[path = "../../molio/src/downloads.rs"]
+#[path = "../../../molio/src/downloads.rs"]
 mod downloads;
 mod model;
 mod tab;
