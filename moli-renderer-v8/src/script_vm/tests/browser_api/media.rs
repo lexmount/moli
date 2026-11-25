@@ -260,7 +260,9 @@ async fn media_source_object_url_uses_the_executing_window_during_child_resource
 #[tokio::test]
 async fn media_source_appends_h264_and_paints_the_seeked_frame() {
     use base64::Engine as _;
-    use moli_layout::{LayoutFlushReason, LayoutPassRequest, LayoutViewport, PaintFragment};
+    use moli_layout::{
+        LayoutFlushReason, LayoutPassRequest, LayoutRect, LayoutViewport, PaintFragment,
+    };
     use std::time::Duration;
 
     let mp4 = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
@@ -291,7 +293,7 @@ async fn media_source_appends_h264_and_paints_the_seeked_frame() {
           };
           buffer.appendBuffer(bytes);
         };
-        testVideo.style.cssText = 'display:block;width:96px;height:64px';
+        testVideo.style.cssText = 'position:absolute;inset:0 auto auto 0;width:96px;height:96px';
         (document.body || document.documentElement).appendChild(testVideo);
         testVideo.src = testUrl;
         "#,
@@ -331,28 +333,41 @@ async fn media_source_appends_h264_and_paints_the_seeked_frame() {
     .await
     .expect("fragmented video decoded and seeked");
 
-    let runtime = vm._context_host.borrow();
-    let pass = runtime
-        .build_layout_pass_for_document(
-            runtime.document_handle(),
-            LayoutPassRequest::with_paint(
-                LayoutViewport::new(120, 90, 1.0),
-                LayoutFlushReason::Test,
-            ),
-        )
-        .unwrap()
-        .unwrap();
-    let snapshot = pass.paint_snapshot().unwrap();
-    assert!(
-        snapshot
+    for (fit, destination) in [
+        ("", LayoutRect::new(0.0, 16.0, 96.0, 64.0)),
+        ("fill", LayoutRect::new(0.0, 0.0, 96.0, 96.0)),
+    ] {
+        vm.eval(&format!("testVideo.style.objectFit = '{fit}'"))
+            .unwrap();
+        let runtime = vm._context_host.borrow();
+        let pass = runtime
+            .build_layout_pass_for_document(
+                runtime.document_handle(),
+                LayoutPassRequest::with_paint(
+                    LayoutViewport::new(120, 120, 1.0),
+                    LayoutFlushReason::Test,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        let snapshot = pass.paint_snapshot().unwrap();
+        let image = snapshot
             .fragments
             .iter()
-            .any(|fragment| matches!(fragment, PaintFragment::Image(_)))
-    );
-    assert!(snapshot.images.iter().any(|image| {
-        let pixel = &image.image.rgba[..4];
-        pixel[0] < 12 && pixel[1] < 12 && pixel[2] > 240 && pixel[3] == 255
-    }));
+            .find_map(|fragment| match fragment {
+                PaintFragment::Image(image) => Some(image),
+                _ => None,
+            })
+            .expect("the seeked video frame should be painted");
+        assert_eq!(
+            image.destination, destination,
+            "object-fit declaration {fit:?}"
+        );
+
+        let pixels = &snapshot.image(image.image).unwrap().image;
+        let pixel = &pixels.rgba[..4];
+        assert!(pixel[0] < 12 && pixel[1] < 12 && pixel[2] > 240 && pixel[3] == 255);
+    }
 }
 
 #[cfg(all(
