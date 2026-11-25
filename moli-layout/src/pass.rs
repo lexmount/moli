@@ -138,6 +138,10 @@ impl LayoutPassRequest {
         self
     }
 
+    pub const fn environment(&self) -> crate::LayoutEnvironment {
+        self.environment
+    }
+
     /// Selects recursive frame geometry independently of paint demand.
     pub const fn with_frame_coverage(mut self, coverage: LayoutFrameCoverage) -> Self {
         self.frame_coverage = coverage;

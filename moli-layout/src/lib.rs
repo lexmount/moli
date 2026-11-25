@@ -20,6 +20,7 @@ mod gradient;
 mod grid;
 mod inline;
 mod intrinsic;
+mod isolated_size;
 mod layout_tree;
 mod list;
 mod normalize;
@@ -52,6 +53,7 @@ pub use capture::{
 pub use environment::LayoutEnvironment;
 pub use error::LayoutError;
 pub use form::{form_control_text, select_control_texts};
+pub use isolated_size::{IsolatedSizeLayout, try_build_isolated_sizes};
 pub use layout_tree::{
     FrozenCoordinateSpace, FrozenEmbeddedFrame, FrozenLayoutBox, FrozenLayoutTree,
     GeometryProvider, LayoutAnswers, LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition,

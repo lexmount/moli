@@ -1,9 +1,11 @@
 mod container_feedback;
 mod inline_svg;
+mod isolated_size;
+pub(crate) use isolated_size::try_build_isolated_sizes;
 mod screen_styles;
 #[cfg(test)]
 pub(crate) use inline_svg::parse_count as svg_parse_count;
-pub(crate) use screen_styles::resolve_screen_style_targets;
+pub(crate) use screen_styles::{resolve_screen_style_targets, validate_region_external_styles};
 mod source_view;
 pub(crate) use source_view::native_scroll_offset;
 mod style_resolver;

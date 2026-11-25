@@ -30,6 +30,7 @@ mod cache;
 mod cause;
 mod cleanup;
 mod computed;
+pub(crate) use computed::computed_style_values_damage;
 #[cfg(test)]
 pub(crate) use computed::take_style_resolution_context_count_for_test;
 mod document_world;
@@ -314,6 +315,15 @@ impl MoliStyleEngine {
         document: DomHandle,
         supported: ServoRestyleDamage,
     ) -> bool {
+        self.has_supported_screen_style_damage_for_nodes(document, supported, |_| true)
+    }
+
+    pub(crate) fn has_supported_screen_style_damage_for_nodes(
+        &self,
+        document: DomHandle,
+        supported: ServoRestyleDamage,
+        mut include: impl FnMut(DomHandle) -> bool,
+    ) -> bool {
         self.document_worlds
             .active_world(document)
             .is_none_or(|world| {
@@ -321,9 +331,9 @@ impl MoliStyleEngine {
                 state.finish_screen_style_invalidation();
                 match &*state.screen_style_invalidation.borrow() {
                     ScreenStyleInvalidation::Clean => true,
-                    ScreenStyleInvalidation::Pending { damage, .. } => {
-                        damage.values().all(|&damage| supported.contains(damage))
-                    }
+                    ScreenStyleInvalidation::Pending { damage, .. } => damage
+                        .iter()
+                        .all(|(&handle, &damage)| !include(handle) || supported.contains(damage)),
                     ScreenStyleInvalidation::Full => false,
                 }
             })
@@ -349,6 +359,17 @@ impl MoliStyleEngine {
         if let Some(world) = self.document_worlds.active_world(document) {
             world.document_state.begin_screen_layout();
         }
+    }
+
+    pub(crate) fn with_screen_style_coverage<R>(
+        &self,
+        document: DomHandle,
+        observe: impl FnOnce(&ScreenStyleCoverage) -> R,
+    ) -> Option<R> {
+        self.document_worlds
+            .active_world(document)?
+            .document_state
+            .with_screen_style_coverage(observe)
     }
 
     pub(crate) fn publish_screen_styles(&self, document: DomHandle, coverage: ScreenStyleCoverage) {

@@ -144,6 +144,9 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
             }
             return Ok(None);
         };
+        if let Some(coverage) = &mut self.screen_style_coverage {
+            coverage.sources.insert(node);
+        }
         let (computed, before, after) = style.into_element_computed_values();
         let eager_pseudo_count = u64::from(before.is_some()) + u64::from(after.is_some());
         if let Some(profile) = self.profile.as_mut() {
@@ -205,6 +208,9 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         }
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let computed = self.pass.marker_for_generation(node);
+        if let Some(coverage) = &mut self.screen_style_coverage {
+            coverage.markers.insert(node, computed.clone());
+        }
         if let Some(profile) = self.profile.as_mut() {
             profile.marker_count = profile.marker_count.saturating_add(1);
             profile.marker_read_ns = profile.marker_read_ns.saturating_add(
@@ -234,7 +240,11 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         if let Some(coverage) = &mut self.screen_style_coverage {
             coverage.lazy_pseudo_owners.insert(node);
         }
-        Ok(self.pass.pseudo_style(node, "placeholder").map(|computed| {
+        let computed = self.pass.pseudo_style(node, "placeholder");
+        if let Some(coverage) = &mut self.screen_style_coverage {
+            coverage.placeholders.insert(node, computed.clone());
+        }
+        Ok(computed.map(|computed| {
             ResolvedLayoutPseudoStyle::new(ResolvedLayoutStyle::from_stylo(computed))
         }))
     }

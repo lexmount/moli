@@ -1286,6 +1286,32 @@ impl ResolvedLayoutStyle {
         self.position
     }
 
+    pub(crate) fn supports_isolated_text_measurement(&self) -> bool {
+        matches!(
+            self.display(),
+            LayoutDisplay::Block
+                | LayoutDisplay::FlowRoot
+                | LayoutDisplay::Inline
+                | LayoutDisplay::InlineBlock
+        ) && self.uses_horizontal_writing_mode()
+            && self.direction == InlineDirection::Ltr
+            && self.effective_zoom() == 1.0
+            && !self.applies_any_viewport_containment()
+            && !self.establishes_fixed_containing_block(false, true, true)
+            && !self.text_projection_deferred
+            && !self.intrinsic_sizing_deferred
+            && self.viewport_scrollbar_gutter() == LayoutScrollbarGutter::Auto
+    }
+
+    pub(crate) fn changes_counters(&self) -> bool {
+        self.computed.as_ref().is_some_and(|computed| {
+            let counters = computed.get_counters();
+            !counters.counter_increment.is_empty()
+                || !counters.counter_reset.is_empty()
+                || !counters.counter_set.is_empty()
+        })
+    }
+
     pub(crate) fn legacy_clip_rect(&self, border: LayoutRect) -> Option<LayoutRect> {
         if !self.position.is_absolute() && self.position != LayoutPosition::Fixed {
             return None;

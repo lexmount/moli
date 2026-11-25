@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{OnceCell, RefCell},
     collections::{HashMap, HashSet},
 };
 
@@ -25,7 +25,7 @@ pub(super) struct NativeLayoutSourceView<'a> {
     document: Option<DomHandle>,
     styles: RefCell<StyleObservation<'a>>,
     paint_resources: bool,
-    text_selections: HashMap<DomHandle, LayoutTextSelection>,
+    text_selections: OnceCell<HashMap<DomHandle, LayoutTextSelection>>,
 }
 
 impl<'a> NativeLayoutSourceView<'a> {
@@ -46,7 +46,7 @@ impl<'a> NativeLayoutSourceView<'a> {
             document: runtime.dom_host().owner_document_handle(root),
             styles: RefCell::new(styles),
             paint_resources,
-            text_selections: document_text_selections(runtime, root),
+            text_selections: OnceCell::new(),
         }
     }
 
@@ -209,7 +209,12 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
                 ));
             }
         }
-        self.text_selections.get(&node).copied()
+        // Size-only source adapters never ask for selection data. Collect it
+        // only for consumers that use it, once within this stable layout pass.
+        self.text_selections
+            .get_or_init(|| document_text_selections(self.runtime, self.root))
+            .get(&node)
+            .copied()
     }
 
     fn scroll_offset(&self, node: Self::NodeId) -> moli_layout::LayoutPoint {

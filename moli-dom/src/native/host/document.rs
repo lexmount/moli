@@ -53,6 +53,7 @@ impl DomHost {
             dom,
             dom_version: Cell::new(0),
             document_layout_versions: RefCell::new(HashMap::new()),
+            document_layout_change_roots: RefCell::new(HashMap::new()),
             query_version: Cell::new(0),
             shadow_root_binding_version: Cell::new(0),
             connected_shadow_roots_version: Cell::new(0),
@@ -208,6 +209,25 @@ impl DomHost {
             .unwrap_or(0)
     }
 
+    /// Connected native-layout changes since the last acknowledged publication.
+    /// An absent or overflowing journal requires a complete document layout.
+    pub fn document_layout_change_roots(&self, document: DomHandle) -> Option<Vec<DomHandle>> {
+        self.document_layout_change_roots
+            .borrow()
+            .get(&document)
+            .cloned()
+            .flatten()
+    }
+
+    /// A size-only observation must not acknowledge document-wide invalidations.
+    pub fn acknowledge_document_layout_changes(&self, document: DomHandle, version: u64) {
+        if version != u64::MAX && self.document_layout_version(document) == version {
+            self.document_layout_change_roots
+                .borrow_mut()
+                .insert(document, Some(Vec::new()));
+        }
+    }
+
     pub fn shadow_root_binding_version(&self) -> u64 {
         self.shadow_root_binding_version.get()
     }
@@ -246,12 +266,27 @@ impl DomHost {
                 self.document_layout_versions
                     .borrow_mut()
                     .insert(document, revision);
+                self.record_layout_change_root(document, handle);
             }
         }
         if matches!(scope, MutationScope::QueryState) {
             self.query_version
                 .set(self.query_version.get().saturating_add(1));
             self.live_collection_cache.borrow_mut().clear();
+        }
+    }
+
+    pub(super) fn record_layout_change_root(&self, document: DomHandle, handle: DomHandle) {
+        let mut journal = self.document_layout_change_roots.borrow_mut();
+        if let Some(entry @ Some(_)) = journal.get_mut(&document) {
+            let roots = entry.as_mut().expect("known layout changes");
+            if !roots.contains(&handle) {
+                if roots.len() == 64 {
+                    *entry = None;
+                } else {
+                    roots.push(handle);
+                }
+            }
         }
     }
 

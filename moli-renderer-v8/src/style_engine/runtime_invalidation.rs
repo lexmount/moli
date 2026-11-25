@@ -82,14 +82,27 @@ impl MoliStyleEngine {
             let document = *document;
             let document_effects = document_effects.as_ref();
             let world = self.world_for_document(document);
+            // Regional geometry needs the same pre-resolution frontier for
+            // native layout changes as for CSS-only attribute changes.
             world.document_state.note_screen_style_attribute_changes(
-                document_effects.iter().filter_map(|effect| {
-                    let StyleMutationEffect::Attribute { element, name, .. } = effect else {
-                        return None;
-                    };
-                    (!DomHost::attribute_affects_native_layout(name) && host.is_connected(*element))
-                        .then_some(*element)
-                }),
+                document_effects
+                    .iter()
+                    .flat_map(|effect| match effect {
+                        StyleMutationEffect::Attribute { element, .. } => {
+                            std::slice::from_ref(element)
+                        }
+                        StyleMutationEffect::CharacterData { node } => std::slice::from_ref(node),
+                        StyleMutationEffect::ChildList { parent, .. } => {
+                            std::slice::from_ref(parent)
+                        }
+                        StyleMutationEffect::SlotAssignment { slot, .. } => {
+                            std::slice::from_ref(slot)
+                        }
+                        StyleMutationEffect::ConnectedSubtrees { roots }
+                        | StyleMutationEffect::DisconnectedSubtrees { roots } => roots.as_ref(),
+                    })
+                    .copied()
+                    .filter(|&handle| host.is_connected(handle)),
             );
             let no_cached_style_started = profile_enabled.then(std::time::Instant::now);
             if self.style_invalidation_without_cached_styles_is_complete(document_effects, &world) {

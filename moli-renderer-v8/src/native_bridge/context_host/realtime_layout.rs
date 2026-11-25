@@ -1,3 +1,5 @@
+mod isolated_size;
+
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -75,6 +77,9 @@ pub(super) struct RealtimeLayoutState {
     non_dom_revision: Cell<Option<u64>>,
     scroll_projection_dirty: Cell<bool>,
     published: RefCell<Option<ScreenLayoutInputs>>,
+    isolated_sizes: RefCell<Option<isolated_size::IsolatedSizeCache>>,
+    #[cfg(test)]
+    isolated_size_layouts: Cell<u64>,
     #[cfg(feature = "devtools")]
     screencast_paint: ScreencastPaintState,
     pub(super) frame: RefCell<RealtimeFrameState>,
@@ -90,6 +95,9 @@ impl Default for RealtimeLayoutState {
             non_dom_revision: Cell::new(Some(0)),
             scroll_projection_dirty: Cell::new(false),
             published: RefCell::new(None),
+            isolated_sizes: RefCell::new(None),
+            #[cfg(test)]
+            isolated_size_layouts: Cell::new(0),
             #[cfg(feature = "devtools")]
             screencast_paint: ScreencastPaintState::default(),
             frame: RefCell::new(RealtimeFrameState::default()),
@@ -114,6 +122,7 @@ impl RealtimeLayoutState {
 
     pub(super) fn clear_publication(&self) {
         self.published.borrow_mut().take();
+        self.isolated_sizes.borrow_mut().take();
         #[cfg(feature = "devtools")]
         self.screencast_paint.publish(None);
     }
@@ -126,7 +135,7 @@ impl RealtimeLayoutState {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct DocumentLayoutInputs {
     document: DomHandle,
     root: Option<DomHandle>,
@@ -135,7 +144,7 @@ struct DocumentLayoutInputs {
     stylesheet_sources: u64,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct ScreenLayoutInputs {
     non_dom: u64,
     viewport: LayoutViewport,
@@ -262,6 +271,7 @@ impl PageScriptHost {
         inputs: ScreenLayoutInputs,
         mut coverage: HashMap<DomHandle, ScreenStyleCoverage>,
     ) {
+        state.isolated_sizes.borrow_mut().take();
         if moli_trace::cpu_profile_enabled() {
             tracing::info!(
                 target: "moli_cpu_profile",
@@ -278,6 +288,8 @@ impl PageScriptHost {
                 document.document,
                 coverage.remove(&document.document).unwrap_or_default(),
             );
+            self.dom_host()
+                .acknowledge_document_layout_changes(document.document, document.dom_revision);
         }
         // Attach the verified inputs after the geometry update retires the previous validity.
         *state.published.borrow_mut() = Some(inputs);
@@ -463,6 +475,10 @@ impl PageScriptHost {
                 self.style_engine.consume_screen_style_work(document);
             }
             state.scroll_projection_dirty.set(false);
+            for document in &inputs.documents {
+                self.dom_host()
+                    .acknowledge_document_layout_changes(document.document, document.dom_revision);
+            }
             return Ok(());
         }
 

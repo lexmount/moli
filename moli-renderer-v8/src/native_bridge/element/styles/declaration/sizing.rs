@@ -33,6 +33,9 @@ impl LayoutSizeReads {
         handle: DomHandle,
     ) -> Option<LayoutUsedSize> {
         let document = size_document(runtime, handle)?;
+        if let Some(size) = runtime.cached_isolated_used_size(handle) {
+            return size;
+        }
         // Recursive compatibility reads may ask about a different Document.
         // Never answer those from this observation's document-local table.
         if Some(document) != source_document {
@@ -77,6 +80,9 @@ fn lookup_size(
     document: DomHandle,
     handle: DomHandle,
 ) -> Option<LayoutUsedSize> {
+    if let Some(size) = runtime.cached_isolated_used_size(handle) {
+        return size;
+    }
     runtime
         .with_latest_layout_tree_for_document(document, |tree| {
             #[cfg(test)]

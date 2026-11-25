@@ -181,6 +181,13 @@ fn layout_adjusted_damage(
     damage
 }
 
+pub(crate) fn computed_style_values_damage(
+    old: Option<&ServoArc<ComputedValues>>,
+    new: Option<&ServoArc<ComputedValues>>,
+) -> ServoRestyleDamage {
+    computed_style_damage::<moli_selector::StyloElement<'_>>(old, new)
+}
+
 impl StyloComputedStyleSnapshot {
     fn from_primary(primary: ServoArc<ComputedValues>) -> Self {
         Self {

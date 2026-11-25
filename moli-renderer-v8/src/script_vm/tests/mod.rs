@@ -2353,6 +2353,7 @@ mod queue_microtask;
 
 mod svg_gradient_native_receivers;
 
+mod isolated_size;
 mod readable_algorithm_arrays;
 mod realtime_cssom;
 mod realtime_frames;
