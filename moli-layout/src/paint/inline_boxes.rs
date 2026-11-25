@@ -6,26 +6,114 @@
 //! line fragmentation, and emits the same owned background/image/border
 //! primitives used by block boxes.
 
-use std::{fmt::Debug, hash::Hash};
+use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use taffy::ResolveOrZero;
 
 use super::{
     PaintSpace,
     background::{project_background_color, project_background_layers},
-    border::{BorderImageRasters, border_image_area, project_box_border},
+    border::{
+        BorderImageGeometry, BorderImageRasters, border_image_outsets, outset_border_image_rect,
+        project_box_border,
+    },
     geometry::{BoxAreas, inset_radii},
     text::TextClipMaskScope,
 };
-use crate::{LayoutBox, LayoutRect, LayoutWorld, PaintEdgeSizes, PaintSnapshot};
+use crate::{
+    LayoutBoxId, LayoutFragment, LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId,
+    LayoutRect, PaintEdgeSizes, PaintSnapshot, projection::PaintProjection, style::InlineDirection,
+};
+
+pub(super) type InlineBorderImages = HashMap<LayoutFragmentId, BorderImageGeometry>;
+
+pub(super) fn inline_border_images<N>(projection: &PaintProjection<'_, N>) -> InlineBorderImages
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    fn inline_box(fragment: &LayoutFragment) -> Option<LayoutOutputBoxId> {
+        match fragment.kind {
+            LayoutFragmentKind::InlineBox { box_id, .. } => Some(box_id),
+            _ => None,
+        }
+    }
+
+    let mut images = HashMap::new();
+    // Each structural inline's projected boxes are adjacent and in line
+    // order. Compute their cumulative widths once even when paint order
+    // visits the fragments individually around atomic inlines.
+    for fragments in projection
+        .fragments
+        .chunk_by(|left, right| inline_box(left).is_some_and(|id| inline_box(right) == Some(id)))
+    {
+        let Some(id) = inline_box(&fragments[0]) else {
+            continue;
+        };
+        let style = &projection.world.boxes[id.index()].style;
+        let widths = style
+            .taffy
+            .border
+            .resolve_or_zero(None, crate::style::resolve_stylo_calc_value);
+        let widths = PaintEdgeSizes::new(widths.top, widths.right, widths.bottom, widths.left);
+        let Some(outsets) = border_image_outsets(style, widths) else {
+            continue;
+        };
+        let strip_width: f32 = fragments.iter().map(|fragment| fragment.rect.width).sum();
+        let ltr = style.direction() == InlineDirection::Ltr;
+        let mut advance = 0.0;
+        for fragment in fragments {
+            let LayoutFragmentKind::InlineBox {
+                has_start_edge,
+                has_end_edge,
+                ..
+            } = fragment.kind
+            else {
+                unreachable!("grouped by inline box");
+            };
+            let rect = fragment.rect;
+            let offset = if ltr {
+                advance
+            } else {
+                strip_width - advance - rect.width
+            };
+            advance += rect.width;
+            let strip = LayoutRect::new(rect.x - offset, rect.y, strip_width, rect.height);
+            let fragment_clip = (fragments.len() > 1).then(|| {
+                let (has_left, has_right) = if ltr {
+                    (has_start_edge, has_end_edge)
+                } else {
+                    (has_end_edge, has_start_edge)
+                };
+                let mut clip_outsets = outsets;
+                if !has_left {
+                    clip_outsets.left = 0.0;
+                }
+                if !has_right {
+                    clip_outsets.right = 0.0;
+                }
+                outset_border_image_rect(rect, clip_outsets)
+            });
+            images.insert(
+                fragment.id,
+                BorderImageGeometry {
+                    area: outset_border_image_rect(strip, outsets),
+                    widths,
+                    fragment_clip,
+                },
+            );
+        }
+    }
+    images
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_inline_box_fragments<N>(
-    world: &LayoutWorld<N>,
-    owner: &LayoutBox<N>,
+    projection: &PaintProjection<'_, N>,
+    owner_id: LayoutBoxId,
     selected_fragment: Option<usize>,
     paint_space: PaintSpace,
     include_backgrounds: bool,
+    border_images: &InlineBorderImages,
     border_rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
     local_cull: Option<LayoutRect>,
@@ -33,6 +121,8 @@ pub(super) fn project_inline_box_fragments<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    let world = projection.world;
+    let owner = &world.boxes[owner_id.index()];
     let Some(context) = owner.inline_layout.as_ref() else {
         return;
     };
@@ -46,10 +136,11 @@ pub(super) fn project_inline_box_fragments<N>(
         - owner_layout.padding.right)
         .max(0.0);
 
-    let fragments = selected_fragment.map_or(context.fragments.boxes.as_slice(), |index| {
-        &context.fragments.boxes[index..index + 1]
-    });
-    for fragment in fragments {
+    let fragments =
+        selected_fragment.map_or(0..context.fragments.boxes.len(), |index| index..index + 1);
+    let projected_fragments = projection.inline_fragments(owner_id);
+    for index in fragments {
+        let fragment = &context.fragments.boxes[index];
         let Some(inline_box) = world.box_by_id(fragment.box_id) else {
             continue;
         };
@@ -69,7 +160,7 @@ pub(super) fn project_inline_box_fragments<N>(
             Some(containing_width),
             crate::style::resolve_stylo_calc_value,
         );
-        let ltr = style.direction() == crate::style::InlineDirection::Ltr;
+        let ltr = style.direction() == InlineDirection::Ltr;
         let has_left_edge = if ltr {
             fragment.has_start_edge
         } else {
@@ -105,8 +196,9 @@ pub(super) fn project_inline_box_fragments<N>(
             border.bottom,
             if has_left_edge { border.left } else { 0.0 },
         );
+        let border_image = border_images.get(&projected_fragments[index].id).copied();
         if local_cull.is_some_and(|cull| {
-            let ink = border_image_area(style, rect, widths).unwrap_or(rect);
+            let ink = border_image.map_or(rect, |image| image.ink_bounds().union(rect));
             !super::cull::rects_intersect(ink, cull)
         }) {
             continue;
@@ -172,6 +264,7 @@ pub(super) fn project_inline_box_fragments<N>(
             rect,
             widths,
             radii,
+            border_image,
             paint_space,
             || local_cull,
             border_rasters,
