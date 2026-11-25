@@ -2,7 +2,6 @@ use moli_selector::{StyloDomHostBinding, StyloElement};
 use style::{
     Atom,
     animation::DocumentAnimationSet,
-    computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
@@ -30,6 +29,7 @@ use super::{
     stylo_pseudo_element_for_computed_style, take_element_styles_for_resolution,
     with_cached_lazy_pseudo_style,
 };
+use crate::style_engine::StyleInvalidationScope;
 
 /// One binding and stylesheet read scope for a stable document world. Create
 /// Stylo's thread-local state only when an element actually needs resolving.
@@ -192,7 +192,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         handle: DomHandle,
         after: u64,
         supported: style::servo::restyle_damage::ServoRestyleDamage,
-    ) -> Option<RestyleHint> {
+    ) -> Option<StyleInvalidationScope> {
         let state = &self.context.world.document_state;
         if !state.screen_style_dependencies_are_current() || state.screen_uses_lazy_pseudo(handle) {
             return None;
@@ -205,30 +205,11 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         {
             return None;
         }
-        let restyles = invalidation.descendant_restyles(handle);
-        Some(if restyles.subtree > after {
-            RestyleHint::restyle_subtree()
-        } else if restyles.children > after {
-            RestyleHint::RECASCADE_SELF
-        } else if restyles.inheriting_reset > after {
-            RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE
+        Some(if invalidation.subtree_generation(handle) > after {
+            StyleInvalidationScope::Subtree
         } else {
-            RestyleHint::empty()
+            StyleInvalidationScope::Element
         })
-    }
-
-    pub(crate) fn may_inherit_reset_style(&self, handle: DomHandle) -> bool {
-        self.context
-            .adapter
-            .element(self.host, handle)
-            .and_then(|element| {
-                element.borrow_data()?.styles.get_primary().map(|style| {
-                    style
-                        .flags
-                        .contains(ComputedValueFlags::INHERITS_RESET_STYLE)
-                })
-            })
-            .unwrap_or(true)
     }
 
     pub(crate) fn element_styles(
@@ -318,12 +299,6 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
             node_wrappers = self.context.adapter.bound_node_count(),
             validated_elements = self.validations,
             resolved_elements = self.resolutions,
-            retained_descendant_restyles = self
-                .context
-                .world
-                .document_state
-                .lazy_invalidation_roots
-                .descendant_restyle_count(),
         );
     }
 
@@ -366,14 +341,9 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
 
         while let Some(element) = self.pending.pop() {
             let handle = DomHandle::new(element.as_node().debug_id());
-            let (depth, inherited_subtree, child_restyles) =
-                parent.map_or((0, 0, Default::default()), |(parent, path)| {
-                    (
-                        path.depth + 1,
-                        path.subtree_generation,
-                        invalidation.descendant_restyles(parent),
-                    )
-                });
+            let (depth, inherited_subtree) = parent.map_or((0, 0), |(_, path)| {
+                (path.depth + 1, path.subtree_generation)
+            });
             let mut subtree_generation =
                 inherited_subtree.max(invalidation.subtree_generation(handle));
             // The style-parent chain skips the Document and ShadowRoot.
@@ -385,17 +355,11 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                     subtree_generation.max(invalidation.subtree_generation(dom_parent));
             }
             let data = element.borrow_data();
-            let inherits_reset = data
+            let inherited_work = data
                 .as_ref()
-                .and_then(|data| data.styles.get_primary())
-                .is_some_and(|style| {
-                    style
-                        .flags
-                        .contains(ComputedValueFlags::INHERITS_RESET_STYLE)
-                });
-            let required_generation = subtree_generation
-                .max(invalidation.element_generation(handle))
-                .max(child_restyles.child_requirement(inherits_reset));
+                .is_some_and(|data| data.hint.contains(RestyleHint::RECASCADE_SELF));
+            let required_generation =
+                subtree_generation.max(invalidation.element_generation(handle));
             let needs_resolution = data
                 .is_none_or(|data| !data.has_styles() || !data.hint.is_empty())
                 || !invalidation.element_is_current(handle, required_generation);
@@ -427,26 +391,54 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                     styles
                 });
                 let child_hint = publish_resolved_element_styles(world, element, previous, styles);
-                invalidation.record_descendant_restyle(
-                    handle,
-                    child_hint,
-                    required_generation,
-                    subtree_generation,
-                );
+                // A queued child recascade can reach an element without a
+                // selector target. Broader dependencies still use the active
+                // invalidation generation.
+                let cascade_generation = if inherited_work {
+                    invalidation.generation()
+                } else {
+                    required_generation
+                };
+                if !child_hint.is_empty() && cascade_generation > subtree_generation {
+                    if child_hint.will_recascade_subtree() {
+                        invalidation.record_subtree_restyle(handle, cascade_generation);
+                        subtree_generation = invalidation.subtree_generation(handle);
+                    } else {
+                        self.queue_child_restyles(handle, child_hint);
+                    }
+                }
                 self.resolutions += 1;
             }
             self.validations += 1;
-            subtree_generation =
-                subtree_generation.max(invalidation.descendant_restyles(handle).subtree);
             let path = invalidation.mark_path_checked(
                 handle,
-                required_generation,
+                required_generation.max(subtree_generation),
                 subtree_generation,
                 depth,
             );
             parent = Some((handle, path));
         }
         Some(element)
+    }
+
+    fn queue_child_restyles(&self, handle: DomHandle, hint: RestyleHint) {
+        // Traversal parents cross a ShadowRoot boundary at its host.
+        let children = self.host.child_handles(handle).chain(
+            self.host
+                .shadow_root_handle(handle)
+                .into_iter()
+                .flat_map(|root| self.host.child_handles(root)),
+        );
+        let marked = self
+            .engine
+            .dom_adapter
+            .mark_cached_child_styles_for_recascade(self.document(), children, hint);
+        if marked && self.host.is_connected(handle) {
+            self.context
+                .world
+                .document_state
+                .note_screen_child_restyles();
+        }
     }
 
     pub(super) fn eager_pseudo_styles_for_read(

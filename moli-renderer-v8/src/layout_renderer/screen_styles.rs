@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use style::{
-    invalidation::element::restyle_hints::RestyleHint, servo::restyle_damage::ServoRestyleDamage,
-};
+use style::servo::restyle_damage::ServoRestyleDamage;
 
 use crate::{
     document_runtime::DomHandle, native_bridge::PageScriptHost,
@@ -45,24 +43,15 @@ pub(crate) fn resolve_screen_style_targets(
             {
                 return false;
             }
-            let Some(child_hint) = pass.resolve_screen_style_target(handle, after, supported)
+            let Some(current_scope) = pass.resolve_screen_style_target(handle, after, supported)
             else {
                 return false;
             };
-            let subtree =
-                scope == StyleInvalidationScope::Subtree || child_hint.will_recascade_subtree();
-            if subtree || !child_hint.is_empty() {
-                let child_scope = if subtree {
-                    StyleInvalidationScope::Subtree
-                } else {
-                    StyleInvalidationScope::Element
-                };
-                let only_reset = !subtree
-                    && child_hint.contains(RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE);
+            if scope.max(current_scope) == StyleInvalidationScope::Subtree {
                 remaining.extend(host.child_handles(handle).filter_map(|child| {
-                    (host.node(child).is_some_and(|node| node.is_element())
-                        && (!only_reset || pass.may_inherit_reset_style(child)))
-                    .then_some((child, child_scope))
+                    host.node(child)
+                        .is_some_and(|node| node.is_element())
+                        .then_some((child, StyleInvalidationScope::Subtree))
                 }));
             }
         }

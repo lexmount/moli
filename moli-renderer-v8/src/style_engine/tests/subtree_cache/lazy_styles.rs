@@ -823,16 +823,14 @@ fn lazy_child_restyle_keeps_earlier_inheritance_and_stops_at_an_override() {
 }
 
 #[test]
-fn descendant_restyle_history_limit_preserves_deferred_inheritance() {
-    use crate::style_engine::lazy_invalidation::MAX_RETAINED_DESCENDANT_RESTYLES;
-
+fn inherited_recascade_queues_cached_children_and_resolves_them_on_read() {
     let mut host = test_host();
     let document = host.document_handle();
     let parent = host.create_element("section");
     let unrelated = host.create_element("aside");
     assert!(host.append_child(document, parent));
     assert!(host.append_child(document, unrelated));
-    let branches = (0..MAX_RETAINED_DESCENDANT_RESTYLES + 1)
+    let branches = (0..1_400)
         .map(|_| {
             let handle = host.create_element("div");
             assert!(host.append_child(parent, handle));
@@ -875,16 +873,25 @@ fn descendant_restyle_history_limit_preserves_deferred_inheritance() {
         Some(vec![(parent, StyleInvalidationScope::Element)])
     );
 
-    let mut peak = 0;
+    assert_eq!(color(&host, parent).as_deref(), blue);
+    assert!(element_style_is_dirty_for_test(&engine, &host, branches[0]));
+    assert!(element_style_is_dirty_for_test(
+        &engine,
+        &host,
+        branches[1399]
+    ));
+    assert!(!element_style_is_dirty_for_test(&engine, &host, deferred));
+    assert_eq!(color(&host, branches[0]).as_deref(), blue);
+    assert!(element_style_is_dirty_for_test(&engine, &host, deferred));
+
     for branch in branches {
         assert_eq!(color(&host, branch).as_deref(), blue);
-        peak = peak.max(invalidation.descendant_restyle_count());
-        assert!(peak <= MAX_RETAINED_DESCENDANT_RESTYLES);
+        assert!(!element_style_is_dirty_for_test(&engine, &host, branch));
     }
-    assert_eq!(peak, MAX_RETAINED_DESCENDANT_RESTYLES);
-    assert!(invalidation.targets_after(before).is_none());
-    assert!(invalidation.checked_path(unrelated).is_none());
+    assert_eq!(invalidation.root_count(), 1);
+    assert!(invalidation.checked_path(unrelated).is_some());
     assert_eq!(color(&host, deferred).as_deref(), blue);
+    assert!(!element_style_is_dirty_for_test(&engine, &host, deferred));
     assert_eq!(color(&host, unrelated).as_deref(), green);
 }
 

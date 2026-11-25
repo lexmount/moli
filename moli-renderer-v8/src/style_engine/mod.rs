@@ -290,7 +290,11 @@ impl MoliStyleEngine {
         state.finish_screen_style_invalidation();
         match &*state.screen_style_invalidation.borrow() {
             ScreenStyleInvalidation::Clean => Some(ScreenStyleChanges::default()),
-            ScreenStyleInvalidation::Pending { after, damage } => Some(ScreenStyleChanges {
+            ScreenStyleInvalidation::Pending {
+                after,
+                damage,
+                child_restyles,
+            } => Some(ScreenStyleChanges {
                 after: *after,
                 targets: state
                     .lazy_invalidation_roots
@@ -304,6 +308,7 @@ impl MoliStyleEngine {
                 observed_damage: damage
                     .values()
                     .fold(Default::default(), |all, damage| all | *damage),
+                child_restyles: *child_restyles,
             }),
             ScreenStyleInvalidation::Full => None,
         }
@@ -321,8 +326,12 @@ impl MoliStyleEngine {
                 state.finish_screen_style_invalidation();
                 match &*state.screen_style_invalidation.borrow() {
                     ScreenStyleInvalidation::Clean => true,
-                    ScreenStyleInvalidation::Pending { damage, .. } => {
-                        damage.values().all(|&damage| supported.contains(damage))
+                    ScreenStyleInvalidation::Pending {
+                        damage,
+                        child_restyles,
+                        ..
+                    } => {
+                        !child_restyles && damage.values().all(|&damage| supported.contains(damage))
                     }
                     ScreenStyleInvalidation::Full => false,
                 }
