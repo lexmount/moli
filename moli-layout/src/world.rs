@@ -660,14 +660,14 @@ impl<N> LayoutBox<N> {
     }
 }
 
-/// Entire short-lived sidecar used for one construction/layout demand.
+/// Owned working box tree and its layout inputs and results.
 #[derive(Debug)]
 pub struct LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
     pub(crate) boxes: Vec<LayoutBox<N>>,
-    /// Pass-local numeric caches, created only for boxes with actual stores.
+    /// Numeric caches, created only for boxes with actual stores.
     /// Flattened text boxes need no empty Taffy measurement arrays.
     pub(crate) box_caches: Vec<Cache>,
     /// Winning collapsed-table edges, computed and consumed in this pass.
@@ -699,6 +699,13 @@ where
     numeric_layout_tracking: bool,
     numeric_layout_touched: Vec<LayoutBoxId>,
     numeric_layout_touched_marks: Vec<bool>,
+    retained_cache_reads: Option<Box<RetainedCacheReads>>,
+}
+
+#[derive(Debug)]
+struct RetainedCacheReads {
+    pending_slots: Vec<bool>,
+    final_hits: usize,
 }
 
 impl<N> LayoutWorld<N>
@@ -728,10 +735,12 @@ where
             numeric_layout_tracking: false,
             numeric_layout_touched: Vec::new(),
             numeric_layout_touched_marks: vec![false],
+            retained_cache_reads: None,
         }
     }
 
     pub(crate) fn clear_layout_caches(&mut self, id: LayoutBoxId) {
+        self.note_retained_cache_access(id, false);
         let layout_box = &mut self.boxes[id.index()];
         if let Some(slot) = layout_box.cache_slot {
             self.box_caches[(slot.get() - 1) as usize].clear();
@@ -739,6 +748,29 @@ where
         if let Some(cache) = &mut layout_box.table_measure_cache {
             cache.clear();
         }
+    }
+
+    pub(crate) fn track_retained_cache_reads(&mut self) {
+        self.retained_cache_reads = Some(Box::new(RetainedCacheReads {
+            pending_slots: vec![true; self.box_caches.len()],
+            final_hits: 0,
+        }));
+    }
+
+    pub(crate) fn note_retained_cache_access(&mut self, id: LayoutBoxId, hit: bool) {
+        if let Some(reads) = &mut self.retained_cache_reads
+            && let Some(slot) = self.boxes[id.index()].cache_slot
+            && let Some(pending) = reads.pending_slots.get_mut((slot.get() - 1) as usize)
+            && std::mem::take(pending)
+        {
+            reads.final_hits += usize::from(hit);
+        }
+    }
+
+    pub(crate) fn finish_retained_cache_reads(&mut self) -> usize {
+        self.retained_cache_reads
+            .take()
+            .map_or(0, |reads| reads.final_hits)
     }
 
     pub(crate) fn release_numeric_cache_storage(&mut self) {

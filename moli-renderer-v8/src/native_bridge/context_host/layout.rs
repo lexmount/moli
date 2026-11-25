@@ -555,6 +555,7 @@ impl PageScriptHost {
                     .numeric_feedback_overflow_recomputed_node_count,
                 box_count = metrics.box_count,
                 retained_box_count = metrics.retained_box_count,
+                retained_numeric_layout_hits = metrics.retained_numeric_layout_hits,
                 fragment_count = metrics.fragment_count,
                 paint_event_count = metrics.paint_event_count,
                 paint_culled_event_count = metrics.paint_culled_event_count,

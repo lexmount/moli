@@ -11,6 +11,7 @@ pub(crate) fn can_retain_world<N: Copy + std::fmt::Debug + Eq + std::hash::Hash>
         && world.boxes.iter().all(|layout_box| {
             layout_box.source.is_some()
                 && layout_box.pseudo.is_none()
+                && layout_box.parent == layout_box.structural_parent
                 && matches!(
                     layout_box.kind,
                     LayoutBoxKind::PrincipalBlock
