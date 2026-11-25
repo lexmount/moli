@@ -50,7 +50,7 @@ pub(super) fn refresh_child_geometry_without_paint(vm: &StandaloneScriptVmHarnes
         .unwrap()
         .unwrap();
     assert_eq!(pass.metrics.paint_operation_count, 0);
-    host.publish_layout_pass_for_document(document, pass);
+    host.publish_layout_pass_for_document(document, pass, None);
 }
 
 #[test]

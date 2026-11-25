@@ -345,6 +345,61 @@ fn realtime_screencast_refreshes_document_selection_and_live_range_paint() {
 }
 
 #[test]
+fn realtime_screencast_reuses_numeric_layout_with_an_active_session() {
+    run_page_vm_large_stack_async_test("realtime-screencast-layout-cache", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime-screencast-layout-cache").unwrap(),
+        );
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut()
+            .eval(
+                r#"
+            document.head.innerHTML = `<style>
+                body{margin:0;display:flex;height:200px;align-items:flex-start}
+                section{width:140px;flex:none}
+                section div{height:12px;background:blue}
+                #stable div{background:red}
+            </style>`;
+            document.body.innerHTML = '<section id=edited><div></div><div></div></section>' +
+                '<section id=stable><div></div></section>';
+        "#,
+            )
+            .unwrap();
+        let session = RendererScreencastPaintSession::default();
+        let request = |known| crate::runtime::RendererCaptureScreencastFrameRequest {
+            paint_session: Some(session.clone()),
+            ..viewport_screencast_request(known)
+        };
+        let Reply::Captured(first) = page.capture_screencast_frame(request(None)).unwrap() else {
+            panic!("initial screencast frame");
+        };
+        let before = moli_image::decode_png(&first.image.bytes).unwrap();
+        assert_eq!(&before.rgba[500..504], &[0, 0, 255, 255]);
+
+        page.vm_mut().eval("edited.style.width='120px'").unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        let (_, builds, _, metrics) = page.vm().layout_pass_observability_for_test();
+        let metrics = metrics.unwrap();
+        assert!(metrics.retained_box_count > 0);
+        assert!(metrics.retained_numeric_layout_hits > 0);
+        assert!(page.vm().has_screencast_paint_for_test());
+
+        let Reply::Captured(second) = page
+            .capture_screencast_frame(request(Some(first.visual_state)))
+            .unwrap()
+        else {
+            panic!("edited geometry must produce a new frame");
+        };
+        let after = moli_image::decode_png(&second.image.bytes).unwrap();
+        assert_eq!(&after.rgba[500..504], &[255, 0, 0, 255]);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+    });
+}
+
+#[test]
 fn realtime_screencast_releases_paint_when_the_document_becomes_empty() {
     run_page_vm_large_stack_async_test("realtime-screencast-empty", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
@@ -355,7 +410,7 @@ fn realtime_screencast_releases_paint_when_the_document_becomes_empty() {
         page.layout_configuration.policy = LayoutPolicy::Realtime;
         page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
         page.vm_mut()
-            .eval("document.body.textContent = 'Visible text'")
+            .eval("document.documentElement.style.display = 'grid'; document.body.textContent = 'Visible text'")
             .unwrap();
 
         let session = RendererScreencastPaintSession::default();
@@ -366,6 +421,11 @@ fn realtime_screencast_releases_paint_when_the_document_becomes_empty() {
             })
             .unwrap();
         assert!(page.vm().has_screencast_paint_for_test());
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        assert!(
+            !host.borrow().has_retained_layout_for_test(),
+            "a grid root still retains paint"
+        );
 
         page.vm_mut()
             .eval("window.savedRoot = document.documentElement; savedRoot.remove()")
@@ -464,6 +524,8 @@ fn realtime_screencast_reuses_published_scroll_and_matches_fresh_pixels() {
         })
         .await
         .expect("the last subscription releases paint while the page is idle");
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        assert!(host.borrow().has_retained_layout_for_test());
 
         let next_session = RendererScreencastPaintSession::default();
         capture(&mut page, &next_session, None);

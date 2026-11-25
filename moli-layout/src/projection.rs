@@ -45,6 +45,7 @@ use crate::{
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutRect, LayoutScrollExtent,
     LayoutScrollbarAxis, LayoutScrollbarGeometry, LayoutSize, LayoutTransform2D, LayoutViewport,
     LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity, PaintSnapshot,
+    RetainedLayoutWorld,
 };
 
 pub(crate) struct LayoutPassPhaseMetrics {
@@ -190,8 +191,8 @@ where
     let embedded_frames = embedded_frames
         .into_iter()
         .map(|(id, (source, snapshot))| {
-            if let Some(paint) = snapshot.screen_paint {
-                screen_frames.insert(source, (id, paint));
+            if let Some(retained) = snapshot.retained_layout {
+                screen_frames.insert(source, (id, retained));
             }
             crate::FrozenEmbeddedFrame {
                 source,
@@ -199,11 +200,12 @@ where
             }
         })
         .collect();
-    let screen_paint_inputs = retain_screen_paint.then(|| {
-        (
-            std::mem::take(&mut projection.paint_metadata),
-            projection.diagnostics.clone(),
-        )
+    let paint = retain_screen_paint.then(|| {
+        Box::new(RetainedPaintData {
+            frames: screen_frames,
+            paint_metadata: std::mem::take(&mut projection.paint_metadata),
+            diagnostics: projection.diagnostics.clone(),
+        })
     });
     let tree = projection.into_frozen_tree(
         source.root(),
@@ -212,65 +214,51 @@ where
         embedded_frames,
         scroll_projection,
     );
-    let (screen_paint, retained_layout) = if let Some((paint_metadata, diagnostics)) =
-        screen_paint_inputs
-    {
-        world.release_numeric_cache_storage();
-        world.native_grid_details = HashMap::new();
-        world.resolved_grid_tracks = HashMap::new();
-        world.table_structures = HashMap::new();
-        (
-            Some(Box::new(ScreenPaintLayout {
-                world,
-                frames: screen_frames,
-                diagnostics,
-                paint_metadata,
-            })),
-            None,
-        )
-    } else if retain_layout_world && crate::builder::can_retain_root(&world) {
-        world.native_grid_details = HashMap::new();
-        world.resolved_grid_tracks = HashMap::new();
-        world.table_structures = HashMap::new();
-        world.collapsed_table_borders = HashMap::new();
-        for layout_box in &mut world.boxes {
-            layout_box.inline_layout = None;
-            layout_box.table_measure_cache = None;
-            layout_box.replaced_image = None;
-        }
+    let reusable_layout = retain_layout_world && crate::builder::can_retain_root(&world) && {
         let estimated_bytes = world.boxes.capacity() * std::mem::size_of::<crate::LayoutBox<N>>()
             + world.box_caches.capacity() * std::mem::size_of::<taffy::Cache>()
             + tree.retention_metrics().estimated_geometry_bytes;
-        let retained = (estimated_bytes <= crate::MAX_RETAINED_LAYOUT_TREE_BYTES)
-            .then(|| Box::new(crate::RetainedLayoutWorld { world, viewport }));
-        (None, retained)
-    } else {
-        (None, None)
+        estimated_bytes <= crate::MAX_RETAINED_LAYOUT_TREE_BYTES
     };
+    let retained_layout = (reusable_layout || paint.is_some()).then(|| {
+        world.native_grid_details = HashMap::new();
+        world.resolved_grid_tracks = HashMap::new();
+        world.table_structures = HashMap::new();
+        if !reusable_layout {
+            world.release_numeric_cache_storage();
+        }
+        if paint.is_none() {
+            world.release_paint_storage();
+        }
+        Box::new(RetainedLayoutWorld {
+            world,
+            viewport,
+            reusable_layout,
+            paint,
+        })
+    });
     Ok(LayoutPassResult::new(
         tree,
         diagnostics,
         metrics,
         paint_snapshot,
         css_image_references,
-        screen_paint,
         retained_layout,
     ))
 }
 
-/// Owned styles, glyphs and resources for painting one published screen layout.
-/// Paint always takes placement and scroll offsets from that layout's tree.
-pub struct ScreenPaintLayout<N>
+/// Additional inputs for painting one published screen layout. Each embedded
+/// Document retains its own world only to paint its corresponding subtree.
+pub(crate) struct RetainedPaintData<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    world: LayoutWorld<N>,
-    frames: HashMap<N, (LayoutBoxId, Box<Self>)>,
+    frames: HashMap<N, (LayoutBoxId, Box<RetainedLayoutWorld<N>>)>,
     diagnostics: Vec<PaintDiagnostic>,
     paint_metadata: PaintMetadata,
 }
 
-impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
+impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
     /// Projects the viewport of the paired tree, using its latest scroll offsets.
     pub fn paint(
         &self,
@@ -278,11 +266,15 @@ impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
         request: PaintCaptureRequest,
         css_images: &dyn Fn(N, &str) -> crate::LayoutCssImageState,
     ) -> Result<PaintSnapshot, LayoutError> {
+        let paint = self
+            .paint
+            .as_deref()
+            .ok_or(LayoutError::PaintProjectionNotRequested)?;
         let scroll = tree.scroll_projection.as_deref().ok_or_else(|| {
             LayoutError::source_contract("screen paint", "missing published box placements")
         })?;
         let world = &self.world;
-        if tree.boxes.len() != world.boxes.len() {
+        if tree.viewport != self.viewport || tree.boxes.len() != world.boxes.len() {
             return Err(LayoutError::source_contract(
                 "screen paint",
                 "paint inputs and published box placements differ",
@@ -301,7 +293,8 @@ impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
         )?;
         let document_images = |url: &str| css_images(tree.source_root(), url);
         let projection = PaintProjection::from_publication(
-            self,
+            world,
+            paint,
             tree,
             scroll,
             &coordinates.spaces,
@@ -313,7 +306,7 @@ impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
             if frame.tree.viewport.css_width == 0 || frame.tree.viewport.css_height == 0 {
                 continue;
             }
-            let (id, paint) = self.frames.get(&frame.source).ok_or_else(|| {
+            let (id, retained) = paint.frames.get(&frame.source).ok_or_else(|| {
                 LayoutError::source_contract("screen paint", "missing embedded paint inputs")
             })?;
             let child_request = PaintCaptureRequest {
@@ -321,7 +314,7 @@ impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
                 base_background_color: crate::PaintColor::TRANSPARENT,
                 ..PaintCaptureRequest::viewport()
             };
-            embedded_paint.insert(*id, paint.paint(&frame.tree, child_request, css_images)?);
+            embedded_paint.insert(*id, retained.paint(&frame.tree, child_request, css_images)?);
         }
 
         let capture = request.resolve(tree.viewport, tree.viewport_scroll, tree.content_size)?;

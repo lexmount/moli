@@ -7,7 +7,7 @@ use crate::{
     style::ResolvedLayoutTransform,
 };
 
-use super::{OutputProjection, ProjectedCoordinateSpace, ScreenPaintLayout, ScrollProjection};
+use super::{OutputProjection, ProjectedCoordinateSpace, RetainedPaintData, ScrollProjection};
 
 #[derive(Default)]
 pub(crate) struct BoxPaintMetadata {
@@ -74,20 +74,21 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
     }
 
     pub(super) fn from_publication(
-        layout: &'a ScreenPaintLayout<N>,
+        world: &'a LayoutWorld<N>,
+        paint: &'a RetainedPaintData<N>,
         tree: &'a FrozenLayoutTree<N>,
         scroll: &'a ScrollProjection<N>,
         coordinate_spaces: &'a [ProjectedCoordinateSpace],
         css_images: &'a CssImageLookup<'a>,
     ) -> Self {
         Self {
-            world: &layout.world,
+            world,
             viewport: tree.viewport,
             coordinate_spaces,
             clip_chain: &tree.clip_chain,
             fragments: &tree.fragments,
-            diagnostics: &layout.diagnostics,
-            metadata: &layout.paint_metadata,
+            diagnostics: &paint.diagnostics,
+            metadata: &paint.paint_metadata,
             css_images,
             geometry: PaintGeometry::Published {
                 boxes: &tree.boxes,

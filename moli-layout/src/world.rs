@@ -779,6 +779,15 @@ where
         }
     }
 
+    pub(crate) fn release_paint_storage(&mut self) {
+        self.collapsed_table_borders = HashMap::new();
+        for layout_box in &mut self.boxes {
+            layout_box.inline_layout = None;
+            layout_box.table_measure_cache = None;
+            layout_box.replaced_image = None;
+        }
+    }
+
     pub(crate) fn replace_retained_leaf(&mut self, id: LayoutBoxId, source: N) {
         let replacement = self.boxes.pop().expect("the new leaf was appended");
         self.numeric_layout_touched_marks.pop();

@@ -87,7 +87,7 @@ pub struct LayoutPassMetrics {
 ///
 /// Consumers may inspect the tree and take an optional paint snapshot while
 /// handling the demand. Diagnostics, metrics, and the projected paint snapshot
-/// are pass-owned. A screen publication can separately take its requested paint inputs.
+/// are pass-owned. A screen publication can take the retained working tree.
 pub struct LayoutPassResult<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -97,7 +97,6 @@ where
     pub metrics: LayoutPassMetrics,
     paint_snapshot: Option<PaintSnapshot>,
     css_image_references: Vec<LayoutCssImageReference<N>>,
-    screen_paint: Option<Box<crate::ScreenPaintLayout<N>>>,
     retained_layout: Option<Box<crate::RetainedLayoutWorld<N>>>,
 }
 
@@ -139,7 +138,7 @@ where
             .ok_or(LayoutError::PaintProjectionNotRequested)
     }
 
-    /// Consumes every pass-only product and returns the sole retainable tree.
+    /// Consumes every other pass product and returns the frozen geometry.
     pub fn into_tree(self) -> FrozenLayoutTree<N> {
         self.tree
     }
@@ -151,12 +150,8 @@ where
             tree: self.tree,
             paint: self.paint_snapshot,
             css_image_references: self.css_image_references,
-            screen_paint: self.screen_paint,
+            retained_layout: self.retained_layout.filter(|layout| layout.has_paint()),
         }
-    }
-
-    pub fn take_screen_paint(&mut self) -> Option<Box<crate::ScreenPaintLayout<N>>> {
-        self.screen_paint.take()
     }
 
     pub fn take_retained_layout(&mut self) -> Option<Box<crate::RetainedLayoutWorld<N>>> {
@@ -186,7 +181,6 @@ where
         metrics: LayoutPassMetrics,
         paint_snapshot: Option<PaintSnapshot>,
         css_image_references: Vec<LayoutCssImageReference<N>>,
-        screen_paint: Option<Box<crate::ScreenPaintLayout<N>>>,
         retained_layout: Option<Box<crate::RetainedLayoutWorld<N>>>,
     ) -> Self {
         Self {
@@ -195,7 +189,6 @@ where
             metrics,
             paint_snapshot,
             css_image_references,
-            screen_paint,
             retained_layout,
         }
     }
