@@ -41,7 +41,8 @@ impl<'a> StyleInvalidationCleanup<'a> {
         self.document_state
             .clear_invalidation_clear_all_fallback_reasons();
         self.clear_shadow_cascade_data_for_document_world();
-        self.clear_document_element_side_tables();
+        self.dom_adapter
+            .clear_element_data_for_document(self.document);
         self.pseudo_style_cache.clear();
         self.document_state.clear_selector_caches();
         self.document_state.bump_computed_cache_generation();
@@ -177,7 +178,8 @@ impl<'a> StyleInvalidationCleanup<'a> {
                     .iter()
                     .copied(),
             );
-        self.clear_document_element_side_tables();
+        self.dom_adapter
+            .clear_element_data_for_document(self.document);
         if context.clears_shadow_cascade_data_for_cleanup_target() {
             self.clear_shadow_cascade_data_for_document_world();
         }
@@ -214,13 +216,6 @@ impl<'a> StyleInvalidationCleanup<'a> {
                 .clear_shadow_cascade_data_for_roots(shadow_roots.iter().copied());
         }
         shadow_roots
-    }
-
-    fn clear_document_element_side_tables(&self) {
-        self.dom_adapter
-            .clear_element_data_for_document(self.document);
-        self.dom_adapter
-            .clear_inline_style_attributes_for_document(self.document);
     }
 
     fn existing_subtree_roots(

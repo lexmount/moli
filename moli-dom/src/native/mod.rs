@@ -21,8 +21,8 @@ pub use document::{
     Document, DocumentFragment, DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
 };
 pub use element::{
-    Attribute, CustomElementState, Element, SelectedFile, html_element_interface_name,
-    svg_element_interface_name,
+    Attribute, CustomElementState, Element, InlineStyleAttribute, SelectedFile,
+    html_element_interface_name, svg_element_interface_name,
 };
 use host::StylesheetCandidateRegistries;
 pub use host::{
