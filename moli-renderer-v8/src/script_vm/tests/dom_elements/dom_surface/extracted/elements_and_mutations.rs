@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn attribute_node_mutations_use_the_native_attr_brand() {
+    let mut vm = new_storage_test_vm("https://attr-arguments.test/");
+    assert_eq!(vm.eval(r#"
+        (() => {
+            const target = document.createElement('div');
+            const attr = document.createAttribute('title');
+            for (const member of ['setAttributeNode', 'setAttributeNodeNS', 'removeAttributeNode']) {
+                for (const value of [null, Object.create(Attr.prototype), new Proxy(attr, {})]) {
+                    try { target[member](value); return false; }
+                    catch (error) { if (!(error instanceof TypeError)) return false; }
+                }
+            }
+            return target.setAttributeNode(attr) === null
+                && target.removeAttributeNode(attr) === attr;
+        })()
+    "#).unwrap(), "true");
+}
+
+#[test]
 fn customized_built_in_constructors_can_extend_specialized_html_elements() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
