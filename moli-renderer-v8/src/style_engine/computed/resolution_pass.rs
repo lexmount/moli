@@ -23,11 +23,11 @@ use style::{
 use super::STYLE_RESOLUTION_CONTEXTS;
 use super::{
     DocumentStyleWorld, DomHandle, DomHost, MarkerStyleDecision, MoliStyleEngine,
-    StyloAnonymousBoxKind, StyloComputedStyleSnapshot, clear_element_styles_for_resolution,
-    document_quirks_mode, element_style_is_current, marker_style_decision,
+    StyloAnonymousBoxKind, StyloComputedStyleSnapshot, document_quirks_mode,
+    element_style_is_current, marker_style_decision,
     populate_inline_style_attribute_for_resolution, publish_resolved_element_styles,
     style_validation_path_needs_resolution, stylo_pseudo_element_for_computed_style,
-    with_cached_lazy_pseudo_style,
+    take_element_styles_for_resolution, with_cached_lazy_pseudo_style,
 };
 
 /// One binding and stylesheet read scope for a stable document world. Create
@@ -334,7 +334,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                     handle,
                     self.quirks_mode,
                 );
-                clear_element_styles_for_resolution(world, element);
+                let previous = take_element_styles_for_resolution(world, element);
                 let styles = self.context.with_stylo(|context| {
                     context
                         .thread_local
@@ -352,7 +352,13 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                     context.thread_local.bloom_filter.push(element);
                     styles
                 });
-                publish_resolved_element_styles(world, element, styles, required_generation);
+                publish_resolved_element_styles(
+                    world,
+                    element,
+                    previous,
+                    styles,
+                    required_generation,
+                );
                 inherited_change = true;
                 self.resolutions += 1;
             }

@@ -19,6 +19,7 @@ use style::{
         parse_style_attribute,
     },
     selector_parser::PseudoElement,
+    servo::restyle_damage::ServoRestyleDamage,
     servo_arc::Arc as ServoArc,
     stylesheets::{CssRuleType, UrlExtraData},
     stylist::RuleInclusion,
@@ -155,33 +156,31 @@ pub(crate) struct ComputedRenderedStyleFacts {
     pub(crate) text_wrap_mode: ComputedTextWrapModeKind,
 }
 
-impl StyloComputedStyleSnapshot {
-    pub(crate) fn has_same_rendering_as(&self, current: &Self) -> bool {
-        fn eq(old: &ComputedValues, new: &ComputedValues) -> bool {
-            use style::{matching::StyleChange, servo::restyle_damage::ServoRestyleDamage};
-
-            old.effective_zoom == new.effective_zoom
-                && old.writing_mode == new.writing_mode
-                && matches!(
-                    ServoRestyleDamage::compute_style_difference::<moli_selector::StyloElement<'_>>(
-                        old, new,
-                    )
-                    .change,
-                    StyleChange::Unchanged
-                )
-        }
-
-        fn pseudo_eq(old: Option<&ComputedValues>, new: Option<&ComputedValues>) -> bool {
-            match (old, new) {
-                (Some(old), Some(new)) => eq(old, new),
-                (None, None) => true,
-                _ => false,
+fn computed_style_damage<E: TElement>(
+    old: Option<&ServoArc<ComputedValues>>,
+    new: Option<&ServoArc<ComputedValues>>,
+) -> ServoRestyleDamage {
+    match (old, new) {
+        (Some(old), Some(new)) => {
+            let mut damage = ServoRestyleDamage::compute_style_difference::<E>(old, new).damage;
+            if old.effective_zoom != new.effective_zoom || old.writing_mode != new.writing_mode {
+                damage.insert(ServoRestyleDamage::RELAYOUT);
             }
+            damage
         }
+        (None, None) => ServoRestyleDamage::empty(),
+        _ => ServoRestyleDamage::reconstruct(),
+    }
+}
 
-        eq(&self.primary, &current.primary)
-            && pseudo_eq(self.before.as_deref(), current.before.as_deref())
-            && pseudo_eq(self.after.as_deref(), current.after.as_deref())
+impl StyloComputedStyleSnapshot {
+    pub(crate) fn rendering_damage(&self, current: &Self) -> ServoRestyleDamage {
+        computed_style_damage::<StyloElement<'_>>(Some(&self.primary), Some(&current.primary))
+            | computed_style_damage::<StyloElement<'_>>(
+                self.before.as_ref(),
+                current.before.as_ref(),
+            )
+            | computed_style_damage::<StyloElement<'_>>(self.after.as_ref(), current.after.as_ref())
     }
 
     fn from_primary(primary: ServoArc<ComputedValues>) -> Self {
@@ -925,21 +924,38 @@ fn with_resolved_style_in_current_world<R>(
 
 /// Both resolver entry points replace the same canonical ElementData. Keep
 /// pseudo invalidation and restyle publication independent of their scheduling.
-fn clear_element_styles_for_resolution<E: TElement>(world: &DocumentStyleWorld, element: E) {
+fn take_element_styles_for_resolution<E: TElement>(
+    world: &DocumentStyleWorld,
+    element: E,
+) -> ElementStyles {
     let handle = DomHandle::new(element.as_node().debug_id());
     world.pseudo_style_cache.invalidate_handles([handle]);
     // Keep dirty values published until an observation actually resolves them.
-    unsafe {
-        element.ensure_data().styles = ElementStyles::default();
-    }
+    unsafe { std::mem::take(&mut element.ensure_data().styles) }
 }
 
 fn publish_resolved_element_styles<E: TElement>(
     world: &DocumentStyleWorld,
     element: E,
+    previous: ElementStyles,
     styles: ElementStyles,
     required_generation: u64,
 ) {
+    world.document_state.record_screen_style_damage(|| {
+        if !element.as_node().is_in_document() {
+            return ServoRestyleDamage::empty();
+        }
+        let mut damage = computed_style_damage::<E>(previous.get_primary(), styles.get_primary());
+        for (old, new) in previous
+            .pseudos
+            .as_array()
+            .iter()
+            .zip(styles.pseudos.as_array())
+        {
+            damage |= computed_style_damage::<E>(old.as_ref(), new.as_ref());
+        }
+        damage
+    });
     unsafe {
         let mut data = element.ensure_data();
         data.styles = styles;
@@ -987,14 +1003,20 @@ fn resolve_element_styles<'dom>(
                 validation_path,
             );
             let target = DomHandle::new(element.as_node().debug_id());
-            clear_element_styles_for_resolution(world, element);
+            let previous = take_element_styles_for_resolution(world, element);
             let styles = resolve_style(context, element, RuleInclusion::All, pseudo_element, None);
             let required_generation = world
                 .document_state
                 .lazy_invalidation_roots
                 .required_generation_for_checked_element(target)
                 .unwrap_or_default();
-            publish_resolved_element_styles(world, element, styles.clone(), required_generation);
+            publish_resolved_element_styles(
+                world,
+                element,
+                previous,
+                styles.clone(),
+                required_generation,
+            );
             world
                 .document_state
                 .note_element_style_resolutions(ancestor_resolution_count.saturating_add(1));
@@ -1040,10 +1062,10 @@ where
         if element_style_is_current(world, ancestor, required_generation) && !force_descendants {
             continue;
         }
-        clear_element_styles_for_resolution(world, ancestor);
+        let previous = take_element_styles_for_resolution(world, ancestor);
         let styles = resolve_style(context, ancestor, RuleInclusion::All, None, None);
         resolution_count = resolution_count.saturating_add(1);
-        publish_resolved_element_styles(world, ancestor, styles, required_generation);
+        publish_resolved_element_styles(world, ancestor, previous, styles, required_generation);
         force_descendants = true;
     }
     resolution_count

@@ -81,7 +81,7 @@ mod source_scope_plan;
 mod state;
 #[cfg(debug_assertions)]
 pub(crate) use state::ComputedStyleObservationInputEpochs;
-use state::ScreenStyleInvalidation;
+use state::{ScreenStyleChanges, ScreenStyleInvalidation};
 mod stylesheet;
 mod stylesheet_resources;
 mod target_plan;
@@ -277,17 +277,20 @@ impl MoliStyleEngine {
             })
     }
 
-    /// An absent result requires a complete layout. An empty list is clean.
-    pub(crate) fn affected_screen_style_roots(
-        &self,
-        document: DomHandle,
-    ) -> Option<Vec<DomHandle>> {
+    /// Incomplete invalidation coverage requires a full layout.
+    pub(crate) fn screen_style_changes(&self, document: DomHandle) -> Option<ScreenStyleChanges> {
         let Some(world) = self.document_worlds.active_world(document) else {
-            return Some(Vec::new());
+            return Some(ScreenStyleChanges::default());
         };
         match &*world.document_state.screen_style_invalidation.borrow() {
-            ScreenStyleInvalidation::Clean => Some(Vec::new()),
-            ScreenStyleInvalidation::Subtrees(roots) => Some(roots.iter().copied().collect()),
+            ScreenStyleInvalidation::Clean => Some(ScreenStyleChanges::default()),
+            ScreenStyleInvalidation::Subtrees {
+                roots,
+                observed_damage,
+            } => Some(ScreenStyleChanges {
+                roots: roots.iter().copied().collect(),
+                observed_damage: *observed_damage,
+            }),
             ScreenStyleInvalidation::Pending | ScreenStyleInvalidation::Full => None,
         }
     }

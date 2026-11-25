@@ -7,6 +7,7 @@ use indexmap::IndexSet;
 use moli_selector::StyloSourceInvalidationFallbackReason;
 use selectors::context::SelectorCaches;
 use style::{
+    servo::restyle_damage::ServoRestyleDamage,
     servo_arc::Arc as ServoArc,
     stylist::{CascadeData, Stylist},
 };
@@ -85,8 +86,17 @@ pub(super) enum ScreenStyleInvalidation {
     #[default]
     Clean,
     Pending,
-    Subtrees(IndexSet<DomHandle>),
+    Subtrees {
+        roots: IndexSet<DomHandle>,
+        observed_damage: ServoRestyleDamage,
+    },
     Full,
+}
+
+#[derive(Default)]
+pub(crate) struct ScreenStyleChanges {
+    pub(crate) roots: Vec<DomHandle>,
+    pub(crate) observed_damage: ServoRestyleDamage,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -192,16 +202,37 @@ impl StyleDocumentState {
             ScreenStyleInvalidation::Pending => {
                 let roots: IndexSet<_> = roots.into_iter().collect();
                 if !roots.is_empty() {
-                    *change = ScreenStyleInvalidation::Subtrees(roots);
+                    *change = ScreenStyleInvalidation::Subtrees {
+                        roots,
+                        observed_damage: ServoRestyleDamage::empty(),
+                    };
                 }
             }
-            ScreenStyleInvalidation::Subtrees(affected) => affected.extend(roots),
+            ScreenStyleInvalidation::Subtrees {
+                roots: affected, ..
+            } => affected.extend(roots),
             ScreenStyleInvalidation::Clean | ScreenStyleInvalidation::Full => {}
         }
-        if matches!(&*change, ScreenStyleInvalidation::Subtrees(roots)
+        if matches!(&*change, ScreenStyleInvalidation::Subtrees { roots, .. }
             if roots.len() > super::lazy_invalidation::MAX_RETAINED_INVALIDATION_ROOTS)
         {
             *change = ScreenStyleInvalidation::Full;
+        }
+    }
+
+    pub(super) fn record_screen_style_damage(&self, compare: impl FnOnce() -> ServoRestyleDamage) {
+        if self.screen_cache_generations.get().is_none() {
+            return;
+        }
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        if let ScreenStyleInvalidation::Subtrees {
+            observed_damage, ..
+        } = &mut *change
+            && self.screen_style_dependencies_are_current()
+        {
+            // Carry work across style reads until the screen consumes it.
+            // The published baseline still covers unresolved styles.
+            *observed_damage |= compare();
         }
     }
 
