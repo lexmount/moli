@@ -2771,16 +2771,12 @@ fn caret_output_offset(
     entries.last().map(|entry| entry.output_range.end)
 }
 
-fn collect_inline_input<N>(world: &mut LayoutWorld<N>, owner: LayoutBoxId) -> InlineBuildInput
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let mut normalizer = InlineNormalizer::new(owner);
-    let children = world.boxes[owner.index()].children.clone();
-    for child in children {
-        collect_box(world, owner, child, &mut Vec::new(), &mut normalizer);
-    }
-    normalizer.finish()
+enum CollectInlineStep {
+    Enter(LayoutBoxId),
+    Exit {
+        id: LayoutBoxId,
+        vertical_align: crate::style::InlineVerticalAlign,
+    },
 }
 
 enum InlineChildKind {
@@ -2843,68 +2839,85 @@ where
     }
 }
 
-fn collect_box<N>(
-    world: &mut LayoutWorld<N>,
-    owner: LayoutBoxId,
-    id: LayoutBoxId,
-    ancestors: &mut Vec<LayoutBoxId>,
-    normalizer: &mut InlineNormalizer,
-) where
+fn collect_inline_input<N>(world: &mut LayoutWorld<N>, owner: LayoutBoxId) -> InlineBuildInput
+where
     N: Copy + Debug + Eq + Hash,
 {
-    let kind = inline_child_kind(&world.boxes[id.index()]);
-    if matches!(kind, InlineChildKind::OutsideMarker) {
-        return;
-    }
-    world.boxes[id.index()].inline_context_owner = Some(owner);
+    let mut normalizer = InlineNormalizer::new(owner);
+    let mut ancestors = Vec::new();
+    let mut stack = world.boxes[owner.index()]
+        .children
+        .iter()
+        .rev()
+        .copied()
+        .map(CollectInlineStep::Enter)
+        .collect::<Vec<_>>();
+    while let Some(step) = stack.pop() {
+        match step {
+            CollectInlineStep::Exit { id, vertical_align } => {
+                ancestors.pop();
+                normalizer.close_inline(id, &ancestors, vertical_align);
+            }
+            CollectInlineStep::Enter(id) => {
+                let kind = inline_child_kind(&world.boxes[id.index()]);
+                if matches!(kind, InlineChildKind::OutsideMarker) {
+                    continue;
+                }
+                world.boxes[id.index()].inline_context_owner = Some(owner);
 
-    if matches!(kind, InlineChildKind::Text) {
-        world.boxes[id.index()].inline_flattened = true;
-        let text = world.boxes[id.index()].text.clone().unwrap_or_default();
-        normalizer.push_text(
-            id,
-            &text,
-            world.boxes[id.index()].style.white_space_collapse(),
-            world.boxes[id.index()].style.text_transform(),
-            ancestors,
-        );
-        return;
+                match kind {
+                    InlineChildKind::OutsideMarker => unreachable!(),
+                    InlineChildKind::Text => {
+                        world.boxes[id.index()].inline_flattened = true;
+                        let text = world.boxes[id.index()].text.clone().unwrap_or_default();
+                        normalizer.push_text(
+                            id,
+                            &text,
+                            world.boxes[id.index()].style.white_space_collapse(),
+                            world.boxes[id.index()].style.text_transform(),
+                            &ancestors,
+                        );
+                    }
+                    InlineChildKind::Break => {
+                        world.boxes[id.index()].inline_flattened = true;
+                        normalizer.hard_break(id, &ancestors);
+                    }
+                    InlineChildKind::Object(role, box_kind) => {
+                        normalizer.push_object(
+                            id,
+                            role,
+                            box_kind,
+                            &ancestors,
+                            world.boxes[id.index()].style.vertical_align(),
+                        );
+                    }
+                    InlineChildKind::Structural => {
+                        world.boxes[id.index()].inline_flattened = true;
+                        let vertical_align = world.boxes[id.index()].style.vertical_align();
+                        normalizer.open_inline(
+                            id,
+                            world.boxes[id.index()].style.unicode_bidi(),
+                            world.boxes[id.index()].style.direction(),
+                            &ancestors,
+                            vertical_align,
+                        );
+                        ancestors.push(id);
+                        stack.push(CollectInlineStep::Exit { id, vertical_align });
+                        stack.extend(
+                            world.boxes[id.index()]
+                                .children
+                                .iter()
+                                .rev()
+                                .copied()
+                                .map(CollectInlineStep::Enter),
+                        );
+                    }
+                }
+            }
+        }
     }
-    if matches!(kind, InlineChildKind::Break) {
-        world.boxes[id.index()].inline_flattened = true;
-        normalizer.hard_break(id, ancestors);
-        return;
-    }
-
-    if let InlineChildKind::Object(role, kind) = kind {
-        normalizer.push_object(
-            id,
-            role,
-            kind,
-            ancestors,
-            world.boxes[id.index()].style.vertical_align(),
-        );
-        return;
-    }
-
-    world.boxes[id.index()].inline_flattened = true;
-    let vertical_align = world.boxes[id.index()].style.vertical_align();
-    normalizer.open_inline(
-        id,
-        world.boxes[id.index()].style.unicode_bidi(),
-        world.boxes[id.index()].style.direction(),
-        ancestors,
-        vertical_align,
-    );
-    ancestors.push(id);
-    let children = world.boxes[id.index()].children.clone();
-    for child in children {
-        collect_box(world, owner, child, ancestors, normalizer);
-    }
-    ancestors.pop();
-    normalizer.close_inline(id, ancestors, vertical_align);
+    normalizer.finish()
 }
-
 struct PendingWhitespace {
     output_index: usize,
     unit_index: usize,

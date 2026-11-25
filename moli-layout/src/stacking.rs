@@ -52,10 +52,7 @@ struct ChildContext {
 #[derive(Debug)]
 enum PaintEntryKind {
     Event(PaintOrderEvent),
-    Group {
-        root: LayoutBoxId,
-        flow: Box<FlowCollection>,
-    },
+    Group { root: LayoutBoxId, flow: usize },
     Context(LayoutBoxId),
 }
 
@@ -306,30 +303,53 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let mut sequence = vec![0; world.boxes.len()];
-    let mut next = 0;
-    assign_tree_order(world, world.root, &mut sequence, &mut next);
+    assign_tree_order(world, world.root, &mut sequence);
     let inline = InlineOrder::new(world);
     let mut events = Vec::with_capacity(world.boxes.len() * 4);
-    emit_context(world, world.root, &sequence, &inline, &mut events);
+    emit_contexts_iterative(world, world.root, &sequence, &inline, &mut events);
     events
 }
 
-fn assign_tree_order<N>(
-    world: &LayoutWorld<N>,
-    id: LayoutBoxId,
-    sequence: &mut [usize],
-    next: &mut usize,
-) where
+fn assign_tree_order<N>(world: &LayoutWorld<N>, root: LayoutBoxId, sequence: &mut [usize])
+where
     N: Copy + Debug + Eq + Hash,
 {
-    sequence[id.index()] = *next;
-    *next += 1;
-    for child in ordered_children(world, id) {
-        assign_tree_order(world, child, sequence, next);
+    let mut next = 0usize;
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        sequence[id.index()] = next;
+        next += 1;
+        stack.extend(ordered_children(world, id).into_iter().rev());
     }
 }
 
-fn emit_context<N>(
+enum EmitWork {
+    Context(LayoutBoxId),
+    Flow(usize),
+    Entries(Vec<PaintEntry>),
+    Group { root: LayoutBoxId, flow: usize },
+    Outlines(Vec<LayoutBoxId>),
+    Event(PaintOrderEvent),
+}
+
+#[derive(Clone, Copy)]
+enum GroupTarget {
+    Positioned,
+    Float,
+    InlineContent,
+}
+
+enum CollectWork {
+    Visit(LayoutBoxId),
+    FinishGroup {
+        id: LayoutBoxId,
+        flow: usize,
+        parent_flow: usize,
+        target: GroupTarget,
+    },
+}
+
+fn emit_contexts_iterative<N>(
     world: &LayoutWorld<N>,
     root: LayoutBoxId,
     sequence: &[usize],
@@ -338,99 +358,195 @@ fn emit_context<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    events.push(PaintOrderEvent::PushStackingContext(root));
-    push_background(root, events);
-    let mut flow = FlowCollection::default();
-    let mut stacking = StackingDescendants::default();
-    collect_contents(world, root, sequence, inline, &mut flow);
-    for child in ordered_children(world, root) {
-        collect_subtree(world, child, sequence, inline, &mut flow, &mut stacking);
+    let mut flows: Vec<FlowCollection> = Vec::new();
+    let mut work = vec![EmitWork::Context(root)];
+    while let Some(step) = work.pop() {
+        match step {
+            EmitWork::Event(event) => events.push(event),
+            EmitWork::Outlines(outlines) => {
+                events.extend(outlines.into_iter().map(PaintOrderEvent::BoxOutline));
+            }
+            EmitWork::Group { root, flow } => {
+                push_background(root, events);
+                work.push(EmitWork::Event(PaintOrderEvent::BoxOutline(root)));
+                work.push(EmitWork::Flow(flow));
+            }
+            EmitWork::Flow(flow_index) => {
+                let flow = std::mem::take(&mut flows[flow_index]);
+                for id in flow.block_backgrounds {
+                    push_background(id, events);
+                }
+                events.extend(
+                    flow.table_collapsed_borders
+                        .into_iter()
+                        .map(PaintOrderEvent::TableCollapsedBorders),
+                );
+                work.push(EmitWork::Outlines(flow.outlines));
+                work.push(EmitWork::Entries(flow.inline_contents));
+                work.push(EmitWork::Entries(flow.floats));
+            }
+            EmitWork::Entries(mut entries) => {
+                entries.sort_by_key(|entry| entry.order);
+                for entry in entries.into_iter().rev() {
+                    match entry.kind {
+                        PaintEntryKind::Event(event) => work.push(EmitWork::Event(event)),
+                        PaintEntryKind::Group { root, flow } => {
+                            work.push(EmitWork::Group { root, flow });
+                        }
+                        PaintEntryKind::Context(id) => work.push(EmitWork::Context(id)),
+                    }
+                }
+            }
+            EmitWork::Context(context_root) => {
+                events.push(PaintOrderEvent::PushStackingContext(context_root));
+                push_background(context_root, events);
+                let flow_index = flows.len();
+                flows.push(FlowCollection::default());
+                let mut stacking = StackingDescendants::default();
+                collect_contents(
+                    world,
+                    context_root,
+                    sequence,
+                    inline,
+                    &mut flows[flow_index],
+                );
+                collect_subtrees_iterative(
+                    world,
+                    ordered_children(world, context_root),
+                    sequence,
+                    inline,
+                    &mut flows,
+                    flow_index,
+                    &mut stacking,
+                );
+                stacking
+                    .negative
+                    .sort_by_key(|context| (context.z_index, context.sequence));
+                stacking
+                    .positive
+                    .sort_by_key(|context| (context.z_index, context.sequence));
+                let outlines = std::mem::take(&mut flows[flow_index].outlines);
+                work.push(EmitWork::Event(PaintOrderEvent::PopStackingContext(
+                    context_root,
+                )));
+                work.push(EmitWork::Event(PaintOrderEvent::BoxOutline(context_root)));
+                work.push(EmitWork::Outlines(outlines));
+                for context in stacking.positive.into_iter().rev() {
+                    work.push(EmitWork::Context(context.id));
+                }
+                work.push(EmitWork::Entries(stacking.positioned));
+                work.push(EmitWork::Flow(flow_index));
+                for context in stacking.negative.into_iter().rev() {
+                    work.push(EmitWork::Context(context.id));
+                }
+            }
+        }
     }
-    stacking
-        .negative
-        .sort_by_key(|context| (context.z_index, context.sequence));
-    stacking
-        .positive
-        .sort_by_key(|context| (context.z_index, context.sequence));
-    for context in stacking.negative {
-        emit_context(world, context.id, sequence, inline, events);
-    }
-    let outlines = std::mem::take(&mut flow.outlines);
-    emit_flow(world, flow, sequence, inline, events);
-    emit_entries(world, stacking.positioned, sequence, inline, events);
-    for context in stacking.positive {
-        emit_context(world, context.id, sequence, inline, events);
-    }
-    events.extend(outlines.into_iter().map(PaintOrderEvent::BoxOutline));
-    events.push(PaintOrderEvent::BoxOutline(root));
-    events.push(PaintOrderEvent::PopStackingContext(root));
 }
 
-fn collect_subtree<N>(
+fn collect_subtrees_iterative<N>(
     world: &LayoutWorld<N>,
-    id: LayoutBoxId,
+    initial_children: Vec<LayoutBoxId>,
     sequence: &[usize],
     inline: &InlineOrder,
-    flow: &mut FlowCollection,
+    flows: &mut Vec<FlowCollection>,
+    root_flow: usize,
     stacking: &mut StackingDescendants,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &world.boxes[id.index()];
-    let flex_or_grid_item = is_flex_or_grid_item(world, id);
-    if layout_box.creates_stacking_context(false, flex_or_grid_item) {
-        let context = ChildContext {
-            id,
-            z_index: layout_box.style.explicit_z_index().unwrap_or(0),
-            sequence: sequence[id.index()],
-        };
-        match context.z_index.cmp(&0) {
-            std::cmp::Ordering::Less => stacking.negative.push(context),
-            std::cmp::Ordering::Equal => stacking.positioned.push(PaintEntry {
-                order: (context.sequence, 0, context.sequence, 0),
-                kind: PaintEntryKind::Context(id),
-            }),
-            std::cmp::Ordering::Greater => stacking.positive.push(context),
+    let mut current_flow = root_flow;
+    let mut work = initial_children
+        .into_iter()
+        .rev()
+        .map(CollectWork::Visit)
+        .collect::<Vec<_>>();
+    while let Some(step) = work.pop() {
+        match step {
+            CollectWork::FinishGroup {
+                id,
+                flow,
+                parent_flow,
+                target,
+            } => {
+                current_flow = parent_flow;
+                let entry = PaintEntry {
+                    order: match target {
+                        GroupTarget::Positioned | GroupTarget::Float => {
+                            (sequence[id.index()], 0, sequence[id.index()], 0)
+                        }
+                        GroupTarget::InlineContent => inline.order(id, sequence),
+                    },
+                    kind: PaintEntryKind::Group { root: id, flow },
+                };
+                match target {
+                    GroupTarget::Positioned => stacking.positioned.push(entry),
+                    GroupTarget::Float => flows[parent_flow].floats.push(entry),
+                    GroupTarget::InlineContent => flows[parent_flow].inline_contents.push(entry),
+                }
+            }
+            CollectWork::Visit(id) => {
+                let layout_box = &world.boxes[id.index()];
+                let flex_or_grid_item = is_flex_or_grid_item(world, id);
+                if layout_box.creates_stacking_context(false, flex_or_grid_item) {
+                    let context = ChildContext {
+                        id,
+                        z_index: layout_box.style.explicit_z_index().unwrap_or(0),
+                        sequence: sequence[id.index()],
+                    };
+                    match context.z_index.cmp(&0) {
+                        std::cmp::Ordering::Less => stacking.negative.push(context),
+                        std::cmp::Ordering::Equal => stacking.positioned.push(PaintEntry {
+                            order: (context.sequence, 0, context.sequence, 0),
+                            kind: PaintEntryKind::Context(id),
+                        }),
+                        std::cmp::Ordering::Greater => stacking.positive.push(context),
+                    }
+                    continue;
+                }
+                let positioned = layout_box.style.position() != LayoutPosition::Static;
+                let floated = layout_box.style.is_floated() && !flex_or_grid_item;
+                let atomic = flex_or_grid_item
+                    || (layout_box.inline_context_owner.is_some() && !layout_box.inline_flattened);
+                if positioned || floated || atomic {
+                    let local_flow = flows.len();
+                    flows.push(FlowCollection::default());
+                    collect_contents(world, id, sequence, inline, &mut flows[local_flow]);
+                    let target = if positioned {
+                        GroupTarget::Positioned
+                    } else if floated {
+                        GroupTarget::Float
+                    } else {
+                        GroupTarget::InlineContent
+                    };
+                    work.push(CollectWork::FinishGroup {
+                        id,
+                        flow: local_flow,
+                        parent_flow: current_flow,
+                        target,
+                    });
+                    current_flow = local_flow;
+                    work.extend(
+                        ordered_children(world, id)
+                            .into_iter()
+                            .rev()
+                            .map(CollectWork::Visit),
+                    );
+                    continue;
+                }
+                if !layout_box.inline_flattened {
+                    flows[current_flow].block_backgrounds.push(id);
+                }
+                collect_contents(world, id, sequence, inline, &mut flows[current_flow]);
+                flows[current_flow].outlines.push(id);
+                work.extend(
+                    ordered_children(world, id)
+                        .into_iter()
+                        .rev()
+                        .map(CollectWork::Visit),
+                );
+            }
         }
-        return;
-    }
-    let positioned = layout_box.style.position() != LayoutPosition::Static;
-    let floated = layout_box.style.is_floated() && !flex_or_grid_item;
-    let atomic = flex_or_grid_item
-        || (layout_box.inline_context_owner.is_some() && !layout_box.inline_flattened);
-    if positioned || floated || atomic {
-        let mut local = FlowCollection::default();
-        collect_contents(world, id, sequence, inline, &mut local);
-        for child in ordered_children(world, id) {
-            collect_subtree(world, child, sequence, inline, &mut local, stacking);
-        }
-        let entry = PaintEntry {
-            order: if positioned || floated {
-                (sequence[id.index()], 0, sequence[id.index()], 0)
-            } else {
-                inline.order(id, sequence)
-            },
-            kind: PaintEntryKind::Group {
-                root: id,
-                flow: Box::new(local),
-            },
-        };
-        if positioned {
-            stacking.positioned.push(entry);
-        } else if floated {
-            flow.floats.push(entry);
-        } else {
-            flow.inline_contents.push(entry);
-        }
-        return;
-    }
-    if !layout_box.inline_flattened {
-        flow.block_backgrounds.push(id);
-    }
-    collect_contents(world, id, sequence, inline, flow);
-    flow.outlines.push(id);
-    for child in ordered_children(world, id) {
-        collect_subtree(world, child, sequence, inline, flow, stacking);
     }
 }
 
@@ -504,51 +620,6 @@ fn collect_contents<N>(
 fn push_background(id: LayoutBoxId, events: &mut Vec<PaintOrderEvent>) {
     events.push(PaintOrderEvent::BoxOutsetShadow(id));
     events.push(PaintOrderEvent::BoxBackground(id));
-}
-
-fn emit_flow<N>(
-    world: &LayoutWorld<N>,
-    flow: FlowCollection,
-    sequence: &[usize],
-    inline: &InlineOrder,
-    events: &mut Vec<PaintOrderEvent>,
-) where
-    N: Copy + Debug + Eq + Hash,
-{
-    for id in flow.block_backgrounds {
-        push_background(id, events);
-    }
-    events.extend(
-        flow.table_collapsed_borders
-            .into_iter()
-            .map(PaintOrderEvent::TableCollapsedBorders),
-    );
-    emit_entries(world, flow.floats, sequence, inline, events);
-    emit_entries(world, flow.inline_contents, sequence, inline, events);
-    events.extend(flow.outlines.into_iter().map(PaintOrderEvent::BoxOutline));
-}
-
-fn emit_entries<N>(
-    world: &LayoutWorld<N>,
-    mut entries: Vec<PaintEntry>,
-    sequence: &[usize],
-    inline: &InlineOrder,
-    events: &mut Vec<PaintOrderEvent>,
-) where
-    N: Copy + Debug + Eq + Hash,
-{
-    entries.sort_by_key(|entry| entry.order);
-    for entry in entries {
-        match entry.kind {
-            PaintEntryKind::Event(event) => events.push(event),
-            PaintEntryKind::Group { root, flow } => {
-                push_background(root, events);
-                emit_flow(world, *flow, sequence, inline, events);
-                events.push(PaintOrderEvent::BoxOutline(root));
-            }
-            PaintEntryKind::Context(id) => emit_context(world, id, sequence, inline, events),
-        }
-    }
 }
 
 fn is_flex_or_grid_item<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> bool

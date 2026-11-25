@@ -255,21 +255,37 @@ where
     )))
 }
 
+struct RefreshFrame<'a, N> {
+    id: LayoutBoxId,
+    node: N,
+    restyled: bool,
+    refreshed_text_style: Option<Box<ResolvedLayoutStyle>>,
+    dirty: Option<&'a DirtyBoxPaths<N>>,
+    source_children: std::vec::IntoIter<N>,
+    children: Vec<LayoutBoxId>,
+    changed: bool,
+    reattach: bool,
+}
+
+enum RefreshEntry<'a, N> {
+    Leaf { changed: bool },
+    Container(RefreshFrame<'a, N>),
+}
+
 impl<S, R> BoxBuilder<'_, S, R>
 where
     S: LayoutSource,
     R: LayoutStyleResolver<S::NodeId>,
 {
-    fn refresh_box(
+    fn open_refresh_frame<'a>(
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         id: LayoutBoxId,
         node: S::NodeId,
         restyled: bool,
-        dirty: Option<&DirtyBoxPaths<S::NodeId>>,
-        retained: &mut RetainedBoxes<S::NodeId>,
-        parent_children: &mut Vec<LayoutBoxId>,
-    ) -> Result<bool, LayoutError> {
+        dirty: Option<&'a DirtyBoxPaths<S::NodeId>>,
+        retained: &RetainedBoxes<S::NodeId>,
+    ) -> Result<RefreshEntry<'a, S::NodeId>, LayoutError> {
         world.map_source(node, id);
         let layout_box = &mut world.boxes[id.index()];
         // Labels are also used in diagnostic output after an ID change.
@@ -278,8 +294,7 @@ where
             let selection = self.source.text_selection(node);
             let changed = layout_box.text_selection != selection;
             layout_box.text_selection = selection;
-            parent_children.push(id);
-            return Ok(changed);
+            return Ok(RefreshEntry::Leaf { changed });
         }
         layout_box.scroll_offset = self.sample_scroll_offset(node, &layout_box.style);
         if !restyled && retained.css_image_sources.contains(&node) {
@@ -295,34 +310,127 @@ where
             .child_box_policy(false, layout_box.style.display())
             != ChildBoxPolicy::All
         {
-            parent_children.push(id);
-            return Ok(false);
+            return Ok(RefreshEntry::Leaf { changed: false });
         }
         let refreshed_text_style = (restyled && layout_box.inline_layout.is_some())
-            .then(|| ResolvedLayoutStyle::text_leaf_from(&layout_box.style));
-        let mut children = Vec::with_capacity(layout_box.children.len());
-        let mut changed = false;
-        let mut reattach = restyled;
+            .then(|| Box::new(ResolvedLayoutStyle::text_leaf_from(&layout_box.style)));
+        let child_capacity = layout_box.children.len();
         let dirty = dirty.filter(|dirty| !restyled && !dirty.subtrees.contains(&node));
-        for child in self.checked_flat_children(node)? {
+        let source_children = self.checked_flat_children(node)?.into_iter();
+        Ok(RefreshEntry::Container(RefreshFrame {
+            id,
+            node,
+            restyled,
+            refreshed_text_style,
+            dirty,
+            source_children,
+            children: Vec::with_capacity(child_capacity),
+            changed: false,
+            reattach: restyled,
+        }))
+    }
+
+    fn refresh_box(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        root_id: LayoutBoxId,
+        root_node: S::NodeId,
+        root_restyled: bool,
+        root_dirty: Option<&DirtyBoxPaths<S::NodeId>>,
+        retained: &mut RetainedBoxes<S::NodeId>,
+        root_parent_children: &mut Vec<LayoutBoxId>,
+    ) -> Result<bool, LayoutError> {
+        let mut frames = match self.open_refresh_frame(
+            world,
+            root_id,
+            root_node,
+            root_restyled,
+            root_dirty,
+            retained,
+        )? {
+            RefreshEntry::Leaf { changed } => {
+                root_parent_children.push(root_id);
+                return Ok(changed);
+            }
+            RefreshEntry::Container(frame) => vec![frame],
+        };
+
+        while let Some(next_child) = frames.last_mut().map(|frame| frame.source_children.next()) {
+            let Some(child) = next_child else {
+                let Some(mut frame) = frames.pop() else {
+                    break;
+                };
+                if frame.reattach || frame.children != world.boxes[frame.id.index()].children {
+                    let old_children = std::mem::take(&mut world.boxes[frame.id.index()].children);
+                    let style = world.boxes[frame.id.index()].style.clone();
+                    let was_ifc = world.boxes[frame.id.index()].inline_formatting_context;
+                    let roots = self.attach_children(
+                        world,
+                        frame.id,
+                        frame.node,
+                        &style,
+                        frame.children,
+                        frame.id != world.root,
+                    )?;
+                    let structure_changed = roots.as_slice() != [frame.id]
+                        || world.boxes[frame.id.index()].children != old_children;
+                    if structure_changed
+                        || world.boxes[frame.id.index()].inline_formatting_context != was_ifc
+                    {
+                        world.numeric_tree = None;
+                    }
+                    frame.changed |= structure_changed;
+                    if let Some(parent) = frames.last_mut() {
+                        parent.children.extend(roots);
+                    } else {
+                        root_parent_children.extend(roots);
+                    }
+                } else if let Some(parent) = frames.last_mut() {
+                    parent.children.push(frame.id);
+                } else {
+                    root_parent_children.push(frame.id);
+                }
+                if frame.changed {
+                    world.invalidate_retained_inline(frame.id);
+                    world.clear_layout_caches(frame.id);
+                }
+                if let Some(parent) = frames.last_mut() {
+                    parent.changed |= frame.changed;
+                } else {
+                    return Ok(frame.changed);
+                }
+                continue;
+            };
+
+            let (parent_id, parent_restyled, parent_dirty, has_refreshed_text_style) = {
+                let Some(frame) = frames.last() else {
+                    break;
+                };
+                (
+                    frame.id,
+                    frame.restyled,
+                    frame.dirty,
+                    frame.refreshed_text_style.is_some(),
+                )
+            };
             // Normalization may wrap a source child in an anonymous box. Its
             // structural owner still identifies the original child stream.
-            let previous = retained
-                .sources
-                .get(&child)
-                .copied()
-                .filter(|previous| world.boxes[previous.index()].structural_parent == Some(id));
+            let previous = retained.sources.get(&child).copied().filter(|previous| {
+                world.boxes[previous.index()].structural_parent == Some(parent_id)
+            });
             if let Some(previous) = previous {
                 let old = &world.boxes[previous.index()];
                 // A previously split inline's boxes can extend beyond its
                 // principal subtree. Rebuild its full contribution to the
                 // parent's child stream together.
                 if can_refresh_box(old) && !retained.split_inline_sources.contains(&child) {
-                    if dirty.is_some_and(|dirty| !dirty.paths.contains(&child)) {
+                    if parent_dirty.is_some_and(|dirty| !dirty.paths.contains(&child)) {
                         if let Some(element) = old.element_semantics() {
                             self.record_viewport_body_candidate(child, element, &old.style);
                         }
-                        children.push(previous);
+                        if let Some(parent) = frames.last_mut() {
+                            parent.children.push(previous);
+                        }
                         retained.pruned_sources = true;
                         continue;
                     }
@@ -334,7 +442,7 @@ where
                                 self.styles.can_reuse_element_style(child, &old.style)
                             }
                             LayoutSourceKind::Text => {
-                                (!restyled || refreshed_text_style.is_some())
+                                (!parent_restyled || has_refreshed_text_style)
                                     && old.kind == LayoutBoxKind::Text
                                     && self.source.text(child) == old.text.as_deref()
                             }
@@ -342,19 +450,28 @@ where
                         };
                     if current {
                         if source_kind == LayoutSourceKind::Text
-                            && let Some(style) = &refreshed_text_style
+                            && let Some(style) = frames
+                                .last()
+                                .and_then(|frame| frame.refreshed_text_style.as_deref())
                         {
                             world.boxes[previous.index()].style = style.clone();
                         }
-                        changed |= self.refresh_box(
+                        match self.open_refresh_frame(
                             world,
                             previous,
                             child,
                             false,
-                            dirty,
+                            parent_dirty,
                             retained,
-                            &mut children,
-                        )?;
+                        )? {
+                            RefreshEntry::Leaf { changed } => {
+                                if let Some(parent) = frames.last_mut() {
+                                    parent.changed |= changed;
+                                    parent.children.push(previous);
+                                }
+                            }
+                            RefreshEntry::Container(child_frame) => frames.push(child_frame),
+                        }
                         continue;
                     }
                     if !table_changed
@@ -362,23 +479,33 @@ where
                         && self.restyle_existing_container(world, previous, child)?
                     {
                         retained.rebuilt_in_place.insert(previous);
-                        self.refresh_box(
+                        if let Some(parent) = frames.last_mut() {
+                            parent.changed = true;
+                        }
+                        match self.open_refresh_frame(
                             world,
                             previous,
                             child,
                             true,
-                            dirty,
+                            parent_dirty,
                             retained,
-                            &mut children,
-                        )?;
-                        changed = true;
+                        )? {
+                            RefreshEntry::Leaf { .. } => {
+                                if let Some(parent) = frames.last_mut() {
+                                    parent.children.push(previous);
+                                }
+                            }
+                            RefreshEntry::Container(child_frame) => frames.push(child_frame),
+                        }
                         continue;
                     }
                 }
-                changed = true;
+                if let Some(parent) = frames.last_mut() {
+                    parent.changed = true;
+                }
             }
 
-            let inherited = world.boxes[id.index()].style.clone();
+            let inherited = world.boxes[parent_id.index()].style.clone();
             let first_new = world.boxes.len();
             let mut built = self.build_source_node(world, child, &inherited)?;
             if let Some(previous) = previous
@@ -391,32 +518,16 @@ where
             {
                 world.replace_retained_leaf(previous, child);
                 retained.rebuilt_in_place.insert(previous);
-                reattach = true;
+                if let Some(parent) = frames.last_mut() {
+                    parent.reattach = true;
+                }
                 *new = previous;
             }
-            children.append(&mut built);
-        }
-        if reattach || children != world.boxes[id.index()].children {
-            let old_children = std::mem::take(&mut world.boxes[id.index()].children);
-            let style = world.boxes[id.index()].style.clone();
-            let was_ifc = world.boxes[id.index()].inline_formatting_context;
-            let roots =
-                self.attach_children(world, id, node, &style, children, id != world.root)?;
-            let structure_changed =
-                roots.as_slice() != [id] || world.boxes[id.index()].children != old_children;
-            if structure_changed || world.boxes[id.index()].inline_formatting_context != was_ifc {
-                world.numeric_tree = None;
+            if let Some(parent) = frames.last_mut() {
+                parent.children.append(&mut built);
             }
-            changed |= structure_changed;
-            parent_children.extend(roots);
-        } else {
-            parent_children.push(id);
         }
-        if changed {
-            world.invalidate_retained_inline(id);
-            world.clear_layout_caches(id);
-        }
-        Ok(changed)
+        Ok(false)
     }
 
     /// A new style on the same principal container invalidates its measured

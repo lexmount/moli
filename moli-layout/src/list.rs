@@ -59,7 +59,7 @@ where
 
     for container in containers {
         let mut items = Vec::new();
-        collect_container_items(world, container, container, &mut items);
+        collect_container_items(world, container, &mut items);
         let data = world.boxes[container.index()]
             .element_semantics
             .as_ref()
@@ -93,12 +93,17 @@ where
 fn collect_container_items<N>(
     world: &LayoutWorld<N>,
     container: LayoutBoxId,
-    current: LayoutBoxId,
     output: &mut Vec<LayoutBoxId>,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    for child in world.boxes[current.index()].children.iter().copied() {
+    let mut stack = world.boxes[container.index()]
+        .children
+        .iter()
+        .rev()
+        .copied()
+        .collect::<Vec<_>>();
+    while let Some(child) = stack.pop() {
         let is_nested_container = child != container
             && matches!(
                 world.boxes[child.index()]
@@ -114,7 +119,7 @@ fn collect_container_items<N>(
             output.push(child);
             continue;
         }
-        collect_container_items(world, container, child, output);
+        stack.extend(world.boxes[child.index()].children.iter().rev().copied());
     }
 }
 

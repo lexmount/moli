@@ -172,78 +172,108 @@ where
     Placement: Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
     Offset: Fn(LayoutBoxId) -> Option<LayoutPoint>,
 {
-    fn resolve(&mut self, index: usize) -> Result<(), LayoutError> {
-        let Some(state) = self.state.get_mut(index) else {
-            return Err(LayoutError::InvalidBoxReference { index });
-        };
-        match *state {
-            2 => return Ok(()),
-            1 => return Err(LayoutError::NumericTreeCycle { index }),
-            _ => *state = 1,
-        }
-        let (base, sticky) = (self.placements)(index)?;
-        if let Some(parent) = base.parent {
-            self.resolve(parent.index())?;
-        }
-        if let Some(sticky) = &sticky
-            && sticky.scroll_container != self.root
-        {
-            self.resolve(sticky.scroll_container.index())?;
-        }
-        let parent = base.parent.map(|id| self.space(id)).transpose()?;
-        let anchor = match parent {
-            Some(parent) => ProjectionAnchor::Parent(parent),
-            None if base.fixed => ProjectionAnchor::Viewport,
-            None => ProjectionAnchor::Document,
-        };
-        let parent_scroll = base
-            .parent
-            .filter(|parent| *parent != self.root)
-            .and_then(&self.scroll_offset);
-        let local_delta = match sticky {
-            Some(sticky) => {
-                let origin = if sticky.scroll_container == self.root {
-                    self.viewport_scroll
-                } else {
-                    self.space(sticky.scroll_container)?
-                        .layout
-                        .local_to_document_ignoring_css_transforms
-                        .map_point(LayoutPoint::ZERO)
-                };
-                sticky.resolve_offset(
-                    origin,
-                    parent.map_or(LayoutTransform2D::IDENTITY, |space| {
-                        space.layout.local_to_document_ignoring_css_transforms
-                    }),
-                    parent_scroll.unwrap_or(LayoutPoint::ZERO),
-                    base.location,
-                )
-            }
-            None => LayoutPoint::ZERO,
-        };
-        let placement = ResolvedPlacement {
-            anchor,
-            layout_location_in_parent: base.location,
-            local_sticky_delta_in_parent: local_delta,
-            parent_scroll,
-            transform: base.transform,
-        };
-        let projected = ProjectedCoordinateSpace {
-            layout: compose_layout_space(index, placement, self.viewport_scroll),
-            paint: if self.paint {
-                derive_paint_space(placement, self.viewport_scroll)
-            } else {
-                PaintSpace::ROOT
+    fn resolve(&mut self, start_index: usize) -> Result<(), LayoutError> {
+        enum ResolveStep {
+            Enter(usize),
+            Finish {
+                index: usize,
+                base: BoxPlacement,
+                sticky: Option<StickyConstraints>,
             },
-        };
-        let inherited = base
-            .parent
-            .map(|parent| self.position_adjustments[parent.index()])
-            .unwrap_or(LayoutPoint::ZERO);
-        self.position_adjustments[index] =
-            LayoutPoint::new(inherited.x + local_delta.x, inherited.y + local_delta.y);
-        self.spaces[index + 1] = Some(projected);
-        self.state[index] = 2;
+        }
+
+        let mut stack = vec![ResolveStep::Enter(start_index)];
+        while let Some(step) = stack.pop() {
+            match step {
+                ResolveStep::Enter(index) => {
+                    let Some(state) = self.state.get_mut(index) else {
+                        return Err(LayoutError::InvalidBoxReference { index });
+                    };
+                    match *state {
+                        2 => continue,
+                        1 => return Err(LayoutError::NumericTreeCycle { index }),
+                        _ => *state = 1,
+                    }
+                    let (base, sticky) = (self.placements)(index)?;
+                    let parent_index = base.parent.map(LayoutBoxId::index);
+                    let sticky_index = sticky
+                        .as_ref()
+                        .filter(|sticky| sticky.scroll_container != self.root)
+                        .map(|sticky| sticky.scroll_container.index());
+                    stack.push(ResolveStep::Finish {
+                        index,
+                        base,
+                        sticky,
+                    });
+                    if let Some(sticky_index) = sticky_index {
+                        stack.push(ResolveStep::Enter(sticky_index));
+                    }
+                    if let Some(parent_index) = parent_index {
+                        stack.push(ResolveStep::Enter(parent_index));
+                    }
+                }
+                ResolveStep::Finish {
+                    index,
+                    base,
+                    sticky,
+                } => {
+                    let parent = base.parent.map(|id| self.space(id)).transpose()?;
+                    let anchor = match parent {
+                        Some(parent) => ProjectionAnchor::Parent(parent),
+                        None if base.fixed => ProjectionAnchor::Viewport,
+                        None => ProjectionAnchor::Document,
+                    };
+                    let parent_scroll = base
+                        .parent
+                        .filter(|parent| *parent != self.root)
+                        .and_then(&self.scroll_offset);
+                    let local_delta = match sticky {
+                        Some(sticky) => {
+                            let origin = if sticky.scroll_container == self.root {
+                                self.viewport_scroll
+                            } else {
+                                self.space(sticky.scroll_container)?
+                                    .layout
+                                    .local_to_document_ignoring_css_transforms
+                                    .map_point(LayoutPoint::ZERO)
+                            };
+                            sticky.resolve_offset(
+                                origin,
+                                parent.map_or(LayoutTransform2D::IDENTITY, |space| {
+                                    space.layout.local_to_document_ignoring_css_transforms
+                                }),
+                                parent_scroll.unwrap_or(LayoutPoint::ZERO),
+                                base.location,
+                            )
+                        }
+                        None => LayoutPoint::ZERO,
+                    };
+                    let placement = ResolvedPlacement {
+                        anchor,
+                        layout_location_in_parent: base.location,
+                        local_sticky_delta_in_parent: local_delta,
+                        parent_scroll,
+                        transform: base.transform,
+                    };
+                    let projected = ProjectedCoordinateSpace {
+                        layout: compose_layout_space(index, placement, self.viewport_scroll),
+                        paint: if self.paint {
+                            derive_paint_space(placement, self.viewport_scroll)
+                        } else {
+                            PaintSpace::ROOT
+                        },
+                    };
+                    let inherited = base
+                        .parent
+                        .map(|parent| self.position_adjustments[parent.index()])
+                        .unwrap_or(LayoutPoint::ZERO);
+                    self.position_adjustments[index] =
+                        LayoutPoint::new(inherited.x + local_delta.x, inherited.y + local_delta.y);
+                    self.spaces[index + 1] = Some(projected);
+                    self.state[index] = 2;
+                }
+            }
+        }
         Ok(())
     }
 

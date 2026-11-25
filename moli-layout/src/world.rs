@@ -698,6 +698,7 @@ where
     pub(crate) measure_baselines: bool,
     /// The active table cell's used height need not be a percentage guarantee.
     pub(crate) table_cell_percentage_height: Option<(LayoutBoxId, bool)>,
+    pub(crate) trampoline: crate::taffy_tree::LayoutTrampoline,
     numeric_layout_tracking: bool,
     numeric_layout_touched: Vec<LayoutBoxId>,
     numeric_layout_touched_marks: Vec<bool>,
@@ -737,6 +738,7 @@ where
             retained_inline_fonts: None,
             measure_baselines: false,
             table_cell_percentage_height: None,
+            trampoline: crate::taffy_tree::LayoutTrampoline::default(),
             numeric_layout_tracking: false,
             numeric_layout_touched: Vec::new(),
             numeric_layout_touched_marks: vec![false],

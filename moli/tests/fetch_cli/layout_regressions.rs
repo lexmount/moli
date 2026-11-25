@@ -513,3 +513,111 @@ fn wrapped_flex_distribution_keeps_child_positions_for_visible_and_scroll_overfl
     }
     Ok(())
 }
+
+fn run_deep_layout_probe(html: &str, extra_args: &[&str]) -> Result<Vec<u8>> {
+    let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
+    command.args([
+        "fetch",
+        "--log-level",
+        "error",
+        "--http-no-proxy",
+        "*",
+        "--layout",
+        "--timeout-ms",
+        "30000",
+    ]);
+    command.args(extra_args);
+    command.arg(url);
+    let output = run_command_with_process_timeout(command, Duration::from_secs(60))
+        .context("deep layout probe process failed")?;
+    ensure!(
+        output.status.success(),
+        "deep layout probe exited with {}: stdout={} stderr={}",
+        output.status,
+        clean_output(&output.stdout),
+        clean_output(&output.stderr)
+    );
+    Ok(output.stdout)
+}
+
+#[test]
+fn deeply_nested_divs_layout_and_screenshot_without_stack_overflow() -> Result<()> {
+    // Regression test for issue #2991: >1429 nested <div> elements previously
+    // aborted render_runtime with a stack overflow during layout/paint.
+    let html = r#"<!doctype html><body><script>
+        let node = document.body;
+        for (let i = 0; i < 2000; i++) {
+            const div = document.createElement('div');
+            node.appendChild(div);
+            node = div;
+        }
+        node.textContent = 'x';
+    </script></body>"#;
+    let eval_stdout = run_deep_layout_probe(
+        html,
+        &[
+            "--eval",
+            "(() => { const divs = document.querySelectorAll('div'); const rect = divs[divs.length - 1].getBoundingClientRect(); return { count: divs.length, width: rect.width, height: rect.height }; })()",
+        ],
+    )?;
+    let value: Value =
+        serde_json::from_slice(&eval_stdout).context("deep div probe must return JSON")?;
+    assert_eq!(value["count"], 2000);
+    assert!(
+        value["width"].as_f64().is_some_and(|w| w > 0.0),
+        "expected positive width, got {value}"
+    );
+    assert!(
+        value["height"].as_f64().is_some_and(|h| h > 0.0),
+        "expected positive height, got {value}"
+    );
+
+    let png = run_deep_layout_probe(html, &["--dump", "screenshot"])?;
+    ensure!(
+        png.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "deep div screenshot must be a valid PNG (got {} bytes)",
+        png.len()
+    );
+    Ok(())
+}
+
+#[test]
+fn deeply_nested_inline_svg_groups_do_not_overflow_or_hang() -> Result<()> {
+    // Regression test for issue #2991: deeply nested <svg><g> subtrees exceed
+    // MAX_SVG_ELEMENT_DEPTH (512) and are rejected before usvg/anyrender_svg
+    // recursion or per-element SVG style resolution (moli-image unit tests also
+    // cover 7,000 nested <g> elements directly).
+    let html = r#"<!doctype html><body><svg width="100" height="100"></svg><script>
+        const ns = 'http://www.w3.org/2000/svg';
+        let node = document.querySelector('svg');
+        for (let i = 0; i < 2000; i++) {
+            const g = document.createElementNS(ns, 'g');
+            node.appendChild(g);
+            node = g;
+        }
+        const rect = document.createElementNS(ns, 'rect');
+        rect.setAttribute('width', '10');
+        rect.setAttribute('height', '10');
+        node.appendChild(rect);
+    </script></body>"#;
+    let eval_stdout = run_deep_layout_probe(
+        html,
+        &[
+            "--eval",
+            "(() => { const r = document.querySelector('svg').getBoundingClientRect(); return { width: r.width, height: r.height }; })()",
+        ],
+    )?;
+    let value: Value =
+        serde_json::from_slice(&eval_stdout).context("deep svg probe must return JSON")?;
+    assert_eq!(value["width"], 100);
+    assert_eq!(value["height"], 100);
+
+    let png = run_deep_layout_probe(html, &["--dump", "screenshot"])?;
+    ensure!(
+        png.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "deep svg screenshot must be a valid PNG (got {} bytes)",
+        png.len()
+    );
+    Ok(())
+}

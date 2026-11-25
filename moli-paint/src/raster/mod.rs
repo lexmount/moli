@@ -404,23 +404,121 @@ fn paint_fragment_stream(
     dimensions: RasterBufferLayout,
     output: Rect,
 ) {
-    let mut index = 0usize;
-    while index < fragments.len() {
-        let fragment = &fragments[index];
-        let isolated_filter = match fragment {
+    // Paint directly in a single allocation-free pass until the first software
+    // color-filter layer (if any). Most frames contain no software filters.
+    let mut first_filter = 0usize;
+    while first_filter < fragments.len() {
+        let fragment = &fragments[first_filter];
+        if matches!(
+            fragment,
             PaintFragment::PushLayer {
                 filter: Some(filter),
                 ..
-            } if is_software_color_filter(filter) => Some(filter),
-            _ => None,
+            } if is_software_color_filter(filter)
+        ) {
+            break;
+        }
+        paint_fragment(scene, snapshot, fragment, scale, output);
+        first_filter += 1;
+    }
+    if first_filter == fragments.len() {
+        return;
+    }
+
+    let mut filter_spans = Vec::new();
+    let mut open_layers: Vec<Option<usize>> = Vec::new();
+    for (index, fragment) in fragments.iter().enumerate().skip(first_filter) {
+        match fragment {
+            PaintFragment::PushLayer {
+                filter: Some(filter),
+                ..
+            } if is_software_color_filter(filter) => {
+                open_layers.push(Some(index));
+            }
+            PaintFragment::PushLayer { .. } | PaintFragment::PushClip { .. } => {
+                open_layers.push(None);
+            }
+            PaintFragment::PopLayer => {
+                if let Some(Some(start)) = open_layers.pop() {
+                    // Pushing on PopLayer records spans in post-order (innermost
+                    // software color filters complete before enclosing ones).
+                    filter_spans.push((start, index));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Resolve each color-filter subtree iteratively into a temporary
+    // transparent image, transform its pixels once, then composite it into its
+    // enclosing filter surface or the final scene with the layer's normal
+    // clip/opacity/blend contract. This surface belongs only to this raster
+    // call and is never cached by screenshot or screencast.
+    let mut rendered_filters: std::collections::HashMap<usize, (usize, Vec<u8>)> =
+        std::collections::HashMap::with_capacity(filter_spans.len());
+    for (start, end) in filter_spans {
+        let PaintFragment::PushLayer {
+            filter: Some(filter),
+            ..
+        } = &fragments[start]
+        else {
+            unreachable!("isolated filters are represented by PushLayer")
         };
-        let Some(filter) = isolated_filter else {
-            paint_fragment(scene, snapshot, fragment, scale, output);
+        let mut filtered_rgba = Vec::new();
+        let mut renderer = VelloCpuImageRenderer::new(dimensions.width, dimensions.height);
+        renderer.render_to_vec(
+            |filtered_scene| {
+                paint_resolved_range(
+                    filtered_scene,
+                    snapshot,
+                    fragments,
+                    start + 1,
+                    end,
+                    scale,
+                    dimensions,
+                    output,
+                    &mut rendered_filters,
+                );
+            },
+            &mut filtered_rgba,
+        );
+        unpremultiply::<false>(&mut filtered_rgba);
+        apply_software_color_filter(&mut filtered_rgba, filter);
+        rendered_filters.insert(start, (end, filtered_rgba));
+    }
+
+    paint_resolved_range(
+        scene,
+        snapshot,
+        fragments,
+        first_filter,
+        fragments.len(),
+        scale,
+        dimensions,
+        output,
+        &mut rendered_filters,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_resolved_range(
+    scene: &mut impl PaintScene,
+    snapshot: &PaintSnapshot,
+    fragments: &[PaintFragment],
+    start: usize,
+    end: usize,
+    scale: f64,
+    dimensions: RasterBufferLayout,
+    output: Rect,
+    rendered_filters: &mut std::collections::HashMap<usize, (usize, Vec<u8>)>,
+) {
+    let mut index = start;
+    while index < end {
+        let Some((span_end, filtered_rgba)) = rendered_filters.remove(&index) else {
+            paint_fragment(scene, snapshot, &fragments[index], scale, output);
             index += 1;
             continue;
         };
-
-        let end = matching_layer_pop(fragments, index);
         let PaintFragment::PushLayer {
             opacity,
             blend_mode,
@@ -428,33 +526,10 @@ fn paint_fragment_stream(
             clip,
             transform,
             ..
-        } = fragment
+        } = &fragments[index]
         else {
             unreachable!("isolated filters are represented by PushLayer")
         };
-
-        // Resolve a color-filter subtree into a temporary transparent image,
-        // transform its pixels once, then composite it with the layer's normal
-        // clip/opacity/blend contract. This surface belongs only to this raster
-        // call and is never cached by screenshot or screencast.
-        let mut filtered_rgba = Vec::new();
-        let mut renderer = VelloCpuImageRenderer::new(dimensions.width, dimensions.height);
-        renderer.render_to_vec(
-            |filtered_scene| {
-                paint_fragment_stream(
-                    filtered_scene,
-                    snapshot,
-                    &fragments[index + 1..end],
-                    scale,
-                    dimensions,
-                    output,
-                );
-            },
-            &mut filtered_rgba,
-        );
-        unpremultiply::<false>(&mut filtered_rgba);
-        apply_software_color_filter(&mut filtered_rgba, filter);
-
         let clip = to_backend_shape(clip);
         scene.push_layer(
             to_backend_blend_mode(*blend_mode, *composite),
@@ -481,23 +556,6 @@ fn paint_fragment_stream(
         };
         scene.draw_image(image.as_ref(), Affine::IDENTITY);
         scene.pop_layer();
-        index = end + 1;
+        index = span_end + 1;
     }
-}
-
-fn matching_layer_pop(fragments: &[PaintFragment], push_index: usize) -> usize {
-    let mut depth = 0usize;
-    for (index, fragment) in fragments.iter().enumerate().skip(push_index) {
-        match fragment {
-            PaintFragment::PushLayer { .. } | PaintFragment::PushClip { .. } => depth += 1,
-            PaintFragment::PopLayer => {
-                depth -= 1;
-                if depth == 0 {
-                    return index;
-                }
-            }
-            _ => {}
-        }
-    }
-    unreachable!("paint stream validation rejects unclosed layers")
 }

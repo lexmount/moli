@@ -571,6 +571,46 @@ fn backend_filter_handles_inner_clip_layers_without_panicking() {
 }
 
 #[test]
+fn deeply_nested_software_color_filters_rasterize_iteratively_on_bounded_stack() {
+    let handle = std::thread::Builder::new()
+        .name("deep_filter_raster".to_owned())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let depth = 500usize;
+            let mut snap = snapshot(1, 1, 1.0);
+            for _ in 0..depth {
+                snap.push_fragment(PaintFragment::PushLayer {
+                    opacity: 1.0,
+                    blend_mode: PaintBlendMode::Normal,
+                    composite: PaintCompositeMode::SrcOver,
+                    clip: PaintShape::Rect(PaintRect::new(0.0, 0.0, 1.0, 1.0)),
+                    transform: PaintTransform2D::IDENTITY,
+                    filter: Some(PaintFilter::Grayscale(1.0)),
+                });
+            }
+            snap.push_fragment(PaintFragment::solid_rect(
+                PaintRect::new(0.0, 0.0, 1.0, 1.0),
+                PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            ));
+            for _ in 0..depth {
+                snap.push_fragment(PaintFragment::PopLayer);
+            }
+            let image =
+                raster_snapshot(&snap).expect("deeply nested software filters must not overflow");
+            let px = pixel(&image, 0, 0);
+            assert_eq!(px[0], px[1], "grayscale output must be neutral: {px:?}");
+            assert_eq!(px[1], px[2], "grayscale output must be neutral: {px:?}");
+            assert_eq!(px[3], 255);
+            assert!(
+                px[0] > 0 && px[0] < 255,
+                "red should map to mid-gray: {px:?}"
+            );
+        })
+        .expect("spawn bounded-stack filter test thread");
+    handle.join().expect("deep filter raster test panicked");
+}
+
+#[test]
 fn malformed_clip_and_font_references_are_structured_errors() {
     let mut pop = snapshot(2, 2, 1.0);
     pop.push_fragment(PaintFragment::PopLayer);

@@ -10,8 +10,7 @@ use taffy::{
     LayoutPartialTree, LeafLayoutContext, Line, MaybeMath, MaybeResolve, NodeId, Point,
     ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
     TraverseTree, compute_block_layout, compute_cached_layout, compute_flexbox_layout,
-    compute_grid_layout, compute_hidden_layout, compute_leaf_layout_with_context,
-    compute_root_layout, round_layout,
+    compute_grid_layout, compute_leaf_layout_with_context, compute_root_layout,
 };
 
 use crate::{
@@ -36,7 +35,10 @@ use crate::{
 };
 
 mod measurement;
+mod trampoline;
 use measurement::FullMeasurementTree;
+pub(crate) use trampoline::LayoutTrampoline;
+use trampoline::{TrampolineBlockContextKind, TrampolineCallKind};
 
 /// Prepared numeric relationships are indexed by the current construction
 /// boxes. Scrollbar feedback changes geometry without changing these links.
@@ -281,28 +283,22 @@ where
     update_viewport_layout_styles(world, viewport);
 
     let root = world.viewport_taffy_node();
-    compute_root_layout(
-        world,
-        root,
-        Size {
-            width: AvailableSpace::Definite(viewport.css_width as f32),
-            height: AvailableSpace::Definite(viewport.css_height as f32),
-        },
-    );
+    let viewport_space = Size {
+        width: AvailableSpace::Definite(viewport.css_width as f32),
+        height: AvailableSpace::Definite(viewport.css_height as f32),
+    };
+    world.run_trampolined(|world| compute_root_layout(world, root, viewport_space));
     let fixed_root = world
         .fixed_viewport_layout
         .is_some()
         .then(|| world.fixed_viewport_taffy_node());
     if let Some(fixed_root) = fixed_root {
         let (width, height) = viewport.frame_size();
-        compute_root_layout(
-            world,
-            fixed_root,
-            Size {
-                width: AvailableSpace::Definite(width as f32),
-                height: AvailableSpace::Definite(height as f32),
-            },
-        );
+        let fixed_space = Size {
+            width: AvailableSpace::Definite(width as f32),
+            height: AvailableSpace::Definite(height as f32),
+        };
+        world.run_trampolined(|world| compute_root_layout(world, fixed_root, fixed_space));
     }
     prepared.capture_numeric_geometry(world);
     physicalize_vertical_block_flow(world);
@@ -437,11 +433,103 @@ where
 
 /// Quantize final browser geometry without teaching Taffy about CSS layout
 /// units. Taffy's public rounding pass operates on an abstract integer grid;
-/// this adapter presents one CSS pixel as 64 such units and converts the
-/// result back at the ownership boundary.
+/// this iterative implementation mirrors `taffy::round_layout` on a 1/64 CSS
+/// pixel grid without native call-stack recursion.
 fn round_layout_to_css_subpixels(tree: &mut impl RoundTree, root: NodeId) {
     let mut scaled = CssSubpixelRoundTree { tree };
-    round_layout(&mut scaled, root);
+    round_layout_iterative(&mut scaled, root);
+}
+
+#[inline(always)]
+fn round_taffy_grid(value: f32) -> f32 {
+    // Matches `taffy::util::sys::round`: round half toward +infinity.
+    (value + 0.5).floor()
+}
+
+fn round_layout_iterative(tree: &mut impl RoundTree, root: NodeId) {
+    let mut stack = vec![(root, 0.0f32, 0.0f32)];
+    while let Some((node_id, parent_x, parent_y)) = stack.pop() {
+        let unrounded_layout = tree.get_unrounded_layout(node_id);
+        let mut layout = unrounded_layout;
+
+        let cumulative_x = parent_x + unrounded_layout.location.x;
+        let cumulative_y = parent_y + unrounded_layout.location.y;
+
+        layout.location.x = round_taffy_grid(cumulative_x) - round_taffy_grid(parent_x);
+        layout.location.y = round_taffy_grid(cumulative_y) - round_taffy_grid(parent_y);
+        layout.size.width = round_taffy_grid(cumulative_x + unrounded_layout.size.width)
+            - round_taffy_grid(cumulative_x);
+        layout.size.height = round_taffy_grid(cumulative_y + unrounded_layout.size.height)
+            - round_taffy_grid(cumulative_y);
+        layout.scrollbar_size.width = round_taffy_grid(unrounded_layout.scrollbar_size.width);
+        layout.scrollbar_size.height = round_taffy_grid(unrounded_layout.scrollbar_size.height);
+        layout.border.left = round_taffy_grid(cumulative_x + unrounded_layout.border.left)
+            - round_taffy_grid(cumulative_x);
+        layout.border.right = round_taffy_grid(cumulative_x + unrounded_layout.size.width)
+            - round_taffy_grid(
+                cumulative_x + unrounded_layout.size.width - unrounded_layout.border.right,
+            );
+        layout.border.top = round_taffy_grid(cumulative_y + unrounded_layout.border.top)
+            - round_taffy_grid(cumulative_y);
+        layout.border.bottom = round_taffy_grid(cumulative_y + unrounded_layout.size.height)
+            - round_taffy_grid(
+                cumulative_y + unrounded_layout.size.height - unrounded_layout.border.bottom,
+            );
+        layout.padding.left = round_taffy_grid(cumulative_x + unrounded_layout.padding.left)
+            - round_taffy_grid(cumulative_x);
+        layout.padding.right = round_taffy_grid(cumulative_x + unrounded_layout.size.width)
+            - round_taffy_grid(
+                cumulative_x + unrounded_layout.size.width - unrounded_layout.padding.right,
+            );
+        layout.padding.top = round_taffy_grid(cumulative_y + unrounded_layout.padding.top)
+            - round_taffy_grid(cumulative_y);
+        layout.padding.bottom = round_taffy_grid(cumulative_y + unrounded_layout.size.height)
+            - round_taffy_grid(
+                cumulative_y + unrounded_layout.size.height - unrounded_layout.padding.bottom,
+            );
+        let unrounded_rect = unrounded_layout.scrollable_overflow_rect;
+        layout.scrollable_overflow_rect.left =
+            round_taffy_grid(cumulative_x + unrounded_rect.left) - round_taffy_grid(cumulative_x);
+        layout.scrollable_overflow_rect.right =
+            round_taffy_grid(cumulative_x + unrounded_rect.right) - round_taffy_grid(cumulative_x);
+        layout.scrollable_overflow_rect.top =
+            round_taffy_grid(cumulative_y + unrounded_rect.top) - round_taffy_grid(cumulative_y);
+        layout.scrollable_overflow_rect.bottom =
+            round_taffy_grid(cumulative_y + unrounded_rect.bottom) - round_taffy_grid(cumulative_y);
+
+        tree.set_final_layout(node_id, &layout);
+
+        // Push hoisted children first (in reverse) and in-flow children second
+        // (in reverse) so preorder traversal matches `taffy::round_layout`.
+        let hoisted_count = tree.hoisted_child_count(node_id);
+        for index in (0..hoisted_count).rev() {
+            let child = tree.get_hoisted_child_id(node_id, index);
+            stack.push((child, cumulative_x, cumulative_y));
+        }
+        let child_count = tree.child_count(node_id);
+        for index in (0..child_count).rev() {
+            let child = tree.get_child_id(node_id, index);
+            if !tree.is_out_of_flow(child) {
+                stack.push((child, cumulative_x, cumulative_y));
+            }
+        }
+    }
+}
+
+fn compute_hidden_layout_iterative<N>(world: &mut LayoutWorld<N>, root: NodeId) -> LayoutOutput
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let mut stack = vec![root];
+    while let Some(node_id) = stack.pop() {
+        world.cache_clear(node_id);
+        world.set_unrounded_layout(node_id, &Layout::with_order(0));
+        let child_count = world.child_count(node_id);
+        for index in (0..child_count).rev() {
+            stack.push(world.get_child_id(node_id, index));
+        }
+    }
+    LayoutOutput::HIDDEN
 }
 
 struct CssSubpixelRoundTree<'a, Tree>
@@ -842,7 +930,8 @@ where
             block_auto_behavior: AutoSizeBehavior::FitContent,
             vertical_margins_are_collapsible: Line::FALSE,
         };
-        let output = world.compute_child_layout(marker.to_taffy(), inputs);
+        let output =
+            world.run_trampolined(|world| world.compute_child_layout(marker.to_taffy(), inputs));
         let marker_style = &world.boxes[marker.index()].style;
         let marker_margin = marker_style
             .taffy
@@ -941,7 +1030,8 @@ where
             block_auto_behavior: AutoSizeBehavior::FitContent,
             vertical_margins_are_collapsible: Line::FALSE,
         };
-        let output = world.compute_child_layout(content.to_taffy(), inputs);
+        let output =
+            world.run_trampolined(|world| world.compute_child_layout(content.to_taffy(), inputs));
         let x = control_layout.border.left + control_layout.padding.left + inline_padding;
         let y = if listbox {
             let style = &world.boxes[control.index()].style;
@@ -1510,73 +1600,79 @@ fn layout_inline_absolute_child<N>(
             (None, None) => area_width - static_position.x,
             (Some(_), Some(_)) => unreachable!("both insets already resolve auto width"),
         } - non_auto_margin_width;
-        known_dimensions.width = Some(world.measure_fit_content_width(
-            child,
-            LayoutInput {
-                known_dimensions,
-                known_dimensions_are_definite: Size {
-                    width: true,
-                    height: true,
+        known_dimensions.width = Some(world.run_trampolined(|world| {
+            world.measure_fit_content_width(
+                child,
+                LayoutInput {
+                    known_dimensions,
+                    known_dimensions_are_definite: Size {
+                        width: true,
+                        height: true,
+                    },
+                    parent_size: area.size.map(Some),
+                    parent_writing_mode: area.writing_mode,
+                    available_space,
+                    sizing_mode: SizingMode::ContentSize,
+                    sizing_purpose: SizingPurpose::IntrinsicContribution,
+                    run_mode: RunMode::ComputeSize,
+                    axis: taffy::RequestedAxis::Horizontal,
+                    block_auto_behavior,
+                    vertical_margins_are_collapsible: Line::FALSE,
                 },
-                parent_size: area.size.map(Some),
-                parent_writing_mode: area.writing_mode,
-                available_space,
-                sizing_mode: SizingMode::ContentSize,
-                sizing_purpose: SizingPurpose::IntrinsicContribution,
-                run_mode: RunMode::ComputeSize,
-                axis: taffy::RequestedAxis::Horizontal,
-                block_auto_behavior,
-                vertical_margins_are_collapsible: Line::FALSE,
-            },
-            available_width,
-        ));
+                available_width,
+            )
+        }));
         known_dimensions = known_dimensions
             .maybe_apply_aspect_ratio(aspect_ratio)
             .maybe_clamp(min_size, max_size);
     }
     let measured_size = world
-        .compute_child_layout(
+        .run_trampolined(|world| {
+            world.compute_child_layout(
+                child.to_taffy(),
+                LayoutInput {
+                    known_dimensions,
+                    known_dimensions_are_definite: Size {
+                        width: true,
+                        height: true,
+                    },
+                    parent_size: area.size.map(Some),
+                    parent_writing_mode: area.writing_mode,
+                    available_space,
+                    sizing_mode: SizingMode::ContentSize,
+                    sizing_purpose: SizingPurpose::Layout,
+                    run_mode: RunMode::ComputeSize,
+                    axis: taffy::RequestedAxis::Both,
+                    block_auto_behavior,
+                    vertical_margins_are_collapsible: Line::FALSE,
+                },
+            )
+        })
+        .size;
+    let final_size = known_dimensions
+        .unwrap_or(measured_size)
+        .maybe_clamp(min_size, max_size);
+    let output = world.run_trampolined(|world| {
+        world.compute_child_layout(
             child.to_taffy(),
             LayoutInput {
-                known_dimensions,
-                known_dimensions_are_definite: Size {
-                    width: true,
-                    height: true,
-                },
+                known_dimensions: final_size.map(Some),
+                known_dimensions_are_definite: (final_size.map(Some))
+                    .zip_map(known_dimensions, |known, definite| {
+                        known.is_none() || definite.is_some()
+                    }),
                 parent_size: area.size.map(Some),
                 parent_writing_mode: area.writing_mode,
                 available_space,
                 sizing_mode: SizingMode::ContentSize,
                 sizing_purpose: SizingPurpose::Layout,
-                run_mode: RunMode::ComputeSize,
+                run_mode: RunMode::PerformLayout,
                 axis: taffy::RequestedAxis::Both,
                 block_auto_behavior,
                 vertical_margins_are_collapsible: Line::FALSE,
             },
         )
-        .size;
-    let final_size = known_dimensions
-        .unwrap_or(measured_size)
-        .maybe_clamp(min_size, max_size);
-    let output = world.compute_child_layout(
-        child.to_taffy(),
-        LayoutInput {
-            known_dimensions: final_size.map(Some),
-            known_dimensions_are_definite: (final_size.map(Some))
-                .zip_map(known_dimensions, |known, definite| {
-                    known.is_none() || definite.is_some()
-                }),
-            parent_size: area.size.map(Some),
-            parent_writing_mode: area.writing_mode,
-            available_space,
-            sizing_mode: SizingMode::ContentSize,
-            sizing_purpose: SizingPurpose::Layout,
-            run_mode: RunMode::PerformLayout,
-            axis: taffy::RequestedAxis::Both,
-            block_auto_behavior,
-            vertical_margins_are_collapsible: Line::FALSE,
-        },
-    );
+    });
 
     let horizontal_margin = resolve_absolute_axis_margins(
         Line {
@@ -1774,6 +1870,9 @@ where
     }
 
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
+        if self.trampoline_aborted() {
+            return;
+        }
         if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
             viewport.unrounded_layout = *layout;
         } else {
@@ -1786,6 +1885,27 @@ where
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
+        if let Some(output) =
+            self.trampoline_before_call(node_id, inputs, TrampolineCallKind::Child)
+        {
+            return output;
+        }
+        self.trampoline_enter();
+        let output = self.compute_child_layout_inner(node_id, inputs);
+        self.trampoline_exit();
+        output
+    }
+}
+
+impl<N> LayoutWorld<N>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    pub(super) fn compute_child_layout_inner(
+        &mut self,
+        node_id: NodeId,
+        inputs: LayoutInput,
+    ) -> LayoutOutput {
         // Float parents own horizontal margin subtraction in both the Taffy
         // block path and Moli's Parley IFC path. The generic intrinsic
         // resolver follows Taffy's ordinary child-input contract and subtracts
@@ -1812,6 +1932,9 @@ where
         };
         let resolved_width_inputs =
             taffy::compute::resolve_used_width_inputs(self, node_id, intrinsic_inputs);
+        if self.trampoline_aborted() {
+            return LayoutOutput::HIDDEN;
+        }
         let inputs = LayoutInput {
             // The float parent has already removed horizontal margins from the
             // child's available space. Restoring them above is only an adapter
@@ -1825,6 +1948,9 @@ where
         if self.is_viewport_taffy_node(node_id) {
             return compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
                 let mut output = compute_block_layout(world, node_id, inputs, None);
+                if world.trampoline_aborted() {
+                    return LayoutOutput::HIDDEN;
+                }
                 if inputs.run_mode == RunMode::PerformLayout {
                     taffy::compute_oof_layout(world, node_id, &mut output);
                 }
@@ -1832,7 +1958,7 @@ where
             });
         }
         if self.should_hide(node_id, inputs) {
-            return compute_hidden_layout(self, node_id);
+            return compute_hidden_layout_iterative(self, node_id);
         }
         let style = &self.boxes[LayoutBoxId::from_taffy(node_id).index()].style;
         if inputs.run_mode == RunMode::ComputeSize
@@ -1850,6 +1976,9 @@ where
                 return output;
             }
             let output = self.compute_child_layout_uncached(node_id, inputs, None);
+            if self.trampoline_aborted() {
+                return LayoutOutput::HIDDEN;
+            }
             self.boxes[id.index()]
                 .table_measure_cache
                 .get_or_insert_with(Default::default)
@@ -1861,6 +1990,30 @@ where
         }
         compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
             world.compute_child_layout_uncached(node_id, inputs, None)
+        })
+    }
+
+    pub(super) fn compute_block_child_layout_inner(
+        &mut self,
+        node_id: NodeId,
+        inputs: LayoutInput,
+        block_context: Option<&mut BlockContext<'_>>,
+    ) -> LayoutOutput {
+        if self.should_hide(node_id, inputs) {
+            return compute_hidden_layout_iterative(self, node_id);
+        }
+        // A block parent's intrinsic height calculation consumes the child's
+        // collapsible-margin sets as well as its numeric size. Taffy's compact
+        // measurement cache intentionally retains only the latter, so a cache
+        // hit reconstructed as `LayoutOutput` would silently turn escaped
+        // descendant margins into zero. Keep this legacy LayoutOutput path
+        // uncached until block sizing uses the dedicated size protocol end to
+        // end; final layout remains cached below.
+        if inputs.run_mode == RunMode::ComputeSize {
+            return self.compute_child_layout_uncached(node_id, inputs, block_context);
+        }
+        compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
+            world.compute_child_layout_uncached(node_id, inputs, block_context)
         })
     }
 }
@@ -1883,8 +2036,9 @@ where
     }
 
     fn cache_store(&mut self, node_id: NodeId, inputs: &LayoutInput, output: LayoutOutput) {
-        if inputs.run_mode == RunMode::PerformHiddenLayout {
-            // Taffy's store ignores this mode; avoid allocating an empty cache.
+        if self.trampoline_aborted() || inputs.run_mode == RunMode::PerformHiddenLayout {
+            // Taffy's store ignores hidden layout; also never persist partial
+            // results while unwinding a suspended trampoline frame.
             return;
         }
         if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
@@ -1903,6 +2057,9 @@ where
     }
 
     fn cache_clear(&mut self, node_id: NodeId) {
+        if self.trampoline_aborted() {
+            return;
+        }
         if let Some(viewport) = self.viewport_layout_for_node_mut(node_id) {
             viewport.cache.clear();
         } else {
@@ -1957,22 +2114,26 @@ where
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        if self.should_hide(node_id, inputs) {
-            return compute_hidden_layout(self, node_id);
+        let context_kind = block_context.as_deref().map(|ctx| {
+            if ctx.is_bfc_root() {
+                TrampolineBlockContextKind::Root
+            } else {
+                TrampolineBlockContextKind::Sub
+            }
+        });
+        if let Some(output) = self.trampoline_before_call(
+            node_id,
+            inputs,
+            TrampolineCallKind::BlockChild {
+                block_context: context_kind,
+            },
+        ) {
+            return output;
         }
-        // A block parent's intrinsic height calculation consumes the child's
-        // collapsible-margin sets as well as its numeric size. Taffy's compact
-        // measurement cache intentionally retains only the latter, so a cache
-        // hit reconstructed as `LayoutOutput` would silently turn escaped
-        // descendant margins into zero. Keep this legacy LayoutOutput path
-        // uncached until block sizing uses the dedicated size protocol end to
-        // end; final layout remains cached below.
-        if inputs.run_mode == RunMode::ComputeSize {
-            return self.compute_child_layout_uncached(node_id, inputs, block_context);
-        }
-        compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
-            world.compute_child_layout_uncached(node_id, inputs, block_context)
-        })
+        self.trampoline_enter();
+        let output = self.compute_block_child_layout_inner(node_id, inputs, block_context);
+        self.trampoline_exit();
+        output
     }
 }
 
@@ -2024,6 +2185,9 @@ where
         node_id: NodeId,
         detailed_grid_info: DetailedGridInfo<Atom>,
     ) {
+        if self.trampoline_aborted() {
+            return;
+        }
         let id = LayoutBoxId::from_taffy(node_id);
         let layout_box = &self.boxes[id.index()];
         let expose_to_cssom = !layout_box
@@ -2122,8 +2286,14 @@ where
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
         let mut output = self.compute_child_layout_for_box(node_id, inputs, block_context);
+        if self.trampoline_aborted() {
+            return LayoutOutput::HIDDEN;
+        }
         if inputs.run_mode == RunMode::PerformLayout {
             taffy::compute_oof_layout(self, node_id, &mut output);
+            if self.trampoline_aborted() {
+                return LayoutOutput::HIDDEN;
+            }
         }
         output
     }
@@ -2484,6 +2654,16 @@ where
             },
         );
         let measurement_was_produced = measurement.is_some();
+        if self.trampoline_aborted() {
+            if final_reuses_accepted_layout {
+                inline_context.laid_out = text_layout;
+            } else {
+                inline_context.measurement_layout = text_layout;
+            }
+            inline_context.content_widths = content_widths;
+            self.boxes[id.index()].inline_layout = Some(inline_context);
+            return LayoutOutput::HIDDEN;
+        }
 
         if let Some(mut measurement) = measurement {
             let text_layout = text_layout
@@ -2682,6 +2862,19 @@ where
                         child_inputs,
                         margins.left + margins.right,
                     );
+                    if self.trampoline_aborted() {
+                        return InlineMeasurement {
+                            size: Size::ZERO,
+                            alignment_block_size: 0.0,
+                            first_baseline: None,
+                            last_baseline: None,
+                            has_non_phantom_line: false,
+                            atomic,
+                            floats,
+                            percentage_basis,
+                            line_placements: None,
+                        };
+                    }
                     inline_box.width =
                         (margins.left + margins.right + child_output.size.width).max(0.0);
                     inline_box.height =
@@ -2835,6 +3028,19 @@ where
                     self.compute_child_layout(object.box_id.to_taffy(), min_float_inputs);
                 let max_output =
                     self.compute_child_layout(object.box_id.to_taffy(), float_max_content_inputs);
+                if self.trampoline_aborted() {
+                    return InlineMeasurement {
+                        size: Size::ZERO,
+                        alignment_block_size: 0.0,
+                        first_baseline: None,
+                        last_baseline: None,
+                        has_non_phantom_line: false,
+                        atomic,
+                        floats,
+                        percentage_basis,
+                        line_placements: None,
+                    };
+                }
                 float_min_width =
                     float_min_width.max(min_output.size.width + margin.left + margin.right);
                 let outer_width = max_output.size.width + margin.left + margin.right;
@@ -3176,6 +3382,9 @@ where
                         ..child_inputs
                     };
                     let output = self.compute_child_layout(child.to_taffy(), layout_inputs);
+                    if self.trampoline_aborted() {
+                        break;
+                    }
                     let state = breaker.state_mut();
                     let position = block_context.place_floated_box(
                         child.index() as u64,
@@ -3999,5 +4208,128 @@ mod tests {
             second.margins_can_collapse_through,
             first.margins_can_collapse_through
         );
+    }
+
+    #[test]
+    fn trampoline_matches_direct_taffy_layout_bit_for_bit() {
+        use super::{compute_prepared_world_layout, prepare_world_layout};
+        use crate::{LayoutPosition, PaintViewport};
+        use taffy::{Display, Rect, style_helpers::length};
+
+        fn build_mixed_tree(depth: usize) -> LayoutWorld<u32> {
+            let mut world = LayoutWorld::new(
+                LayoutWorld::new_box(
+                    Some(0),
+                    None,
+                    None,
+                    "root".to_owned(),
+                    None,
+                    None,
+                    None,
+                    LayoutBoxKind::PrincipalBlock,
+                    ResolvedLayoutStyle::synthetic(
+                        LayoutDisplay::Block,
+                        Style::default(),
+                        PaintColor::TRANSPARENT,
+                    ),
+                    None,
+                ),
+                true,
+            );
+            let mut parent = world.root();
+            for level in 1..=depth {
+                let (kind, display, mut style) = match level % 7 {
+                    2 => (
+                        LayoutBoxKind::PrincipalFlex,
+                        LayoutDisplay::Flex,
+                        Style {
+                            display: Display::Flex,
+                            padding: Rect {
+                                left: length(1.0),
+                                right: length(1.0),
+                                top: length(1.0),
+                                bottom: length(1.0),
+                            },
+                            ..Style::default()
+                        },
+                    ),
+                    4 => (
+                        LayoutBoxKind::PrincipalGrid,
+                        LayoutDisplay::Grid,
+                        Style {
+                            display: Display::Grid,
+                            ..Style::default()
+                        },
+                    ),
+                    // Include consecutive empty blocks with vertical margins to
+                    // verify margin-collapsing parity across chunk boundaries.
+                    5 | 6 => (
+                        LayoutBoxKind::PrincipalBlock,
+                        LayoutDisplay::Block,
+                        Style {
+                            margin: Rect {
+                                left: LengthPercentageAuto::length(0.0),
+                                right: LengthPercentageAuto::length(0.0),
+                                top: LengthPercentageAuto::length(4.0),
+                                bottom: LengthPercentageAuto::length(6.0),
+                            },
+                            ..Style::default()
+                        },
+                    ),
+                    _ => (
+                        LayoutBoxKind::PrincipalBlock,
+                        LayoutDisplay::Block,
+                        Style::default(),
+                    ),
+                };
+                if level == depth {
+                    style.size = Size {
+                        width: Dimension::length(32.5),
+                        height: Dimension::length(14.25),
+                    };
+                }
+                let mut resolved =
+                    ResolvedLayoutStyle::synthetic(display, style, PaintColor::TRANSPARENT);
+                if level % 11 == 0 {
+                    resolved = resolved.with_position(LayoutPosition::Relative);
+                }
+                let id = world.allocate(LayoutWorld::new_box(
+                    Some(level as u32),
+                    None,
+                    None,
+                    format!("node-{level}"),
+                    None,
+                    None,
+                    None,
+                    kind,
+                    resolved,
+                    None,
+                ));
+                world.boxes[parent.index()].children.push(id);
+                world.boxes[id.index()].parent = Some(parent);
+                world.boxes[id.index()].structural_parent = Some(parent);
+                parent = id;
+            }
+            world
+        }
+
+        let viewport = PaintViewport::new(320, 240, 1.0);
+        let run_with_limit = |limit: u32| {
+            let mut world = build_mixed_tree(60);
+            world.trampoline.set_max_depth_for_test(limit);
+            let mut prepared = prepare_world_layout(&mut world, viewport, false);
+            compute_prepared_world_layout(&mut world, viewport, &mut prepared);
+            world
+                .boxes
+                .into_iter()
+                .map(|b| (b.unrounded_layout, b.final_layout))
+                .collect::<Vec<_>>()
+        };
+
+        let baseline = run_with_limit(512);
+        let chunk_16 = run_with_limit(16);
+        let chunk_7 = run_with_limit(7);
+        assert_eq!(chunk_16, baseline, "trampoline max_depth=16 diverged");
+        assert_eq!(chunk_7, baseline, "trampoline max_depth=7 diverged");
     }
 }

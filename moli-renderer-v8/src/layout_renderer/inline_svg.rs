@@ -93,35 +93,46 @@ pub(super) fn layout_content(
         .flatten()?;
     let source = prepare_source(source)?;
     let mut elements = Vec::new();
-    let mut pending = vec![(root, None)];
+    let mut pending = vec![(root, None, 0usize)];
     let mut referenced_ids = HashSet::new();
-    while let Some((node, parent)) = pending.pop() {
-        let parent = if let Some(element) = host.node(node).and_then(|node| node.as_element()) {
-            if element.is_svg_element("use") {
-                let href = element.attribute("href").or_else(|| {
-                    element
-                        .attributes()
-                        .iter()
-                        .find(|attribute| {
-                            attribute.namespace() == "http://www.w3.org/1999/xlink"
-                                && attribute.local_name() == "href"
-                        })
-                        .map(|attribute| attribute.value())
-                });
-                if let Some(id) = href.and_then(|href| href.strip_prefix('#')) {
-                    referenced_ids.insert(id);
+    while let Some((node, parent, depth)) = pending.pop() {
+        let (parent, child_depth) =
+            if let Some(element) = host.node(node).and_then(|node| node.as_element()) {
+                let next_depth = depth + 1;
+                if next_depth > moli_image::MAX_SVG_ELEMENT_DEPTH {
+                    tracing::debug!(
+                        node = root.index(),
+                        depth = next_depth,
+                        limit = moli_image::MAX_SVG_ELEMENT_DEPTH,
+                        "inline SVG element nesting depth exceeded"
+                    );
+                    return None;
                 }
-            }
-            let index = elements.len();
-            elements.push((node, parent));
-            Some(index)
-        } else {
-            parent
-        };
+                if element.is_svg_element("use") {
+                    let href = element.attribute("href").or_else(|| {
+                        element
+                            .attributes()
+                            .iter()
+                            .find(|attribute| {
+                                attribute.namespace() == "http://www.w3.org/1999/xlink"
+                                    && attribute.local_name() == "href"
+                            })
+                            .map(|attribute| attribute.value())
+                    });
+                    if let Some(id) = href.and_then(|href| href.strip_prefix('#')) {
+                        referenced_ids.insert(id);
+                    }
+                }
+                let index = elements.len();
+                elements.push((node, parent));
+                (Some(index), next_depth)
+            } else {
+                (parent, depth)
+            };
         pending.extend(
             host.dom()
                 .html_serialization_child_ids_reversed(node)
-                .map(|node| (node, parent)),
+                .map(|node| (node, parent, child_depth)),
         );
     }
     let mut profiles = HashMap::<String, moli_image::SvgElementStyle>::new();

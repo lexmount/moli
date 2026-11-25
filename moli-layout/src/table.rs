@@ -209,6 +209,9 @@ where
     let structure = table_structure(world, root);
     let mut context = build_table_context(world, root, structure);
     context.collect_cell_inline_constraints(world);
+    if world.trampoline_aborted() {
+        return LayoutOutput::HIDDEN;
+    }
     let mut grid_inputs = context.resolve_column_tracks(inputs);
     let allocated_wrapper = world.boxes[root.index()]
         .layout_parent
@@ -283,6 +286,9 @@ where
         }
     }
     let grid_inputs = context.resolve_row_tracks(world, grid_inputs);
+    if world.trampoline_aborted() {
+        return LayoutOutput::HIDDEN;
+    }
     let mut output = {
         let mut wrapper = TableTreeWrapper {
             world,
@@ -290,6 +296,9 @@ where
         };
         compute_grid_layout(&mut wrapper, NodeId::from(0usize), grid_inputs)
     };
+    if world.trampoline_aborted() {
+        return LayoutOutput::HIDDEN;
+    }
     if context.writing_mode.is_horizontal() && inputs.axis != RequestedAxis::Horizontal {
         // Fixed Grid tracks can return without measuring child baselines.
         // Use the row pass, including the absence of a baseline in a table
@@ -322,6 +331,9 @@ where
             caption_parent_writing_mode,
             inputs.run_mode,
         );
+        if world.trampoline_aborted() {
+            return LayoutOutput::HIDDEN;
+        }
         let bottom_height = layout_captions(
             world,
             &bottom_captions,
@@ -330,6 +342,9 @@ where
             caption_parent_writing_mode,
             inputs.run_mode,
         );
+        if world.trampoline_aborted() {
+            return LayoutOutput::HIDDEN;
+        }
         if inputs.run_mode == RunMode::PerformLayout {
             context.align_row_baselines(world, &mut output);
             shift_grid_children(world, &context.structure.cells, top_height);
@@ -1311,12 +1326,14 @@ where
     ) -> R {
         let cell = self.context.structure.cells[cell_index].id;
         self.world.cache_clear(cell.to_taffy());
+        self.world.push_trampoline_pinned_style(cell);
         let authored_style = std::mem::replace(
             &mut self.world.boxes[cell.index()].style.taffy,
             self.context.cell_layouts[cell_index].style.clone(),
         );
         let result = operation(self.world, cell);
         self.world.boxes[cell.index()].style.taffy = authored_style;
+        self.world.pop_trampoline_pinned_style();
         self.world.cache_clear(cell.to_taffy());
         result
     }
@@ -1365,6 +1382,9 @@ where
     }
 
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
+        if self.world.trampoline_aborted() {
+            return;
+        }
         let cell = self.context.structure.cells[usize::from(node_id)].id;
         self.world.boxes[cell.index()].unrounded_layout = *layout;
     }

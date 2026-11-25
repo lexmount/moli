@@ -1303,93 +1303,117 @@ where
 
     fn assign_box_clip_metadata(
         &mut self,
-        id: LayoutBoxId,
-        ancestor_clip: Option<LayoutClipChainId>,
+        root_id: LayoutBoxId,
+        root_ancestor_clip: Option<LayoutClipChainId>,
         viewport_clip: LayoutClipChainId,
         legacy_clips: &mut Vec<LayoutClipChainId>,
     ) {
-        let index = id.index();
-        // CSS overflow clips follow the containing-block chain, not the box
-        // parent chain. In particular, an absolute/fixed descendant skips any
-        // overflow clips between itself and its containing block. A
-        // viewport-fixed descendant therefore starts from the viewport clip,
-        // while a transformed/contained fixed descendant starts from the clip
-        // accumulated by that fixed containing block. Blink maintains the
-        // same separate in-flow, absolute-position and fixed-position clip
-        // contexts in its paint property tree builder.
-        let mut box_clip = if self.world.boxes[index].style.is_absolute_positioned()
-            || self.world.boxes[index].style.is_fixed_positioned()
-        {
-            let mut positioned_clip = self.world.boxes[index]
-                .positioned_containing_block
-                .map_or(Some(viewport_clip), |containing_block| {
-                    self.paint_metadata.boxes[containing_block.index()].content_clip
-                });
-            // CSS clip applies to the entire subtree, including descendants
-            // that skip an intermediate overflow clip.
-            if positioned_clip != ancestor_clip && !legacy_clips.is_empty() {
-                let mut retained = HashSet::new();
-                let mut ancestor = positioned_clip;
-                while let Some(id) = ancestor {
-                    let clip = &self.clip_chain[id.index()];
-                    if let LayoutClipKind::CssRect(owner) = clip.kind {
-                        retained.insert(owner);
-                    }
-                    ancestor = clip.parent;
+        enum ClipMetadataStep {
+            Enter {
+                id: LayoutBoxId,
+                ancestor_clip: Option<LayoutClipChainId>,
+            },
+            PopLegacyClip,
+        }
+
+        let mut stack = vec![ClipMetadataStep::Enter {
+            id: root_id,
+            ancestor_clip: root_ancestor_clip,
+        }];
+        while let Some(step) = stack.pop() {
+            match step {
+                ClipMetadataStep::PopLegacyClip => {
+                    legacy_clips.pop();
                 }
-                for &legacy_clip in legacy_clips.iter() {
-                    let legacy = &self.clip_chain[legacy_clip.index()];
-                    if let LayoutClipKind::CssRect(owner) = legacy.kind
-                        && !retained.contains(&owner)
+                ClipMetadataStep::Enter { id, ancestor_clip } => {
+                    let index = id.index();
+                    // CSS overflow clips follow the containing-block chain, not the box
+                    // parent chain. In particular, an absolute/fixed descendant skips any
+                    // overflow clips between itself and its containing block. A
+                    // viewport-fixed descendant therefore starts from the viewport clip,
+                    // while a transformed/contained fixed descendant starts from the clip
+                    // accumulated by that fixed containing block. Blink maintains the
+                    // same separate in-flow, absolute-position and fixed-position clip
+                    // contexts in its paint property tree builder.
+                    let mut box_clip = if self.world.boxes[index].style.is_absolute_positioned()
+                        || self.world.boxes[index].style.is_fixed_positioned()
                     {
-                        positioned_clip = Some(self.push_clip(
-                            positioned_clip,
-                            legacy.kind,
-                            legacy.coordinate_space,
-                            legacy.rect,
-                        ));
+                        let mut positioned_clip = self.world.boxes[index]
+                            .positioned_containing_block
+                            .map_or(Some(viewport_clip), |containing_block| {
+                                self.paint_metadata.boxes[containing_block.index()].content_clip
+                            });
+                        // CSS clip applies to the entire subtree, including descendants
+                        // that skip an intermediate overflow clip.
+                        if positioned_clip != ancestor_clip && !legacy_clips.is_empty() {
+                            let mut retained = HashSet::new();
+                            let mut ancestor = positioned_clip;
+                            while let Some(id) = ancestor {
+                                let clip = &self.clip_chain[id.index()];
+                                if let LayoutClipKind::CssRect(owner) = clip.kind {
+                                    retained.insert(owner);
+                                }
+                                ancestor = clip.parent;
+                            }
+                            for &legacy_clip in legacy_clips.iter() {
+                                let legacy = &self.clip_chain[legacy_clip.index()];
+                                if let LayoutClipKind::CssRect(owner) = legacy.kind
+                                    && !retained.contains(&owner)
+                                {
+                                    positioned_clip = Some(self.push_clip(
+                                        positioned_clip,
+                                        legacy.kind,
+                                        legacy.coordinate_space,
+                                        legacy.rect,
+                                    ));
+                                }
+                            }
+                        }
+                        positioned_clip
+                    } else {
+                        ancestor_clip
+                    };
+                    let legacy_rect = self.world.boxes[index]
+                        .style
+                        .legacy_clip_rect(self.boxes[index].border_box);
+                    let owner = LayoutOutputBoxId::from_index(index);
+                    if let Some(rect) = legacy_rect {
+                        let clip = self.push_clip(
+                            box_clip,
+                            LayoutClipKind::CssRect(owner),
+                            self.boxes[index].coordinate_space,
+                            rect,
+                        );
+                        box_clip = Some(clip);
+                        legacy_clips.push(clip);
                     }
+                    self.boxes[index].clip_chain = box_clip;
+
+                    let child_clip = if id != self.world.root
+                        && !self.world.is_viewport_defining_body(id)
+                        && self.world.boxes[index].clips_descendant_paint()
+                    {
+                        Some(self.push_clip(
+                            box_clip,
+                            LayoutClipKind::Overflow(owner),
+                            self.boxes[index].coordinate_space,
+                            self.scroll_extents[index].scrollport,
+                        ))
+                    } else {
+                        box_clip
+                    };
+                    self.paint_metadata.boxes[index].content_clip = child_clip;
+                    if legacy_rect.is_some() {
+                        stack.push(ClipMetadataStep::PopLegacyClip);
+                    }
+                    stack.extend(self.world.boxes[index].children.iter().rev().copied().map(
+                        |child| ClipMetadataStep::Enter {
+                            id: child,
+                            ancestor_clip: child_clip,
+                        },
+                    ));
                 }
             }
-            positioned_clip
-        } else {
-            ancestor_clip
-        };
-        let legacy_rect = self.world.boxes[index]
-            .style
-            .legacy_clip_rect(self.boxes[index].border_box);
-        let owner = LayoutOutputBoxId::from_index(index);
-        if let Some(rect) = legacy_rect {
-            let clip = self.push_clip(
-                box_clip,
-                LayoutClipKind::CssRect(owner),
-                self.boxes[index].coordinate_space,
-                rect,
-            );
-            box_clip = Some(clip);
-            legacy_clips.push(clip);
-        }
-        self.boxes[index].clip_chain = box_clip;
-
-        let child_clip = if id != self.world.root
-            && !self.world.is_viewport_defining_body(id)
-            && self.world.boxes[index].clips_descendant_paint()
-        {
-            Some(self.push_clip(
-                box_clip,
-                LayoutClipKind::Overflow(owner),
-                self.boxes[index].coordinate_space,
-                self.scroll_extents[index].scrollport,
-            ))
-        } else {
-            box_clip
-        };
-        self.paint_metadata.boxes[index].content_clip = child_clip;
-        for child in self.world.boxes[index].children.clone() {
-            self.assign_box_clip_metadata(child, child_clip, viewport_clip, legacy_clips);
-        }
-        if legacy_rect.is_some() {
-            legacy_clips.pop();
         }
     }
 

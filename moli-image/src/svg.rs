@@ -35,6 +35,14 @@ pub struct SvgScene {
 /// before `usvg` receives attacker-controlled bytes.
 pub const MAX_ENCODED_SVG_BYTES: usize = 16 * 1024 * 1024;
 
+/// Maximum XML element nesting depth admitted before invoking `usvg`.
+///
+/// Both `usvg::Tree` construction/drop and downstream SVG scene rendering
+/// recurse once per nested `<g>` element. Bounding XML depth up front with the
+/// streaming `xmlparser` tokenizer keeps pathological SVGs from overflowing
+/// the render thread stack while matching Blink's 512-level DOM tree depth cap.
+pub const MAX_SVG_ELEMENT_DEPTH: usize = 512;
+
 const DEFAULT_OBJECT_WIDTH: f32 = 300.0;
 const DEFAULT_OBJECT_HEIGHT: f32 = 150.0;
 
@@ -258,6 +266,8 @@ pub enum SvgDecodeError {
     InvalidConcreteSize,
     #[error("SVG style profile count {actual} does not match {expected} serialized elements")]
     StyleElementCount { actual: usize, expected: usize },
+    #[error("SVG element nesting exceeds the maximum depth of {max}")]
+    ElementNestingDepthExceeded { max: usize },
     #[error("SVG tree could not be parsed: {0}")]
     Parse(#[from] usvg::Error),
 }
@@ -323,6 +333,7 @@ pub fn decode_inline_svg_scene(
 ) -> Result<SvgScene, SvgDecodeError> {
     check_encoded_budget(bytes)?;
     let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
+    check_svg_element_depth(source)?;
     let xml = usvg::roxmltree::Document::parse_with_options(
         source,
         usvg::roxmltree::ParsingOptions {
@@ -408,6 +419,8 @@ fn decode_svg_image_with_fonts(
     fonts: &SvgFonts,
 ) -> Result<SvgImage, SvgDecodeError> {
     check_encoded_budget(bytes)?;
+    let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
+    check_svg_element_depth(source)?;
     let default_size = usvg::Size::from_wh(metadata.concrete_width, metadata.concrete_height)
         .ok_or(SvgDecodeError::InvalidConcreteSize)?;
     let options = usvg::Options {
@@ -456,6 +469,30 @@ fn check_encoded_budget(bytes: &[u8]) -> Result<(), SvgDecodeError> {
             actual: bytes.len(),
             max: MAX_ENCODED_SVG_BYTES,
         });
+    }
+    Ok(())
+}
+
+fn check_svg_element_depth(source: &str) -> Result<(), SvgDecodeError> {
+    let mut depth = 0usize;
+    for token in xmlparser::Tokenizer::from(source) {
+        match token.map_err(|error| SvgDecodeError::MalformedXml(error.to_string()))? {
+            xmlparser::Token::ElementStart { .. } => {
+                depth = depth.saturating_add(1);
+                if depth > MAX_SVG_ELEMENT_DEPTH {
+                    return Err(SvgDecodeError::ElementNestingDepthExceeded {
+                        max: MAX_SVG_ELEMENT_DEPTH,
+                    });
+                }
+            }
+            xmlparser::Token::ElementEnd {
+                end: xmlparser::ElementEnd::Empty | xmlparser::ElementEnd::Close(..),
+                ..
+            } => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
     }
     Ok(())
 }
@@ -572,6 +609,55 @@ mod tests {
             decode_inline_svg_scene(source, &[], (100.0, 100.0)),
             Err(SvgDecodeError::StyleElementCount { .. })
         ));
+    }
+
+    #[test]
+    fn deeply_nested_svg_groups_are_rejected_without_stack_overflow() {
+        let handle = std::thread::Builder::new()
+            .name("deep_svg_test".to_owned())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let mut deep = String::from(
+                    r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">"#,
+                );
+                for _ in 0..7000 {
+                    deep.push_str("<g>");
+                }
+                deep.push_str(r#"<rect width="10" height="10"/>"#);
+                for _ in 0..7000 {
+                    deep.push_str("</g>");
+                }
+                deep.push_str("</svg>");
+
+                assert!(matches!(
+                    decode_svg_image(deep.as_bytes()),
+                    Err(SvgDecodeError::ElementNestingDepthExceeded {
+                        max: MAX_SVG_ELEMENT_DEPTH
+                    })
+                ));
+                assert!(matches!(
+                    decode_inline_svg_scene(deep.as_bytes(), &[], (100.0, 100.0)),
+                    Err(SvgDecodeError::ElementNestingDepthExceeded {
+                        max: MAX_SVG_ELEMENT_DEPTH
+                    })
+                ));
+
+                // Negative control: normal nested SVG groups still decode cleanly.
+                let mut shallow = String::from(
+                    r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">"#,
+                );
+                for _ in 0..16 {
+                    shallow.push_str("<g>");
+                }
+                shallow.push_str(r#"<rect width="10" height="10"/>"#);
+                for _ in 0..16 {
+                    shallow.push_str("</g>");
+                }
+                shallow.push_str("</svg>");
+                assert!(decode_svg_image(shallow.as_bytes()).is_ok());
+            })
+            .expect("spawn bounded-stack svg test thread");
+        handle.join().expect("svg depth test panicked");
     }
 
     #[test]

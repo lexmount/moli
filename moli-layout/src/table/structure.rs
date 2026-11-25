@@ -164,85 +164,132 @@ impl TableGroupedChildren {
     }
 }
 
+enum ColumnCollectStep {
+    Enter {
+        current: LayoutBoxId,
+        group: Option<LayoutBoxId>,
+    },
+    FinishGroup {
+        current: LayoutBoxId,
+        before: usize,
+    },
+}
+
 fn collect_columns<N>(
     world: &LayoutWorld<N>,
-    current: LayoutBoxId,
-    group: Option<LayoutBoxId>,
+    root: LayoutBoxId,
+    root_group: Option<LayoutBoxId>,
     columns: &mut Vec<TableColumn>,
     column_count: &mut usize,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let group = match world.boxes[current.index()].kind {
-        LayoutBoxKind::TableColumnGroup => {
-            let before = *column_count;
-            for child in world.boxes[current.index()].children.iter().copied() {
-                collect_columns(world, child, Some(current), columns, column_count);
+    let mut stack = vec![ColumnCollectStep::Enter {
+        current: root,
+        group: root_group,
+    }];
+    while let Some(step) = stack.pop() {
+        match step {
+            ColumnCollectStep::Enter { current, group } => {
+                match world.boxes[current.index()].kind {
+                    LayoutBoxKind::TableColumnGroup => {
+                        let before = *column_count;
+                        stack.push(ColumnCollectStep::FinishGroup { current, before });
+                        stack.extend(
+                            world.boxes[current.index()]
+                                .children
+                                .iter()
+                                .rev()
+                                .copied()
+                                .map(|child| ColumnCollectStep::Enter {
+                                    current: child,
+                                    group: Some(current),
+                                }),
+                        );
+                    }
+                    LayoutBoxKind::TableColumn => {
+                        let span = table_data(world, current).span.max(1) as usize;
+                        columns.push(TableColumn {
+                            id: current,
+                            group,
+                            start: *column_count,
+                            span,
+                        });
+                        *column_count += span;
+                    }
+                    _ => {}
+                }
             }
-            if *column_count != before {
-                return;
+            ColumnCollectStep::FinishGroup { current, before } => {
+                if *column_count == before {
+                    let span = table_data(world, current).span.max(1) as usize;
+                    columns.push(TableColumn {
+                        id: current,
+                        group: Some(current),
+                        start: *column_count,
+                        span,
+                    });
+                    *column_count += span;
+                }
             }
-            Some(current)
         }
-        LayoutBoxKind::TableColumn => group,
-        _ => return,
-    };
-    let span = table_data(world, current).span.max(1) as usize;
-    columns.push(TableColumn {
-        id: current,
-        group,
-        start: *column_count,
-        span,
-    });
-    *column_count += span;
+    }
 }
 
 fn collect_rows<N>(
     world: &LayoutWorld<N>,
-    current: LayoutBoxId,
-    group: Option<LayoutBoxId>,
+    root: LayoutBoxId,
+    root_group: Option<LayoutBoxId>,
     rows: &mut Vec<TableRow>,
     cells: &mut Vec<TableCell>,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    match world.boxes[current.index()].kind {
-        LayoutBoxKind::TableRowGroup
-        | LayoutBoxKind::TableHeaderGroup
-        | LayoutBoxKind::TableFooterGroup
-        | LayoutBoxKind::AnonymousTableRowGroup => {
-            for child in world.boxes[current.index()].children.iter().copied() {
-                collect_rows(world, child, Some(current), rows, cells);
+    let mut stack = vec![(root, root_group)];
+    while let Some((current, group)) = stack.pop() {
+        match world.boxes[current.index()].kind {
+            LayoutBoxKind::TableRowGroup
+            | LayoutBoxKind::TableHeaderGroup
+            | LayoutBoxKind::TableFooterGroup
+            | LayoutBoxKind::AnonymousTableRowGroup => {
+                stack.extend(
+                    world.boxes[current.index()]
+                        .children
+                        .iter()
+                        .rev()
+                        .copied()
+                        .map(|child| (child, Some(current))),
+                );
             }
-        }
-        LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow => {
-            let row_index = rows.len();
-            let start_cell_index = cells.len();
-            for cell in world.boxes[current.index()].children.iter().copied() {
-                if !matches!(
-                    world.boxes[cell.index()].kind,
-                    LayoutBoxKind::TableCell | LayoutBoxKind::AnonymousTableCell
-                ) {
-                    continue;
+            LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow => {
+                let row_index = rows.len();
+                let start_cell_index = cells.len();
+                for cell in world.boxes[current.index()].children.iter().copied() {
+                    if !matches!(
+                        world.boxes[cell.index()].kind,
+                        LayoutBoxKind::TableCell | LayoutBoxKind::AnonymousTableCell
+                    ) {
+                        continue;
+                    }
+                    let data = table_data(world, cell);
+                    let column_span = usize::from(data.column_span.max(1));
+                    let row_span = usize::from(data.row_span);
+                    cells.push(TableCell {
+                        id: cell,
+                        row: row_index,
+                        column: 0,
+                        row_span,
+                        column_span,
+                    });
                 }
-                let data = table_data(world, cell);
-                let column_span = usize::from(data.column_span.max(1));
-                let row_span = usize::from(data.row_span);
-                cells.push(TableCell {
-                    id: cell,
-                    row: row_index,
-                    column: 0,
-                    row_span,
-                    column_span,
+                rows.push(TableRow {
+                    id: current,
+                    group,
+                    cells: start_cell_index..cells.len(),
                 });
             }
-            rows.push(TableRow {
-                id: current,
-                group,
-                cells: start_cell_index..cells.len(),
-            });
+            _ => {}
         }
-        _ => {}
     }
 }
 

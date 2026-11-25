@@ -73,6 +73,21 @@ impl AnonymousInlineRunRole {
     }
 }
 
+enum ElementFrameTarget {
+    Root { box_id: LayoutBoxId },
+    Principal { box_id: LayoutBoxId },
+    DisplayContents,
+}
+
+struct ElementFrame<N> {
+    source_node: N,
+    style: ResolvedLayoutStyle,
+    after: Option<ResolvedLayoutPseudoStyle>,
+    target: ElementFrameTarget,
+    source_children: std::vec::IntoIter<N>,
+    built_children: Vec<LayoutBoxId>,
+}
+
 impl<'a, S, R> BoxBuilder<'a, S, R>
 where
     S: LayoutSource,
@@ -217,19 +232,16 @@ where
         before: Option<ResolvedLayoutPseudoStyle>,
         after: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<(), LayoutError> {
-        if !self.active_sources.insert(source_node) {
-            return Err(LayoutError::SourceCycle {
-                source_label: self.source.label(source_node),
-            });
-        }
-        let result = (|| {
-            let children =
-                self.build_element_child_stream(world, source_node, style, before, after)?;
-            let _ = self.attach_children(world, root_box, source_node, style, children, false)?;
-            Ok(())
-        })();
-        self.active_sources.remove(&source_node);
-        result
+        let root_frame = self.open_element_frame(
+            world,
+            source_node,
+            style.clone(),
+            before,
+            after,
+            ElementFrameTarget::Root { box_id: root_box },
+        )?;
+        let _ = self.drive_element_frames(world, vec![root_frame])?;
+        Ok(())
     }
 
     fn build_source_node(
@@ -246,112 +258,264 @@ where
             }
             LayoutSourceKind::Text => {
                 self.validate_non_element_semantics(source_node, source_kind)?;
-                let Some(text) = self.source.text(source_node) else {
-                    return Ok(Vec::new());
-                };
-                let id = world.allocate(LayoutWorld::new_box(
-                    Some(source_node),
-                    None,
-                    None,
-                    self.source.label(source_node),
-                    None,
-                    None,
-                    None,
-                    LayoutBoxKind::Text,
-                    ResolvedLayoutStyle::text_leaf_from(inherited_style),
-                    Some(Arc::from(text)),
-                ));
-                world.boxes[id.index()].text_selection = self.source.text_selection(source_node);
-                world.map_source(source_node, id);
-                Ok(vec![id])
+                Ok(self
+                    .build_text_box(world, source_node, inherited_style)
+                    .into_iter()
+                    .collect())
             }
-            LayoutSourceKind::Element => self.build_element(world, source_node),
+            LayoutSourceKind::Element => {
+                let mut frames = Vec::new();
+                if let Some(id) = self.begin_element(world, source_node, &mut frames)? {
+                    return Ok(vec![id]);
+                }
+                if frames.is_empty() {
+                    return Ok(Vec::new());
+                }
+                self.drive_element_frames(world, frames)
+            }
         }
     }
 
-    fn build_element(
+    fn build_text_box(
+        &self,
+        world: &mut LayoutWorld<S::NodeId>,
+        source_node: S::NodeId,
+        inherited_style: &ResolvedLayoutStyle,
+    ) -> Option<LayoutBoxId> {
+        let text = self.source.text(source_node)?;
+        let id = world.allocate(LayoutWorld::new_box(
+            Some(source_node),
+            None,
+            None,
+            self.source.label(source_node),
+            None,
+            None,
+            None,
+            LayoutBoxKind::Text,
+            ResolvedLayoutStyle::text_leaf_from(inherited_style),
+            Some(Arc::from(text)),
+        ));
+        world.boxes[id.index()].text_selection = self.source.text_selection(source_node);
+        world.map_source(source_node, id);
+        Some(id)
+    }
+
+    fn drive_element_frames(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        mut frames: Vec<ElementFrame<S::NodeId>>,
+    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let mut top_level = Vec::new();
+        while let Some(next_child) = frames.last_mut().map(|frame| frame.source_children.next()) {
+            let Some(child_source) = next_child else {
+                let Some(frame) = frames.pop() else {
+                    break;
+                };
+                let emitted = self.finish_element_frame(world, frame)?;
+                if let Some(parent_frame) = frames.last_mut() {
+                    parent_frame.built_children.extend(emitted);
+                } else {
+                    top_level = emitted;
+                }
+                continue;
+            };
+
+            let source_kind = self.source.node_kind(child_source);
+            match source_kind {
+                LayoutSourceKind::Comment | LayoutSourceKind::Other => {
+                    self.validate_non_element_semantics(child_source, source_kind)?;
+                }
+                LayoutSourceKind::Text => {
+                    self.validate_non_element_semantics(child_source, source_kind)?;
+                    if let Some(parent_frame) = frames.last_mut()
+                        && let Some(id) =
+                            self.build_text_box(world, child_source, &parent_frame.style)
+                    {
+                        parent_frame.built_children.push(id);
+                    }
+                }
+                LayoutSourceKind::Element => {
+                    if let Some(id) = self.begin_element(world, child_source, &mut frames)?
+                        && let Some(parent_frame) = frames.last_mut()
+                    {
+                        parent_frame.built_children.push(id);
+                    }
+                }
+            }
+        }
+        Ok(top_level)
+    }
+
+    fn open_element_frame(
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
-    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        style: ResolvedLayoutStyle,
+        before: Option<ResolvedLayoutPseudoStyle>,
+        after: Option<ResolvedLayoutPseudoStyle>,
+        target: ElementFrameTarget,
+    ) -> Result<ElementFrame<S::NodeId>, LayoutError> {
         if !self.active_sources.insert(source_node) {
             return Err(LayoutError::SourceCycle {
                 source_label: self.source.label(source_node),
             });
         }
+        let mut built_children = Vec::new();
+        if style.display().is_list_item()
+            && let Some(marker) = self.styles.marker_style(source_node)?
+        {
+            built_children.extend(self.build_generated_pseudo(
+                world,
+                source_node,
+                LayoutPseudo::Marker,
+                marker.into_style(),
+            )?);
+        }
+        built_children.extend(self.build_pseudo(
+            world,
+            source_node,
+            LayoutPseudo::Before,
+            before,
+        )?);
+        let source_children = self.checked_flat_children(source_node)?.into_iter();
+        Ok(ElementFrame {
+            source_node,
+            style,
+            after,
+            target,
+            source_children,
+            built_children,
+        })
+    }
 
-        let result = (|| {
-            let semantics =
-                self.validated_element_semantics(source_node, self.source.node_kind(source_node))?;
-            let Some(styles) = self.styles.element_styles(source_node)? else {
-                return Ok(Vec::new());
-            };
-            let (mut style, before, after) = styles.into_parts();
-            self.record_viewport_body_candidate(source_node, &semantics, &style);
-            let metrics = self.source.replaced_metrics(source_node);
-            if semantics.is_replaced() {
-                style.mark_replaced(
-                    semantics.replaced == Some(crate::LayoutReplacedKind::FormControl),
+    fn finish_element_frame(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        mut frame: ElementFrame<S::NodeId>,
+    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        frame.built_children.extend(self.build_pseudo(
+            world,
+            frame.source_node,
+            LayoutPseudo::After,
+            frame.after,
+        )?);
+        let emitted = match frame.target {
+            ElementFrameTarget::Root { box_id } => {
+                let _ = self.attach_children(
+                    world,
+                    box_id,
+                    frame.source_node,
+                    &frame.style,
+                    frame.built_children,
+                    false,
+                )?;
+                Vec::new()
+            }
+            ElementFrameTarget::DisplayContents => {
+                world.map_display_contents_source(frame.source_node, &frame.built_children);
+                frame.built_children
+            }
+            ElementFrameTarget::Principal { box_id } => self.attach_children(
+                world,
+                box_id,
+                frame.source_node,
+                &frame.style,
+                frame.built_children,
+                true,
+            )?,
+        };
+        self.active_sources.remove(&frame.source_node);
+        Ok(emitted)
+    }
+
+    fn begin_element(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        source_node: S::NodeId,
+        frames: &mut Vec<ElementFrame<S::NodeId>>,
+    ) -> Result<Option<LayoutBoxId>, LayoutError> {
+        if self.active_sources.contains(&source_node) {
+            return Err(LayoutError::SourceCycle {
+                source_label: self.source.label(source_node),
+            });
+        }
+        let semantics =
+            self.validated_element_semantics(source_node, self.source.node_kind(source_node))?;
+        let Some(styles) = self.styles.element_styles(source_node)? else {
+            return Ok(None);
+        };
+        let (mut style, before, after) = styles.into_parts();
+        self.record_viewport_body_candidate(source_node, &semantics, &style);
+        let metrics = self.source.replaced_metrics(source_node);
+        if semantics.is_replaced() {
+            style.mark_replaced(semantics.replaced == Some(crate::LayoutReplacedKind::FormControl));
+        } else if matches!(
+            semantics.category,
+            crate::LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Button)
+        ) {
+            style.mark_intrinsic_form_control_container();
+        }
+
+        if semantics.is_hidden_input()
+            || (style.display() == LayoutDisplay::Contents && semantics.display_contents_is_none())
+        {
+            return Ok(None);
+        }
+
+        match style.display() {
+            LayoutDisplay::None => Ok(None),
+            LayoutDisplay::Contents => {
+                let child_frame = self.open_element_frame(
+                    world,
+                    source_node,
+                    style,
+                    before,
+                    after,
+                    ElementFrameTarget::DisplayContents,
+                )?;
+                frames.push(child_frame);
+                Ok(None)
+            }
+            _ => {
+                let kind = principal_kind(&semantics, &style);
+                let box_node = self.principal_box(
+                    source_node,
+                    self.source.label(source_node),
+                    semantics.clone(),
+                    kind,
+                    style.clone(),
+                    metrics,
                 );
-            } else if matches!(
-                semantics.category,
-                crate::LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Button)
-            ) {
-                style.mark_intrinsic_form_control_container();
-            }
-
-            if semantics.is_hidden_input()
-                || (style.display() == LayoutDisplay::Contents
-                    && semantics.display_contents_is_none())
-            {
-                return Ok(Vec::new());
-            }
-
-            match style.display() {
-                LayoutDisplay::None => Ok(Vec::new()),
-                LayoutDisplay::Contents => {
-                    let children =
-                        self.build_element_child_stream(world, source_node, &style, before, after)?;
-                    world.map_display_contents_source(source_node, &children);
-                    Ok(children)
+                let id = world.allocate(box_node);
+                if matches!(
+                    semantics.category,
+                    crate::LayoutElementCategory::FormControl(_)
+                ) {
+                    world.boxes[id.index()].text_selection =
+                        self.source.text_selection(source_node);
                 }
-                _ => {
-                    let kind = principal_kind(&semantics, &style);
-                    let box_node = self.principal_box(
-                        source_node,
-                        self.source.label(source_node),
-                        semantics.clone(),
-                        kind,
-                        style.clone(),
-                        metrics,
-                    );
-                    let id = world.allocate(box_node);
-                    if matches!(
-                        semantics.category,
-                        crate::LayoutElementCategory::FormControl(_)
-                    ) {
-                        world.boxes[id.index()].text_selection =
-                            self.source.text_selection(source_node);
-                    }
-                    world.map_source(source_node, id);
+                world.map_source(source_node, id);
 
-                    if semantics
-                        .category
-                        .child_box_policy(semantics.is_replaced(), style.display())
-                        == ChildBoxPolicy::None
-                    {
-                        return Ok(vec![id]);
-                    }
-
-                    let children =
-                        self.build_element_child_stream(world, source_node, &style, before, after)?;
-                    self.attach_children(world, id, source_node, &style, children, true)
+                if semantics
+                    .category
+                    .child_box_policy(semantics.is_replaced(), style.display())
+                    == ChildBoxPolicy::None
+                {
+                    return Ok(Some(id));
                 }
-            }
-        })();
 
-        self.active_sources.remove(&source_node);
-        result
+                let child_frame = self.open_element_frame(
+                    world,
+                    source_node,
+                    style,
+                    before,
+                    after,
+                    ElementFrameTarget::Principal { box_id: id },
+                )?;
+                frames.push(child_frame);
+                Ok(None)
+            }
+        }
     }
 
     fn record_viewport_body_candidate(
@@ -466,33 +630,6 @@ where
             scroll_offset.x * effective_zoom,
             scroll_offset.y * effective_zoom,
         )
-    }
-
-    fn build_element_child_stream(
-        &mut self,
-        world: &mut LayoutWorld<S::NodeId>,
-        source_node: S::NodeId,
-        style: &ResolvedLayoutStyle,
-        before: Option<ResolvedLayoutPseudoStyle>,
-        after: Option<ResolvedLayoutPseudoStyle>,
-    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        let mut children = Vec::new();
-        if style.display().is_list_item()
-            && let Some(marker) = self.styles.marker_style(source_node)?
-        {
-            children.extend(self.build_generated_pseudo(
-                world,
-                source_node,
-                LayoutPseudo::Marker,
-                marker.into_style(),
-            )?);
-        }
-        children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?);
-        for child in self.checked_flat_children(source_node)? {
-            children.extend(self.build_source_node(world, child, style)?);
-        }
-        children.extend(self.build_pseudo(world, source_node, LayoutPseudo::After, after)?);
-        Ok(children)
     }
 
     fn build_pseudo(

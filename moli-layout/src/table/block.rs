@@ -249,6 +249,9 @@ impl TableContext {
             let cell_id = self.structure.cells[index].id;
             let restored =
                 restrict_scrollable_percentage_children(world, cell_id, mode, restricted);
+            for (id, _) in &restored {
+                world.push_trampoline_pinned_style(*id);
+            }
             let mut wrapper = TableTreeWrapper {
                 world,
                 context: self,
@@ -258,8 +261,12 @@ impl TableContext {
             });
             self.cell_layouts[index].style.padding = final_padding.map(style_helpers::length);
             for (id, style) in restored {
+                world.pop_trampoline_pinned_style();
                 world.boxes[id.index()].style.taffy = style;
                 world.cache_clear(id.to_taffy());
+            }
+            if world.trampoline_aborted() {
+                return inputs;
             }
             let natural = mode.to_logical(output.size).block_size;
             let baseline = if mode.is_horizontal() {
