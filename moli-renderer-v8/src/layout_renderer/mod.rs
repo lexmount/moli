@@ -12,7 +12,8 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
-    LayoutViewport, finish_measured_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
+    LayoutViewport, RetainedLayoutWorld, finish_measured_layout_pass, measure_prepared_layout_pass,
+    prepare_layout_pass_reusing,
 };
 use moli_page_types::ViewportSurface;
 use moli_selector::QueryContainerSizes;
@@ -63,6 +64,7 @@ pub(crate) fn build_native_layout_pass<'a>(
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     collect_screen_style_coverage: bool,
+    retained: Option<Box<RetainedLayoutWorld<DomHandle>>>,
 ) -> Result<(LayoutPassResult<DomHandle>, LayoutPassFeedback<'a>), moli_layout::LayoutError> {
     let mut feedback = LayoutPassFeedback {
         host: runtime,
@@ -79,6 +81,7 @@ pub(crate) fn build_native_layout_pass<'a>(
         &mut Vec::new(),
         &mut feedback.previous,
         &mut feedback.screen_style_coverage,
+        retained,
     )?;
     Ok((pass, feedback))
 }
@@ -93,6 +96,7 @@ fn build_native_layout_pass_recursive(
     document_stack: &mut Vec<DomHandle>,
     original_container_sizes: &mut HashMap<DomHandle, QueryContainerSizes>,
     screen_style_coverage: &mut Option<HashMap<DomHandle, ScreenStyleCoverage>>,
+    mut retained: Option<Box<RetainedLayoutWorld<DomHandle>>>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
     let document = runtime
@@ -132,7 +136,7 @@ fn build_native_layout_pass_recursive(
                     if profile_started.is_some() && styles_ready.is_none() {
                         styles_ready = Some(std::time::Instant::now());
                     }
-                    prepare_layout_pass(&source, styles, request)
+                    prepare_layout_pass_reusing(&source, styles, request, retained.take())
                 },
             )
         };
@@ -317,6 +321,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             self.document_stack,
             self.original_container_sizes,
             self.screen_style_coverage,
+            None,
         );
         self.embedded_document_services.insert(document, services);
         let output = result?;

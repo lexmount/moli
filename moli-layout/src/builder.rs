@@ -25,6 +25,9 @@ use crate::{
 };
 use style::values::generics::image::GenericImage;
 
+mod retained;
+pub(crate) use retained::{can_retain_root, update_layout_world};
+
 /// Constructs a complete pass-local CSS box tree from a borrowed source view.
 pub fn build_layout_world<S, R>(
     source: &S,
@@ -45,7 +48,7 @@ where
     source: &'a S,
     styles: &'a mut R,
     active_sources: HashSet<S::NodeId>,
-    seen_sources: HashMap<S::NodeId, String>,
+    seen_sources: HashMap<S::NodeId, S::NodeId>,
     seen_css_images: HashSet<(S::NodeId, String, crate::LayoutCssImagePurpose)>,
     css_image_references: Vec<crate::LayoutCssImageReference<S::NodeId>>,
     source_root: Option<S::NodeId>,
@@ -160,8 +163,7 @@ where
         if root_generates_principal_box {
             world.map_source(source_root, root_box);
         }
-        self.seen_sources
-            .insert(source_root, self.source.label(source_root));
+        self.seen_sources.insert(source_root, source_root);
 
         if !matches!(
             root_style.display(),
@@ -286,19 +288,7 @@ where
                 return Ok(Vec::new());
             };
             let (mut style, before, after) = styles.into_parts();
-            if self.viewport_body_candidate.is_none()
-                && self.root_is_html
-                && self
-                    .source_root
-                    .is_some_and(|root| self.source.flat_parent(source_node) == Some(root))
-                && semantics.is_html_element("body")
-            {
-                self.viewport_body_candidate = Some(ViewportBodyCandidate {
-                    source: source_node,
-                    overflow: style.overflow_modes(),
-                    blocks_propagation: style.applies_any_viewport_containment(),
-                });
-            }
+            self.record_viewport_body_candidate(source_node, &semantics, &style);
             let metrics = self.source.replaced_metrics(source_node);
             if semantics.is_replaced() {
                 style.mark_replaced(
@@ -363,6 +353,27 @@ where
 
         self.active_sources.remove(&source_node);
         result
+    }
+
+    fn record_viewport_body_candidate(
+        &mut self,
+        node: S::NodeId,
+        semantics: &LayoutElementSemantics,
+        style: &ResolvedLayoutStyle,
+    ) {
+        if self.viewport_body_candidate.is_none()
+            && self.root_is_html
+            && semantics.is_html_element("body")
+            && self
+                .source_root
+                .is_some_and(|root| self.source.flat_parent(node) == Some(root))
+        {
+            self.viewport_body_candidate = Some(ViewportBodyCandidate {
+                source: node,
+                overflow: style.overflow_modes(),
+                blocks_propagation: style.applies_any_viewport_containment(),
+            });
+        }
     }
 
     /// Converts the construction-only body candidate into the final viewport
@@ -438,16 +449,24 @@ where
         ) {
             layout_box.css_images = self.css_image_resources(source_node, &style);
         }
+        layout_box.scroll_offset = self.sample_scroll_offset(source_node, &style);
+        layout_box
+    }
+
+    fn sample_scroll_offset(
+        &self,
+        source_node: S::NodeId,
+        style: &ResolvedLayoutStyle,
+    ) -> crate::LayoutPoint {
         // DOM scroll state is stored in CSSOM units. Numeric layout operates
         // in effective-zoomed CSS pixels, so import the sampled state into the
         // same coordinate space as the box geometry.
         let scroll_offset = self.source.scroll_offset(source_node);
         let effective_zoom = style.effective_zoom();
-        layout_box.scroll_offset = crate::LayoutPoint::new(
+        crate::LayoutPoint::new(
             scroll_offset.x * effective_zoom,
             scroll_offset.y * effective_zoom,
-        );
-        layout_box
+        )
     }
 
     fn build_element_child_stream(
@@ -1221,13 +1240,11 @@ where
     }
 
     fn checked_flat_children(&mut self, parent: S::NodeId) -> Result<Vec<S::NodeId>, LayoutError> {
-        let parent_label = self.source.label(parent);
         let children = self.source.flat_children(parent).collect::<Vec<_>>();
         for child in &children {
-            let child_label = self.source.label(*child);
             if self.active_sources.contains(child) {
                 return Err(LayoutError::SourceCycle {
-                    source_label: child_label,
+                    source_label: self.source.label(*child),
                 });
             }
             let actual_parent = self.source.flat_parent(*child);
@@ -1236,21 +1253,24 @@ where
                     .map(|node| self.source.label(node))
                     .unwrap_or_else(|| "<none>".to_owned());
                 return Err(LayoutError::source_contract(
-                    child_label,
+                    self.source.label(*child),
                     format!(
-                        "flat_children({parent_label}) disagrees with flat_parent; got {actual}"
+                        "flat_children({}) disagrees with flat_parent; got {actual}",
+                        self.source.label(parent)
                     ),
                 ));
             }
             if let Some(first_parent) = self.seen_sources.get(child) {
                 return Err(LayoutError::source_contract(
-                    child_label,
+                    self.source.label(*child),
                     format!(
-                        "flat-tree node appears more than once; first parent was {first_parent}, second parent is {parent_label}"
+                        "flat-tree node appears more than once; first parent was {}, second parent is {}",
+                        self.source.label(*first_parent),
+                        self.source.label(parent),
                     ),
                 ));
             }
-            self.seen_sources.insert(*child, parent_label.clone());
+            self.seen_sources.insert(*child, parent);
         }
         Ok(children)
     }

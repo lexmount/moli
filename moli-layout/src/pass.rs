@@ -99,6 +99,7 @@ pub struct LayoutPassRequest {
     frame_coverage: LayoutFrameCoverage,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
+    retain_layout_world: bool,
 }
 
 impl LayoutPassRequest {
@@ -113,6 +114,7 @@ impl LayoutPassRequest {
             frame_coverage: LayoutFrameCoverage::PositiveViewport,
             retain_scroll_projection: false,
             retain_screen_paint: false,
+            retain_layout_world: false,
         }
     }
 
@@ -166,6 +168,17 @@ impl LayoutPassRequest {
 
     pub const fn retains_screen_paint(self) -> bool {
         self.retain_screen_paint
+    }
+
+    /// Keep an owned working tree for a subsequent screen publication. Paint
+    /// publications already own their working tree for the screencast lease.
+    pub const fn with_retained_layout_world(mut self) -> Self {
+        self.retain_layout_world = true;
+        self
+    }
+
+    pub const fn retains_layout_world(self) -> bool {
+        self.retain_layout_world && !self.retain_screen_paint
     }
 
     /// Whether this demand also needs immutable software-paint input.
@@ -279,6 +292,17 @@ where
     box_tree_elapsed: Duration,
     list_marker_elapsed: Duration,
     form_control_elapsed: Duration,
+    retained_box_count: usize,
+    reuse_numeric_layout: bool,
+}
+
+/// Document-owned construction state with no borrows into the live source.
+pub struct RetainedLayoutWorld<N>
+where
+    N: Copy + std::fmt::Debug + Eq + Hash,
+{
+    pub(crate) world: LayoutWorld<N>,
+    pub(crate) viewport: LayoutViewport,
 }
 
 /// Pass-local numeric layout, before embedded frames and paint are projected.
@@ -438,9 +462,32 @@ where
     S: LayoutSource,
     R: LayoutStyleResolver<S::NodeId>,
 {
+    prepare_layout_pass_reusing(source, styles, request, None)
+}
+
+pub fn prepare_layout_pass_reusing<S, R>(
+    source: &S,
+    styles: &mut R,
+    request: LayoutPassRequest,
+    retained: Option<Box<RetainedLayoutWorld<S::NodeId>>>,
+) -> Result<PreparedLayoutPass<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    R: LayoutStyleResolver<S::NodeId>,
+{
     let started = Instant::now();
     let phase_started = Instant::now();
-    let mut world = build_layout_world(source, styles)?;
+    let (mut world, retained_box_count, reuse_numeric_layout) = if let Some(mut retained) = retained
+        && request.retains_layout_world()
+        && retained.viewport == request.viewport
+        && retained.world.environment == request.environment
+        && let Some((count, reuse_numeric_layout)) =
+            crate::builder::update_layout_world(source, styles, &mut retained.world)?
+    {
+        (retained.world, count, reuse_numeric_layout)
+    } else {
+        (build_layout_world(source, styles)?, 0, false)
+    };
     world.environment = request.environment;
     if request.viewport.mobile_frame_size().is_some() {
         // Mobile viewport scrollbars overlay content. Classic scrollbar
@@ -468,6 +515,8 @@ where
         box_tree_elapsed,
         list_marker_elapsed,
         form_control_elapsed,
+        retained_box_count,
+        reuse_numeric_layout,
     })
 }
 
@@ -507,13 +556,35 @@ where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
     let world = &mut prepared.world;
+    let mut invalidated = Vec::new();
+    if prepared.reuse_numeric_layout {
+        // IFCs are prepared afresh, including their fragment storage. A
+        // retained layout covering one of these boxes must run to fill it.
+        invalidated.extend(
+            world
+                .boxes
+                .iter()
+                .enumerate()
+                .filter_map(|(index, layout_box)| {
+                    layout_box
+                        .inline_context_owner
+                        .is_some()
+                        .then_some(crate::LayoutBoxId::from_index(index))
+                }),
+        );
+    }
     let phase_started = Instant::now();
     prepare_inline_contexts(world, services);
     let inline_preparation_elapsed = phase_started.elapsed();
     world.validate_invariants()?;
     let phase_started = Instant::now();
-    let numeric_metrics =
-        compute_world_layout_with_scrollbars(world, prepared.request.viewport, frozen_scrollbars);
+    let numeric_metrics = compute_world_layout_with_scrollbars(
+        world,
+        prepared.request.viewport,
+        frozen_scrollbars,
+        prepared.reuse_numeric_layout,
+        invalidated,
+    );
     let numeric_layout_elapsed = phase_started.elapsed();
     if moli_trace::cpu_profile_enabled() {
         tracing::info!(
@@ -556,6 +627,8 @@ where
                 box_tree_elapsed,
                 list_marker_elapsed,
                 form_control_elapsed,
+                retained_box_count,
+                ..
             },
         inline_preparation_elapsed,
         numeric_layout_elapsed,
@@ -613,6 +686,7 @@ where
         request.paint_capture,
         request.retains_scroll_projection(),
         request.retains_screen_paint(),
+        request.retains_layout_world(),
         object_geometry,
         embedded_frames,
         crate::projection::LayoutPassPhaseMetrics {
@@ -631,6 +705,8 @@ where
                 .feedback_invalidated_node_count,
             numeric_feedback_overflow_recomputed_node_count: numeric_metrics
                 .feedback_overflow_recomputed_node_count,
+            retained_box_count,
+            retained_numeric_layout_hits: numeric_metrics.retained_layout_hits,
         },
     )
 }
@@ -708,6 +784,7 @@ struct NumericLayoutMetrics {
     scrollbar_feedback_elapsed: Duration,
     feedback_invalidated_node_count: usize,
     feedback_overflow_recomputed_node_count: usize,
+    retained_layout_hits: usize,
 }
 
 impl NumericLayoutMetrics {
@@ -720,6 +797,7 @@ impl NumericLayoutMetrics {
         self.feedback_invalidated_node_count += previous.feedback_invalidated_node_count;
         self.feedback_overflow_recomputed_node_count +=
             previous.feedback_overflow_recomputed_node_count;
+        self.retained_layout_hits += previous.retained_layout_hits;
     }
 }
 
@@ -727,6 +805,8 @@ fn compute_world_layout_with_scrollbars<N>(
     world: &mut crate::LayoutWorld<N>,
     viewport: LayoutViewport,
     frozen_scrollbars: &AutoScrollbars<N>,
+    reuse_numeric_layout: bool,
+    mut invalidated: Vec<crate::LayoutBoxId>,
 ) -> NumericLayoutMetrics
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
@@ -750,6 +830,15 @@ where
     }
     for (index, layout_box) in world.boxes.iter_mut().enumerate() {
         let id = crate::LayoutBoxId::from_index(index);
+        if reuse_numeric_layout
+            && (layout_box.inline_formatting_context
+                || layout_box.inline_context_owner.is_some()
+                || SCROLLBAR_AXES
+                    .into_iter()
+                    .any(|axis| layout_box.style.auto_scrollbar_revealed(axis)))
+        {
+            invalidated.push(id);
+        }
         if id == root_id {
             layout_box.style.prepare_viewport_root_layout();
         } else if defining_body == Some(id) {
@@ -773,7 +862,13 @@ where
 
     let mut metrics = NumericLayoutMetrics::default();
     let phase_started = Instant::now();
-    let mut prepared = prepare_world_layout(world, viewport);
+    let mut prepared = prepare_world_layout(world, viewport, reuse_numeric_layout);
+    if reuse_numeric_layout {
+        world.track_retained_cache_reads();
+        // Preserve local geometry for cache hits. Recompute the root under
+        // the viewport's initial gutter state, which can differ between passes.
+        prepared.invalidate_cached_layout_paths(world, &invalidated, true);
+    }
     let preparation_elapsed = phase_started.elapsed();
     let mut overflow_projection: Option<OverflowProjection> = None;
     let mut pending_feedback_seeds = Vec::new();
@@ -854,10 +949,13 @@ where
             // `compute_prepared_world_layout` starts at the root, untouched
             // branches remain cache hits; only these boxes and their ancestor
             // paths participate in the corrective numeric layout.
-            metrics.feedback_invalidated_node_count =
-                metrics.feedback_invalidated_node_count.saturating_add(
-                    prepared.invalidate_scrollbar_feedback(world, &changed_boxes, viewport_changed),
-                );
+            metrics.feedback_invalidated_node_count = metrics
+                .feedback_invalidated_node_count
+                .saturating_add(prepared.invalidate_cached_layout_paths(
+                    world,
+                    &changed_boxes,
+                    viewport_changed,
+                ));
             pending_feedback_seeds.extend(changed_boxes.iter().copied());
             if viewport_changed {
                 pending_feedback_seeds.push(root_id);
@@ -868,6 +966,7 @@ where
             break;
         }
     }
+    metrics.retained_layout_hits = world.finish_retained_cache_reads();
     metrics
 }
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, FrozenLayoutTree, LayoutError, LayoutPoint, LayoutViewport,
-    ScrollProjectionRefresh,
+    RetainedLayoutWorld, ScrollProjectionRefresh,
 };
 
 use super::layout_snapshot::LatestLayoutTreeCache;
@@ -56,6 +56,9 @@ pub(super) struct DocumentLayoutState {
     embedded_web_fonts: Option<Box<HashMap<DomHandle, DocumentWebFontState>>>,
     visual_state_generation: u64,
     latest_layout: LatestLayoutTreeCache,
+    /// Mutable input for the next Realtime screen pass. The frozen tree
+    /// above remains available while a new pass owns this working tree.
+    pub(super) retained_layout: Option<Box<RetainedLayoutWorld<DomHandle>>>,
     /// Last used content viewport published by each live iframe owner's
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
     /// separate from the single latest-tree slot because a later fresh layout
@@ -251,6 +254,7 @@ impl DocumentLayoutState {
 
     pub(super) fn clear_latest_layout(&mut self) {
         self.latest_layout.clear();
+        self.retained_layout = None;
         self.mark_visual_state_dirty();
     }
 

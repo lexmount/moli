@@ -1,9 +1,9 @@
-//! One-shot CSS box construction, numeric layout, and owned paint projection.
+//! CSS box construction, numeric layout, and owned paint projection.
 //!
 //! The crate knows Stylo and Taffy but never knows Moli's live DOM or V8
 //! runtime. Renderer-owned adapters lend a canonical source view and resolve
-//! styles; all source/style borrows and per-pass caches are gone before the
-//! returned [`FrozenLayoutTree`] or [`PaintSnapshot`] crosses into a consumer.
+//! styles. A renderer may keep an owned screen working tree between passes.
+//! Geometry queries and paint snapshots use separate published output.
 
 /// Number of fixed layout subpixels in one CSS pixel, matching Blink's
 /// `LayoutUnit` precision.
@@ -74,10 +74,10 @@ pub use normalize_source::{
 };
 pub use pass::{
     AutoScrollbars, EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutFrameCoverage,
-    LayoutPassRequest, MeasuredLayoutPass, PreparedLayoutPass, ScreenshotLayoutRequest,
-    build_layout_pass, build_layout_pass_with_embedded_frames, build_screenshot_snapshot,
-    finish_measured_layout_pass, finish_prepared_layout_pass, measure_prepared_layout_pass,
-    prepare_layout_pass,
+    LayoutPassRequest, MeasuredLayoutPass, PreparedLayoutPass, RetainedLayoutWorld,
+    ScreenshotLayoutRequest, build_layout_pass, build_layout_pass_with_embedded_frames,
+    build_screenshot_snapshot, finish_measured_layout_pass, finish_prepared_layout_pass,
+    measure_prepared_layout_pass, prepare_layout_pass, prepare_layout_pass_reusing,
 };
 pub use projection::ScreenPaintLayout;
 pub use scrollbar::{

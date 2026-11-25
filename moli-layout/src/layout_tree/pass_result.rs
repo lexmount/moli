@@ -64,6 +64,10 @@ pub struct LayoutPassMetrics {
     /// initial linear overflow projection. Unaffected branches are excluded.
     pub numeric_feedback_overflow_recomputed_node_count: usize,
     pub box_count: usize,
+    /// Construction boxes kept from the previous screen layout.
+    pub retained_box_count: usize,
+    /// Final numeric cache hits populated by the previous screen pass.
+    pub retained_numeric_layout_hits: usize,
     pub fragment_count: usize,
     /// Paint-order events considered for this capture before viewport culling.
     pub paint_event_count: usize,
@@ -93,6 +97,7 @@ where
     paint_snapshot: Option<PaintSnapshot>,
     css_image_references: Vec<LayoutCssImageReference<N>>,
     screen_paint: Option<Box<crate::ScreenPaintLayout<N>>>,
+    retained_layout: Option<Box<crate::RetainedLayoutWorld<N>>>,
 }
 
 impl<N> Deref for LayoutPassResult<N>
@@ -149,6 +154,10 @@ where
         self.screen_paint.take()
     }
 
+    pub fn take_retained_layout(&mut self) -> Option<Box<crate::RetainedLayoutWorld<N>>> {
+        self.retained_layout.take()
+    }
+
     pub fn retention_metrics(&self) -> LayoutTreeRetentionMetrics {
         self.tree.retention_metrics()
     }
@@ -173,6 +182,7 @@ where
         paint_snapshot: Option<PaintSnapshot>,
         css_image_references: Vec<LayoutCssImageReference<N>>,
         screen_paint: Option<Box<crate::ScreenPaintLayout<N>>>,
+        retained_layout: Option<Box<crate::RetainedLayoutWorld<N>>>,
     ) -> Self {
         Self {
             tree,
@@ -181,6 +191,7 @@ where
             paint_snapshot,
             css_image_references,
             screen_paint,
+            retained_layout,
         }
     }
 }
