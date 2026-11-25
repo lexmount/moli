@@ -149,6 +149,48 @@ fn set_range_text_preserve_mode_adjusts_selection_by_replacement_delta() {
     assert_eq!(result, "xy world:3:8|abZef:1:3");
 }
 #[test]
+fn range_stringifier_uses_child_offsets_and_preserves_utf16() {
+    let mut vm = new_parsed_test_vm(
+        "https://range-stringifier.test/",
+        "<!doctype html><div><p><b>outside</b><em hidden>left</em></p><p><b>right</b><em>outside</em></p></div>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.querySelector("div");
+  const left = root.firstChild;
+  const right = root.lastChild;
+  const range = document.createRange();
+  range.setStart(left, 1);
+  range.setEnd(right, 1);
+  const acrossElements = range.toString();
+  range.setStart(left.lastChild.firstChild, 2);
+  const fromText = range.toString();
+  range.setStart(left, left.childNodes.length);
+  range.setEnd(right, 0);
+  const betweenSubtrees = range.toString();
+
+  const xml = document.implementation.createDocument(null, "root");
+  const cdata = xml.createCDATASection("\uD83D\uDE00");
+  const next = xml.createTextNode("\uD800\uDC00!");
+  xml.documentElement.append(cdata, next);
+  const xmlRange = xml.createRange();
+  xmlRange.setStart(cdata, 1);
+  xmlRange.setEnd(next, 1);
+  const partial = xmlRange.toString();
+  return JSON.stringify([
+    acrossElements, fromText, betweenSubtrees,
+    partial.length, partial.charCodeAt(0), partial.charCodeAt(1),
+  ]);
+})()
+"#,
+        )
+        .expect("Range.toString should follow native DOM boundaries");
+    assert_eq!(result, r#"["leftright","ftright","",2,56832,55296]"#);
+}
+
+#[test]
 fn selection_collapses_to_removed_editing_host_position() {
     let mut vm = new_storage_test_vm("https://selection-editing-host-removal.test/");
 
