@@ -198,10 +198,14 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
             return None;
         }
         self.prepare(handle)?;
-        if !state.screen_style_target_has_supported_damage(handle, supported) {
+        let invalidation = &state.lazy_invalidation_roots;
+        // Preparing a target can coalesce the history this traversal read.
+        if !invalidation.can_replay_after(after)
+            || !state.screen_style_target_has_supported_damage(handle, supported)
+        {
             return None;
         }
-        let restyles = state.lazy_invalidation_roots.descendant_restyles(handle);
+        let restyles = invalidation.descendant_restyles(handle);
         Some(if restyles.subtree > after {
             RestyleHint::restyle_subtree()
         } else if restyles.children > after {
@@ -314,6 +318,12 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
             node_wrappers = self.context.adapter.bound_node_count(),
             validated_elements = self.validations,
             resolved_elements = self.resolutions,
+            retained_descendant_restyles = self
+                .context
+                .world
+                .document_state
+                .lazy_invalidation_roots
+                .descendant_restyle_count(),
         );
     }
 
