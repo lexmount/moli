@@ -23,7 +23,6 @@ use crate::{
     text_is_ignorable_in_anonymous_run,
     world::{ViewportDefiningBox, ViewportScrollPolicy},
 };
-use style::values::generics::image::GenericImage;
 
 mod retained;
 pub(crate) use retained::{can_retain_root, update_layout_world};
@@ -447,7 +446,7 @@ where
             style.display(),
             LayoutDisplay::None | LayoutDisplay::Contents
         ) {
-            layout_box.css_images = self.css_image_resources(source_node, &style);
+            self.collect_css_images(source_node, &style);
         }
         layout_box.scroll_offset = self.sample_scroll_offset(source_node, &style);
         layout_box
@@ -559,7 +558,7 @@ where
             style.clone(),
             None,
         );
-        layout_box.css_images = self.css_image_resources(owner, &style);
+        self.collect_css_images(owner, &style);
         if style.has_unsupported_generated_content() {
             push_diagnostic(
                 &mut layout_box.capability_diagnostics,
@@ -731,7 +730,7 @@ where
         style: &ResolvedLayoutStyle,
         semantics: Option<LayoutElementSemantics>,
     ) -> LayoutBoxId {
-        let mut continuation = LayoutWorld::new_box(
+        let continuation = LayoutWorld::new_box(
             None,
             Some(owner),
             None,
@@ -743,62 +742,34 @@ where
             style.clone(),
             None,
         );
-        continuation.css_images = self.css_image_resources(owner, style);
+        self.collect_css_images(owner, style);
         world.allocate(continuation)
     }
 
-    fn css_image_resources(
-        &mut self,
-        source: S::NodeId,
-        style: &ResolvedLayoutStyle,
-    ) -> crate::source::LayoutCssImageResources {
+    fn collect_css_images(&mut self, source: S::NodeId, style: &ResolvedLayoutStyle) {
         let Some(computed) = style.stylo_computed_values() else {
-            return crate::source::LayoutCssImageResources::default();
+            return;
         };
-        let background = computed
-            .get_background()
-            .background_image
-            .0
-            .iter()
-            .map(|image| {
-                self.css_image_resource(source, image, crate::LayoutCssImagePurpose::Background)
-            })
-            .collect();
-        let border = self
-            .css_image_resource(
-                source,
-                &computed.get_border().border_image_source,
-                crate::LayoutCssImagePurpose::Border,
-            )
-            .map(Box::new);
-        let mask = computed
-            .get_svg()
-            .mask_image
-            .0
-            .iter()
-            .map(|image| self.css_image_resource(source, image, crate::LayoutCssImagePurpose::Mask))
-            .collect();
-        crate::source::LayoutCssImageResources {
-            background,
-            border,
-            mask,
+        use crate::LayoutCssImagePurpose::{Background, Border, Mask};
+        for image in computed.get_background().background_image.0.iter() {
+            self.note_css_image(source, image, Background);
+        }
+        self.note_css_image(source, &computed.get_border().border_image_source, Border);
+        for image in computed.get_svg().mask_image.0.iter() {
+            self.note_css_image(source, image, Mask);
         }
     }
 
-    fn css_image_resource(
+    fn note_css_image(
         &mut self,
         source: S::NodeId,
         image: &style::values::computed::Image,
         purpose: crate::LayoutCssImagePurpose,
-    ) -> Option<crate::LayoutImageResource> {
-        let GenericImage::Url(computed_url) = image else {
-            return None;
+    ) {
+        let Some(url) = crate::source::css_image_url(image) else {
+            return;
         };
-        let url = computed_url.url()?;
-        if !matches!(url.scheme(), "http" | "https" | "data" | "blob") || url.fragment().is_some() {
-            return None;
-        }
-        let resolved_url = url.as_str().to_owned();
+        let resolved_url = url.to_owned();
         if self
             .seen_css_images
             .insert((source, resolved_url.clone(), purpose))
@@ -810,7 +781,6 @@ where
                     resolved_url,
                 });
         }
-        self.source.css_image_resource(url.as_str())
     }
 
     fn normalize_flow_children(

@@ -1,14 +1,13 @@
 use std::{collections::HashMap, sync::Arc};
 
 use futures_util::future::BoxFuture;
+use moli_layout::{LayoutCssImageState, LayoutImageResource};
 use parking_lot::Mutex;
 
 use super::{
     ImageResponseDescriptor,
     decode::{DecodedImageContent, ReadyDecodedImage},
-    state::{
-        ReadyImageForLayout, ReadyImageResource, ReadyImageResourceIndex, intrinsic_dimensions,
-    },
+    state::{ReadyImageResource, ReadyImageResourceIndex, intrinsic_dimensions},
 };
 use crate::{
     document_runtime::DomHandle,
@@ -50,6 +49,7 @@ pub(super) struct CssImageResourceStore {
     inner: Arc<Mutex<CssImageResourceStoreInner>>,
     ready_by_request: ReadyImageResourceIndex,
     visual_generation: VisualResourceGeneration,
+    #[cfg(test)]
     completion_notify: Arc<tokio::sync::Notify>,
 }
 
@@ -57,11 +57,13 @@ pub(super) struct CssImageResourceStore {
 struct CssImageResourceStoreInner {
     next_request_id: u64,
     slots: HashMap<CssImageResourceKey, CssImageResourceSlot>,
+    paint_snapshot: Option<CssImagePaintSnapshot>,
 }
 
 struct CssImageResourceSlot {
     identity: CssImageResourceRequestIdentity,
     state: CssImageResourceState,
+    completion: Option<tokio::sync::watch::Sender<()>>,
 }
 
 enum CssImageResourceState {
@@ -69,6 +71,22 @@ enum CssImageResourceState {
     DecodeQueued(ImageResponseDescriptor),
     Ready(Arc<ReadyImageResource>),
     Failed,
+}
+
+/// One immutable sample for an entire paint, including embedded Documents.
+#[derive(Clone, Default)]
+pub(crate) struct CssImagePaintSnapshot(
+    Arc<HashMap<DomHandle, HashMap<String, LayoutCssImageState>>>,
+);
+
+impl CssImagePaintSnapshot {
+    pub(crate) fn image(&self, document: DomHandle, url: &str) -> LayoutCssImageState {
+        self.0
+            .get(&document)
+            .and_then(|images| images.get(url))
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 impl CssImageResourceStore {
@@ -80,6 +98,7 @@ impl CssImageResourceStore {
             inner: Arc::new(Mutex::new(CssImageResourceStoreInner::default())),
             ready_by_request,
             visual_generation,
+            #[cfg(test)]
             completion_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
@@ -129,10 +148,13 @@ impl CssImageResourceStore {
             CssImageResourceSlot {
                 identity: identity.clone(),
                 state,
+                completion: None,
             },
         );
+        inner.paint_snapshot = None;
+        self.visual_generation.bump_css_image();
         if reused {
-            self.visual_generation.bump();
+            #[cfg(test)]
             self.completion_notify.notify_waiters();
             CssImageResourceAdmission::Reused
         } else {
@@ -204,7 +226,10 @@ impl CssImageResourceStore {
         self.ready_by_request
             .insert(identity.request_key.clone(), &resource);
         slot.state = CssImageResourceState::Ready(resource);
-        self.visual_generation.bump();
+        drop(slot.completion.take());
+        inner.paint_snapshot = None;
+        self.visual_generation.bump_css_image();
+        #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
     }
@@ -221,55 +246,85 @@ impl CssImageResourceStore {
             return false;
         }
         slot.state = CssImageResourceState::Failed;
-        self.visual_generation.bump();
+        drop(slot.completion.take());
+        inner.paint_snapshot = None;
+        self.visual_generation.bump_css_image();
+        #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
     }
 
-    pub(super) fn wait_for_pending_loads(&self) -> BoxFuture<'static, ()> {
-        let store = self.clone();
-        Box::pin(async move {
-            loop {
-                let changed = store.completion_notify.notified();
-                let pending = store.inner.lock().slots.values().any(|slot| {
-                    matches!(
-                        slot.state,
-                        CssImageResourceState::Pending | CssImageResourceState::DecodeQueued(_)
-                    )
-                });
-                if !pending {
-                    break;
-                }
-                changed.await;
-            }
-        })
+    pub(super) fn wait_for_pending_loads(
+        &self,
+        images: &[(DomHandle, &str)],
+    ) -> Option<BoxFuture<'static, ()>> {
+        let mut inner = self.inner.lock();
+        let pending = images
+            .iter()
+            .filter_map(|&(document_handle, url)| {
+                let key = CssImageResourceKey {
+                    document_handle,
+                    request_key: ImageRequestKey::with_density(
+                        url.to_owned(),
+                        ImageRequestCorsMode::NoCors,
+                        1.0,
+                    ),
+                };
+                let slot = inner.slots.get_mut(&key)?;
+                matches!(
+                    slot.state,
+                    CssImageResourceState::Pending | CssImageResourceState::DecodeQueued(_)
+                )
+                .then(|| {
+                    slot.completion
+                        .get_or_insert_with(|| tokio::sync::watch::Sender::new(()))
+                        .subscribe()
+                })
+            })
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            return None;
+        }
+        // Dropping the sender settles this exact request, including when its
+        // Document is retired or the slot is replaced.
+        Some(Box::pin(async move {
+            futures_util::future::join_all(pending.into_iter().map(|mut completion| async move {
+                let _ = completion.changed().await;
+            }))
+            .await;
+        }))
     }
 
-    pub(super) fn ready_for_layout(
-        &self,
-        document_handle: DomHandle,
-        resolved_url: &str,
-    ) -> Option<ReadyImageForLayout> {
-        let key = CssImageResourceKey {
-            document_handle,
-            request_key: ImageRequestKey::with_density(
-                resolved_url.to_owned(),
-                ImageRequestCorsMode::NoCors,
-                1.0,
-            ),
-        };
-        let inner = self.inner.lock();
-        let slot = inner.slots.get(&key)?;
-        let CssImageResourceState::Ready(resource) = &slot.state else {
-            return None;
-        };
-        let (intrinsic_width, intrinsic_height) = intrinsic_dimensions(resource);
-        Some(ReadyImageForLayout {
-            intrinsic_width,
-            intrinsic_height,
-            pixels: resource.pixels.clone(),
-            svg: resource.svg.clone(),
-        })
+    pub(super) fn paint_snapshot(&self) -> CssImagePaintSnapshot {
+        let mut inner = self.inner.lock();
+        if let Some(snapshot) = &inner.paint_snapshot {
+            return snapshot.clone();
+        }
+        let mut documents = HashMap::<_, HashMap<_, _>>::new();
+        for (key, slot) in &inner.slots {
+            let state = match &slot.state {
+                CssImageResourceState::Pending | CssImageResourceState::DecodeQueued(_) => {
+                    LayoutCssImageState::Pending
+                }
+                CssImageResourceState::Ready(resource) => {
+                    let (intrinsic_width, intrinsic_height) = intrinsic_dimensions(resource);
+                    LayoutCssImageState::Ready(LayoutImageResource {
+                        intrinsic_width,
+                        intrinsic_height,
+                        pixels: resource.pixels.clone(),
+                        svg: resource.svg.clone(),
+                    })
+                }
+                CssImageResourceState::Failed => LayoutCssImageState::Failed,
+            };
+            documents
+                .entry(key.document_handle)
+                .or_default()
+                .insert(key.request_key.url().to_owned(), state);
+        }
+        let snapshot = CssImagePaintSnapshot(Arc::new(documents));
+        inner.paint_snapshot = Some(snapshot.clone());
+        snapshot
     }
 
     pub(super) fn retire_document(&self, document_handle: DomHandle) -> usize {
@@ -280,7 +335,9 @@ impl CssImageResourceStore {
             .retain(|key, _| key.document_handle != document_handle);
         let removed = before - inner.slots.len();
         if removed != 0 {
-            self.visual_generation.bump();
+            inner.paint_snapshot = None;
+            self.visual_generation.bump_css_image();
+            #[cfg(test)]
             self.completion_notify.notify_waiters();
         }
         drop(inner);
@@ -353,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_completion_publishes_through_the_shared_visual_generation() {
+    fn worker_completion_publishes_a_new_css_paint_snapshot() {
         let generation = VisualResourceGeneration::default();
         let store =
             CssImageResourceStore::new(ReadyImageResourceIndex::default(), generation.clone());
@@ -362,14 +419,15 @@ mod tests {
             width: 1,
             height: 1,
         });
-        let CssImageResourceAdmission::Fetch(identity) = store.admit(
-            DomHandle::new(10),
-            owner(1),
-            "https://example.test/async.png".to_owned(),
-        ) else {
+        let document = DomHandle::new(10);
+        let url = "https://example.test/async.png";
+        let CssImageResourceAdmission::Fetch(identity) =
+            store.admit(document, owner(1), url.to_owned())
+        else {
             panic!("a new CSS image must create a fetch identity");
         };
         assert!(store.mark_decode_queued(&identity, descriptor));
+        let pending = store.paint_snapshot();
         let before = generation.current();
         let worker_store = store.clone();
         let completed =
@@ -378,6 +436,46 @@ mod tests {
                 .expect("CSS decoder worker must finish");
         assert!(completed);
         assert_eq!(generation.current(), before + 1);
+        assert!(matches!(
+            pending.image(document, url),
+            LayoutCssImageState::Pending
+        ));
+        assert!(matches!(
+            store.paint_snapshot().image(document, url),
+            LayoutCssImageState::Ready(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn export_waits_only_for_selected_document_images() {
+        use futures_util::FutureExt;
+
+        let store = CssImageResourceStore::new(
+            ReadyImageResourceIndex::default(),
+            VisualResourceGeneration::default(),
+        );
+        let document = DomHandle::new(10);
+        let unrelated_document = DomHandle::new(20);
+        let url = "https://example.test/async.png";
+        let CssImageResourceAdmission::Fetch(selected) =
+            store.admit(document, owner(1), url.to_owned())
+        else {
+            panic!("the selected image must start loading");
+        };
+        assert!(matches!(
+            store.admit(unrelated_document, owner(2), url.to_owned()),
+            CssImageResourceAdmission::Fetch(_)
+        ));
+        let mut waiter = store.wait_for_pending_loads(&[(document, url)]).unwrap();
+        assert!(waiter.as_mut().now_or_never().is_none());
+        assert!(store.fail(&selected));
+        assert_eq!(waiter.now_or_never(), Some(()));
+        assert!(store.wait_for_pending_loads(&[(document, url)]).is_none());
+        assert!(
+            store
+                .wait_for_pending_loads(&[(unrelated_document, url)])
+                .is_some()
+        );
     }
 
     #[test]
@@ -416,13 +514,13 @@ mod tests {
             !store.fail(&replacement),
             "a duplicate failure terminal must not replace ready content"
         );
+        let LayoutCssImageState::Ready(replacement) =
+            store.paint_snapshot().image(first_document, url)
+        else {
+            panic!("replacement ready resource");
+        };
         assert_eq!(
-            store
-                .ready_for_layout(first_document, url)
-                .expect("replacement ready resource")
-                .pixels
-                .expect("decoded raster")
-                .rgba,
+            replacement.pixels.expect("decoded raster").rgba,
             [255, 0, 0, 255]
         );
 
@@ -431,11 +529,17 @@ mod tests {
             CssImageResourceAdmission::Reused
         ));
         assert!(
-            store.ready_for_layout(second_document, url).is_some(),
+            matches!(
+                store.paint_snapshot().image(second_document, url),
+                LayoutCssImageState::Ready(_)
+            ),
             "another live Document may share the immutable decoded resource"
         );
         assert_eq!(store.retire_document(first_document), 1);
-        assert!(store.ready_for_layout(second_document, url).is_some());
+        assert!(matches!(
+            store.paint_snapshot().image(second_document, url),
+            LayoutCssImageState::Ready(_)
+        ));
         assert_eq!(store.retire_document(second_document), 1);
 
         assert!(matches!(

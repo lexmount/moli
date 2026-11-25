@@ -9,6 +9,110 @@ use crate::runtime::{
 use moli_page_types::LayoutPolicy;
 
 #[test]
+fn realtime_css_images_load_during_rendering_and_repaint_with_retained_layout() {
+    use crate::runtime::tests::spawn_owner_wake_gated_binary_server_with_content_type;
+    use std::time::Duration;
+
+    run_page_vm_large_stack_async_test("realtime-css-images", || async move {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="3"><rect width="3" height="3" fill="red"/></svg>"#;
+        let (base, request_seen, release_image, server) =
+            spawn_owner_wake_gated_binary_server_with_content_type(
+                "/css.svg",
+                svg.to_vec(),
+                "image/svg+xml",
+            )
+            .await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::IMAGE,
+        );
+        let (mut page, _, mut wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse(&format!("{base}/document")).unwrap(),
+        );
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut().eval(r#"
+            document.head.innerHTML = `<style>
+                html,body { margin: 0; background: white }
+                div { position: absolute; top: 0; width: 12px; height: 12px }
+                #border { left: 0; border: 4px solid lime; border-image: url(/css.svg) 1 / 4px }
+                #background { left: 24px; background-image: url(/unused.svg) }
+                #background { background: url(/css.svg) center / cover }
+                #mask { left: 48px; background: blue; mask: url(/css.svg) center / cover }
+            </style>`;
+            document.body.innerHTML = '<div id=border></div><div id=background></div><div id=mask></div>';
+            requestAnimationFrame(() => {});
+        "#).unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), request_seen)
+            .await
+            .unwrap()
+            .unwrap();
+        let image_url = format!("{base}/css.svg");
+        assert_eq!(
+            page.vm()
+                .css_image_resource_observability_for_test()
+                .4
+                .as_slice(),
+            std::slice::from_ref(&image_url)
+        );
+
+        let session = RendererScreencastPaintSession::default();
+        let request = |state| crate::runtime::RendererCaptureScreencastFrameRequest {
+            paint_session: Some(session.clone()),
+            ..viewport_screencast_request(state)
+        };
+        let Reply::Captured(pending) = page.capture_screencast_frame(request(None)).unwrap() else {
+            panic!("expected a frame with a pending CSS image");
+        };
+        let pixels = moli_image::decode_png(&pending.image.bytes).unwrap();
+        assert_eq!(&pixels.rgba[4..8], &[255; 4]);
+        assert_eq!(&pixels.rgba[100..104], &[255; 4]);
+        let passes = page.vm().layout_pass_observability_for_test().1;
+
+        release_image.send(()).unwrap();
+        server.await.unwrap();
+        let completion = page.vm().css_image_completion_notify_for_test();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let notified = completion.notified();
+                if page.vm().css_image_resource_is_ready_for_test(&image_url) {
+                    break;
+                }
+                if !page
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::ResourceCompletion,
+                        &loader,
+                    )
+                    .await
+                    .unwrap()
+                {
+                    tokio::select! {
+                        _ = notified => {},
+                        message = wake.recv() => assert!(message.is_some()),
+                    }
+                }
+            }
+        })
+        .await
+        .expect("CSS image must decode");
+
+        let Reply::Captured(ready) = page
+            .capture_screencast_frame(request(Some(pending.visual_state)))
+            .unwrap()
+        else {
+            panic!("decoding the CSS image must produce a new frame");
+        };
+        let pixels = moli_image::decode_png(&ready.image.bytes).unwrap();
+        assert_eq!(&pixels.rgba[4..8], &[255, 0, 0, 255]);
+        assert_eq!(&pixels.rgba[100..104], &[255, 0, 0, 255]);
+        assert_eq!(&pixels.rgba[196..200], &[0, 0, 255, 255]);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+    });
+}
+
+#[test]
 fn realtime_capture_keeps_clean_tokens_across_frames_and_paints_current_style() {
     run_page_vm_large_stack_async_test("realtime-capture", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

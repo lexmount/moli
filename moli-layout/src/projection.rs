@@ -116,7 +116,9 @@ where
             request
                 .resolve(viewport, projection.viewport_scroll, content_size)
                 .map(|capture| {
-                    let paint_projection = PaintProjection::from_layout_pass(&projection);
+                    let css_images = |url: &str| source.css_image_state(url);
+                    let paint_projection =
+                        PaintProjection::from_layout_pass(&projection, &css_images);
                     crate::paint::project_paint_snapshot(
                         &paint_projection,
                         capture,
@@ -235,7 +237,6 @@ where
             layout_box.inline_layout = None;
             layout_box.table_measure_cache = None;
             layout_box.replaced_image = None;
-            layout_box.css_images = Default::default();
         }
         let estimated_bytes = world.boxes.capacity() * std::mem::size_of::<crate::LayoutBox<N>>()
             + world.box_caches.capacity() * std::mem::size_of::<taffy::Cache>()
@@ -275,6 +276,7 @@ impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
         &self,
         tree: &FrozenLayoutTree<N>,
         request: PaintCaptureRequest,
+        css_images: &dyn Fn(N, &str) -> crate::LayoutCssImageState,
     ) -> Result<PaintSnapshot, LayoutError> {
         let scroll = tree.scroll_projection.as_deref().ok_or_else(|| {
             LayoutError::source_contract("screen paint", "missing published box placements")
@@ -297,7 +299,14 @@ impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
                 extent.is_scroll_container.then_some(extent.applied_offset)
             },
         )?;
-        let projection = PaintProjection::from_publication(self, tree, scroll, &coordinates.spaces);
+        let document_images = |url: &str| css_images(tree.source_root(), url);
+        let projection = PaintProjection::from_publication(
+            self,
+            tree,
+            scroll,
+            &coordinates.spaces,
+            &document_images,
+        );
 
         let mut embedded_paint = HashMap::new();
         for frame in tree.embedded_frames() {
@@ -312,7 +321,7 @@ impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
                 base_background_color: crate::PaintColor::TRANSPARENT,
                 ..PaintCaptureRequest::viewport()
             };
-            embedded_paint.insert(*id, paint.paint(&frame.tree, child_request)?);
+            embedded_paint.insert(*id, paint.paint(&frame.tree, child_request, css_images)?);
         }
 
         let capture = request.resolve(tree.viewport, tree.viewport_scroll, tree.content_size)?;

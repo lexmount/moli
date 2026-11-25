@@ -2465,28 +2465,6 @@ impl ScriptVm {
         }
     }
 
-    pub(super) fn start_stylesheet_subresource_fetches(
-        &mut self,
-        resources: Vec<(
-            crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
-            crate::css_resource_urls::StylesheetLoadBlockingResource,
-        )>,
-    ) {
-        if resources.is_empty() {
-            return;
-        }
-        if let Err(error) = self.with_default_context_scope(move |scope, host_ptr| {
-            crate::document_runtime::DocumentRuntime::start_stylesheet_subresource_fetches_in_current_scope(
-                scope, host_ptr, resources,
-            );
-            Ok(())
-        }) {
-            self.record_runtime_warning(format_args!(
-                "failed to enter stylesheet subresource request scope: {error}"
-            ));
-        }
-    }
-
     pub(crate) fn record_script_subresource_network_result(
         &mut self,
         document_url: Url,

@@ -34,7 +34,7 @@ document.body.innerHTML = '<input type=password value="Aß😀e\u0301Z">';
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn native_pdf_only_admits_css_images_used_by_the_capture() {
+async fn native_pdf_prepares_only_css_images_used_by_the_capture() {
     run_page_vm_async_test(async move {
         let image = "data:image/webp;base64,UklGRhwAAABXRUJQVlA4TA8AAAAvAUAAAAcQ/Y/+ByKi/wEA";
         for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
@@ -56,8 +56,10 @@ async fn native_pdf_only_admits_css_images_used_by_the_capture() {
                 } else {
                     String::new()
                 };
-                let css =
-                    format!("@media print {{ p {{ background-image: url('{image}'); {mask} }} }}");
+                let css = format!(
+                    "@media screen {{ p {{ background-image: url('/screen.png') }} }} \
+                     @media print {{ p {{ background-image: url('{image}'); {mask} }} }}"
+                );
                 page.vm_mut().eval(&format!(
                     "document.head.innerHTML='<style></style>';\
                      document.querySelector('style').textContent={};\
@@ -71,6 +73,21 @@ async fn native_pdf_only_admits_css_images_used_by_the_capture() {
                         .is_empty()
                 );
 
+                let expected = if print_background || uses_mask {
+                    vec![image.to_owned()]
+                } else {
+                    Vec::new()
+                };
+                drop(
+                    page.prepare_paint_resources(RendererScreenshotPurpose::Print {
+                        print_background,
+                    })?,
+                );
+                assert_eq!(
+                    page.vm().css_image_resource_observability_for_test().4,
+                    expected,
+                    "{policy:?}, print_background={print_background}, uses_mask={uses_mask}"
+                );
                 let request = RendererPrintToPdfRequest {
                     print_background,
                     ..Default::default()
@@ -79,15 +96,9 @@ async fn native_pdf_only_admits_css_images_used_by_the_capture() {
                     page.print_to_pdf(request)?,
                     RendererPrintToPdfReply::Printed(_)
                 ));
-                let admitted = page.vm().css_image_resource_observability_for_test().4;
-                let expected = if print_background || uses_mask {
-                    vec![image.to_owned()]
-                } else {
-                    Vec::new()
-                };
                 assert_eq!(
-                    admitted, expected,
-                    "{policy:?}, print_background={print_background}, uses_mask={uses_mask}"
+                    page.vm().css_image_resource_observability_for_test().4,
+                    expected
                 );
             }
         }

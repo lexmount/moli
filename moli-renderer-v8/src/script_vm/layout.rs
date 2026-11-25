@@ -126,36 +126,53 @@ impl ScriptVm {
 
     /// One-shot exports discover image URLs before the paint pass so their
     /// caller can wait for decode without holding the renderer execution lane.
-    pub(crate) fn prepare_screenshot_resources(
+    pub(crate) fn prepare_paint_resources(
         &mut self,
+        viewport: moli_layout::LayoutViewport,
+        reason: moli_layout::LayoutFlushReason,
+        environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
+        include_backgrounds: bool,
     ) -> anyhow::Result<Option<futures_util::future::BoxFuture<'static, ()>>> {
         if self.is_debugger_paused() {
             return Ok(None);
         }
-        let viewport = {
+        let screen_images = {
             let host = self._context_host.borrow();
-            if !host.layout_policy().uses_real_layout() {
+            if !host.layout_policy().uses_real_layout()
+                || !DocumentRuntime::css_image_fetch_enabled(&host)
+            {
                 return Ok(None);
             }
-            host.layout_viewport_for_document(host.document_handle())
+            if reason == moli_layout::LayoutFlushReason::Screenshot {
+                host.current_screen_css_images()?
+            } else {
+                None
+            }
         };
-        let references = self
-            .with_fresh_layout_pass(
-                moli_layout::LayoutPassRequest::new(
-                    viewport,
-                    moli_layout::LayoutFlushReason::Screenshot,
-                ),
-                LayoutPublicationRequest::Transient,
-                |pass| Ok(pass.css_image_references().to_vec()),
-            )?
-            .unwrap_or_default();
+        let references = match screen_images {
+            Some(images) => images,
+            None => self
+                .with_fresh_layout_pass_in_environment(
+                    moli_layout::LayoutPassRequest::new(viewport, reason),
+                    LayoutPublicationRequest::Transient,
+                    environment_override,
+                    |pass| Ok(pass.take_css_image_references()),
+                )?
+                .unwrap_or_default()
+                .into(),
+        };
         if references.is_empty() {
             return Ok(None);
         }
-        self.start_css_images_discovered_by_layout(references);
-        Ok(Some(
-            self._context_host.borrow().wait_for_pending_css_images(),
-        ))
+        self.with_default_context_scope(|scope, host_ptr| {
+            let targets = DocumentRuntime::prepare_css_images_in_current_scope(
+                scope,
+                host_ptr,
+                &references,
+                include_backgrounds,
+            );
+            Ok(unsafe { &*host_ptr }.wait_for_pending_css_images(&targets))
+        })
     }
 
     #[cfg(test)]
@@ -233,21 +250,27 @@ impl ScriptVm {
     }
 
     #[cfg(feature = "devtools")]
-    pub(crate) fn paint_current_screencast_layout(
+    pub(crate) fn paint_current_screen_layout(
         &mut self,
         session: &crate::runtime::RendererScreencastPaintSession,
         viewport: moli_layout::PaintViewport,
         capture: moli_layout::PaintCaptureRequest,
+        reason: moli_layout::LayoutFlushReason,
     ) -> Result<Option<moli_layout::PaintSnapshot>> {
         let painted = self
             ._context_host
             .borrow()
-            .paint_current_screencast_layout(session, viewport, capture)?;
-        let Some((snapshot, css_images)) = painted else {
-            return Ok(None);
-        };
-        self.start_css_images_discovered_by_layout(css_images);
-        Ok(Some(snapshot))
+            .paint_current_screen_layout(session, viewport, capture, reason)?;
+        if painted.is_some() && !self.is_debugger_paused() {
+            let images = self
+                ._context_host
+                .borrow()
+                .take_realtime_css_image_preparation();
+            if let Some(images) = images {
+                self.prepare_css_images_for_paint(&images, capture.include_backgrounds);
+            }
+        }
+        Ok(painted)
     }
 
     #[cfg(feature = "devtools")]
@@ -418,17 +441,10 @@ impl ScriptVm {
                     let Some((mut pass, feedback)) = pass else {
                         return Ok(None);
                     };
-                    let css_images = match (discovers_css_images, request.includes_backgrounds()) {
-                        (false, _) => Vec::new(),
-                        (true, true) => pass.css_image_references().to_vec(),
-                        (true, false) => pass
-                            .css_image_references()
-                            .iter()
-                            .filter(|image| {
-                                image.purpose != moli_layout::LayoutCssImagePurpose::Background
-                            })
-                            .cloned()
-                            .collect(),
+                    let css_images = if discovers_css_images {
+                        pass.css_image_references().to_vec()
+                    } else {
+                        Vec::new()
                     };
                     let value = consume(&mut pass)?;
                     context_host.finish_layout_publication(publication, pass, feedback)?;
@@ -446,7 +462,7 @@ impl ScriptVm {
         if paused {
             return result;
         }
-        self.start_css_images_discovered_by_layout(css_images);
+        self.prepare_css_images_for_paint(&css_images, request.includes_backgrounds());
         if publishes_layout
             && matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_current_main_world_scope(|scope, runtime_ptr| {
@@ -486,8 +502,11 @@ impl ScriptVm {
     #[cfg(test)]
     pub(crate) fn css_image_resource_is_ready_for_test(&self, resolved_url: &str) -> bool {
         let host = self._context_host.borrow();
-        host.ready_css_image_for_layout(host.document_handle(), resolved_url)
-            .is_some()
+        matches!(
+            host.css_image_paint_snapshot()
+                .image(host.document_handle(), resolved_url),
+            moli_layout::LayoutCssImageState::Ready(_)
+        )
     }
 
     #[cfg(test)]
@@ -529,50 +548,27 @@ impl ScriptVm {
         )
     }
 
-    pub(super) fn start_css_images_discovered_by_layout(
+    fn prepare_css_images_for_paint(
         &mut self,
-        references: Vec<moli_layout::LayoutCssImageReference<DomHandle>>,
+        references: &[moli_layout::LayoutCssImageReference<DomHandle>],
+        include_backgrounds: bool,
     ) {
-        if references.is_empty() {
+        if references.is_empty()
+            || !DocumentRuntime::css_image_fetch_enabled(&self._context_host.borrow())
+        {
             return;
         }
-        let image_fetch_enabled = self
-            .document_runtime
-            .current_document_resource_loader()
-            .is_some_and(|loader| {
-                loader
-                    .request_client()
-                    .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Image)
-            });
-        if !image_fetch_enabled {
-            return;
+        if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
+            DocumentRuntime::prepare_css_images_in_current_scope(
+                scope,
+                host_ptr,
+                references,
+                include_backgrounds,
+            );
+            Ok(())
+        }) {
+            self.record_runtime_warning(format_args!("failed to prepare CSS images: {error}"));
         }
-        let mut seen = std::collections::HashSet::new();
-        let bound = {
-            let mut host = self._context_host.borrow_mut();
-            references
-                .into_iter()
-                .filter_map(|reference| {
-                    let document = host.layout_document_for_source(reference.source)?;
-                    if !seen.insert((document, reference.resolved_url.clone())) {
-                        return None;
-                    }
-                    if host.stylesheet_css_image_is_current(document, &reference.resolved_url) {
-                        return None;
-                    }
-                    let request_url = url::Url::parse(&reference.resolved_url).ok()?;
-                    let binding = host
-                        .accept_current_stylesheet_subresource_load_delay_for_document(document)?;
-                    Some((
-                        binding,
-                        crate::css_resource_urls::StylesheetLoadBlockingResource::image(
-                            request_url,
-                        ),
-                    ))
-                })
-                .collect::<Vec<_>>()
-        };
-        self.start_stylesheet_subresource_fetches(bound);
     }
 
     /// Initializes the first layout on demand, then keeps its content extent

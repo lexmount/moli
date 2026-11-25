@@ -254,6 +254,7 @@ pub(super) fn project_inline_box_fragments<N>(
                 inline_box,
                 areas,
                 paint_space,
+                projection.css_images,
                 snapshot,
                 &mut project_text_clip_mask,
             );
@@ -266,6 +267,7 @@ pub(super) fn project_inline_box_fragments<N>(
             radii,
             border_image,
             paint_space,
+            projection.css_images,
             || local_cull,
             border_rasters,
             snapshot,

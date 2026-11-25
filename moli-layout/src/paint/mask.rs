@@ -68,6 +68,7 @@ pub(super) fn project_css_mask<N>(
     layout_box: &LayoutBox<N>,
     areas: BoxAreas,
     paint_space: PaintSpace,
+    css_images: &crate::source::CssImageLookup<'_>,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -130,20 +131,20 @@ pub(super) fn project_css_mask<N>(
                     }
                 }
             }
-            GenericImage::Url(_) => project_url_image_layer(
-                layout_box,
-                &layer,
-                layout_box
-                    .css_images
-                    .mask
-                    .get(index)
-                    .and_then(Option::as_ref),
-                areas,
-                paint_space,
-                snapshot,
-                CssImageLayerKind::Mask,
-                false,
-            ),
+            GenericImage::Url(_) => {
+                let resource = crate::source::css_image_url(layer.image)
+                    .map_or_else(crate::LayoutCssImageState::default, css_images);
+                project_url_image_layer(
+                    layout_box,
+                    &layer,
+                    resource.ready(),
+                    areas,
+                    paint_space,
+                    snapshot,
+                    CssImageLayerKind::Mask,
+                    false,
+                );
+            }
             GenericImage::LightDark(_)
             | GenericImage::PaintWorklet(_)
             | GenericImage::CrossFade(_)

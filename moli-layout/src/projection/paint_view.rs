@@ -3,7 +3,8 @@ use std::{fmt::Debug, hash::Hash, ops::Range};
 use crate::{
     FrozenLayoutBox, FrozenLayoutTree, LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId,
     LayoutClipNode, LayoutFragment, LayoutFragmentId, LayoutScrollExtent, LayoutViewport,
-    LayoutWorld, PaintDiagnostic, stacking::PaintOrderEvent, style::ResolvedLayoutTransform,
+    LayoutWorld, PaintDiagnostic, source::CssImageLookup, stacking::PaintOrderEvent,
+    style::ResolvedLayoutTransform,
 };
 
 use super::{OutputProjection, ProjectedCoordinateSpace, ScreenPaintLayout, ScrollProjection};
@@ -46,11 +47,15 @@ where
     pub(crate) fragments: &'a [LayoutFragment],
     pub(crate) diagnostics: &'a [PaintDiagnostic],
     pub(crate) metadata: &'a PaintMetadata,
+    pub(crate) css_images: &'a CssImageLookup<'a>,
     geometry: PaintGeometry<'a, N>,
 }
 
 impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
-    pub(super) fn from_layout_pass(pass: &'a OutputProjection<'_, N>) -> Self {
+    pub(super) fn from_layout_pass(
+        pass: &'a OutputProjection<'_, N>,
+        css_images: &'a CssImageLookup<'a>,
+    ) -> Self {
         Self {
             world: pass.world,
             viewport: pass.viewport,
@@ -59,6 +64,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
             fragments: &pass.fragments,
             diagnostics: &pass.diagnostics,
             metadata: &pass.paint_metadata,
+            css_images,
             geometry: PaintGeometry::LayoutPass {
                 boxes: &pass.boxes,
                 scroll_extents: &pass.scroll_extents,
@@ -72,6 +78,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
         tree: &'a FrozenLayoutTree<N>,
         scroll: &'a ScrollProjection<N>,
         coordinate_spaces: &'a [ProjectedCoordinateSpace],
+        css_images: &'a CssImageLookup<'a>,
     ) -> Self {
         Self {
             world: &layout.world,
@@ -81,6 +88,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
             fragments: &tree.fragments,
             diagnostics: &layout.diagnostics,
             metadata: &layout.paint_metadata,
+            css_images,
             geometry: PaintGeometry::Published {
                 boxes: &tree.boxes,
                 scroll,

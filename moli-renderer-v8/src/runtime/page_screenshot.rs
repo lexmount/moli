@@ -143,7 +143,7 @@ pub enum RendererScreenshotFormat {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RendererScreenshotPurpose {
     Screenshot,
-    /// Pixel capture under print media, independent of native PDF output.
+    /// Capture or export using the print style environment.
     Print {
         print_background: bool,
     },
@@ -249,6 +249,28 @@ impl RendererCaptureScreenshotRequest {
 }
 
 impl PageVm {
+    pub(super) fn prepare_paint_resources(
+        &mut self,
+        purpose: RendererScreenshotPurpose,
+    ) -> anyhow::Result<Option<futures_util::future::BoxFuture<'static, ()>>> {
+        let (viewport, reason, environment, include_backgrounds) = match purpose {
+            RendererScreenshotPurpose::Screenshot => (
+                layout_viewport_for_surface(self.vm().viewport_surface().unwrap_or_default()),
+                LayoutFlushReason::Screenshot,
+                None,
+                true,
+            ),
+            RendererScreenshotPurpose::Print { print_background } => (
+                self.print_layout_viewport(),
+                LayoutFlushReason::Print,
+                self.print_style_environment_override(),
+                print_background,
+            ),
+        };
+        self.vm_mut()
+            .prepare_paint_resources(viewport, reason, environment, include_backgrounds)
+    }
+
     /// Captures an explicit screenshot. These demands always execute a fresh
     /// paint pass and never carry screencast state.
     pub(super) fn capture_screenshot(
@@ -454,10 +476,12 @@ impl PageVm {
         let layout_started = profile_enabled.then(Instant::now);
         #[cfg(feature = "devtools")]
         let reusable = match paint_session {
-            Some(session) => {
-                self.vm_mut()
-                    .paint_current_screencast_layout(session, viewport, paint_capture)?
-            }
+            Some(session) => self.vm_mut().paint_current_screen_layout(
+                session,
+                viewport,
+                paint_capture,
+                reason,
+            )?,
             None => None,
         };
         #[cfg(not(feature = "devtools"))]

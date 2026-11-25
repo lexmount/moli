@@ -249,9 +249,15 @@ async fn capture_screenshot_paints_sliced_border_images_after_resource_load() {
             }
             .raster { top: 216px; border-image: url("data:image/png;base64,PNG_SOURCE") 1 fill / 4px }
             .zoom { left: 45px; top: 108px; zoom: 2 }
+            /* Valid dimensions with corrupt compressed pixel data. */
+            .broken {
+                left: 65px; top: 8px;
+                border-image-source: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABklEQVRicm9rZW5jnxQXAAAAAElFTkSuQmCC")
+            }
         </style>
         <div class="space"></div><div class="round"></div><div class="repeat"></div>
-        <div class="data"></div><div class="raster"></div><div class="raster zoom"></div>"#
+        <div class="data"></div><div class="raster"></div><div class="raster zoom"></div>
+        <div class="broken"></div>"#
             .replace("SVG_SOURCE", &data_svg)
             .replace("PNG_SOURCE", &data_png),
     )
@@ -266,23 +272,30 @@ async fn capture_screenshot_paints_sliced_border_images_after_resource_load() {
         }),
         ..super::RendererCaptureScreenshotRequest::viewport_png()
     };
-    let pending = capture_screenshot_with_request(&page, request.clone()).await;
-    assert_eq!(decoded_png_pixel(&pending.bytes, 30, 10), [0, 255, 0, 255]);
+    let unrequested = capture_screenshot_with_request(&page, request.clone()).await;
+    assert_eq!(
+        decoded_png_pixel(&unrequested.bytes, 30, 10),
+        [0, 255, 0, 255]
+    );
     tokio::time::timeout(Duration::from_secs(2), request_seen)
         .await
         .expect("border image should be discovered by layout")
         .expect("border image request signal should remain open");
+    let pending = capture_screenshot_with_request(&page, request.clone()).await;
+    assert_eq!(decoded_png_pixel(&pending.bytes, 30, 10), [255; 4]);
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::PreparePaintResources(
+            crate::runtime::RendererScreenshotPurpose::Screenshot,
+        ))
+        .await
+        .expect("screenshot resources should prepare");
+    let RendererPageReply::PreparedPaintResources(Some(resources)) = reply else {
+        panic!("expected screenshot resource readiness");
+    };
     release_response.send(()).expect("release the border image");
     server
         .await
         .expect("border image fixture server should finish");
-    let (reply, _) = page
-        .run_async_command(RendererPageCommand::PrepareScreenshotResources)
-        .await
-        .expect("screenshot resources should prepare");
-    let RendererPageReply::PreparedScreenshotResources(Some(resources)) = reply else {
-        panic!("expected screenshot resource readiness");
-    };
     tokio::time::timeout(Duration::from_secs(2), resources)
         .await
         .expect("border images should finish loading");
@@ -305,6 +318,7 @@ async fn capture_screenshot_paints_sliced_border_images_after_resource_load() {
         (12, 219, [0, 0, 255, 255]),
         (12, 220, [255, 255, 0, 255]),
         (100, 221, [0, 0, 255, 255]), // zoom leaves numeric raster slices in source pixels
+        (72, 10, [0, 255, 0, 255]),   // failed decode restores the ordinary border
     ] {
         assert_eq!(
             decoded_png_pixel(&painted.bytes, x, y),

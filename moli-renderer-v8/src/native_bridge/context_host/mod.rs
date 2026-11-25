@@ -104,8 +104,8 @@ mod image_decodes;
 mod image_loads;
 mod image_resources;
 pub(crate) use image_resources::{
-    CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageResponseDescriptor,
-    ScannedImagePreloadAdmission,
+    CssImagePaintSnapshot, CssImageResourceAdmission, CssImageResourceRequestIdentity,
+    ImageResponseDescriptor, ScannedImagePreloadAdmission,
 };
 mod indexed_db_tasks;
 mod interaction_batch;

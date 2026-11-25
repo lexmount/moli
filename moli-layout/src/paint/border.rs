@@ -10,10 +10,12 @@ use style::values::{
 
 use super::{PaintSpace, background::css_image_concrete_object_size, push_diagnostic_once};
 use crate::{
-    LayoutBox, LayoutRect, LayoutTransform2D, PaintBrush, PaintCornerRadii, PaintEdgeSizes,
-    PaintFillRule, PaintFragment, PaintImage, PaintImageId, PaintImageSampling, PaintShape,
-    PaintSnapshot, PaintSvgImage, PaintSvgImageId, ResolvedLayoutStyle, gradient::project_gradient,
+    LayoutBox, LayoutCssImageState, LayoutRect, LayoutTransform2D, PaintBrush, PaintCornerRadii,
+    PaintEdgeSizes, PaintFillRule, PaintFragment, PaintImage, PaintImageId, PaintImageSampling,
+    PaintShape, PaintSnapshot, PaintSvgImage, PaintSvgImageId, ResolvedLayoutStyle,
+    gradient::project_gradient,
     pixel_snap_paint_rect,
+    source::{CssImageLookup, css_image_url},
 };
 
 #[derive(Clone, Copy)]
@@ -36,6 +38,7 @@ pub(super) fn project_box_border<N>(
     radii: PaintCornerRadii,
     border_image: Option<BorderImageGeometry>,
     paint_space: PaintSpace,
+    css_images: &CssImageLookup<'_>,
     local_cull: impl FnOnce() -> Option<LayoutRect>,
     rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
@@ -47,6 +50,7 @@ pub(super) fn project_box_border<N>(
             layout_box,
             geometry,
             paint_space,
+            css_images,
             local_cull,
             rasters,
             snapshot,
@@ -123,6 +127,7 @@ fn project_border_image<N>(
         fragment_clip,
     }: BorderImageGeometry,
     paint_space: PaintSpace,
+    css_images: &CssImageLookup<'_>,
     local_cull: impl FnOnce() -> Option<LayoutRect>,
     rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
@@ -160,8 +165,15 @@ where
                     (zoom, zoom),
                 )
             }
-            GenericImage::Url(_) => {
-                let Some(resource) = layout_box.css_images.border.as_deref() else {
+            image @ GenericImage::Url(_) => {
+                let Some(url) = css_image_url(image) else {
+                    return false;
+                };
+                let state = css_images(url);
+                if matches!(state, LayoutCssImageState::Pending) {
+                    return true;
+                }
+                let Some(resource) = state.ready() else {
                     return false;
                 };
                 let Some((width, height)) = css_image_concrete_object_size(resource, area) else {

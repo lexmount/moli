@@ -13,7 +13,9 @@ use crate::{
     types::ImageRequestKey,
 };
 
-pub(crate) use css::{CssImageResourceAdmission, CssImageResourceRequestIdentity};
+pub(crate) use css::{
+    CssImagePaintSnapshot, CssImageResourceAdmission, CssImageResourceRequestIdentity,
+};
 pub(crate) use preload::{ScannedImagePreloadAdmission, SharedScannedImagePreloadLoad};
 pub(super) use state::ImageResourceStore;
 pub(crate) use state::ReadyImageForLayout;
@@ -148,6 +150,11 @@ impl super::PageScriptHost {
         self.image_resources.visual_generation()
     }
 
+    #[cfg(feature = "devtools")]
+    pub(super) fn retained_paint_resource_generation(&self) -> u64 {
+        self.image_resources.retained_paint_generation()
+    }
+
     #[cfg(feature = "molio")]
     pub(crate) fn set_viewport_resource_wake(&self, wake: &std::sync::Arc<tokio::sync::Notify>) {
         self.image_resources.set_viewport_resource_wake(wake);
@@ -227,20 +234,15 @@ impl super::PageScriptHost {
         self.image_resources.ready_for_layout(element)
     }
 
-    pub(crate) fn ready_css_image_for_layout(
-        &self,
-        document: DomHandle,
-        resolved_url: &str,
-    ) -> Option<ReadyImageForLayout> {
-        self.image_resources
-            .css
-            .ready_for_layout(document, resolved_url)
+    pub(crate) fn css_image_paint_snapshot(&self) -> CssImagePaintSnapshot {
+        self.image_resources.css.paint_snapshot()
     }
 
     pub(crate) fn wait_for_pending_css_images(
         &self,
-    ) -> futures_util::future::BoxFuture<'static, ()> {
-        self.image_resources.css.wait_for_pending_loads()
+        images: &[(DomHandle, &str)],
+    ) -> Option<futures_util::future::BoxFuture<'static, ()>> {
+        self.image_resources.css.wait_for_pending_loads(images)
     }
 
     #[cfg(test)]

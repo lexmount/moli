@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
 use moli_input::{InputModifiers, Point, ScrollAction};
-use moli_layout::{LayoutFlushReason, PaintCaptureRequest, PaintSnapshot, PaintViewport};
+use moli_layout::{LayoutFlushReason, PaintCaptureRequest, PaintSnapshot};
 use moli_page_types::ViewportSurface;
 use tokio::sync::{Notify, watch};
 
 use super::{
     PageVm, RendererDocumentLifecycleIdentity, RendererInputDispatchOutcome,
-    RendererVisualStateToken,
+    RendererScreencastPaintSession, RendererVisualStateToken,
 };
+use crate::layout_renderer::layout_viewport_for_surface;
 use crate::native_bridge::LayoutPublicationRequest;
 
 pub use style::values::specified::ui::CursorKind as RendererViewportCursorKind;
@@ -181,6 +182,7 @@ impl RendererViewportWheelInput {
 pub(super) struct ViewportFrameState {
     subscription: RendererViewportSubscription,
     painted: Option<RendererVisualStateToken>,
+    paint_session: RendererScreencastPaintSession,
     sequence: u64,
     editing: crate::context_bootstrap::viewport_edit::ViewportEditing,
     pointer: Option<(f64, f64)>,
@@ -561,6 +563,7 @@ impl PageVm {
         self.restore_viewport_frames(Box::new(ViewportFrameState {
             subscription,
             painted: None,
+            paint_session: RendererScreencastPaintSession::default(),
             sequence: 0,
             editing,
             pointer,
@@ -630,11 +633,8 @@ impl PageVm {
             return;
         }
         let surface = state.subscription.surface;
-        let viewport = PaintViewport::new(
-            surface.inner_width,
-            surface.inner_height,
-            surface.device_pixel_ratio as f32,
-        );
+        let viewport = layout_viewport_for_surface(surface);
+        let paint_session = state.paint_session.clone();
         let document = self.document_lifecycle.identity();
         let before = self.vm().visual_state_token(document, viewport, [255; 4]);
         let pixels_current = state.painted.as_ref() == Some(&before);
@@ -664,13 +664,21 @@ impl PageVm {
             return;
         }
 
-        let snapshot = match self.vm_mut().paint_layout_snapshot_with_capture(
-            viewport,
-            LayoutFlushReason::RenderingOpportunity,
-            PaintCaptureRequest::viewport(),
-            LayoutPublicationRequest::Screen,
-            None,
-        ) {
+        let vm = self.vm_mut();
+        let reason = LayoutFlushReason::RenderingOpportunity;
+        let capture = PaintCaptureRequest::viewport();
+        let snapshot = match vm
+            .paint_current_screen_layout(&paint_session, viewport, capture, reason)
+            .and_then(|snapshot| match snapshot {
+                Some(_) => Ok(snapshot),
+                None => vm.paint_layout_snapshot_with_capture(
+                    viewport,
+                    reason,
+                    capture,
+                    LayoutPublicationRequest::Screen,
+                    None,
+                ),
+            }) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 tracing::warn!(%error, "could not produce viewport frame");
