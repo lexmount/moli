@@ -656,8 +656,7 @@ impl PageScriptHost {
         creator_policy_container: DocumentPolicyContainer,
         update_existing_opener: bool,
     ) -> Option<OpenedLightweightPopup<'s>> {
-        if opener.is_some()
-            && let Some(name) = trackable_lightweight_popup_window_name(target_name)
+        if let Some(name) = trackable_lightweight_popup_window_name(target_name)
             && let Some(popup_id) =
                 self.lightweight_popup_browsing_contexts
                     .iter()
