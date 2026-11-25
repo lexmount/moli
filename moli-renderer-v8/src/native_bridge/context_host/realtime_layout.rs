@@ -39,7 +39,7 @@ enum LayoutPublication {
         document: DomHandle,
         inputs: ScreenLayoutInputs,
         source_dom_version: u64,
-        paint_generation: Option<u64>,
+        retain_paint: bool,
     },
     Transient,
 }
@@ -54,14 +54,11 @@ impl PreparedLayoutPublication {
     }
 
     pub(crate) fn layout_request(&self, request: LayoutPassRequest) -> LayoutPassRequest {
-        if let LayoutPublication::CurrentScreen {
-            paint_generation, ..
-        } = &self.0
-        {
+        if let LayoutPublication::CurrentScreen { retain_paint, .. } = &self.0 {
             request
                 .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
                 .with_scroll_projection(true)
-                .with_screen_paint(paint_generation.is_some())
+                .with_screen_paint(*retain_paint)
         } else {
             request
         }
@@ -113,6 +110,13 @@ impl RealtimeLayoutState {
                 .get()
                 .and_then(|value| value.checked_add(1)),
         );
+    }
+
+    fn has_screen_paint_consumers(&self) -> bool {
+        #[cfg(feature = "devtools")]
+        return self.screen_paint_consumers.is_active();
+        #[cfg(not(feature = "devtools"))]
+        false
     }
 
     pub(super) fn clear_publication(&self) {
@@ -195,7 +199,7 @@ impl PageScriptHost {
                 document,
                 inputs,
                 source_dom_version: self.dom_host().dom_version(),
-                paint_generation: self.screen_paint_generation(state),
+                retain_paint: state.has_screen_paint_consumers(),
             },
         ))
     }
@@ -208,13 +212,13 @@ impl PageScriptHost {
     ) -> Result<(), LayoutError> {
         match publication.0 {
             LayoutPublication::LegacyLatest(document) => {
-                self.publish_layout_pass_for_document(document, pass, None);
+                self.publish_layout_pass_for_document(document, pass, false);
             }
             LayoutPublication::CurrentScreen {
                 document,
                 inputs,
                 source_dom_version,
-                paint_generation,
+                retain_paint,
             } => {
                 let state = self.realtime_layout_state.as_ref().ok_or_else(|| {
                     LayoutError::source_contract(
@@ -231,11 +235,12 @@ impl PageScriptHost {
                         "source inputs or Document owners changed during layout",
                     ));
                 }
-                #[cfg(feature = "devtools")]
-                let paint_generation =
-                    paint_generation.filter(|_| state.screen_paint_consumers.is_active());
                 let images = pass.take_css_image_references();
-                self.publish_layout_pass_for_document(document, pass, paint_generation);
+                self.publish_layout_pass_for_document(
+                    document,
+                    pass,
+                    retain_paint && state.has_screen_paint_consumers(),
+                );
                 state.css_images_need_preparation.set(!images.is_empty());
                 *state.css_images.borrow_mut() = images.into();
                 self.did_publish_screen_layout(state, inputs, feedback.commit());
@@ -307,17 +312,6 @@ impl PageScriptHost {
         self.did_publish_realtime_font_layout();
     }
 
-    fn screen_paint_generation(&self, state: &RealtimeLayoutState) -> Option<u64> {
-        #[cfg(feature = "devtools")]
-        if state.screen_paint_consumers.is_active() {
-            let generation = self.retained_paint_resource_generation();
-            return (generation != u64::MAX).then_some(generation);
-        }
-        #[cfg(not(feature = "devtools"))]
-        let _ = state;
-        None
-    }
-
     #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn has_screencast_paint_for_test(&self) -> bool {
         self.document_layout_state
@@ -345,9 +339,7 @@ impl PageScriptHost {
             .attach(session, &self.document_layout_state);
         self.ensure_current_screen_layout(reason)?;
         let layout = self.document_layout_state.borrow();
-        let Some((tree, retained)) =
-            layout.retained_screen_paint(document, self.retained_paint_resource_generation())
-        else {
+        let Some((tree, retained)) = layout.retained_screen_paint(document) else {
             return Ok(None);
         };
         let images = self.css_image_paint_snapshot();
@@ -357,7 +349,11 @@ impl PageScriptHost {
                     images.image(document, url)
                 })
         };
-        retained.paint(tree, capture, &css_image).map(Some)
+        let replaced_image =
+            |source, kind| crate::layout_renderer::native_replaced_image(self, source, kind);
+        retained
+            .paint(tree, capture, &css_image, &replaced_image)
+            .map(Some)
     }
 
     #[cfg(test)]
@@ -522,11 +518,11 @@ impl PageScriptHost {
             self.prepare_current_screen_styles(&inputs);
         }
         let source_dom_version = self.dom_host().dom_version();
-        let paint_generation = self.screen_paint_generation(state);
+        let retain_paint = state.has_screen_paint_consumers();
         let request = LayoutPassRequest::new(inputs.viewport, reason)
             .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
             .with_scroll_projection(true)
-            .with_screen_paint(paint_generation.is_some());
+            .with_screen_paint(retain_paint);
         let Some((pass, feedback)) =
             self.build_layout_pass_for_document_in_environment(document, request, None, true)?
         else {
@@ -552,7 +548,7 @@ impl PageScriptHost {
                 document,
                 inputs,
                 source_dom_version,
-                paint_generation,
+                retain_paint,
             }),
             pass,
             feedback,

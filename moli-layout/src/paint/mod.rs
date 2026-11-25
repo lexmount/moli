@@ -860,7 +860,7 @@ fn project_box_background<N>(
 
     if include_backgrounds && propagated_background != Some(id) {
         let mut color = layout_box.style.background_color();
-        match unavailable_replaced_content_paint(layout_box, has_embedded_frame) {
+        match unavailable_replaced_content_paint(projection, layout_box, has_embedded_frame) {
             Some(UnavailableReplacedContentPaint::OpaquePlaceholder) => {
                 snapshot.push_diagnostic(PaintDiagnostic::new(
                     "replaced-content-placeholder",
@@ -1213,6 +1213,7 @@ fn project_box_text<N>(
 }
 
 fn unavailable_replaced_content_paint<N>(
+    projection: &PaintProjection<'_, N>,
     layout_box: &LayoutBox<N>,
     has_embedded_frame: bool,
 ) -> Option<UnavailableReplacedContentPaint>
@@ -1220,13 +1221,6 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     if !layout_box.is_replaced() {
-        return None;
-    }
-    if layout_box
-        .replaced_image
-        .as_ref()
-        .is_some_and(|resource| resource.pixels.is_some() || resource.svg.is_some())
-    {
         return None;
     }
     if has_embedded_frame
@@ -1237,7 +1231,7 @@ where
         return None;
     }
     let semantics = layout_box.element_semantics()?;
-    match semantics.category {
+    let fallback = match semantics.category {
         LayoutElementCategory::FormControl(LayoutFormControlKind::Input(
             LayoutInputControlKind::Image,
         )) => Some(UnavailableReplacedContentPaint::OpaquePlaceholder),
@@ -1252,5 +1246,9 @@ where
             Some(_) => Some(UnavailableReplacedContentPaint::OpaquePlaceholder),
             None => None,
         },
-    }
+    }?;
+    let ready = projection
+        .replaced_image(layout_box)
+        .is_some_and(|resource| resource.pixels.is_some() || resource.svg.is_some());
+    (!ready).then_some(fallback)
 }

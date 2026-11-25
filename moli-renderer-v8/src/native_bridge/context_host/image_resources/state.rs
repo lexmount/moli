@@ -368,11 +368,6 @@ impl ImageResourceStore {
         self.visual_generation.current()
     }
 
-    #[cfg(feature = "devtools")]
-    pub(super) fn retained_paint_generation(&self) -> u64 {
-        self.visual_generation.retained_paint_generation()
-    }
-
     #[cfg(all(
         feature = "media-ext",
         any(target_os = "linux", target_os = "macos"),

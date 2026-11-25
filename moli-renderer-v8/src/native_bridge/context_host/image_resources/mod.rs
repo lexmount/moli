@@ -150,11 +150,6 @@ impl super::PageScriptHost {
         self.image_resources.visual_generation()
     }
 
-    #[cfg(feature = "devtools")]
-    pub(super) fn retained_paint_resource_generation(&self) -> u64 {
-        self.image_resources.retained_paint_generation()
-    }
-
     #[cfg(feature = "molio")]
     pub(crate) fn set_viewport_resource_wake(&self, wake: &std::sync::Arc<tokio::sync::Notify>) {
         self.image_resources.set_viewport_resource_wake(wake);

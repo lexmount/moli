@@ -152,7 +152,7 @@ impl CssImageResourceStore {
             },
         );
         inner.paint_snapshot = None;
-        self.visual_generation.bump_css_image();
+        self.visual_generation.bump();
         if reused {
             #[cfg(test)]
             self.completion_notify.notify_waiters();
@@ -228,7 +228,7 @@ impl CssImageResourceStore {
         slot.state = CssImageResourceState::Ready(resource);
         drop(slot.completion.take());
         inner.paint_snapshot = None;
-        self.visual_generation.bump_css_image();
+        self.visual_generation.bump();
         #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
@@ -248,7 +248,7 @@ impl CssImageResourceStore {
         slot.state = CssImageResourceState::Failed;
         drop(slot.completion.take());
         inner.paint_snapshot = None;
-        self.visual_generation.bump_css_image();
+        self.visual_generation.bump();
         #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
@@ -336,7 +336,7 @@ impl CssImageResourceStore {
         let removed = before - inner.slots.len();
         if removed != 0 {
             inner.paint_snapshot = None;
-            self.visual_generation.bump_css_image();
+            self.visual_generation.bump();
             #[cfg(test)]
             self.completion_notify.notify_waiters();
         }

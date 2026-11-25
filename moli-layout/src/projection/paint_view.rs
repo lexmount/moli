@@ -1,9 +1,11 @@
-use std::{fmt::Debug, hash::Hash, ops::Range};
+use std::{borrow::Cow, fmt::Debug, hash::Hash, ops::Range};
 
 use crate::{
-    FrozenLayoutBox, FrozenLayoutTree, LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId,
-    LayoutClipNode, LayoutFragment, LayoutFragmentId, LayoutScrollExtent, LayoutViewport,
-    LayoutWorld, PaintDiagnostic, source::CssImageLookup, stacking::PaintOrderEvent,
+    FrozenLayoutBox, FrozenLayoutTree, LayoutBox, LayoutBoxGeometry, LayoutBoxId,
+    LayoutClipChainId, LayoutClipNode, LayoutFragment, LayoutFragmentId, LayoutImageResource,
+    LayoutScrollExtent, LayoutViewport, LayoutWorld, PaintDiagnostic,
+    source::{CssImageLookup, LiveReplacedImageLookup},
+    stacking::PaintOrderEvent,
     style::ResolvedLayoutTransform,
 };
 
@@ -48,6 +50,7 @@ where
     pub(crate) diagnostics: &'a [PaintDiagnostic],
     pub(crate) metadata: &'a PaintMetadata,
     pub(crate) css_images: &'a CssImageLookup<'a>,
+    live_replaced_images: Option<&'a LiveReplacedImageLookup<'a, N>>,
     geometry: PaintGeometry<'a, N>,
 }
 
@@ -65,6 +68,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
             diagnostics: &pass.diagnostics,
             metadata: &pass.paint_metadata,
             css_images,
+            live_replaced_images: None,
             geometry: PaintGeometry::LayoutPass {
                 boxes: &pass.boxes,
                 scroll_extents: &pass.scroll_extents,
@@ -80,6 +84,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
         scroll: &'a ScrollProjection<N>,
         coordinate_spaces: &'a [ProjectedCoordinateSpace],
         css_images: &'a CssImageLookup<'a>,
+        live_replaced_images: &'a LiveReplacedImageLookup<'a, N>,
     ) -> Self {
         Self {
             world,
@@ -90,11 +95,28 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
             diagnostics: &paint.diagnostics,
             metadata: &paint.paint_metadata,
             css_images,
+            live_replaced_images: Some(live_replaced_images),
             geometry: PaintGeometry::Published {
                 boxes: &tree.boxes,
                 scroll,
             },
         }
+    }
+
+    pub(crate) fn replaced_image<'box_data>(
+        &self,
+        layout_box: &'box_data LayoutBox<N>,
+    ) -> Option<Cow<'box_data, LayoutImageResource>> {
+        if let Some(lookup) = self.live_replaced_images
+            && let Some(source) = layout_box.source()
+            && let Some(kind) = layout_box
+                .element_semantics()
+                .and_then(|element| element.replaced)
+            && kind.is_live_paint_image()
+        {
+            return lookup(source, kind).map(Cow::Owned);
+        }
+        layout_box.replaced_image.as_ref().map(Cow::Borrowed)
     }
 
     pub(crate) fn geometry(&self, index: usize) -> &LayoutBoxGeometry {
