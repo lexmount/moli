@@ -151,7 +151,7 @@ fn repeated_viewport_resizes_recascade_only_dependent_cached_elements() {
     assert!(host.set_attribute(dependent, "class", "viewport-dependent"));
     assert!(host.set_attribute(independent, "class", "viewport-independent"));
     assert!(host.append_child(document, dependent));
-    assert!(host.append_child(document, independent));
+    assert!(host.append_child(dependent, independent));
 
     let document_url = url::Url::parse("https://example.test/repeated-resize.html").unwrap();
     let mut inputs = FullStyleWorldSnapshot::default();

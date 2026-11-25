@@ -51,16 +51,29 @@ impl<'a> StyleInvalidationCleanup<'a> {
         self.document_state.style_paths.clear();
     }
 
-    /// Retains Stylo's top-most dirty elements as lazy subtree roots.
-    /// Descendants inherit the root generation when they are next observed;
-    /// no document-wide published-style scan is performed here.
-    pub(super) fn retain_stylesheet_invalidation_roots(
+    /// The adapter already set the native hints. Publish their affected scopes
+    /// to the demand-driven scheduler and keep the original cascade modes.
+    pub(super) fn retain_stylesheet_invalidation_targets(
         &self,
         host: &DomHost,
-        roots: impl IntoIterator<Item = DomHandle>,
+        targets: Vec<(DomHandle, RestyleHint)>,
     ) {
-        let roots = self.existing_subtree_roots(host, roots);
-        self.record_style_paths(host, &roots);
+        if targets.is_empty() {
+            return;
+        }
+        self.document_state.record_style_targets(
+            host,
+            self.document,
+            targets.iter().map(|&(handle, hint)| {
+                let scope = if hint.contains(RestyleHint::RESTYLE_DESCENDANTS) {
+                    StyleInvalidationScope::Subtree
+                } else {
+                    StyleInvalidationScope::Element
+                };
+                (handle, scope)
+            }),
+        );
+        self.invalidate_target_caches(targets.into_iter().map(|(handle, _)| handle));
     }
 
     pub(super) fn invalidate_detached_subtrees(
@@ -319,11 +332,14 @@ impl<'a> StyleInvalidationCleanup<'a> {
             .copied()
             .filter(|handle| self.dom_adapter.mark_element_style_dirty(*handle, hint))
             .collect::<IndexSet<_>>();
-        self.pseudo_style_cache
-            .invalidate_handles(roots.iter().copied());
+        self.invalidate_target_caches(roots.iter().copied());
+        Some(immediately_invalidated)
+    }
+
+    fn invalidate_target_caches(&self, handles: impl IntoIterator<Item = DomHandle>) {
+        self.pseudo_style_cache.invalidate_handles(handles);
         self.document_state.clear_selector_caches();
         self.document_state.bump_computed_context_epoch();
-        Some(immediately_invalidated)
     }
 }
 

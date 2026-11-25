@@ -2,9 +2,8 @@
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
-use indexmap::IndexSet;
 use moli_selector::StyloDomStyleAdapter;
-use style::context::QuirksMode;
+use style::{context::QuirksMode, invalidation::element::restyle_hints::RestyleHint};
 
 use super::{
     FullStyleWorldSnapshot, StyleTreeScopeVersions, StyleWorldEnvironment,
@@ -305,7 +304,7 @@ fn apply_retained_stylesheet_invalidations(
         viewport_size_changed,
         used_color_scheme_changed,
     } = invalidations;
-    let mut stylesheet_invalidation_roots = IndexSet::new();
+    let mut targets = Vec::new();
     if let Some(invalidations) = document_invalidations {
         // HTML documents normally have one document element. The native DOM
         // also permits fragment-like test documents with several top-level
@@ -323,11 +322,7 @@ fn apply_retained_stylesheet_invalidations(
         {
             roots.push(root);
         }
-        stylesheet_invalidation_roots.extend(dom_adapter.process_stylesheet_invalidations(
-            host,
-            &roots,
-            &invalidations,
-        ));
+        targets.extend(dom_adapter.process_stylesheet_invalidations(host, &roots, &invalidations));
     }
     for (shadow_root, invalidations) in shadow_scopes {
         let mut roots = host
@@ -340,23 +335,15 @@ fn apply_retained_stylesheet_invalidations(
         if let Some(shadow_host) = host.shadow_root_host(shadow_root) {
             roots.push(shadow_host);
         }
-        stylesheet_invalidation_roots.extend(dom_adapter.process_stylesheet_invalidations(
-            host,
-            &roots,
-            &invalidations,
-        ));
+        targets.extend(dom_adapter.process_stylesheet_invalidations(host, &roots, &invalidations));
     }
     if viewport_size_changed {
-        stylesheet_invalidation_roots.extend(invalidate_viewport_unit_styles(
-            host,
-            dom_adapter,
-            document,
-        ));
+        targets.extend(invalidate_viewport_unit_styles(host, dom_adapter, document));
     }
     if used_color_scheme_changed {
         invalidation_cleanup.invalidate_subtrees(host, [document]);
     }
-    invalidation_cleanup.retain_stylesheet_invalidation_roots(host, stylesheet_invalidation_roots);
+    invalidation_cleanup.retain_stylesheet_invalidation_targets(host, targets);
     if document_scope_fallback {
         invalidation_cleanup.invalidate_subtrees(host, [document]);
     }
@@ -372,7 +359,7 @@ fn invalidate_viewport_unit_styles(
     host: &DomHost,
     dom_adapter: &StyloDomStyleAdapter,
     document: DomHandle,
-) -> Vec<DomHandle> {
+) -> Vec<(DomHandle, RestyleHint)> {
     let mut roots = host
         .child_handles(document)
         .filter(|handle| {
@@ -401,5 +388,5 @@ fn invalidate_viewport_unit_styles(
             })
             .collect::<Vec<_>>()
     });
-    dom_adapter.collect_dirty_style_roots(host, &changed_roots)
+    dom_adapter.collect_dirty_style_targets(host, &changed_roots)
 }
