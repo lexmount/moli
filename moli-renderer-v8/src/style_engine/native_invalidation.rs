@@ -596,7 +596,13 @@ fn invalidate_relative_boundaries(
             {
                 subtrees.insert(handle);
             }
-            if reaches_other_subjects {
+            if reaches_other_subjects
+                && host.parent_node(handle).is_some_and(|parent| {
+                    adapter
+                        .selector_flags(host, parent)
+                        .contains(Flags::HAS_SLOW_SELECTOR_LATER_SIBLINGS)
+                })
+            {
                 subtrees.extend(following_sibling_subtrees(host, handle));
             }
             if element

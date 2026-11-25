@@ -335,3 +335,62 @@ fn removal_with_a_pending_attribute_snapshot_refreshes_relative_anchor() {
     assert_eq!(color(&engine, &host, anchor), "rgb(0, 0, 255)");
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));
 }
+
+#[test]
+fn coalesced_relative_removal_preserves_siblings_unless_a_selector_reaches_them() {
+    for suffix in [" > p", " + aside"] {
+        let mut host = test_host();
+        let document = host.document_handle();
+        let root = host.create_element("main");
+        let anchor = host.create_element("section");
+        let branch = host.create_element("div");
+        let marker = host.create_element("span");
+        let child = host.create_element("p");
+        let sibling = host.create_element("aside");
+        assert!(host.set_attribute(marker, "class", "marker"));
+        assert!(host.append_child(document, root));
+        assert!(host.append_child(root, anchor));
+        assert!(host.append_child(anchor, branch));
+        assert!(host.append_child(branch, marker));
+        assert!(host.append_child(anchor, child));
+        assert!(host.append_child(root, sibling));
+
+        let mut engine = MoliStyleEngine::new();
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let inputs = FullStyleWorldSnapshot {
+            document_stylesheet_sources: vec![StyloStylesheetSource::new(
+                format!("p, aside {{ color: blue }} section:has(.marker){suffix} {{ color: red }}"),
+                url.clone(),
+            )],
+            ..Default::default()
+        };
+        let color = |engine: &MoliStyleEngine, host: &DomHost, element| {
+            engine
+                .computed_style_property_value(host, &url, element, "color", None, &inputs, None)
+                .unwrap()
+        };
+        let dependent = if suffix == " > p" { child } else { sibling };
+        assert_eq!(color(&engine, &host, dependent), "rgb(255, 0, 0)");
+        let _ = color(&engine, &host, sibling);
+
+        set_class(&mut engine, &mut host, marker, "inactive");
+        let removal = host.remove_child_effects(anchor, branch);
+        engine.invalidate_for_mutations(
+            &host,
+            &StyleMutationEffect::from_dom_mutation_effects(&host, &removal),
+            &crate::protocol_types::EmulatedMediaOverrides::default(),
+        );
+
+        assert_eq!(
+            color(&engine, &host, dependent),
+            "rgb(0, 0, 255)",
+            "{suffix}"
+        );
+        if dependent != sibling {
+            assert!(
+                engine
+                    .computed_style_cache_contains_handle_for_document_for_test(document, sibling)
+            );
+        }
+    }
+}
