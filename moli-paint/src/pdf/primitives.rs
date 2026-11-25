@@ -227,11 +227,14 @@ impl<'a, 's> PdfPainter<'a, 's> {
                 }
                 PaintFragment::Image(image) => {
                     let resource = self.snapshot.image(image.image).expect("validated image");
+                    let Some(pixels) = resource.image.rgba() else {
+                        continue;
+                    };
                     let interpolate = image.sampling == moli_layout::PaintImageSampling::Linear;
                     let key = (image.image.index(), interpolate);
                     if let std::collections::hash_map::Entry::Vacant(entry) = self.images.entry(key)
                     {
-                        entry.insert(super::image::from_rgba(&resource.image, interpolate)?);
+                        entry.insert(super::image::from_rgba(pixels, interpolate)?);
                     }
                     let data = self.images[&key].clone();
                     let matrix = crate::geometry::to_backend_transform(image.transform)
@@ -240,14 +243,12 @@ impl<'a, 's> PdfPainter<'a, 's> {
                             image.destination.y as f64,
                         ))
                         * Affine::scale_non_uniform(
-                            image.destination.width as f64 / resource.image.width as f64,
-                            image.destination.height as f64 / resource.image.height as f64,
+                            image.destination.width as f64 / pixels.width as f64,
+                            image.destination.height as f64 / pixels.height as f64,
                         );
                     self.surface.push_transform(&transform(matrix));
-                    self.surface.draw_image(
-                        data,
-                        super::image_size(resource.image.width, resource.image.height)?,
-                    );
+                    self.surface
+                        .draw_image(data, super::image_size(pixels.width, pixels.height)?);
                     self.surface.pop();
                 }
                 _ => {

@@ -1034,7 +1034,7 @@ fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
     ));
     let mut second = first.clone();
     second.images[image.index()].image =
-        Arc::new(moli_image::RgbaImage::try_new(1, 1, vec![0, 255, 0, 180]).unwrap());
+        Arc::new(moli_image::RgbaImage::try_new(1, 1, vec![0, 255, 0, 180]).unwrap()).into();
     let layout = raster_buffer_layout(96.0, 120.0, 2.0).unwrap();
     let rows = raster_damage_rows(&first, &second, layout);
     assert_eq!(rows, 58..122);

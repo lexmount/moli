@@ -6,13 +6,17 @@
 
 mod bounded;
 mod budget;
+mod image_pixels;
 mod jpeg;
 mod png;
 mod raster;
 mod rgba;
 mod svg;
+#[cfg(all(feature = "native-video", target_os = "macos"))]
+mod video_frame;
 
 pub use budget::{MAX_DECODED_RGBA_BYTES, MAX_ENCODED_IMAGE_BYTES};
+pub use image_pixels::ImagePixels;
 pub use jpeg::{EncodedJpeg, JpegDecodeError, JpegEncodeError, decode_jpeg, encode_jpeg};
 pub use png::{
     EncodedPng, PngDecodeError, PngEncodeError, PngEncodeOptions, decode_png, encode_png,
@@ -29,3 +33,5 @@ pub use svg::{
     SvgObjectGeometry, SvgScene, SvgStyleProperty, decode_inline_svg_scene, decode_svg_image,
     decode_svg_image_with_metadata, probe_svg_image, svg_image_metadata_from_root_attributes,
 };
+#[cfg(all(feature = "native-video", target_os = "macos"))]
+pub use video_frame::{NativeVideoFrame, VideoFrameListener, VideoFrameSource};

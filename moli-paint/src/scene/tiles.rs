@@ -47,10 +47,12 @@ pub(super) fn paint_tiles(
     }
 
     if let PaintTileSource::Image(id, sampling) = tiles.source {
-        let Some(resource) = snapshot.image(id) else {
+        let Some(image) = snapshot
+            .image(id)
+            .and_then(|resource| resource.image.rgba())
+        else {
             return;
         };
-        let image = &resource.image;
         if image.width == 0 || image.height == 0 {
             return;
         }

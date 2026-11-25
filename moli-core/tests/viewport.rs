@@ -1924,6 +1924,128 @@ async fn viewport_paints_into_caller_buffers_without_waiting_for_control_updates
     Ok(())
 }
 
+#[cfg(all(feature = "media-ext", target_os = "macos"))]
+#[tokio::test]
+async fn native_viewport_video_refreshes_retained_capture_and_falls_back_to_raster() -> Result<()> {
+    use moli_core::{
+        OptionalResourceFetchMask,
+        page::{
+            RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
+            RendererScreencastPaintSession, RendererScreenshotFormat,
+        },
+    };
+
+    let browser = Browser::new(
+        BrowserConfig::default()
+            .with_layout_policy(LayoutPolicy::Realtime)
+            .with_optional_resource_fetch_mask(OptionalResourceFetchMask::VIDEO),
+    )?;
+    let movie: String = url::form_urlencoded::byte_serialize(include_bytes!(
+        "../../moli-video/tests/fixtures/primary-colors.mp4"
+    ))
+    .collect::<String>()
+    .replace('+', "%20");
+    let mut page = browser
+        .fetch(&html_url(&format!(
+            r#"<!doctype html><style>body{{margin:0}} video{{display:block}}</style>
+                <video id="clip" width="48" height="32" src="data:video/mp4,{movie}"></video>"#,
+        )))
+        .await?;
+    let surface = ViewportSurface {
+        inner_width: 64,
+        inner_height: 48,
+        device_pixel_ratio: 1.,
+        ..ViewportSurface::default()
+    };
+    let layout = ViewportBuffers::layout_for(surface)?;
+    let output = Arc::new(ViewportOutput::default());
+    let mut changes = output.subscribe();
+    let _binding = page
+        .subscribe_viewport_buffer(
+            surface,
+            1,
+            ViewportBuffers::new(
+                layout,
+                std::array::from_fn(|_| Vec::with_capacity(layout.byte_len)),
+            )?
+            .with_native_video(),
+            output.clone(),
+        )
+        .await?;
+    let mut capture = RendererCaptureScreencastFrameRequest {
+        format: RendererScreenshotFormat::Png,
+        quality: 100,
+        base_background_color: [255; 4],
+        optimize_for_speed: false,
+        max_width: None,
+        max_height: None,
+        known_visual_state: None,
+        paint_session: Some(RendererScreencastPaintSession::default()),
+    };
+    let mut versions = None;
+    for dominant in [0, 2] {
+        let band_versions = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(Some(versions)) = output.read(|frame| {
+                    let video = frame.video_layers.first()?.source.latest();
+                    let color = &video.rgba()?.rgba[..4];
+                    (color[dominant] > 240).then(|| {
+                        assert_eq!(frame.pixels.unwrap()[..4], [0; 4]);
+                        frame.band_versions.to_vec()
+                    })
+                }) {
+                    return Ok::<_, watch::error::RecvError>(versions);
+                }
+                changes.changed().await?;
+            }
+        })
+        .await??;
+        if let Some(versions) = versions.replace(band_versions.clone()) {
+            assert_eq!(
+                versions, band_versions,
+                "a new video frame keeps the raster bands"
+            );
+        }
+        let pending = page.start_capture_screencast_frame(capture.clone())?;
+        let RendererCaptureScreencastFrameReply::Captured(frame) =
+            page.finish_capture_screencast_frame(pending.wait().await?)?
+        else {
+            anyhow::bail!("the screencast must capture each video frame");
+        };
+        let rgba = moli_image::decode_png(&frame.image.bytes)?;
+        let color = &rgba.rgba[..4];
+        assert!(
+            color[dominant] > 240 && color[2 - dominant] < 12 && color[3] == 255,
+            "{color:?}"
+        );
+        capture.known_visual_state = Some(frame.visual_state);
+        if dominant == 0 {
+            page.evaluate_runtime_expression_async("clip.currentTime = 1.5")
+                .await?;
+        }
+    }
+    page.evaluate_runtime_expression_async("clip.style.opacity = '0.5'")
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if output
+                .read(|frame| {
+                    frame.video_layers.is_empty()
+                        && frame.pixels.is_some_and(|pixels| {
+                            pixels[0] > 240 && (120..136).contains(&pixels[2]) && pixels[3] == 255
+                        })
+                })
+                .unwrap_or_default()
+            {
+                return Ok::<_, watch::error::RecvError>(());
+            }
+            changes.changed().await?;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
 #[tokio::test]
 async fn viewport_ime_replaces_composition_and_reports_utf16_offsets() -> Result<()> {
     use moli_core::{RendererViewportEdit, RendererViewportEditAction, page::PageInputExt};

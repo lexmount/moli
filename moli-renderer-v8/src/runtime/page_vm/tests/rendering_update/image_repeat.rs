@@ -215,13 +215,7 @@ border:1px solid lime; border-image:url('__IMAGE_URL__') 64 1 / 1px repeat}
         1,
         "all slices reference the original resource"
     );
-    assert_eq!(
-        (
-            snapshot.images[0].image.width,
-            snapshot.images[0].image.height
-        ),
-        (3, 129)
-    );
+    assert_eq!(snapshot.images[0].image.dimensions(), (3, 129));
     let grids: Vec<_> = snapshot
         .fragments
         .iter()

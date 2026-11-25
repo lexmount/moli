@@ -507,7 +507,7 @@ pub struct ReplacedMetrics {
 pub struct LayoutImageResource {
     pub intrinsic_width: f32,
     pub intrinsic_height: f32,
-    pub pixels: Option<Arc<moli_image::RgbaImage>>,
+    pub pixels: Option<moli_image::ImagePixels>,
     pub svg: Option<Arc<moli_image::SvgImage>>,
 }
 

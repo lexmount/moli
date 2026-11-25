@@ -267,9 +267,17 @@ mod tests {
 
         for index in 0..8 {
             let frame = decoder.next_frame().unwrap().unwrap();
+            #[cfg(all(feature = "molio", target_os = "macos"))]
+            {
+                let moli_image::ImagePixels::Video { frame, .. } = &frame.image else {
+                    panic!("the I420 fixture must decode directly into an IOSurface");
+                };
+                assert_eq!(frame.dimensions(), (48, 32));
+                assert_eq!(frame.buffer().get_plane_count(), 3);
+            }
             assert_eq!(frame.timestamp, f64::from(index) / 4.0);
             assert_eq!(frame.duration, 0.25);
-            let pixel = &frame.image.rgba[..4];
+            let pixel = &frame.image.rgba().unwrap().rgba[..4];
             let dominant = if index < 4 { 0 } else { 2 };
             assert!(pixel[dominant] > 240, "{pixel:?}");
             assert!(pixel[2 - dominant] < 12, "{pixel:?}");
@@ -280,6 +288,6 @@ mod tests {
         decoder.seek(1.5).unwrap();
         let frame = decoder.next_frame().unwrap().unwrap();
         assert_eq!(frame.timestamp, 1.0);
-        assert!(frame.image.rgba[2] > 240);
+        assert!(frame.image.rgba().unwrap().rgba[2] > 240);
     }
 }
