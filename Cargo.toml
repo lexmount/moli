@@ -128,13 +128,13 @@ curl-sys = { git = "https://github.com/lexmount/curl-rust", rev = "0392e12475d8d
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-152.2.0" }
 deno_v8 = { path = "vendor/deno_v8-0.3.0" }
-selectors = { git = "https://github.com/lexmount/stylo", rev = "72093480ab91bc01088fdc7c27512e6838a0e65f" }
-servo_arc = { git = "https://github.com/lexmount/stylo", rev = "72093480ab91bc01088fdc7c27512e6838a0e65f" }
-stylo = { git = "https://github.com/lexmount/stylo", rev = "72093480ab91bc01088fdc7c27512e6838a0e65f" }
-stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "72093480ab91bc01088fdc7c27512e6838a0e65f" }
-stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "72093480ab91bc01088fdc7c27512e6838a0e65f" }
-stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "72093480ab91bc01088fdc7c27512e6838a0e65f" }
-stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "72093480ab91bc01088fdc7c27512e6838a0e65f" }
+selectors = { git = "https://github.com/lexmount/stylo", rev = "5aca06381f726d289acef01f06cf7871fc477c7c" }
+servo_arc = { git = "https://github.com/lexmount/stylo", rev = "5aca06381f726d289acef01f06cf7871fc477c7c" }
+stylo = { git = "https://github.com/lexmount/stylo", rev = "5aca06381f726d289acef01f06cf7871fc477c7c" }
+stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "5aca06381f726d289acef01f06cf7871fc477c7c" }
+stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "5aca06381f726d289acef01f06cf7871fc477c7c" }
+stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "5aca06381f726d289acef01f06cf7871fc477c7c" }
+stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "5aca06381f726d289acef01f06cf7871fc477c7c" }
 svgtypes = { git = "https://github.com/lexmount/svgtypes", rev = "520374d714d69f8e2dc93c81a9d6be559ecde3ff" }
 # Preserve original SVG selector inputs and collect unclipped source geometry.
 usvg = { git = "https://github.com/lexmount/resvg", rev = "a137793a5749c27862b724eef60c4734526b14a0" }

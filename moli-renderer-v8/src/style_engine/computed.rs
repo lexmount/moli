@@ -7,7 +7,7 @@ use dom::ElementState as StyloElementState;
 use style::{
     computed_value_flags::ComputedValueFlags,
     context::QuirksMode,
-    data::ElementStyles,
+    data::{ElementData, ElementStyles},
     dom::{TElement, TNode},
     invalidation::element::restyle_hints::RestyleHint,
     properties::{
@@ -22,7 +22,6 @@ use style::{
     selector_parser::PseudoElement,
     servo::restyle_damage::ServoRestyleDamage,
     servo_arc::Arc as ServoArc,
-    style_resolver::ResolvedElementStyles,
     stylesheets::{CssRuleType, UrlExtraData},
     values::{
         AtomIdent, resolved,
@@ -155,30 +154,19 @@ pub(crate) struct ComputedRenderedStyleFacts {
     pub(crate) text_wrap_mode: ComputedTextWrapModeKind,
 }
 
-fn computed_style_damage<E: TElement>(
+fn layout_damage_for_style_change(
     old: Option<&ServoArc<ComputedValues>>,
     new: Option<&ServoArc<ComputedValues>>,
 ) -> ServoRestyleDamage {
     match (old, new) {
-        (Some(old), Some(new)) => layout_adjusted_damage(
-            old,
-            new,
-            ServoRestyleDamage::compute_style_difference::<E>(old, new).damage,
-        ),
-        (None, None) => ServoRestyleDamage::empty(),
-        _ => ServoRestyleDamage::reconstruct(),
+        (Some(old), Some(new))
+            if old.effective_zoom != new.effective_zoom || old.writing_mode != new.writing_mode =>
+        {
+            ServoRestyleDamage::RELAYOUT
+        }
+        (Some(_), None) | (None, Some(_)) => ServoRestyleDamage::reconstruct(),
+        _ => ServoRestyleDamage::empty(),
     }
-}
-
-fn layout_adjusted_damage(
-    old: &ComputedValues,
-    new: &ComputedValues,
-    mut damage: ServoRestyleDamage,
-) -> ServoRestyleDamage {
-    if old.effective_zoom != new.effective_zoom || old.writing_mode != new.writing_mode {
-        damage.insert(ServoRestyleDamage::RELAYOUT);
-    }
-    damage
 }
 
 impl StyloComputedStyleSnapshot {
@@ -861,49 +849,28 @@ fn with_resolved_style_in_current_world<R>(
     })
 }
 
-fn take_element_styles_for_resolution<E: TElement>(
-    world: &DocumentStyleWorld,
-    element: E,
-) -> ElementStyles {
-    let handle = DomHandle::new(element.as_node().debug_id());
-    world.pseudo_style_cache.invalidate_handles([handle]);
-    // Keep dirty values published until an observation actually resolves them.
-    unsafe { std::mem::take(&mut element.ensure_data().styles) }
+fn child_restyle_scope(hint: RestyleHint) -> RestyleHint {
+    let direct_children =
+        RestyleHint::RECASCADE_SELF | RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE;
+    // Other Stylo hints can reach descendants even when intervening
+    // children retain the same computed values.
+    if hint.difference(direct_children).is_empty() {
+        hint
+    } else {
+        RestyleHint::restyle_subtree()
+    }
 }
 
-fn publish_resolved_element_styles<E: TElement>(
+fn record_screen_restyle<E: TElement>(
     world: &DocumentStyleWorld,
     element: E,
-    previous: ElementStyles,
-    styles: ResolvedElementStyles,
-) -> RestyleHint {
+    previous: &ElementStyles,
+    data: &ElementData,
+    child_hint: RestyleHint,
+) {
     let handle = DomHandle::new(element.as_node().debug_id());
-    let root_units_changed = styles.root_font_relative_state_changed().unwrap_or(false);
-    let styles: ElementStyles = styles.into();
     let old_primary = previous.get_primary();
-    let new_primary = styles.primary();
-    let (primary_damage, child_hint) = if let Some(old) = old_primary {
-        let difference = ServoRestyleDamage::compute_style_difference::<E>(old, new_primary);
-        let hint = difference.child_restyle_hint(old, new_primary, root_units_changed);
-        let direct_children =
-            RestyleHint::RECASCADE_SELF | RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE;
-        // The lazy path can apply the direct child hints. Other Stylo hints
-        // can reach descendants beyond a child with an unchanged style.
-        let hint = if hint.difference(direct_children).is_empty() {
-            hint
-        } else {
-            RestyleHint::restyle_subtree()
-        };
-        (
-            layout_adjusted_damage(old, new_primary, difference.damage),
-            hint,
-        )
-    } else {
-        (
-            ServoRestyleDamage::reconstruct(),
-            RestyleHint::recascade_subtree(),
-        )
-    };
+    let new_primary = data.styles.get_primary();
     world
         .document_state
         .record_screen_style_damage(handle, old_primary.is_some(), || {
@@ -911,29 +878,23 @@ fn publish_resolved_element_styles<E: TElement>(
                 return Some(ServoRestyleDamage::empty());
             }
             if child_hint.will_recascade_subtree()
-                || old_primary.is_some_and(|old| {
-                    old.flags.maybe_inherited() != new_primary.flags.maybe_inherited()
+                || old_primary.zip(new_primary).is_some_and(|(old, new)| {
+                    old.flags.maybe_inherited() != new.flags.maybe_inherited()
                 })
             {
                 return None;
             }
-            let mut damage = primary_damage;
+            let mut damage = data.damage | layout_damage_for_style_change(old_primary, new_primary);
             for (old, new) in previous
                 .pseudos
                 .as_array()
                 .iter()
-                .zip(styles.pseudos.as_array())
+                .zip(data.styles.pseudos.as_array())
             {
-                damage |= computed_style_damage::<E>(old.as_ref(), new.as_ref());
+                damage |= layout_damage_for_style_change(old.as_ref(), new.as_ref());
             }
             Some(damage)
         });
-    unsafe {
-        let mut data = element.ensure_data();
-        data.styles = styles;
-        data.clear_restyle_state();
-    }
-    child_hint
 }
 
 fn with_lazily_resolved_pseudo_style<R>(

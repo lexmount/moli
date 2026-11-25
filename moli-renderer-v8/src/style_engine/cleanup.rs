@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use indexmap::IndexSet;
 use moli_selector::StyloDomStyleAdapter;
+use style::invalidation::element::restyle_hints::RestyleHint;
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
@@ -87,14 +88,28 @@ impl<'a> StyleInvalidationCleanup<'a> {
         cleared
     }
 
-    pub(super) fn invalidate_inline_style_subtree(&self, host: &DomHost, root: DomHandle) -> bool {
+    pub(super) fn invalidate_inline_style(
+        &self,
+        host: &DomHost,
+        root: DomHandle,
+        can_replace_rules: bool,
+    ) -> bool {
         self.document_state
             .clear_invalidation_clear_all_fallback_reasons();
         let roots = self.existing_subtree_roots(host, [root]);
         if roots.is_empty() {
             return false;
         }
-        self.record_lazy_invalidation_roots(host, &roots);
+        if can_replace_rules {
+            self.record_lazy_invalidation_targets(
+                host,
+                &roots,
+                |_| StyleInvalidationScope::Element,
+                RestyleHint::RESTYLE_STYLE_ATTRIBUTE,
+            );
+        } else {
+            self.record_lazy_invalidation_roots(host, &roots);
+        }
         self.dom_adapter.clear_inline_style_attribute(root);
         true
     }
@@ -151,13 +166,18 @@ impl<'a> StyleInvalidationCleanup<'a> {
         affected_roots.extend(subtree_roots.iter().copied());
         let complete_selector_targets = context.has_complete_selector_targets();
         let eagerly_invalidated_roots = self
-            .record_lazy_invalidation_targets(host, &affected_roots, |handle| {
-                if complete_selector_targets && !subtree_roots.contains(&handle) {
-                    StyleInvalidationScope::Element
-                } else {
-                    StyleInvalidationScope::Subtree
-                }
-            })
+            .record_lazy_invalidation_targets(
+                host,
+                &affected_roots,
+                |handle| {
+                    if complete_selector_targets && !subtree_roots.contains(&handle) {
+                        StyleInvalidationScope::Element
+                    } else {
+                        StyleInvalidationScope::Subtree
+                    }
+                },
+                RestyleHint::RESTYLE_SELF,
+            )
             .expect("subtree cleanup application should carry an existing root");
         let cleared_shadow_cascade_roots =
             if context.clears_shadow_cascade_data_for_cleanup_target() {
@@ -263,7 +283,12 @@ impl<'a> StyleInvalidationCleanup<'a> {
         host: &DomHost,
         roots: &IndexSet<DomHandle>,
     ) -> Option<IndexSet<DomHandle>> {
-        self.record_lazy_invalidation_targets(host, roots, |_| StyleInvalidationScope::Subtree)
+        self.record_lazy_invalidation_targets(
+            host,
+            roots,
+            |_| StyleInvalidationScope::Subtree,
+            RestyleHint::RESTYLE_SELF,
+        )
     }
 
     fn record_lazy_invalidation_targets(
@@ -271,6 +296,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
         host: &DomHost,
         roots: &IndexSet<DomHandle>,
         scope: impl Fn(DomHandle) -> StyleInvalidationScope,
+        hint: RestyleHint,
     ) -> Option<IndexSet<DomHandle>> {
         if roots.is_empty() {
             return None;
@@ -291,7 +317,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
         let immediately_invalidated = roots
             .iter()
             .copied()
-            .filter(|handle| self.dom_adapter.mark_element_style_dirty(*handle))
+            .filter(|handle| self.dom_adapter.mark_element_style_dirty(*handle, hint))
             .collect::<IndexSet<_>>();
         self.pseudo_style_cache
             .invalidate_handles(roots.iter().copied());
