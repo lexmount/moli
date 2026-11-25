@@ -59,26 +59,48 @@ impl DomHost {
         })
     }
 
-    pub fn set_deferred_style_attribute(
+    /// Commit the node's CSSOM source. Exact text is supplied when attribute
+    /// consumers need historical values or attribute mutation facts.
+    pub fn set_cssom_style_attribute(
         &mut self,
         handle: DomHandle,
         source: Box<dyn DeferredStyleAttribute>,
-    ) -> DomMutationEffects {
+        text: Option<&str>,
+    ) -> DomAttributeMutationOutcome {
+        let before = text.and_then(|_| self.qualified_attribute_before_mutation(handle, "style"));
         let Some(element) = self
             .node_mut(handle)
             .and_then(|node| node.data_mut().as_element_mut())
         else {
-            return DomMutationEffects::default();
+            return DomAttributeMutationOutcome::default();
         };
-        // The CSSOM fast path applies only to the non-namespaced attribute.
-        if element
-            .find_attribute("style")
-            .is_some_and(|attribute| !attribute.namespace().is_empty())
+        if text.is_none()
+            && element
+                .find_attribute("style")
+                .is_some_and(|attribute| !attribute.namespace().is_empty())
         {
-            return DomMutationEffects::default();
+            return DomAttributeMutationOutcome::default();
         }
-        element.set_deferred_style_attribute(source);
-        self.deferred_style_attribute_effects(handle)
+        let old_value = before
+            .as_ref()
+            .and_then(|attribute| attribute.prior_value.clone());
+        element.set_cssom_style_attribute(source);
+        let exact = before.zip(text);
+        let effects = if let Some((before, text)) = exact.as_ref()
+            && old_value.as_deref() == Some(*text)
+        {
+            self.same_value_attribute_effects(
+                handle,
+                &before.local_name,
+                before.namespace.as_deref(),
+                old_value.clone(),
+                text,
+                self.mutation_records_enabled(),
+            )
+        } else {
+            self.cssom_style_attribute_effects(handle, exact)
+        };
+        DomAttributeMutationOutcome::new(effects, old_value)
     }
 
     pub fn edit_deferred_style_attribute(
@@ -92,7 +114,7 @@ impl DomHost {
             .and_then(Element::deferred_style_attribute_mut)
             .is_some_and(edit);
         if changed {
-            return self.deferred_style_attribute_effects(handle);
+            return self.cssom_style_attribute_effects(handle, None);
         }
         DomMutationEffects::default()
     }
@@ -111,11 +133,36 @@ impl DomHost {
         }
     }
 
-    fn deferred_style_attribute_effects(&self, handle: DomHandle) -> DomMutationEffects {
-        self.record_attribute_mutation(handle, None, "style");
+    fn cssom_style_attribute_effects(
+        &self,
+        handle: DomHandle,
+        exact: Option<(AttributeBeforeMutation, &str)>,
+    ) -> DomMutationEffects {
+        let (name, namespace) = exact.as_ref().map_or(("style", None), |(attribute, _)| {
+            (
+                attribute.local_name.as_str(),
+                attribute.namespace.as_deref(),
+            )
+        });
+        self.record_attribute_mutation(handle, namespace, name);
         let mut effects = self.node_update_effects(handle);
-        if self.mutation_records_enabled() {
-            // This path is reserved for writes with no old-value consumer.
+        let records_enabled = self.mutation_records_enabled();
+        if let Some((before, text)) = exact {
+            self.mark_stylesheet_owner_attribute_change(
+                &mut effects,
+                handle,
+                before.namespace.as_deref(),
+                &before.local_name,
+            );
+            effects.mark_attribute_change(
+                handle,
+                &before.local_name,
+                before.namespace.as_deref(),
+                before.prior_value,
+                Some(text),
+                records_enabled,
+            );
+        } else if records_enabled {
             effects.queue_attribute_mutation_record(handle, "style", None, None, None);
         }
         effects

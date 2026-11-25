@@ -109,6 +109,22 @@ pub(in crate::native_bridge::element::styles) fn parse_style_property_entries_fo
     parse_style_property_entries_for_cssom_write(name, value, priority, base_url)
 }
 
+pub(in crate::native_bridge::element::styles) enum InlineStylePropertyWrite {
+    NeedsCompatibilityEntries,
+    NoAttributeWrite,
+    AttributeWritten,
+}
+
+impl InlineStylePropertyWrite {
+    fn from_attribute_write(written: bool) -> Self {
+        if written {
+            Self::AttributeWritten
+        } else {
+            Self::NoAttributeWrite
+        }
+    }
+}
+
 pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_pdb_storage(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -116,9 +132,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
     name: &str,
     value: &str,
     priority: bool,
-) -> Option<bool> {
+) -> InlineStylePropertyWrite {
     if name != "all" && !inline_style_property_write_can_use_pdb_storage(name, value) {
-        return None;
+        return InlineStylePropertyWrite::NeedsCompatibilityEntries;
     }
     let runtime = unsafe { &*runtime_ptr };
     let existing_inline_base_url = runtime.existing_element_inline_style_base_url(handle);
@@ -145,7 +161,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
     } else {
         existing_inline_base_url
     };
-    let affected_names = style_property_mutation_affected_names_with_pdb(name)?;
+    let Some(affected_names) = style_property_mutation_affected_names_with_pdb(name) else {
+        return InlineStylePropertyWrite::NeedsCompatibilityEntries;
+    };
     let current = cached
         .as_deref()
         .or(initial.as_ref())
@@ -193,7 +211,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                     .iter()
                     .any(|property| current.block.property_is_declared(property))
             {
-                return Some(false);
+                return InlineStylePropertyWrite::NoAttributeWrite;
             }
             let cleanup_names = style_property_mutation_cleanup_names_with_pdb(name);
             let compare_longhand = cleanup_names.is_empty() && !update_inline_style_base;
@@ -232,13 +250,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                 )
             {
                 drop(cached);
-                return Some(commit_deferred_inline_property(
-                    scope,
-                    runtime_ptr,
-                    handle,
-                    initial,
-                    mutate,
-                ));
+                return InlineStylePropertyWrite::from_attribute_write(
+                    commit_deferred_inline_property(scope, runtime_ptr, handle, initial, mutate),
+                );
             }
             // The committed attribute supplies the previous text until the
             // exact attribute mutation has been applied.
@@ -247,9 +261,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                 .expect("inline style declaration state");
             drop(cached);
             if !mutate(&mut state) {
-                return Some(false);
+                return InlineStylePropertyWrite::NoAttributeWrite;
             }
-            return Some(commit_inline_property_state(
+            return InlineStylePropertyWrite::from_attribute_write(commit_inline_property_state(
                 scope,
                 runtime_ptr,
                 handle,
@@ -265,7 +279,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
     drop(cached);
     state.parse_context = None;
     if inline_state_has_unpreservable_side_entries_for_property(&state, name, &affected_names) {
-        return None;
+        return InlineStylePropertyWrite::NeedsCompatibilityEntries;
     }
     let has_replaceable_side_entry =
         inline_state_has_replaceable_side_entries_for_property(&state, name, &affected_names);
@@ -275,15 +289,18 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             removed_from_block |= state.block.remove_property(affected).changed;
         }
         if !removed_from_block && !has_replaceable_side_entry {
-            return Some(false);
+            return InlineStylePropertyWrite::NoAttributeWrite;
         }
         (Vec::new(), Vec::new())
     } else if name == "all" {
-        let parsed = parse_style_property_entries_with_base(name, value, priority, None)?;
+        let Some(parsed) = parse_style_property_entries_with_base(name, value, priority, None)
+        else {
+            return InlineStylePropertyWrite::NeedsCompatibilityEntries;
+        };
         if state.block.set_property(name, value, priority)
             == moli_css_parse::CssSetResult::ParseError
         {
-            return None;
+            return InlineStylePropertyWrite::NeedsCompatibilityEntries;
         }
         let block_entries = state
             .block
@@ -297,7 +314,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             (parsed.entries, Vec::new())
         }
     } else {
-        let (parsed, native) = parse_pdb_style_property(name, value, priority)?;
+        let Some((parsed, native)) = parse_pdb_style_property(name, value, priority) else {
+            return InlineStylePropertyWrite::NeedsCompatibilityEntries;
+        };
         if parsed
             .entries
             .iter()
@@ -320,14 +339,17 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                 native.apply(&mut state.block, false);
                 parsed.entries.clone()
             } else {
-                set_pdb_block_property_collecting_entries(
+                let Some(entries) = set_pdb_block_property_collecting_entries(
                     &mut state.block,
                     name,
                     value,
                     priority,
                     &parsed,
                     uses_preferred_supplemental_entries,
-                )?
+                ) else {
+                    return InlineStylePropertyWrite::NeedsCompatibilityEntries;
+                };
+                entries
             };
             for affected in style_property_mutation_cleanup_names_with_pdb(name) {
                 let _ = state.block.remove_property(&affected);
@@ -364,7 +386,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         new_entries,
         new_side_entries,
     );
-    Some(commit_inline_property_state(
+    InlineStylePropertyWrite::from_attribute_write(commit_inline_property_state(
         scope,
         runtime_ptr,
         handle,
@@ -395,9 +417,10 @@ fn commit_deferred_inline_property(
         }
         runtime
             .dom_host_mut()
-            .set_deferred_style_attribute(handle, Box::new(CssomStyleAttribute::new(state)))
+            .set_cssom_style_attribute(handle, Box::new(CssomStyleAttribute::new(state)), None)
+            .into_effects()
     };
-    runtime.apply_deferred_style_attribute_effects(scope, runtime_ptr, handle, effects)
+    runtime.apply_cssom_style_attribute_effects(scope, runtime_ptr, handle, effects)
 }
 
 fn commit_inline_property_state(
@@ -462,31 +485,30 @@ pub(super) fn commit_inline_style_declaration(
     override_text: Option<String>,
     base_url: Option<&url::Url>,
 ) {
-    let publish = |runtime: &mut PageScriptHost| {
+    let publish_metadata = |runtime: &mut PageScriptHost| {
         if let Some(base_url) = base_url {
             runtime.set_element_inline_style_base_url(handle, base_url.clone());
         }
         runtime.set_element_inline_style_resolution_override(handle, override_text);
-        runtime.set_element_inline_style_declaration_state(handle, state);
     };
     let Some(attribute_text) = attribute_text else {
-        publish(unsafe { &mut *runtime_ptr });
+        let runtime = unsafe { &mut *runtime_ptr };
+        publish_metadata(runtime);
+        runtime.set_element_inline_style_declaration_state(handle, state);
         return;
     };
     crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let runtime = unsafe { &mut *runtime_ptr };
-        let _ = runtime.set_style_attribute_from_cssom_appending_to_current_reaction_queue(
+        let source = CssomStyleAttribute::with_text(state, attribute_text.to_owned(), true);
+        runtime.set_style_attribute_from_cssom_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
+            source,
             attribute_text,
-        );
-        runtime.set_element_inline_style_csp_state(
-            handle,
-            crate::style_engine::InlineStyleCspState::Cssom,
         );
         // Publish the CSSOM and rendering views before the reaction scope
         // invokes attributeChangedCallback and permits another mutation.
-        publish(runtime);
+        publish_metadata(runtime);
     });
 }

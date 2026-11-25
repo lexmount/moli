@@ -611,34 +611,52 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         handle: DomHandle,
+        source: crate::css_style::CssomStyleAttribute,
         value: &str,
-    ) -> bool {
-        self.set_attribute_with_reaction_policy_and_options(
-            scope,
-            host_ptr,
-            handle,
-            "style",
-            value,
-            AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
-            RuntimeMutationOptions::js_dom_api().with_inline_style_csp_check(false),
-        )
+    ) {
+        unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
+        let was_cssom = unsafe { &*host_ptr }.element_inline_style_csp_state(handle)
+            == crate::style_engine::InlineStyleCspState::Cssom;
+        let (effects, old_value) = self
+            .dom_host
+            .set_cssom_style_attribute(handle, Box::new(source), Some(value))
+            .into_parts();
+        let changed = self.apply_cssom_style_attribute_effects(scope, host_ptr, handle, effects);
+        if !changed && !was_cssom {
+            // Assigning cssText can authorize an existing raw attribute even
+            // when the serialized text was already identical.
+            self.note_attribute_layout_activity(host_ptr, handle, "style");
+        }
+        if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
+            self.apply_attribute_changed_reaction_policy(
+                scope,
+                host_ptr,
+                handle,
+                "style",
+                None,
+                old_value.as_deref(),
+                Some(value),
+                AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
+            );
+        }
     }
 
-    pub(crate) fn apply_deferred_style_attribute_effects(
+    pub(crate) fn apply_cssom_style_attribute_effects(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         effects: DomMutationEffects,
     ) -> bool {
-        if !effects.did_change() {
-            return false;
-        }
-        self.note_attribute_layout_activity(host_ptr, handle, "style");
-        // An iframe's inline style can change the viewport used by its child
-        // document, including the result of its media queries.
-        if self.dom_host.is_html_element_named(handle, "iframe") {
-            unsafe { &*host_ptr }.invalidate_published_frame_viewports([handle]);
+        if effects.did_change() {
+            self.note_attribute_layout_activity(host_ptr, handle, "style");
+            // An iframe's inline style can change the viewport used by its child
+            // document, including the result of its media queries.
+            if effects.style().attribute_mutations().is_empty()
+                && self.dom_host.is_html_element_named(handle, "iframe")
+            {
+                unsafe { &*host_ptr }.invalidate_published_frame_viewports([handle]);
+            }
         }
         self.apply_runtime_mutation_effects(
             scope,

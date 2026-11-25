@@ -232,7 +232,7 @@ impl Element {
         self.style_attribute_mut()?.deferred_style_mut()
     }
 
-    pub(super) fn set_deferred_style_attribute(&mut self, source: Box<dyn DeferredStyleAttribute>) {
+    pub(super) fn set_cssom_style_attribute(&mut self, source: Box<dyn DeferredStyleAttribute>) {
         if let Some(attribute) = self.style_attribute_mut() {
             attribute.set_deferred_style(source);
         } else {
@@ -244,11 +244,7 @@ impl Element {
         &mut self,
         source: Box<dyn DeferredStyleAttribute>,
     ) {
-        if let Some(attribute) = self
-            .attributes
-            .iter_mut()
-            .find(|attribute| attribute.name_matches("style"))
-        {
+        if let Some(attribute) = self.style_attribute_mut() {
             attribute.set_deferred_style(source);
         }
     }
@@ -257,7 +253,6 @@ impl Element {
         self.attributes
             .iter_mut()
             .find(|attribute| attribute.name_matches("style"))
-            .filter(|attribute| attribute.namespace().is_empty())
     }
 
     pub fn attribute(&self, name: &str) -> Option<&str> {
