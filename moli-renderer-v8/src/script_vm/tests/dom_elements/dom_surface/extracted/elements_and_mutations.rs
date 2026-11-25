@@ -1161,3 +1161,25 @@ fn document_fragment_insert_runs_nested_scripts_in_tree_order() {
 
     assert_eq!(result, "before append|first|nested|last|after append");
 }
+
+#[test]
+fn insert_adjacent_text_keeps_lone_surrogates_in_the_text_node() {
+    let mut vm = new_storage_test_vm("https://insert-adjacent-text.test/");
+    let result = vm
+        .eval(
+            r#"
+        (() => {
+            const data = 'a\uD800b\uDC00';
+            return [document, document.implementation.createHTMLDocument('')].every(doc => {
+                const host = doc.createElement('div');
+                let conversions = 0;
+                host.insertAdjacentText('beforeend', {toString() { conversions++; return data; }});
+                return conversions === 1 && host.firstChild.data === data
+                    && host.firstChild.nodeValue === data && host.firstChild.length === data.length;
+            });
+        })()
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result, "true");
+}
