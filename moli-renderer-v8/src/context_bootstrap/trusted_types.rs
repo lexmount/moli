@@ -515,8 +515,18 @@ fn trusted_types_create_policy_callback<'s>(
         return;
     }
 
-    let policy_name = v8_string(scope, &name).unwrap_or_else(|| v8::String::empty(scope));
     let global = scope.get_current_context().global(scope);
+    if name == "default"
+        && get_private_value(scope, global, TRUSTED_TYPES_DEFAULT_POLICY_SLOT).is_some()
+    {
+        throw_type_error(
+            scope,
+            "Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Policy with name \"default\" already exists.",
+        );
+        return;
+    }
+
+    let policy_name = v8_string(scope, &name).unwrap_or_else(|| v8::String::empty(scope));
     let prototype = get_private_value(scope, global, TRUSTED_TYPE_POLICY_PROTOTYPE_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .expect("the policy prototype must be captured when the factory materializes");
@@ -529,7 +539,6 @@ fn trusted_types_create_policy_callback<'s>(
     install_policy_callbacks(scope, policy, callbacks);
 
     if name == "default" {
-        let global = scope.get_current_context().global(scope);
         set_private_value(
             scope,
             global,

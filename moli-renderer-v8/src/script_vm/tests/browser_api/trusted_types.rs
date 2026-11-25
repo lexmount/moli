@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn trusted_types_rejects_a_duplicate_default_policy() {
+    let mut vm = new_storage_test_vm("https://trusted-default.test/");
+    let result = vm
+        .eval(
+            r#"
+            const first = trustedTypes.createPolicy("default", {createHTML: value => "first:" + value});
+            let duplicateThrows = false;
+            try {
+              trustedTypes.createPolicy("default", {createHTML: value => "second:" + value});
+            } catch (error) {
+              duplicateThrows = error instanceof TypeError;
+            }
+            // Unrestricted realms permit repeated non-default names.
+            trustedTypes.createPolicy("ordinary", {});
+            trustedTypes.createPolicy("ordinary", {});
+            JSON.stringify([duplicateThrows, String(first.createHTML("value"))]);
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, r#"[true,"first:value"]"#);
+}
+
+#[test]
 fn trusted_types_csp_policy_creation_matches_only_valid_name_tokens() {
     for (policy, name, expected) in [
         ("trusted-types valid policy*name", "valid", "allowed"),
