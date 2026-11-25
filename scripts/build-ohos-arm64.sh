@@ -65,4 +65,4 @@ export RUSTY_V8_ARCHIVE_SHA256="$v8_archive_sha256"
 export RUSTY_V8_SRC_BINDING_PATH="$repo_root/vendor/v8-$v8_version/gen/src_binding_release_aarch64-unknown-linux-musl.rs"
 export V8_FROM_SOURCE=0 V8_FORCE_DEBUG=0 RUSTY_V8_SKIP_DOWNLOAD=0
 
-cargo build --locked --release -p moli --target "$target" "$@"
+cargo build --locked --release -p "${MOLI_OHOS_PACKAGE:-moli}" --target "$target" "$@"
