@@ -748,3 +748,37 @@ scrollTo(0, 15);
     .await
     .expect("rendering-update post-checkpoint child synchronization test should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn trusted_animation_start_uses_legacy_listener_and_restores_event_type() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let url = Url::parse("https://example.com/legacy-animation-start")?;
+        let (mut page_vm, _, _) = page_vm_with_bound_task_sources_and_owner_wake(&loader, url);
+        page_vm.vm_mut().eval(
+            r#"
+document.head.appendChild(document.createElement('style')).textContent =
+  '@keyframes move { from { left: 0px; } to { left: 10px; } } #target { position: relative; animation: move 1s linear; }';
+document.body.innerHTML = '<div id="target"></div>';
+const target = document.getElementById('target');
+globalThis.starts = [];
+target.addEventListener('webkitAnimationStart', event => starts.push([event, event.type]));
+target.dispatchEvent(new Event('animationstart', {bubbles: true}));
+"#,
+        )?;
+        assert_eq!(page_vm.vm_mut().eval("String(starts.length)")?, "0");
+        assert!(page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::RenderingUpdate,
+            &loader,
+        ).await?);
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "JSON.stringify(starts.map(([event, type]) => [type, event.type, event.isTrusted]))"
+            )?,
+            r#"[["webkitAnimationStart","animationstart",true]]"#
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("trusted legacy animation listener dispatch");
+}

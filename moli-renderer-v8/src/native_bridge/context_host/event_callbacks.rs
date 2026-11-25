@@ -147,6 +147,9 @@ impl PageScriptHost {
                     passive,
                 );
                 self.insert_event_listener(target, event_type, registration);
+                if event_type == "webkitAnimationStart" {
+                    let _ = self.queue_animation_start_scan(scope, target);
+                }
             }
         }
         Some(callback_id)

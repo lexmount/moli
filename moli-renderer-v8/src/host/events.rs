@@ -9,6 +9,7 @@ use crate::{
     util::{get_private_object, get_private_value, serialize_v8_iter_array},
     v8_execution_watchdog::V8ExecutionWatchdog,
 };
+use moli_webapi::events::state::{define_event_property, event_attribute, event_trusted};
 use moli_webapi::events::subclasses::error::construct_original_error_event;
 use moli_webapi::events::{construct_native_event, init::EventInit};
 use std::collections::HashSet;
@@ -1144,6 +1145,39 @@ impl HostEventTargetRegistry {
         filter: ListenerFilter,
         at_target: bool,
     ) -> std::result::Result<DispatchStatus, String> {
+        let legacy_type = match event_type {
+            "animationend" => Some("webkitAnimationEnd"),
+            "animationiteration" => Some("webkitAnimationIteration"),
+            "animationstart" => Some("webkitAnimationStart"),
+            "transitionend" => Some("webkitTransitionEnd"),
+            _ => None,
+        };
+        // Select the event type before filtering listeners by capture phase.
+        if let Some(legacy_type) = legacy_type
+            && !self.has_listener(target, event_type)
+            && self
+                .event_handler_property_callback_id(target, event_type)
+                .flatten()
+                .is_none()
+            && self.has_listener(target, legacy_type)
+            && event_trusted(scope, event)
+            && let Some(original) = event_attribute(scope, event, "type")
+        {
+            define_event_property(scope, event, "type", v8str(scope, legacy_type).into());
+            let status = self.call_listeners_filtered(
+                scope,
+                host_ptr,
+                target,
+                invocation_target_in_shadow_tree,
+                legacy_type,
+                event,
+                filter,
+                at_target,
+            );
+            define_event_property(scope, event, "type", original);
+            return status;
+        }
+
         let snapshot: Vec<(
             u64,
             crate::native_bridge::EventCallbackId,
