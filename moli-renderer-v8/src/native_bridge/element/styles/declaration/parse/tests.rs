@@ -981,7 +981,7 @@ fn animation_pdb_parser_keeps_only_required_supplemental_side_entries() {
     ]);
     assert_eq!(
         state
-            .side_entries
+            .side_entries()
             .iter()
             .map(|entry| (entry.name.as_str(), entry.value.as_str()))
             .collect::<Vec<_>>(),
@@ -1000,7 +1000,7 @@ fn animation_pdb_parser_keeps_only_required_supplemental_side_entries() {
 
     let ordinary_state = inline_style_declaration_state_from_entries(&[ordinary_timing]);
     assert!(
-        ordinary_state.side_entries.is_empty(),
+        ordinary_state.side_entries().is_empty(),
         "ordinary animation timing values should not keep supplemental side storage"
     );
     assert_eq!(
@@ -1133,8 +1133,9 @@ fn inline_css_text_all_adapter_removes_preceding_reset_properties() {
 
     assert_eq!(
         state
-            .entries
-            .into_iter()
+            .source_entries()
+            .iter()
+            .cloned()
             .map(|entry| (entry.name, entry.value))
             .collect::<Vec<_>>(),
         [
@@ -1163,7 +1164,7 @@ fn inline_dynamic_transition_entries_seed_pdb_without_css_text_reparse() {
 
     let state = inline_style_declaration_state_from_entries(&[duration, timing]);
     assert!(!state.block.is_empty());
-    assert!(state.side_entries.is_empty());
+    assert!(state.side_entries().is_empty());
     assert_eq!(
         inline_state_property_value_with_pdb(&state, "transition-duration").as_deref(),
         Some("calc(10s + (5s * sign(2cqw - 10px)))")
@@ -1177,14 +1178,16 @@ fn inline_dynamic_transition_entries_seed_pdb_without_css_text_reparse() {
 #[test]
 fn inline_pdb_mutation_can_replace_fully_covered_side_entries() {
     let shorthand_state = CssInlineStyleDeclarationState {
-        entries: vec![
-            style_entry("--token", "value"),
-            style_entry("padding-left", "var(--pad)"),
-        ],
-        side_entries: vec![
-            style_entry("--token", "value"),
-            style_entry("padding-left", "var(--pad)"),
-        ],
+        compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+            entries: vec![
+                style_entry("--token", "value"),
+                style_entry("padding-left", "var(--pad)"),
+            ],
+            side_entries: vec![
+                style_entry("--token", "value"),
+                style_entry("padding-left", "var(--pad)"),
+            ],
+        })),
         ..Default::default()
     };
     let padding_affected = style_property_affected_names_with_pdb("padding")
@@ -1207,8 +1210,10 @@ fn inline_pdb_mutation_can_replace_fully_covered_side_entries() {
     );
 
     let longhand_state = CssInlineStyleDeclarationState {
-        entries: vec![style_entry("padding", "var(--pad)")],
-        side_entries: vec![style_entry("padding", "var(--pad)")],
+        compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+            entries: vec![style_entry("padding", "var(--pad)")],
+            side_entries: vec![style_entry("padding", "var(--pad)")],
+        })),
         ..Default::default()
     };
     let padding_left_affected = style_property_affected_names_with_pdb("padding-left")
@@ -1235,8 +1240,10 @@ fn inline_pdb_mutation_can_replace_fully_covered_side_entries() {
     );
 
     let border_longhand_state = CssInlineStyleDeclarationState {
-        entries: vec![style_entry("border-width", "var(--w)")],
-        side_entries: vec![style_entry("border-width", "var(--w)")],
+        compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+            entries: vec![style_entry("border-width", "var(--w)")],
+            side_entries: vec![style_entry("border-width", "var(--w)")],
+        })),
         ..Default::default()
     };
     let border_left_width_affected = style_property_affected_names_with_pdb("border-left-width")
@@ -1263,8 +1270,10 @@ fn inline_pdb_mutation_can_replace_fully_covered_side_entries() {
     );
 
     let border_side_state = CssInlineStyleDeclarationState {
-        entries: vec![style_entry("border-top", "var(--top)")],
-        side_entries: vec![style_entry("border-top", "var(--top)")],
+        compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+            entries: vec![style_entry("border-top", "var(--top)")],
+            side_entries: vec![style_entry("border-top", "var(--top)")],
+        })),
         ..Default::default()
     };
     let border_top_width_affected = style_property_affected_names_with_pdb("border-top-width")
@@ -1291,8 +1300,10 @@ fn inline_pdb_mutation_can_replace_fully_covered_side_entries() {
     );
 
     let font_state = CssInlineStyleDeclarationState {
-        entries: vec![style_entry("font", "var(--font)")],
-        side_entries: vec![style_entry("font", "var(--font)")],
+        compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+            entries: vec![style_entry("font", "var(--font)")],
+            side_entries: vec![style_entry("font", "var(--font)")],
+        })),
         ..Default::default()
     };
     let font_size_affected = style_property_affected_names_with_pdb("font-size")
@@ -1410,12 +1421,14 @@ fn inline_state_pdb_queries_use_stored_block_when_it_wins_order() {
     );
 
     let partial_side_state = CssInlineStyleDeclarationState {
+        compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+            entries: vec![
+                style_entry("padding", "var(--pad)"),
+                style_entry("padding-left", "1px"),
+            ],
+            side_entries: vec![style_entry("padding", "var(--pad)")],
+        })),
         block: moli_css_parse::parse_declaration_block("padding-left: 1px;"),
-        entries: vec![
-            style_entry("padding", "var(--pad)"),
-            style_entry("padding-left", "1px"),
-        ],
-        side_entries: vec![style_entry("padding", "var(--pad)")],
         parse_context: None,
     };
     assert_eq!(
@@ -1428,18 +1441,20 @@ fn inline_state_pdb_queries_use_stored_block_when_it_wins_order() {
     );
 
     let important_side_state = CssInlineStyleDeclarationState {
-        block: moli_css_parse::parse_declaration_block("padding-left: 1px;"),
-        entries: vec![
-            StyleEntry {
+        compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+            entries: vec![
+                StyleEntry {
+                    priority: true,
+                    ..style_entry("padding", "var(--pad)")
+                },
+                style_entry("padding-left", "1px"),
+            ],
+            side_entries: vec![StyleEntry {
                 priority: true,
                 ..style_entry("padding", "var(--pad)")
-            },
-            style_entry("padding-left", "1px"),
-        ],
-        side_entries: vec![StyleEntry {
-            priority: true,
-            ..style_entry("padding", "var(--pad)")
-        }],
+            }],
+        })),
+        block: moli_css_parse::parse_declaration_block("padding-left: 1px;"),
         parse_context: None,
     };
     assert!(
@@ -1479,15 +1494,17 @@ fn inline_state_pdb_queries_use_stored_block_when_it_wins_order() {
 #[test]
 fn inline_pdb_mutation_empty_return_uses_mutated_block_entries() {
     let mut state = CssInlineStyleDeclarationState {
+        compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+            entries: vec![
+                style_entry("display", "block"),
+                style_entry("--token", "value"),
+                style_entry("color", "red"),
+            ],
+            side_entries: vec![style_entry("--token", "value")],
+        })),
         block: moli_css_parse::parse_declaration_block(
             "display: block; color: rgb(0 128 0 / 50%);",
         ),
-        entries: vec![
-            style_entry("display", "block"),
-            style_entry("--token", "value"),
-            style_entry("color", "red"),
-        ],
-        side_entries: vec![style_entry("--token", "value")],
         parse_context: None,
     };
     let affected_names = style_property_affected_names_with_pdb("color")
@@ -1538,9 +1555,9 @@ fn inline_pdb_transition_longhand_mutation_keeps_shorthand_query_with_side_entri
     ]);
     assert!(state.block.property_is_declared("transition-property"));
     assert!(state.block.property_is_declared("transition-duration"));
-    assert_eq!(state.side_entries.len(), 1);
-    assert_eq!(state.side_entries[0].name, "-webkit-transform-origin");
-    assert_eq!(state.side_entries[0].value, "20px 30px");
+    assert_eq!(state.side_entries().len(), 1);
+    assert_eq!(state.side_entries()[0].name, "-webkit-transform-origin");
+    assert_eq!(state.side_entries()[0].value, "20px 30px");
 
     let affected_names = style_property_affected_names_with_pdb("transition-duration")
         .expect("transition-duration affected names should come from PDB");
@@ -1582,9 +1599,9 @@ fn inline_pdb_transition_longhand_mutation_keeps_shorthand_query_with_side_entri
         inline_state_property_value_with_pdb(&state, "-webkit-transform-origin").as_deref(),
         None
     );
-    assert_eq!(state.side_entries.len(), 1);
-    assert_eq!(state.side_entries[0].name, "-webkit-transform-origin");
-    assert_eq!(state.side_entries[0].value, "20px 30px");
+    assert_eq!(state.side_entries().len(), 1);
+    assert_eq!(state.side_entries()[0].name, "-webkit-transform-origin");
+    assert_eq!(state.side_entries()[0].value, "20px 30px");
 }
 
 #[test]
@@ -2656,7 +2673,7 @@ fn webkit_text_fill_color_is_owned_by_stylo_pdb() {
     assert!(parsed.entries[0].priority);
 
     let state = inline_style_declaration_state_from_entries(&parsed.entries);
-    assert!(state.side_entries.is_empty());
+    assert!(state.side_entries().is_empty());
     assert_eq!(
         state
             .block
@@ -2690,7 +2707,7 @@ fn newly_enabled_chromium_properties_use_pdb_capability_routing() {
         );
         let state = inline_style_declaration_state_from_entries(&parsed.entries);
         assert!(
-            state.side_entries.is_empty(),
+            state.side_entries().is_empty(),
             "Stylo-owned property should not use renderer side entries: {name}"
         );
         assert!(
@@ -2821,11 +2838,11 @@ fn inline_state_builder_keeps_legacy_shorthands_out_of_pdb_entries() {
 
     let state = inline_style_declaration_state_from_entries(std::slice::from_ref(&border));
     assert!(!state.block.is_empty());
-    assert_eq!(state.entries.len(), 1);
-    assert_eq!(state.entries[0].name, border.name);
-    assert_eq!(state.entries[0].value, border.value);
-    assert_eq!(state.entries[0].priority, border.priority);
-    assert!(state.side_entries.is_empty());
+    assert_eq!(state.source_entries().len(), 1);
+    assert_eq!(state.source_entries()[0].name, border.name);
+    assert_eq!(state.source_entries()[0].value, border.value);
+    assert_eq!(state.source_entries()[0].priority, border.priority);
+    assert!(state.side_entries().is_empty());
     assert_eq!(
         state.block.property_value("border").as_deref(),
         Some("1px solid black")
@@ -2853,10 +2870,10 @@ fn inline_serialized_entries_seed_pdb_state_without_css_text_reparse() {
         None,
     );
     assert!(
-        plain.entries.is_empty(),
+        plain.source_entries().is_empty(),
         "pure PDB inline state should not keep ordinary adapter entries"
     );
-    assert!(plain.side_entries.is_empty());
+    assert!(plain.side_entries().is_empty());
     assert_eq!(
         plain.block.property_value("display").as_deref(),
         Some("block")
@@ -2876,7 +2893,7 @@ fn inline_serialized_entries_seed_pdb_state_without_css_text_reparse() {
         r#"--token: value; visibility: hidden; background-image: url("https://example.test/img.png");"#,
         None,
     );
-    assert!(mixed.side_entries.is_empty());
+    assert!(mixed.side_entries().is_empty());
     assert!(
         mixed
             .block
@@ -2916,8 +2933,7 @@ fn inline_serialized_entries_seed_pdb_state_without_css_text_reparse() {
         "border: calc(10px) solid pink;",
         None,
     );
-    assert!(border_shorthand.entries.is_empty());
-    assert!(border_shorthand.side_entries.is_empty());
+    assert!(border_shorthand.compatibility.is_none());
     assert_eq!(
         border_shorthand.block.property_value("border").as_deref(),
         Some("calc(10px) solid pink")
@@ -2933,8 +2949,7 @@ fn inline_serialized_entries_seed_pdb_state_without_css_text_reparse() {
         None,
     );
     assert!(!border_side_shorthand.block.is_empty());
-    assert!(border_side_shorthand.entries.is_empty());
-    assert!(border_side_shorthand.side_entries.is_empty());
+    assert!(border_side_shorthand.compatibility.is_none());
     assert_eq!(
         border_side_shorthand
             .block
@@ -3030,7 +3045,7 @@ fn inline_unresolved_and_custom_values_respect_pdb_compat_boundaries() {
         "--token: var(--fallback, value); padding: var(--pad); width: env(safe-area-inset-top);",
         None,
     );
-    assert!(state.side_entries.is_empty());
+    assert!(state.side_entries().is_empty());
     assert!(
         state
             .block
@@ -3065,7 +3080,7 @@ fn inline_unresolved_and_custom_values_respect_pdb_compat_boundaries() {
 
     let empty_custom_state =
         inline_style_declaration_state_from_css_text("--empty:; --space:  ;", None);
-    assert!(empty_custom_state.side_entries.is_empty());
+    assert!(empty_custom_state.side_entries().is_empty());
     assert!(empty_custom_state.block.property_is_declared("--empty"));
     assert!(empty_custom_state.block.property_is_declared("--space"));
     assert_eq!(
@@ -3232,7 +3247,7 @@ fn inline_pdb_mutation_keeps_unresolved_shorthand_projection() {
     );
     assert_eq!(
         state
-            .entries
+            .source_entries()
             .iter()
             .map(|entry| (entry.name.as_str(), entry.value.as_str()))
             .collect::<Vec<_>>(),
@@ -3306,7 +3321,7 @@ fn inline_pdb_mutation_materializes_existing_block_before_renderer_projection() 
         block: moli_css_parse::parse_declaration_block("font-size: unset"),
         ..Default::default()
     };
-    assert!(state.entries.is_empty());
+    assert!(state.source_entries().is_empty());
     assert_eq!(
         state.css_text_and_style_resolution_override(),
         ("font-size: unset;".to_owned(), None),
@@ -3338,7 +3353,7 @@ fn inline_pdb_mutation_materializes_existing_block_before_renderer_projection() 
 
     assert_eq!(
         state
-            .entries
+            .source_entries()
             .iter()
             .map(|entry| (entry.name.as_str(), entry.value.as_str()))
             .collect::<Vec<_>>(),
@@ -3370,7 +3385,7 @@ fn inline_serialized_border_state_keeps_pdb_query_with_side_entries() {
 
     assert_eq!(
         state
-            .side_entries
+            .side_entries()
             .iter()
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>(),

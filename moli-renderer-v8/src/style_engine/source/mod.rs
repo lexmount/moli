@@ -629,45 +629,6 @@ impl MoliStyleEngine {
         }
     }
 
-    pub(crate) fn set_inline_style_resolution_text_with_host(
-        &self,
-        host: &DomHost,
-        handle: DomHandle,
-        text: String,
-    ) {
-        let Some(document) = owner_document_for_source_owner(host, handle) else {
-            return;
-        };
-        self.move_inline_style_metadata_to_document(handle, document);
-        self.world_for_document(document)
-            .inline_style_metadata
-            .set_resolution_text(handle, text);
-        self.inline_style_metadata_documents
-            .borrow_mut()
-            .insert(handle, document);
-    }
-
-    pub(crate) fn clear_inline_style_resolution_text_with_host(
-        &self,
-        host: &DomHost,
-        handle: DomHandle,
-    ) {
-        let indexed_document = self
-            .inline_style_metadata_documents
-            .borrow()
-            .get(&handle)
-            .copied();
-        if let Some(document) = indexed_document {
-            let world = self.world_for_document(document);
-            world.inline_style_metadata.clear_resolution_text(handle);
-            self.remove_inline_style_metadata_document_if_empty(document, handle);
-        }
-        if let Some(world) = self.owner_document_world(host, handle) {
-            world.inline_style_metadata.clear_resolution_text(handle);
-            self.remove_inline_style_metadata_document_if_empty(world.document, handle);
-        }
-    }
-
     pub(crate) fn set_inline_style_csp_state_with_host(
         &self,
         host: &DomHost,

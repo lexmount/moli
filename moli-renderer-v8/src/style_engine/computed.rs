@@ -1395,9 +1395,8 @@ fn populate_inline_style_attribute_for_resolution(
         .inline_style_metadata
         .base_url(node)
         .unwrap_or_else(|| style_resolution_base_url(host, document_url, node));
-    let override_text = world.inline_style_metadata.resolution_text(node);
     if let Some(cssom) = cssom
-        && override_text.is_none()
+        && cssom.resolution_text().is_none()
         && let Some((url_data, declarations)) =
             cssom.publish(world.document, &base_url, quirks_mode)
     {
@@ -1413,7 +1412,7 @@ fn populate_inline_style_attribute_for_resolution(
         );
         return;
     }
-    let Some(source) = override_text.or_else(|| attribute?.shared_style_value()) else {
+    let Some(source) = attribute.and_then(|attribute| attribute.shared_style_value()) else {
         engine.dom_adapter.clear_inline_style_attribute(node);
         return;
     };
@@ -1427,13 +1426,11 @@ fn populate_inline_style_attribute_for_resolution(
         return;
     }
     let url_data = UrlExtraData::from(base_url);
-    let declarations = parse_style_attribute(
-        source.as_str(),
-        &url_data,
-        None,
-        quirks_mode,
-        CssRuleType::Style,
-    );
+    let text = cssom
+        .and_then(crate::css_style::CssomStyleAttribute::resolution_text)
+        .unwrap_or_else(|| source.as_str());
+    let declarations =
+        parse_style_attribute(text, &url_data, None, quirks_mode, CssRuleType::Style);
     engine.dom_adapter.set_inline_style_attribute(
         node,
         InlineStyleSnapshot {

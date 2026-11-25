@@ -110,14 +110,20 @@ pub(crate) struct CssStyleEntry {
 #[derive(Clone, Default)]
 pub(crate) struct CssInlineStyleDeclarationState {
     pub(crate) block: moli_css_parse::CssDeclarationBlock,
+    pub(crate) compatibility: Option<Box<InlineStyleCompatibility>>,
+    pub(crate) parse_context: Option<InlineStyleParseContext>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct InlineStyleCompatibility {
     pub(crate) entries: Vec<CssStyleEntry>,
     pub(crate) side_entries: Vec<CssStyleEntry>,
-    pub(crate) parse_context: Option<InlineStyleParseContext>,
 }
 
 pub(crate) struct CssomStyleAttribute {
     state: RwLock<CssInlineStyleDeclarationState>,
     text: OnceLock<Box<str>>,
+    resolution_text: Option<Box<str>>,
     cssom_authored: bool,
 }
 
@@ -126,6 +132,7 @@ impl CssomStyleAttribute {
         Self {
             state: RwLock::new(state),
             text: OnceLock::new(),
+            resolution_text: None,
             cssom_authored: true,
         }
     }
@@ -133,17 +140,23 @@ impl CssomStyleAttribute {
     pub(crate) fn with_text(
         state: CssInlineStyleDeclarationState,
         text: String,
+        resolution_text: Option<String>,
         cssom_authored: bool,
     ) -> Self {
         Self {
             state: RwLock::new(state),
             text: OnceLock::from(text.into_boxed_str()),
+            resolution_text: resolution_text.map(String::into_boxed_str),
             cssom_authored,
         }
     }
 
     pub(crate) fn is_cssom_authored(&self) -> bool {
         self.cssom_authored
+    }
+
+    pub(crate) fn resolution_text(&self) -> Option<&str> {
+        self.resolution_text.as_deref()
     }
 
     pub(crate) fn from_attribute(attribute: &moli_dom::native::Attribute) -> Option<&Self> {
@@ -185,6 +198,7 @@ impl CssomStyleAttribute {
             return false;
         }
         self.text.take();
+        self.resolution_text = None;
         self.cssom_authored = true;
         true
     }
@@ -251,100 +265,125 @@ impl InlineStyleParseContext {
 }
 
 impl CssInlineStyleDeclarationState {
+    pub(crate) fn source_entries(&self) -> &[CssStyleEntry] {
+        self.compatibility
+            .as_ref()
+            .map_or(&[], |compatibility| &compatibility.entries)
+    }
+
+    pub(crate) fn side_entries(&self) -> &[CssStyleEntry] {
+        self.compatibility
+            .as_ref()
+            .map_or(&[], |compatibility| &compatibility.side_entries)
+    }
+
     pub(crate) fn entries(&self) -> Vec<CssStyleEntry> {
-        if self.entries.iter().any(|entry| entry.name == "all") {
-            return self.entries.clone();
-        }
-        if self.side_entries.is_empty() && self.entries.is_empty() && !self.block.is_empty() {
+        let Some(compatibility) = &self.compatibility else {
             return self.pdb_entries();
-        }
-        if self.entries.is_empty() && !self.block.is_empty() {
-            let mut entries = self.pdb_entries();
-            entries.extend(self.side_entries.clone());
-            return entries;
-        }
-        if let Some(entries) =
-            css_style_entries_with_pdb_block(&self.entries, &self.side_entries, &self.block)
+        };
+        if compatibility
+            .entries
+            .iter()
+            .any(|entry| entry.name == "all")
         {
+            return compatibility.entries.clone();
+        }
+        if compatibility.entries.is_empty() && !self.block.is_empty() {
+            let mut entries = self.pdb_entries();
+            entries.extend(compatibility.side_entries.iter().cloned());
             return entries;
         }
-        self.entries.clone()
+        css_style_entries_with_pdb_block(
+            &compatibility.entries,
+            &compatibility.side_entries,
+            &self.block,
+        )
+        .unwrap_or_else(|| compatibility.entries.clone())
     }
 
     pub(crate) fn property_names(&self) -> Vec<String> {
-        if self.side_entries.is_empty() && self.entries.is_empty() && !self.block.is_empty() {
+        if self.compatibility.is_none() {
             return stylo_declaration_block_property_names(&self.block);
         }
         self.entries().into_iter().map(|entry| entry.name).collect()
     }
 
     pub(crate) fn css_text(&self) -> String {
-        if self.entries.iter().any(|entry| entry.name == "all") {
-            return serialize_css_style_entries(&self.entries());
+        let Some(compatibility) = &self.compatibility else {
+            return self.block.css_text();
+        };
+        if compatibility
+            .entries
+            .iter()
+            .any(|entry| entry.name == "all")
+            || css_style_entries_have_renderer_projection(&compatibility.entries)
+        {
+            return serialize_css_style_entries(&compatibility.entries);
         }
-        if css_style_entries_have_renderer_projection(&self.entries) {
-            return serialize_css_style_entries(&self.entries);
-        }
-        if self.side_entries.is_empty() {
+        if compatibility.side_entries.is_empty() {
             return self.block.css_text();
         }
-        self.mixed_css_text()
-    }
-
-    pub(crate) fn style_resolution_text(&self) -> String {
-        if self.entries.iter().any(|entry| entry.name == "all") {
-            return serialize_css_style_entries(&self.entries());
-        }
-        if css_style_entries_have_renderer_projection(&self.entries) {
-            let entries = self
-                .entries
-                .iter()
-                .cloned()
-                .map(|mut entry| {
-                    if entry.value.is_empty()
-                        && let Some(value) =
-                            self.style_resolution_value_for_placeholder_entry(&entry.name)
-                    {
-                        entry.value = value;
-                    }
-                    entry
-                })
-                .collect::<Vec<_>>();
-            return serialize_css_style_entries(&entries);
-        }
-        if self.side_entries.is_empty() {
-            return self.block.css_text();
-        }
-        serialize_css_style_entries_with_pdb_block(&self.entries(), &self.side_entries, &self.block)
-            .or_else(|| {
-                serialize_css_style_entries_with_contiguous_pdb_block(
-                    &self.entries(),
-                    &self.side_entries,
-                    &self.block,
-                )
-            })
-            .unwrap_or_else(|| serialize_css_style_entries(&self.entries()))
+        let entries = self.entries();
+        serialize_css_style_entries_with_pdb_block(
+            &entries,
+            &compatibility.side_entries,
+            &self.block,
+        )
+        .unwrap_or_else(|| serialize_css_style_entries(&entries))
     }
 
     pub(crate) fn css_text_and_style_resolution_override(&self) -> (String, Option<String>) {
         let css_text = self.css_text();
-        if (self.side_entries.is_empty()
-            && !css_style_entries_have_renderer_projection(&self.entries))
-            || self.entries.iter().any(|entry| entry.name == "all")
+        let Some(compatibility) = &self.compatibility else {
+            return (css_text, None);
+        };
+        let has_projection = css_style_entries_have_renderer_projection(&compatibility.entries);
+        if (!has_projection && compatibility.side_entries.is_empty())
+            || compatibility
+                .entries
+                .iter()
+                .any(|entry| entry.name == "all")
         {
             return (css_text, None);
         }
-        let resolution_text = self.style_resolution_text();
+        let resolution_text = if has_projection {
+            let mut entries = compatibility.entries.clone();
+            for entry in &mut entries {
+                if entry.value.is_empty()
+                    && let Some(value) =
+                        self.style_resolution_value_for_placeholder_entry(&entry.name)
+                {
+                    entry.value = value;
+                }
+            }
+            serialize_css_style_entries(&entries)
+        } else {
+            let entries = self.entries();
+            let sides = &compatibility.side_entries;
+            serialize_css_style_entries_with_pdb_block(&entries, sides, &self.block)
+                .or_else(|| {
+                    serialize_css_style_entries_with_contiguous_pdb_block(
+                        &entries,
+                        sides,
+                        &self.block,
+                    )
+                })
+                .unwrap_or_else(|| serialize_css_style_entries(&entries))
+        };
         let override_text = (resolution_text != css_text).then_some(resolution_text);
         (css_text, override_text)
     }
 
     pub(crate) fn refresh_pdb_entries(&mut self) {
-        if self.side_entries.is_empty()
-            && !self.entries.iter().any(|entry| entry.name == "all")
-            && !css_style_entries_have_renderer_projection(&self.entries)
-        {
-            self.entries.clear();
+        if self.compatibility.as_ref().is_some_and(|compatibility| {
+            compatibility.side_entries.is_empty()
+                && !compatibility
+                    .entries
+                    .iter()
+                    .any(|entry| entry.name == "all")
+                && !css_style_entries_have_renderer_projection(&compatibility.entries)
+        }) {
+            self.compatibility = None;
         }
     }
 
@@ -366,14 +405,6 @@ impl CssInlineStyleDeclarationState {
                     .property_value(shorthand)
                     .filter(|value| !value.is_empty())
             })
-    }
-
-    fn mixed_css_text(&self) -> String {
-        if css_style_entries_have_renderer_projection(&self.entries) {
-            return serialize_css_style_entries(&self.entries);
-        }
-        serialize_css_style_entries_with_pdb_block(&self.entries(), &self.side_entries, &self.block)
-            .unwrap_or_else(|| serialize_css_style_entries(&self.entries()))
     }
 }
 
@@ -3115,13 +3146,15 @@ mod tests {
     #[test]
     fn mixed_inline_state_property_names_use_stored_pdb_active_entries() {
         let state = CssInlineStyleDeclarationState {
+            compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+                entries: vec![
+                    style_entry("display", "block"),
+                    style_entry("-webkit-transform-origin", "20px 30px"),
+                    style_entry("display", "flex"),
+                ],
+                side_entries: vec![style_entry("-webkit-transform-origin", "20px 30px")],
+            })),
             block: moli_css_parse::parse_declaration_block("display: block; display: flex;"),
-            entries: vec![
-                style_entry("display", "block"),
-                style_entry("-webkit-transform-origin", "20px 30px"),
-                style_entry("display", "flex"),
-            ],
-            side_entries: vec![style_entry("-webkit-transform-origin", "20px 30px")],
             parse_context: None,
         };
 
@@ -3152,13 +3185,15 @@ mod tests {
     #[test]
     fn mixed_inline_state_property_names_preserve_side_entry_positions() {
         let state = CssInlineStyleDeclarationState {
+            compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+                entries: vec![
+                    style_entry("width", "0"),
+                    style_entry("-webkit-transform-origin", "20px 30px"),
+                    style_entry("height", "0"),
+                ],
+                side_entries: vec![style_entry("-webkit-transform-origin", "20px 30px")],
+            })),
             block: moli_css_parse::parse_declaration_block("width: 0; height: 0;"),
-            entries: vec![
-                style_entry("width", "0"),
-                style_entry("-webkit-transform-origin", "20px 30px"),
-                style_entry("height", "0"),
-            ],
-            side_entries: vec![style_entry("-webkit-transform-origin", "20px 30px")],
             parse_context: None,
         };
 
@@ -3190,14 +3225,16 @@ mod tests {
     #[test]
     fn mixed_inline_state_entries_include_pdb_block_after_custom_property_projection() {
         let state = CssInlineStyleDeclarationState {
+            compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+                entries: vec![
+                    style_entry("--token", "value"),
+                    style_entry("-webkit-transform-origin", "20px 30px"),
+                ],
+                side_entries: vec![style_entry("-webkit-transform-origin", "20px 30px")],
+            })),
             block: moli_css_parse::parse_declaration_block(
                 "transition: display 3s ease-in-out 1s allow-discrete, opacity !important; --token: value;",
             ),
-            entries: vec![
-                style_entry("--token", "value"),
-                style_entry("-webkit-transform-origin", "20px 30px"),
-            ],
-            side_entries: vec![style_entry("-webkit-transform-origin", "20px 30px")],
             parse_context: None,
         };
 
@@ -3245,15 +3282,17 @@ mod tests {
     #[test]
     fn inline_state_no_side_entries_are_pdb_views_not_cached_truth() {
         let mut state = CssInlineStyleDeclarationState {
+            compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+                entries: vec![style_entry("display", "inline")],
+                side_entries: Vec::new(),
+            })),
             block: moli_css_parse::parse_declaration_block("display: block; opacity: 0.5;"),
-            entries: vec![style_entry("display", "inline")],
-            side_entries: Vec::new(),
             parse_context: None,
         };
 
         state.refresh_pdb_entries();
 
-        assert!(state.entries.is_empty());
+        assert!(state.source_entries().is_empty());
         assert_eq!(state.property_names(), ["display", "opacity"]);
         assert_eq!(
             state
@@ -3272,9 +3311,11 @@ mod tests {
     #[test]
     fn inline_state_all_keeps_single_cssom_adapter_entry() {
         let mut state = CssInlineStyleDeclarationState {
+            compatibility: Some(Box::new(crate::css_style::InlineStyleCompatibility {
+                entries: vec![style_entry("all", "inherit")],
+                side_entries: Vec::new(),
+            })),
             block: moli_css_parse::parse_declaration_block("all: inherit;"),
-            entries: vec![style_entry("all", "inherit")],
-            side_entries: Vec::new(),
             parse_context: None,
         };
 

@@ -2687,26 +2687,6 @@ impl PageScriptHost {
             .clear_inline_style_base_url_with_host(unsafe { &*dom_host }, handle);
     }
 
-    pub(crate) fn set_element_inline_style_resolution_override(
-        &mut self,
-        handle: DomHandle,
-        override_text: Option<String>,
-    ) {
-        let Some(text) = override_text else {
-            self.clear_element_inline_style_resolution_text(handle);
-            return;
-        };
-        let dom_host = self.dom_host() as *const _;
-        self.style_engine
-            .set_inline_style_resolution_text_with_host(unsafe { &*dom_host }, handle, text);
-    }
-
-    pub(crate) fn clear_element_inline_style_resolution_text(&mut self, handle: DomHandle) {
-        let dom_host = self.dom_host() as *const _;
-        self.style_engine
-            .clear_inline_style_resolution_text_with_host(unsafe { &*dom_host }, handle);
-    }
-
     pub(crate) fn set_element_inline_style_csp_state(
         &mut self,
         handle: DomHandle,
@@ -2760,15 +2740,28 @@ impl PageScriptHost {
         &mut self,
         handle: DomHandle,
         state: crate::css_style::CssInlineStyleDeclarationState,
+        resolution_text: Option<String>,
     ) {
         let Some(text) = self.dom_host().get_attribute(handle, "style") else {
             return;
         };
         let cssom_authored = self.element_inline_style_csp_state(handle)
             == crate::style_engine::InlineStyleCspState::Cssom;
-        let source = crate::css_style::CssomStyleAttribute::with_text(state, text, cssom_authored);
+        let source = crate::css_style::CssomStyleAttribute::with_text(
+            state,
+            text,
+            resolution_text,
+            cssom_authored,
+        );
+        let resolution_changed = self
+            .element_cssom_style(handle)
+            .and_then(crate::css_style::CssomStyleAttribute::resolution_text)
+            != source.resolution_text();
         self.dom_host_mut()
             .replace_style_attribute_source(handle, Box::new(source));
+        if resolution_changed {
+            self.note_element_inline_style_subtree_activity(handle);
+        }
     }
 
     pub(crate) fn can_defer_cssom_attribute(&self, handle: DomHandle) -> bool {

@@ -133,7 +133,8 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
     value: &str,
     priority: bool,
 ) -> InlineStylePropertyWrite {
-    if name != "all" && !inline_style_property_write_can_use_pdb_storage(name, value) {
+    let custom = moli_css_parse::is_cssom_custom_property_name(name);
+    if name != "all" && !custom && !inline_style_property_write_can_use_pdb_storage(name, value) {
         return InlineStylePropertyWrite::NeedsCompatibilityEntries;
     }
     let runtime = unsafe { &*runtime_ptr };
@@ -168,9 +169,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         .as_deref()
         .or(initial.as_ref())
         .expect("inline style declaration state");
-    if current.entries.is_empty() && current.side_entries.is_empty() && name != "all" {
+    if current.compatibility.is_none() && name != "all" {
         let parsed = (!value.is_empty()
-            && !css_value_uses_unresolved_cssom_storage(value)
+            && (custom || !css_value_uses_unresolved_cssom_storage(value))
             && !cssom_style_property_uses_preferred_pdb_supplemental_entries(
                 name, value, priority,
             ))
@@ -201,7 +202,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                 &context.url_data,
                 mode,
             )
-            .filter(moli_css_parse::ParsedCssomProperty::is_resolved_longhand_list)
+            .filter(moli_css_parse::ParsedCssomProperty::is_ordinary_declaration_list)
             .map(|declarations| (declarations, publishable.then_some(context)))
         })
         .flatten();
@@ -218,7 +219,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
             let can_defer = !blocked
                 && compare_longhand
                 && parsed.as_ref().map_or(current.parse_context.is_some(), |(property, context)| {
-                    property.is_single_longhand() && context.is_some()
+                    property.is_single_declaration() && context.is_some()
                 })
                 // Raw attribute text can have different spelling even when its
                 // declarations equal the newly serialized CSSOM block.
@@ -491,21 +492,21 @@ pub(super) fn commit_inline_style_declaration(
     override_text: Option<String>,
     base_url: Option<&url::Url>,
 ) {
-    let publish_metadata = |runtime: &mut PageScriptHost| {
+    let publish_base_url = |runtime: &mut PageScriptHost| {
         if let Some(base_url) = base_url {
             runtime.set_element_inline_style_base_url(handle, base_url.clone());
         }
-        runtime.set_element_inline_style_resolution_override(handle, override_text);
     };
     let Some(attribute_text) = attribute_text else {
         let runtime = unsafe { &mut *runtime_ptr };
-        publish_metadata(runtime);
-        runtime.set_element_inline_style_declaration_state(handle, state);
+        publish_base_url(runtime);
+        runtime.set_element_inline_style_declaration_state(handle, state, override_text);
         return;
     };
     crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let runtime = unsafe { &mut *runtime_ptr };
-        let source = CssomStyleAttribute::with_text(state, attribute_text.to_owned(), true);
+        let source =
+            CssomStyleAttribute::with_text(state, attribute_text.to_owned(), override_text, true);
         let base_url_changed = base_url.is_some_and(|base_url| {
             runtime
                 .existing_element_inline_style_base_url(handle)
@@ -522,6 +523,6 @@ pub(super) fn commit_inline_style_declaration(
         );
         // Publish the CSSOM and rendering views before the reaction scope
         // invokes attributeChangedCallback and permits another mutation.
-        publish_metadata(runtime);
+        publish_base_url(runtime);
     });
 }

@@ -618,13 +618,19 @@ impl DocumentRuntime {
         unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
         let was_cssom = unsafe { &*host_ptr }.element_inline_style_csp_state(handle)
             == crate::style_engine::InlineStyleCspState::Cssom;
+        let render_text_changed = unsafe { &*host_ptr }
+            .element_cssom_style(handle)
+            .and_then(crate::css_style::CssomStyleAttribute::resolution_text)
+            != source.resolution_text();
         let (effects, old_value) = self
             .dom_host
             .set_cssom_style_attribute(handle, Box::new(source), Some(value))
             .into_parts();
         // Same-value observer records can be queued without changing the style input.
-        let style_input_changed =
-            old_value.as_deref() != Some(value) || !was_cssom || base_url_changed;
+        let style_input_changed = old_value.as_deref() != Some(value)
+            || !was_cssom
+            || base_url_changed
+            || render_text_changed;
         let changed = self.apply_cssom_style_attribute_effects(
             scope,
             host_ptr,
@@ -725,9 +731,6 @@ impl DocumentRuntime {
                 old_style_state,
             );
             self.note_derived_element_state_style_activity(host_ptr, &derived_old_style_states);
-            if name.eq_ignore_ascii_case("style") {
-                unsafe { &mut *host_ptr }.clear_element_inline_style_resolution_text(handle);
-            }
         }
         if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
             self.apply_attribute_changed_reaction_policy(
@@ -932,7 +935,6 @@ impl DocumentRuntime {
             if name.eq_ignore_ascii_case("style") {
                 let runtime = unsafe { &mut *host_ptr };
                 runtime.clear_element_inline_style_base_url(handle);
-                runtime.clear_element_inline_style_resolution_text(handle);
             }
         }
         if changed {
@@ -1070,7 +1072,6 @@ impl DocumentRuntime {
             if namespace.is_none() && local_name.eq_ignore_ascii_case("style") {
                 let runtime = unsafe { &mut *host_ptr };
                 runtime.clear_element_inline_style_base_url(handle);
-                runtime.clear_element_inline_style_resolution_text(handle);
             }
         }
         if changed {
@@ -1207,9 +1208,6 @@ impl DocumentRuntime {
                 old_style_state,
             );
             self.note_derived_element_state_style_activity(host_ptr, &derived_old_style_states);
-            if namespace.is_none() && local_name.eq_ignore_ascii_case("style") {
-                unsafe { &mut *host_ptr }.clear_element_inline_style_resolution_text(handle);
-            }
         }
         if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
             self.apply_attribute_changed_reaction_policy(
