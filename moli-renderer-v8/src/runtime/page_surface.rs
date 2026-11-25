@@ -5076,6 +5076,7 @@ pub enum RendererPageCommand {
     LayoutMetrics,
     PublishLayout,
     PrintToPdf(RendererPrintToPdfRequest),
+    PrepareScreenshotResources,
     CaptureScreenshot(RendererCaptureScreenshotRequest),
     BlobBytesForUuid {
         uuid: String,
@@ -5228,6 +5229,7 @@ impl RendererPageCommand {
             Self::LayoutMetrics => Some("LayoutMetrics"),
             Self::PublishLayout => Some("PublishLayout"),
             Self::PrintToPdf(_) => Some("PrintToPdf"),
+            Self::PrepareScreenshotResources => Some("PrepareScreenshotResources"),
             Self::CaptureScreenshot(_) => Some("CaptureScreenshot"),
             Self::BlobBytesForUuid { .. } => Some("BlobBytesForUuid"),
             Self::RuntimeRealmInventory => Some("RuntimeRealmInventory"),
@@ -5451,6 +5453,7 @@ pub enum RendererPageReply {
     CookieFacadeSnapshot(Box<RendererPageCookieFacadeSnapshotReply>),
     LayoutMetrics(RendererLayoutMetrics),
     PrintToPdf(RendererPrintToPdfReply),
+    PreparedScreenshotResources(Option<futures_util::future::BoxFuture<'static, ()>>),
     CaptureScreenshot(RendererCaptureScreenshotReply),
     Unit,
 }

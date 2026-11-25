@@ -50,6 +50,10 @@ impl ReadinessPlan {
         self.response.is_some() || self.selector.is_some() || self.script.is_some()
     }
 
+    pub(super) fn remaining(&self) -> Duration {
+        self.deadline.remaining()
+    }
+
     pub(super) async fn fetch_document(
         &self,
         browser: &Browser,

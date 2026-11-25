@@ -496,6 +496,35 @@ impl Page {
         self.start_capture_screenshot_with_request(RendererCaptureScreenshotRequest::viewport_png())
     }
 
+    /// Starts computed CSS image requests for an export and gives them the
+    /// remaining readiness budget. Capture can use ordinary border fallbacks
+    /// if the deadline expires or an image fails.
+    pub async fn prepare_screenshot_resources_async(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<()> {
+        if timeout.is_zero() {
+            return Ok(());
+        }
+        let prepared = tokio::time::timeout(timeout, async {
+            let reply = self
+                .dispatch_page_command_async(RendererPageCommand::PrepareScreenshotResources)
+                .await?;
+            let ready = expect_page_reply!(
+                reply,
+                "prepare screenshot resources",
+                "a screenshot resource readiness reply",
+                RendererPageReply::PreparedScreenshotResources(ready) => Ok(ready)
+            )?;
+            if let Some(ready) = ready {
+                ready.await;
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+        prepared.ok().transpose().map(|_| ())
+    }
+
     pub fn start_capture_screenshot_with_request(
         &self,
         request: RendererCaptureScreenshotRequest,

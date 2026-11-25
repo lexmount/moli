@@ -222,6 +222,10 @@ impl PageVm {
             RendererPageCommand::PrintToPdf(request) => self
                 .print_to_pdf(request)
                 .map(RendererPageReply::PrintToPdf),
+            RendererPageCommand::PrepareScreenshotResources => self
+                .vm_mut()
+                .prepare_screenshot_resources()
+                .map(RendererPageReply::PreparedScreenshotResources),
             RendererPageCommand::CaptureScreenshot(request) => self
                 .capture_screenshot(request)
                 .map(RendererPageReply::CaptureScreenshot),
@@ -436,7 +440,8 @@ fn renderer_page_command_action_barrier(
     match command {
         #[cfg(feature = "devtools")]
         RendererPageCommand::DevTools(command) => devtools_page_command_action_barrier(command),
-        RendererPageCommand::CaptureScreenshot(_) => {
+        RendererPageCommand::PrepareScreenshotResources
+        | RendererPageCommand::CaptureScreenshot(_) => {
             Some(moli_action_window::ActionBarrier::Screenshot)
         }
         #[cfg(feature = "molio")]

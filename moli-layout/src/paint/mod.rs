@@ -1,4 +1,5 @@
 mod background;
+mod border;
 mod clip_path;
 mod cull;
 mod filters;
@@ -15,6 +16,7 @@ mod text;
 use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use background::{project_background_color, project_background_layers};
+use border::{BorderImageRasters, project_box_border};
 use clip_path::{ClipPathUnsupported, project_clip_path};
 use cull::{PaintCullPlan, PaintCullRegion};
 use filters::{expanded_filter_clip, project_filters};
@@ -187,6 +189,7 @@ where
         .diagnostics
         .extend_from_slice(projection.diagnostics);
     let cull_plan = PaintCullPlan::build(projection);
+    let mut border_rasters = BorderImageRasters::default();
     let mut metrics = PaintProjectionMetrics {
         event_count: projection.metadata.events.len(),
         ..PaintProjectionMetrics::default()
@@ -437,6 +440,7 @@ where
                     capture.include_backgrounds,
                     current_cull,
                     &mut metrics,
+                    &mut border_rasters,
                     &mut snapshot,
                 );
             }
@@ -476,6 +480,7 @@ where
                     capture.include_backgrounds,
                     current_cull,
                     &mut metrics,
+                    &mut border_rasters,
                     &mut snapshot,
                 );
             }
@@ -529,6 +534,7 @@ where
                     capture.include_backgrounds,
                     current_cull,
                     &mut metrics,
+                    &mut border_rasters,
                     &mut snapshot,
                 );
             }
@@ -825,6 +831,7 @@ fn project_box_background<N>(
     include_backgrounds: bool,
     cull: PaintCullRegion,
     metrics: &mut PaintProjectionMetrics,
+    border_rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -909,22 +916,26 @@ fn project_box_background<N>(
         layout.border.bottom,
         layout.border.left,
     );
-    let colors = layout_box.style.border_colors();
     for shadow in shadows.iter().filter(|shadow| shadow.inset).rev() {
         snapshot.push_fragment(PaintFragment::BoxShadow(shadow.clone()));
     }
-    if !layout_box.collapsed_table_border_part
-        && widths.has_positive_edge()
-        && colors.has_visible_edge()
-    {
-        snapshot.push_fragment(PaintFragment::Border {
-            rect: paint_space.pre_transform_rect(rect),
+    if !layout_box.collapsed_table_border_part {
+        project_box_border(
+            layout_box,
+            rect,
             widths,
-            colors,
-            styles: layout_box.style.border_styles(),
             radii,
-            transform: paint_space.property_transform(),
-        });
+            paint_space,
+            || {
+                cull.local_rect(
+                    projection.coordinate_spaces[geometry.coordinate_space.index()]
+                        .paint
+                        .local_transform(),
+                )
+            },
+            border_rasters,
+            snapshot,
+        );
     }
 }
 
@@ -1123,6 +1134,7 @@ fn project_inline_contents<N>(
     include_backgrounds: bool,
     cull: PaintCullRegion,
     metrics: &mut PaintProjectionMetrics,
+    border_rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -1151,6 +1163,7 @@ fn project_inline_contents<N>(
         selected_fragment,
         paint_space,
         include_backgrounds,
+        border_rasters,
         snapshot,
         local_cull,
         &mut text_clip_mask,

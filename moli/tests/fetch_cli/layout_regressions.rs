@@ -4,6 +4,46 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 use std::{process::Command, time::Duration};
 
+#[test]
+fn screenshot_cli_loads_border_image_before_first_capture() -> Result<()> {
+    let svg = STANDARD.encode(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="3"><rect width="3" height="3" fill="red"/></svg>"#,
+    );
+    let capture = |decoration: &str| -> Result<Vec<u8>> {
+        let html = format!(
+            r#"<!doctype html><body style="margin:0;background:white"><div style="width:60px;height:48px;border:6px solid lime;{decoration}"></div>"#,
+        );
+        let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
+        command.args([
+            "fetch",
+            "--layout",
+            "--resource",
+            "--timeout",
+            "5000",
+            "--dump",
+            "screenshot",
+            &url,
+        ]);
+        let output = run_command_with_process_timeout(command, Duration::from_secs(15))?;
+        ensure!(
+            output.status.success(),
+            "screenshot failed: {}",
+            clean_output(&output.stderr),
+        );
+        Ok(output.stdout)
+    };
+    let control = capture("border-color:red")?;
+    let border_image = capture(&format!(
+        "border-image:url('data:image/svg+xml;base64,{svg}') 1"
+    ))?;
+    assert!(
+        border_image == control,
+        "SVG border should match a solid red border"
+    );
+    Ok(())
+}
+
 fn run_layout(html: &str, expression: &str, fonts: bool) -> Result<Value> {
     let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
     let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));

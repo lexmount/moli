@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use futures_util::future::BoxFuture;
 use parking_lot::Mutex;
 
 use super::{
@@ -49,7 +50,6 @@ pub(super) struct CssImageResourceStore {
     inner: Arc<Mutex<CssImageResourceStoreInner>>,
     ready_by_request: ReadyImageResourceIndex,
     visual_generation: VisualResourceGeneration,
-    #[cfg(test)]
     completion_notify: Arc<tokio::sync::Notify>,
 }
 
@@ -80,7 +80,6 @@ impl CssImageResourceStore {
             inner: Arc::new(Mutex::new(CssImageResourceStoreInner::default())),
             ready_by_request,
             visual_generation,
-            #[cfg(test)]
             completion_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
@@ -134,6 +133,7 @@ impl CssImageResourceStore {
         );
         if reused {
             self.visual_generation.bump();
+            self.completion_notify.notify_waiters();
             CssImageResourceAdmission::Reused
         } else {
             CssImageResourceAdmission::Fetch(identity)
@@ -205,7 +205,6 @@ impl CssImageResourceStore {
             .insert(identity.request_key.clone(), &resource);
         slot.state = CssImageResourceState::Ready(resource);
         self.visual_generation.bump();
-        #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
     }
@@ -223,9 +222,27 @@ impl CssImageResourceStore {
         }
         slot.state = CssImageResourceState::Failed;
         self.visual_generation.bump();
-        #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
+    }
+
+    pub(super) fn wait_for_pending_loads(&self) -> BoxFuture<'static, ()> {
+        let store = self.clone();
+        Box::pin(async move {
+            loop {
+                let changed = store.completion_notify.notified();
+                let pending = store.inner.lock().slots.values().any(|slot| {
+                    matches!(
+                        slot.state,
+                        CssImageResourceState::Pending | CssImageResourceState::DecodeQueued(_)
+                    )
+                });
+                if !pending {
+                    break;
+                }
+                changed.await;
+            }
+        })
     }
 
     pub(super) fn ready_for_layout(
@@ -264,6 +281,7 @@ impl CssImageResourceStore {
         let removed = before - inner.slots.len();
         if removed != 0 {
             self.visual_generation.bump();
+            self.completion_notify.notify_waiters();
         }
         drop(inner);
         self.ready_by_request.prune_dead();

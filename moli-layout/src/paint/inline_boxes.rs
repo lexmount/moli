@@ -13,10 +13,11 @@ use taffy::ResolveOrZero;
 use super::{
     PaintSpace,
     background::{project_background_color, project_background_layers},
+    border::{BorderImageRasters, border_image_area, project_box_border},
     geometry::{BoxAreas, inset_radii},
     text::TextClipMaskScope,
 };
-use crate::{LayoutBox, LayoutRect, LayoutWorld, PaintEdgeSizes, PaintFragment, PaintSnapshot};
+use crate::{LayoutBox, LayoutRect, LayoutWorld, PaintEdgeSizes, PaintSnapshot};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_inline_box_fragments<N>(
@@ -25,6 +26,7 @@ pub(super) fn project_inline_box_fragments<N>(
     selected_fragment: Option<usize>,
     paint_space: PaintSpace,
     include_backgrounds: bool,
+    border_rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
     local_cull: Option<LayoutRect>,
     text_clip_mask: &mut impl FnMut(TextClipMaskScope, &mut PaintSnapshot),
@@ -97,17 +99,20 @@ pub(super) fn project_inline_box_fragments<N>(
         if rect.width <= 0.0 || rect.height <= 0.0 {
             continue;
         }
-        if local_cull.is_some_and(|cull| !super::cull::rects_intersect(rect, cull)) {
-            continue;
-        }
-        let color = style.background_color();
-        let radii = style.border_radii(rect.width, rect.height);
         let widths = PaintEdgeSizes::new(
             border.top,
             if has_right_edge { border.right } else { 0.0 },
             border.bottom,
             if has_left_edge { border.left } else { 0.0 },
         );
+        if local_cull.is_some_and(|cull| {
+            let ink = border_image_area(style, rect, widths).unwrap_or(rect);
+            !super::cull::rects_intersect(ink, cull)
+        }) {
+            continue;
+        }
+        let color = style.background_color();
+        let radii = style.border_radii(rect.width, rect.height);
         let padding_widths = PaintEdgeSizes::new(
             padding.top,
             if has_right_edge { padding.right } else { 0.0 },
@@ -162,17 +167,16 @@ pub(super) fn project_inline_box_fragments<N>(
             );
         }
 
-        let colors = style.border_colors();
-        if widths.has_positive_edge() && colors.has_visible_edge() {
-            snapshot.push_fragment(PaintFragment::Border {
-                rect: paint_space.pre_transform_rect(rect),
-                widths,
-                colors,
-                styles: style.border_styles(),
-                radii,
-                transform: paint_space.property_transform(),
-            });
-        }
+        project_box_border(
+            inline_box,
+            rect,
+            widths,
+            radii,
+            paint_space,
+            || local_cull,
+            border_rasters,
+            snapshot,
+        );
     }
 }
 

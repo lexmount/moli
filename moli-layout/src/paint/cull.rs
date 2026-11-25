@@ -9,13 +9,15 @@
 use std::{fmt::Debug, hash::Hash};
 
 use super::{
+    border::border_image_area,
     filters::{expanded_filter_clip, project_filters},
     geometry::BoxAreas,
     text::{caret_rect, range_selection_rects},
 };
 use crate::{
-    LayoutBoxId, LayoutPoint, LayoutRect, LayoutTransform2D, PaintFilter, PaintFragment,
-    inline::InlinePaintBounds, projection::PaintProjection, stacking::PaintOrderEvent,
+    LayoutBoxId, LayoutFragment, LayoutFragmentKind, LayoutPoint, LayoutRect, LayoutTransform2D,
+    PaintEdgeSizes, PaintFilter, PaintFragment, inline::InlinePaintBounds,
+    projection::PaintProjection, stacking::PaintOrderEvent,
 };
 
 const CULL_ANTIALIAS_MARGIN: f32 = 1.0;
@@ -183,9 +185,24 @@ where
         PaintOrderEvent::BoxOutsetShadow(id) => outset_shadow_bounds(projection, id),
         PaintOrderEvent::BoxBackground(id) => box_background_bounds(projection, id),
         PaintOrderEvent::TableCollapsedBorders(id) => table_border_bounds(projection, id),
-        PaintOrderEvent::BoxContents(id)
-        | PaintOrderEvent::InlineContents(id)
-        | PaintOrderEvent::BoxText(id) => box_contents_bounds(projection, id),
+        PaintOrderEvent::BoxContents(id) | PaintOrderEvent::BoxText(id) => {
+            box_contents_bounds(projection, id)
+        }
+        PaintOrderEvent::InlineContents(id) => {
+            let mut bounds = box_contents_bounds(projection, id);
+            for fragment in projection
+                .inline_fragments(id)
+                .iter()
+                .take_while(|fragment| {
+                    matches!(fragment.kind, LayoutFragmentKind::InlineBox { .. })
+                })
+            {
+                if let Some(area) = inline_border_image_area(projection, fragment) {
+                    bounds.include(map_box_rect(projection, id, area));
+                }
+            }
+            bounds
+        }
         PaintOrderEvent::BoxCaret(id) => caret_rect(&projection.world.boxes[id.index()])
             .map_or(PaintCullBounds::Empty, |rect| {
                 map_box_rect(projection, id, rect)
@@ -203,11 +220,11 @@ where
             );
             bounds
         }
-        PaintOrderEvent::InlineBox { owner, fragment } => map_box_rect(
-            projection,
-            owner,
-            projection.inline_fragments(owner)[fragment].rect,
-        ),
+        PaintOrderEvent::InlineBox { owner, fragment } => {
+            let fragment = &projection.inline_fragments(owner)[fragment];
+            let rect = inline_border_image_area(projection, fragment).unwrap_or(fragment.rect);
+            map_box_rect(projection, owner, rect)
+        }
         PaintOrderEvent::InlineText { owner, line, .. } => {
             let layout_box = &projection.world.boxes[owner.index()];
             let context = layout_box.inline_layout.as_ref().unwrap();
@@ -239,7 +256,11 @@ where
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let bounds = map_box_rect(projection, id, projection.geometry(id.index()).border_box);
+    let rect = projection.geometry(id.index()).border_box;
+    let border = layout_box.final_layout.border;
+    let widths = PaintEdgeSizes::new(border.top, border.right, border.bottom, border.left);
+    let ink = border_image_area(&layout_box.style, rect, widths).unwrap_or(rect);
+    let bounds = map_box_rect(projection, id, ink);
     if matches!(bounds, PaintCullBounds::Empty) && layout_box.is_replaced() {
         // Replaced-content projection can publish a fallback diagnostic even
         // when its used box has no ink. Do not make diagnostics depend on the
@@ -248,6 +269,30 @@ where
     } else {
         bounds
     }
+}
+
+fn inline_border_image_area<N>(
+    projection: &PaintProjection<'_, N>,
+    fragment: &LayoutFragment,
+) -> Option<LayoutRect>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let LayoutFragmentKind::InlineBox { box_id, .. } = fragment.kind else {
+        return None;
+    };
+    let model = fragment.box_model.as_ref()?;
+    let widths = PaintEdgeSizes::new(
+        model.padding.y - model.border.y,
+        model.border.right() - model.padding.right(),
+        model.border.bottom() - model.padding.bottom(),
+        model.padding.x - model.border.x,
+    );
+    border_image_area(
+        &projection.world.boxes[box_id.index()].style,
+        model.border,
+        widths,
+    )
 }
 
 fn box_contents_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
