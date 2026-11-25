@@ -99,10 +99,7 @@ pub(super) struct LocalFontSources {
 impl LocalFontSources {
     pub(super) fn new(system_fonts: bool) -> Self {
         Self {
-            collection: Collection::new(CollectionOptions {
-                shared: false,
-                system_fonts,
-            }),
+            collection: font_collection(system_fonts),
             cache: SourceCache::default(),
             names: None,
         }

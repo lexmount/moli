@@ -63,6 +63,16 @@ Implications:
 - `V8_FROM_SOURCE=1` is supported only after restoring the full upstream
   source-build layout; the slim tree fails early and lists the missing inputs
 
+For the OHOS ARM64 CLI build, add the `aarch64-unknown-linux-ohos` Rust target
+and run `scripts/build-ohos-arm64.sh` from the repository root. Set
+`OHOS_SDK_NATIVE` if the DevEco native SDK is installed somewhere other than
+the default macOS app path. Set `MOLI_OHOS_V8_CXX` to select a recent Clang++
+for the V8 bridges.
+
+The script pins the matching upstream ARM64 musl archive and Chromium libc++
+headers. Refresh both checksums and the binding path on rusty_v8 upgrades.
+The OHOS executable starts V8 in `--jitless` mode for shell deployments.
+
 `serde_v8 0.320.0` depends on `deno_v8 0.3.0`, whose published manifest still
 selects V8 150. The adjacent slim `vendor/deno_v8-0.3.0` patch changes only that
 dependency constraint to V8 152 so serde_v8 and Moli share one V8 type universe.

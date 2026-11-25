@@ -5287,6 +5287,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "libjpeg-turbo-rs",
+ "moli-system-fonts",
  "png",
  "thiserror 2.0.18",
  "usvg",

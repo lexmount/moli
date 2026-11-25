@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
 
-[dependencies]
+[target.'cfg(not(target_env = "ohos"))'.dependencies]
 fontique = "=0.11.0"
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+[target.'cfg(target_env = "ohos")'.dependencies]
+fontique = { version = "=0.11.0", default-features = false, features = ["std"] }
+
+[target.'cfg(any(all(target_os = "linux", not(target_env = "ohos")), target_os = "freebsd"))'.dependencies]
 parking_lot = "0.12"
 yeslogic-fontconfig-sys = "=6.0.1"
 

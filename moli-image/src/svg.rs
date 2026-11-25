@@ -104,6 +104,16 @@ impl SvgFonts {
 
 static SVG_FONTS: LazyLock<SvgFonts> = LazyLock::new(|| {
     let mut database = usvg::fontdb::Database::new();
+    #[cfg(target_env = "ohos")]
+    {
+        for data in moli_system_fonts::ohos_system_font_data() {
+            database.load_font_source(usvg::fontdb::Source::Binary(data));
+        }
+        database.set_sans_serif_family("HarmonyOS Sans");
+        database.set_serif_family("Noto Serif");
+        database.set_monospace_family("Noto Sans Mono");
+    }
+    #[cfg(not(target_env = "ohos"))]
     database.load_system_fonts();
     SvgFonts::from_database(database)
 });

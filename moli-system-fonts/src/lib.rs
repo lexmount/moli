@@ -10,14 +10,39 @@
 
 use std::collections::HashMap;
 
-use fontique::Collection;
+use fontique::{Collection, CollectionOptions};
 
-#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
+#[cfg(any(
+    test,
+    all(target_os = "linux", not(target_env = "ohos")),
+    target_os = "freebsd"
+))]
 mod matching;
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(any(
+    all(target_os = "linux", not(target_env = "ohos")),
+    target_os = "freebsd"
+))]
 #[path = "fontconfig.rs"]
 mod platform;
+
+#[cfg(target_env = "ohos")]
+mod ohos;
+#[cfg(target_env = "ohos")]
+pub use ohos::ohos_system_font_data;
+
+/// Creates a per-document font collection using the platform's system fonts when requested.
+pub fn font_collection(system_fonts: bool) -> Collection {
+    #[cfg(target_env = "ohos")]
+    if system_fonts {
+        return ohos::SYSTEM_FONTS.clone();
+    }
+
+    Collection::new(CollectionOptions {
+        shared: false,
+        system_fonts,
+    })
+}
 
 /// Caches named-family substitutions for one font collection.
 ///
@@ -94,7 +119,10 @@ fn normalized_family_name(name: &str) -> String {
     name.chars().flat_map(char::to_lowercase).collect()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+#[cfg(not(any(
+    all(target_os = "linux", not(target_env = "ohos")),
+    target_os = "freebsd"
+)))]
 mod platform {
     pub(super) fn match_family(
         _family: &str,
@@ -126,10 +154,7 @@ mod tests {
 
     #[test]
     fn successful_family_lookup_is_cached() {
-        let mut collection = Collection::new(fontique::CollectionOptions {
-            shared: false,
-            system_fonts: true,
-        });
+        let mut collection = font_collection(true);
         let family = collection
             .family_names()
             .next()
@@ -149,10 +174,7 @@ mod tests {
 
     #[test]
     fn missing_family_lookup_is_cached_without_replacing_the_css_fallback() {
-        let mut collection = Collection::new(fontique::CollectionOptions {
-            shared: false,
-            system_fonts: true,
-        });
+        let mut collection = font_collection(true);
         let mut resolver = SystemFontFamilyResolver::new(&mut collection);
         let family = "__moli_missing_font_family_cache_3bb2__";
         for _ in 0..2 {
@@ -161,13 +183,13 @@ mod tests {
         assert_eq!(resolver.family_lookup_count, 1);
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        all(target_os = "linux", not(target_env = "ohos")),
+        target_os = "freebsd"
+    ))]
     #[test]
     fn fontconfig_aliases_do_not_convert_an_unknown_family_to_default_sans() {
-        let mut collection = Collection::new(fontique::CollectionOptions {
-            shared: false,
-            system_fonts: true,
-        });
+        let mut collection = font_collection(true);
         let mut resolver = SystemFontFamilyResolver::new(&mut collection);
         assert_eq!(
             resolver.resolve_missing_family("__moli_another_missing_family_92a6__"),
