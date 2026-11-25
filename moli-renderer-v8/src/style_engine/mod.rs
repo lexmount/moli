@@ -6,6 +6,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use dom::ElementState as StyloElementState;
 use moli_selector::{QueryContainerSizes, StyloDomStyleAdapter};
+#[cfg(test)]
 use style::servo::restyle_damage::ServoRestyleDamage;
 
 mod active_stylesheets;
@@ -62,7 +63,7 @@ mod state;
 #[cfg(debug_assertions)]
 pub(crate) use state::ComputedStyleObservationInputEpochs;
 pub(crate) use state::ScreenStyleCoverage;
-use state::{ScreenStyleChanges, ScreenStyleInvalidation};
+use state::{ScreenRestyleTargets, ScreenStyleInvalidation};
 pub(crate) use style_paths::StyleInvalidationScope;
 mod stylesheet;
 mod stylesheet_resources;
@@ -245,20 +246,23 @@ impl MoliStyleEngine {
             })
     }
 
-    /// Incomplete invalidation coverage requires a full layout.
-    pub(crate) fn screen_style_changes(
+    /// The scopes to settle while the existing screen layout may still be used.
+    pub(crate) fn screen_restyle_targets(
         &self,
         host: &DomHost,
         document: DomHandle,
-    ) -> Option<ScreenStyleChanges> {
+    ) -> Option<ScreenRestyleTargets> {
         let Some(world) = self.document_worlds.active_world(document) else {
-            return Some(ScreenStyleChanges::default());
+            return Some(ScreenRestyleTargets::default());
         };
         let state = &world.document_state;
         state.finish_screen_style_invalidation();
+        if state.screen_needs_layout() {
+            return None;
+        }
         match &*state.screen_style_invalidation.borrow() {
-            ScreenStyleInvalidation::Clean => Some(ScreenStyleChanges::default()),
-            ScreenStyleInvalidation::Pending { after, targets } => Some(ScreenStyleChanges {
+            ScreenStyleInvalidation::Clean => Some(ScreenRestyleTargets::default()),
+            ScreenStyleInvalidation::Pending { after, targets } => Some(ScreenRestyleTargets {
                 after: *after,
                 targets: targets
                     .iter()
@@ -268,43 +272,24 @@ impl MoliStyleEngine {
                         .then_some((handle, scope))
                     })
                     .collect(),
-                observed_damage: self.pending_screen_damage(&world),
             }),
             ScreenStyleInvalidation::Full => None,
         }
     }
 
-    fn pending_screen_damage(&self, world: &DocumentStyleWorld) -> ServoRestyleDamage {
+    #[cfg(test)]
+    pub(crate) fn observed_screen_damage_for_test(
+        &self,
+        document: DomHandle,
+    ) -> ServoRestyleDamage {
+        let world = self.world_for_document(document);
         world
             .document_state
             .screen_damage_nodes
             .borrow()
             .iter()
-            .filter_map(|&handle| {
-                self.dom_adapter
-                    .element_restyle_damage(world.document, handle)
-            })
+            .filter_map(|&handle| self.dom_adapter.element_restyle_damage(document, handle))
             .fold(ServoRestyleDamage::empty(), |all, damage| all | damage)
-    }
-
-    pub(crate) fn has_supported_screen_style_damage(
-        &self,
-        document: DomHandle,
-        supported: ServoRestyleDamage,
-    ) -> bool {
-        self.document_worlds
-            .active_world(document)
-            .is_none_or(|world| {
-                let state = &world.document_state;
-                state.finish_screen_style_invalidation();
-                match &*state.screen_style_invalidation.borrow() {
-                    ScreenStyleInvalidation::Clean => true,
-                    ScreenStyleInvalidation::Pending { .. } => {
-                        supported.contains(self.pending_screen_damage(&world))
-                    }
-                    ScreenStyleInvalidation::Full => false,
-                }
-            })
     }
 
     #[cfg(test)]
