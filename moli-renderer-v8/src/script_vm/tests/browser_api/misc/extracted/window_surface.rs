@@ -833,3 +833,31 @@ fn window_dialog_and_open_arguments_use_webidl_conversion() {
         "undefined|TypeError|false|RangeError|null|TypeError|[object Window]|TypeError|TypeError|RangeError"
     );
 }
+
+#[test]
+fn window_open_popup_uses_native_viewport_without_reading_opener_expandos() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const names = ['innerWidth', 'innerHeight', 'outerWidth', 'outerHeight', 'devicePixelRatio'];
+              const expected = names.map(name => window[name]);
+              let reads = 0;
+              for (const name of names) {
+                Object.defineProperty(window, name, {
+                  configurable: true,
+                  get() { ++reads; throw new Error('opener viewport getter'); }
+                });
+              }
+              const popup = open();
+              try {
+                return JSON.stringify([reads, names.every((name, index) => popup[name] === expected[index])]);
+              } finally {
+                popup.close();
+              }
+            })()"#
+        )
+        .unwrap(),
+        "[0,true]"
+    );
+}

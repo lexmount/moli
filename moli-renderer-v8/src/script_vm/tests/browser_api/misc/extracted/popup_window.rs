@@ -1189,23 +1189,20 @@ async fn lightweight_popup_local_storage_events_fire_on_opener() {
 #[test]
 fn window_open_lightweight_popup_inherits_opener_viewport_surface() {
     let mut vm = new_storage_test_vm("https://example.com/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 320,
+        inner_height: 240,
+        outer_width: 321,
+        outer_height: 241,
+        device_pixel_ratio: 2.5,
+        ..Default::default()
+    }))
+    .unwrap();
 
     let result = vm
         .eval(
             r##"
             (() => {
-              for (const [name, value] of Object.entries({
-                innerWidth: 320,
-                innerHeight: 240,
-                outerWidth: 321,
-                outerHeight: 241,
-                devicePixelRatio: 2.5
-              })) {
-                Object.defineProperty(globalThis, name, {
-                  configurable: true,
-                  get: () => value
-                });
-              }
               const popup = open("about:blank#surface");
               return JSON.stringify({
                 width: popup.innerWidth,
