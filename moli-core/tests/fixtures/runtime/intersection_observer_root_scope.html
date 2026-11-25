@@ -2,7 +2,7 @@
 <html>
 <body>
   <div id="root">
-    <div id="inside"></div>
+    <div id="inside" style="width: 10px; height: 10px"></div>
   </div>
   <div id="outside"></div>
   <script>
@@ -12,14 +12,14 @@
 
     let seen = [];
     const observer = new IntersectionObserver((entries) => {
-      seen = seen.concat(entries.map((entry) => entry.target.id));
+      seen = seen.concat(entries.map((entry) => `${entry.target.id}:${entry.isIntersecting}`));
     }, { root });
 
     observer.observe(outside);
     observer.observe(inside);
 
     setTimeout(() => {
-      window.intersectionObserverRootScopedIds = seen.join(',');
+      window.intersectionObserverRootScopedEntries = seen.join(',');
       window.intersectionObserverRootScopedCount = seen.length;
     }, 0);
   </script>
