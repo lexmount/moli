@@ -716,6 +716,7 @@ pub(super) fn apply_video_update(
                 Ok(DecodeResult::Frame(_) | DecodeResult::Waiting) => false,
                 Err(error) => {
                     tracing::debug!(?error, "MP4 video decoder could not open the input");
+                    video.worker = None;
                     false
                 }
             };
