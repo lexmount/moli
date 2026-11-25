@@ -45,9 +45,11 @@ fn important_style_entry(name: &str, value: &str) -> StyleEntry {
 }
 
 fn inline_css_text_pdb_storage_state(css_text: &str) -> Option<CssInlineStyleDeclarationState> {
+    let (declarations, source_preserved) = crate::css_style::scan_inline_css_text(css_text);
     super::inline_state::inline_css_text_pdb_storage_state(
         css_text,
-        &crate::css_style::parse_css_declaration_list(css_text),
+        &declarations,
+        source_preserved,
     )
 }
 
@@ -78,14 +80,24 @@ fn css_text_builder_matches_stylo_for_order_priority_and_shorthand_resets() {
         "WIDTH: 1px; width: 2px !important; width: 3px; height: 4px;",
         "margin: 1px 2px; margin-inline-start: 3px; margin-left: 4px;",
         "border-image-source: url(example.png); border: 1px solid red; color: green;",
+        "border-image-source: url(./example.png); width: 2px;",
         r#"content: "x;y"; --Empty:; --Variant: normal; --variant: hidden;"#,
+        "width: 10px\u{00a0}; height: 20px;",
+        "width: 10px !important\u{00a0}; width: 30px;",
+        "width\u{00a0}: 10px; height: 20px;",
+        "width: 10px\u{000b}; height: 20px;",
+        "cssFloat: left; height: 20px;",
+        "width: 10px !/**/important/**/; width: 30px;",
+        "--Token: \u{00a0}value\u{00a0}; --token: \u{00a0};",
+        "--Token: { value !important }; color: red !important;",
+        r#"content: "hello !important"#,
+        "--Token: [value !important",
+        r"w\69 dth: 10px; --a: a\;b;",
     ] {
         let state = inline_css_text_pdb_storage_state(css_text).expect(css_text);
-        assert_eq!(
-            state.block,
-            moli_css_parse::parse_declaration_block(css_text),
-            "{css_text}"
-        );
+        let expected = moli_css_parse::parse_declaration_block(css_text);
+        assert_eq!(state.block, expected, "{css_text}");
+        assert_eq!(state.css_text(), expected.css_text(), "{css_text}");
     }
 }
 

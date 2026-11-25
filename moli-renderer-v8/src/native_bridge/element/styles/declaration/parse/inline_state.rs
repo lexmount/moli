@@ -97,6 +97,7 @@ pub(super) fn inline_style_declaration_state_from_css_text(
 pub(super) fn inline_css_text_pdb_storage_state(
     css_text: &str,
     declarations: &[StyleEntry],
+    source_preserved: bool,
 ) -> Option<CssInlineStyleDeclarationState> {
     if declarations
         .iter()
@@ -108,9 +109,8 @@ pub(super) fn inline_css_text_pdb_storage_state(
         return Some(state);
     }
     let mut block = style::properties::PropertyDeclarationBlock::new();
-    // The declaration scanner unwraps escaped semicolons for compatibility
-    // entry parsers. Let Stylo consume the original token stream in that case.
-    let mut use_original_text = css_text.contains('\\');
+    // Escapes and compatibility normalization can change the token stream.
+    let mut use_original_text = !source_preserved || css_text.contains('\\');
     let mut project_entries = false;
     for declaration in declarations {
         let name = canonical_style_property_name(declaration.name.trim());

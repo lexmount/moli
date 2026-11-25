@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn inline_css_text_preserves_css_whitespace_and_priority_tokens() {
+    let mut vm = new_storage_test_vm("https://cssom-tokens.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const {style} = document.createElement('div');
+  const cases = [
+    ['width: 10px\u00a0; height: 20px;', 'height: 20px;'],
+    ['width: 10px !important\u00a0; width: 30px;', 'width: 30px;'],
+    ['width\u00a0: 10px; height: 20px;', 'height: 20px;'],
+    ['cssFloat: left; float: right;', 'float: right;'],
+    ['width: 10px !/**/important/**/; width: 30px;', 'width: 10px !important;'],
+    ['--token: \u00a0value\u00a0;', '--token: \u00a0value\u00a0;'],
+    ['content: "hello !important', 'content: "hello !important";'],
+    ['--Token: [value !important', '--Token: [value !important];'],
+  ];
+  for (const [source, expected] of cases) {
+    style.cssText = source;
+    if (style.cssText !== expected) {
+      throw new Error(`${JSON.stringify(source)} produced ${JSON.stringify(style.cssText)}`);
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("cssText must preserve CSS tokens before parsing declarations");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn cssom_preparsed_write_preserves_mutations_and_custom_element_observations() {
     let mut vm = new_storage_test_vm("https://cssom-preparsed-write.test/");
     assert_eq!(

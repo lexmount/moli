@@ -25,7 +25,10 @@ pub use color::{
 };
 pub use cssom_block::{CssDeclarationBlock, parse_declaration_block};
 pub use cssom_property::ParsedCssomProperty;
-pub use declaration::{CssDeclaration, DeclarationParseOptions, parse_declaration_list};
+pub use declaration::{
+    CssDeclaration, DeclarationParseOptions, parse_declaration_list,
+    parse_declaration_list_with_source_check,
+};
 pub use font_face::{
     CssFontFace, CssFontFamily, CssFontShorthand, CssFontSource, font_family_name_key,
     font_load_query_contains_css_wide_keyword, font_load_query_family, font_load_query_is_valid,

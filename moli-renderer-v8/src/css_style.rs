@@ -1392,17 +1392,30 @@ impl From<CssFontFace> for CssFontFaceEntry {
 }
 
 pub(crate) fn parse_css_declaration_list(style_text: &str) -> Vec<CssStyleEntry> {
-    parse_declaration_list(
+    parse_declaration_list(style_text, CSSOM_DECLARATION_PARSE_OPTIONS)
+        .into_iter()
+        .map(CssStyleEntry::from)
+        .collect()
+}
+
+const CSSOM_DECLARATION_PARSE_OPTIONS: DeclarationParseOptions = DeclarationParseOptions {
+    canonicalize_property_name: false,
+    unescape_value_semicolons: true,
+    preserve_empty_values: true,
+};
+
+pub(crate) fn scan_inline_css_text(style_text: &str) -> (Vec<CssStyleEntry>, bool) {
+    let (declarations, source_preserved) = moli_css_parse::parse_declaration_list_with_source_check(
         style_text,
-        DeclarationParseOptions {
-            canonicalize_property_name: false,
-            unescape_value_semicolons: true,
-            preserve_empty_values: true,
-        },
-    )
-    .into_iter()
-    .map(CssStyleEntry::from)
-    .collect()
+        CSSOM_DECLARATION_PARSE_OPTIONS,
+    );
+    let entries = declarations
+        .into_iter()
+        // cssFloat is an IDL attribute name. The CSS property is float.
+        .filter(|declaration| !declaration.name.eq_ignore_ascii_case("cssFloat"))
+        .map(CssStyleEntry::from)
+        .collect();
+    (entries, source_preserved)
 }
 
 /// Returns the winning declaration for one property inside a declaration
