@@ -97,14 +97,18 @@ impl DomHost {
         DomMutationEffects::default()
     }
 
-    pub fn materialize_deferred_style_attribute(
+    /// Install a declaration source with the same text as the committed attribute.
+    pub fn replace_style_attribute_source(
         &mut self,
         handle: DomHandle,
-    ) -> Option<Arc<InlineStyleAttribute>> {
-        self.node_mut(handle)?
-            .data_mut()
-            .as_element_mut()?
-            .materialize_deferred_style_attribute()
+        source: Box<dyn DeferredStyleAttribute>,
+    ) {
+        if let Some(element) = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+        {
+            element.replace_style_attribute_source(source);
+        }
     }
 
     fn deferred_style_attribute_effects(&self, handle: DomHandle) -> DomMutationEffects {

@@ -172,12 +172,6 @@ impl Attribute {
         }
     }
 
-    pub(super) fn materialize_deferred_style(&mut self) -> Option<Arc<InlineStyleAttribute>> {
-        let source = self.deferred_style_mut()?;
-        let text = InlineStyleAttribute::new(source.as_str().to_owned());
-        Some(std::mem::replace(source, Arc::new(text)))
-    }
-
     pub(super) fn set_value(&mut self, value: String) {
         self.value = AttributeValue::new(value, self.name_matches("style"));
     }

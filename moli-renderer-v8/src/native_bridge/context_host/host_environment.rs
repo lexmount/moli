@@ -2728,14 +2728,17 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
     ) -> crate::style_engine::InlineStyleCspState {
-        if self.element_deferred_cssom_style(handle).is_some() {
+        if self
+            .element_cssom_style(handle)
+            .is_some_and(crate::css_style::CssomStyleAttribute::is_cssom_authored)
+        {
             return crate::style_engine::InlineStyleCspState::Cssom;
         }
         self.style_engine
             .inline_style_csp_state_with_host(self.dom_host(), handle)
     }
 
-    pub(crate) fn element_deferred_cssom_style(
+    pub(crate) fn element_cssom_style(
         &self,
         handle: DomHandle,
     ) -> Option<&crate::css_style::CssomStyleAttribute> {
@@ -2747,14 +2750,10 @@ impl PageScriptHost {
     pub(crate) fn element_inline_style_declaration_state(
         &self,
         handle: DomHandle,
-    ) -> Option<crate::css_style::InlineStyleStateRef<'_>> {
-        use crate::css_style::InlineStyleStateRef;
-        if let Some(style) = self.element_deferred_cssom_style(handle) {
-            return Some(InlineStyleStateRef::Deferred(style.read()));
-        }
-        self.style_engine
-            .cssom_inline_style(handle)
-            .map(InlineStyleStateRef::Cached)
+    ) -> Option<parking_lot::RwLockReadGuard<'_, crate::css_style::CssInlineStyleDeclarationState>>
+    {
+        self.element_cssom_style(handle)
+            .map(crate::css_style::CssomStyleAttribute::read)
     }
 
     pub(crate) fn set_element_inline_style_declaration_state(
@@ -2762,31 +2761,14 @@ impl PageScriptHost {
         handle: DomHandle,
         state: crate::css_style::CssInlineStyleDeclarationState,
     ) {
-        if self.element_deferred_cssom_style(handle).is_some() {
-            self.dom_host_mut()
-                .materialize_deferred_style_attribute(handle);
-        }
-        let source = self
-            .dom_host()
-            .dom()
-            .find_attribute(handle, "style")
-            .and_then(|attribute| attribute.shared_style_value());
-        self.style_engine
-            .set_cssom_inline_style(handle, state, source);
-    }
-
-    pub(crate) fn take_element_inline_style_declaration_state(
-        &mut self,
-        handle: DomHandle,
-    ) -> Option<crate::css_style::CssInlineStyleDeclarationState> {
-        if self.element_deferred_cssom_style(handle).is_some()
-            && let Some(deferred) = self
-                .dom_host_mut()
-                .materialize_deferred_style_attribute(handle)
-        {
-            return Some(crate::css_style::CssomStyleAttribute::take_state(deferred));
-        }
-        self.style_engine.take_cssom_inline_style(handle)
+        let Some(text) = self.dom_host().get_attribute(handle, "style") else {
+            return;
+        };
+        let cssom_authored = self.element_inline_style_csp_state(handle)
+            == crate::style_engine::InlineStyleCspState::Cssom;
+        let source = crate::css_style::CssomStyleAttribute::with_text(state, text, cssom_authored);
+        self.dom_host_mut()
+            .replace_style_attribute_source(handle, Box::new(source));
     }
 
     pub(crate) fn can_defer_cssom_attribute(&self, handle: DomHandle) -> bool {
@@ -2800,11 +2782,6 @@ impl PageScriptHost {
                 || !self
                     .style_engine
                     .has_retained_style_attribute_selector(dom, handle))
-    }
-
-    pub(crate) fn clear_element_inline_style_declaration_state(&mut self, handle: DomHandle) {
-        self.style_engine.take_cssom_inline_style(handle);
-        self.clear_element_inline_style_resolution_text(handle);
     }
 
     pub(crate) fn set_element_inline_style_current_base_url(&mut self, handle: DomHandle) {

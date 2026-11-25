@@ -207,9 +207,6 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                 && (current.parse_context.is_some()
                     || !runtime.dom_host().dom().has_attribute(handle, "style"))
                 && runtime.can_defer_cssom_attribute(handle);
-            // Parsing is complete. Move the block out until publication so no
-            // borrow of the declaration store spans an author callback.
-            drop(cached);
             let mutate = |state: &mut CssInlineStyleDeclarationState| {
                 if let Some((parsed, context)) = parsed {
                     if !parsed.apply(&mut state.block, compare_longhand) {
@@ -234,6 +231,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                     "style",
                 )
             {
+                drop(cached);
                 return Some(commit_deferred_inline_property(
                     scope,
                     runtime_ptr,
@@ -242,17 +240,13 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
                     mutate,
                 ));
             }
-            let had_cached_state = initial.is_none();
-            let mut state = initial.unwrap_or_else(|| {
-                unsafe { &mut *runtime_ptr }
-                    .take_element_inline_style_declaration_state(handle)
-                    .expect("cached inline style declaration state")
-            });
+            // The committed attribute supplies the previous text until the
+            // exact attribute mutation has been applied.
+            let mut state = initial
+                .or_else(|| cached.as_deref().cloned())
+                .expect("inline style declaration state");
+            drop(cached);
             if !mutate(&mut state) {
-                if had_cached_state {
-                    unsafe { &mut *runtime_ptr }
-                        .set_element_inline_style_declaration_state(handle, state);
-                }
                 return Some(false);
             }
             return Some(commit_inline_property_state(
@@ -388,23 +382,15 @@ fn commit_deferred_inline_property(
     mutate: impl FnOnce(&mut CssInlineStyleDeclarationState) -> bool,
 ) -> bool {
     let runtime = unsafe { &mut *runtime_ptr };
-    let effects = if runtime.element_deferred_cssom_style(handle).is_some() {
+    let effects = if runtime.element_cssom_style(handle).is_some() {
         runtime
             .dom_host_mut()
             .edit_deferred_style_attribute(handle, |source| {
                 CssomStyleAttribute::edit_shared(source, mutate)
             })
     } else {
-        let had_cached_state = initial.is_none();
-        let mut state = initial.unwrap_or_else(|| {
-            runtime
-                .take_element_inline_style_declaration_state(handle)
-                .expect("cached inline style declaration state")
-        });
+        let mut state = initial.expect("uncached inline style declaration state");
         if !mutate(&mut state) {
-            if had_cached_state {
-                runtime.set_element_inline_style_declaration_state(handle, state);
-            }
             return false;
         }
         runtime

@@ -810,7 +810,6 @@ impl PageScriptHost {
             dropped_image_decode_context_count = image_decode_retirement.dropped_context_count(),
             "applied main document replacement owner transaction"
         );
-        self.style_engine.clear_cssom_inline_styles();
         self.style_engine
             .clear_for_document_replacement(document_handle);
         if self.layout_policy().is_realtime() {

@@ -240,10 +240,17 @@ impl Element {
         }
     }
 
-    pub(super) fn materialize_deferred_style_attribute(
+    pub(super) fn replace_style_attribute_source(
         &mut self,
-    ) -> Option<Arc<InlineStyleAttribute>> {
-        self.style_attribute_mut()?.materialize_deferred_style()
+        source: Box<dyn DeferredStyleAttribute>,
+    ) {
+        if let Some(attribute) = self
+            .attributes
+            .iter_mut()
+            .find(|attribute| attribute.name_matches("style"))
+        {
+            attribute.set_deferred_style(source);
+        }
     }
 
     fn style_attribute_mut(&mut self) -> Option<&mut Attribute> {
