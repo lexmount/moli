@@ -24,7 +24,7 @@ use style::{
 };
 use style_traits::{ParsingMode, ToCss};
 
-use crate::dom::native::Element;
+use crate::dom::{forms::parse_html_integer_prefix, native::Element};
 
 use super::{presentational_hints::synthesize_hidden_presentational_hint, query::QueryElement};
 
@@ -165,6 +165,12 @@ impl QueryElement<'_> {
             append_html_text_alignment_declaration(*self, &mut block);
             if element.local_name() == "object" {
                 append_html_object_dimension_declarations(element, &mut block);
+            }
+            if element.local_name() == "iframe"
+                && let Some(value) = element.attribute_ns("", "frameborder")
+                && parse_html_integer_prefix(value).unwrap_or(0) == 0
+            {
+                append_parsed_presentation_declaration(*self, "border-width", "0", &mut block);
             }
             append_html_table_presentation_declarations(*self, &mut block);
         }

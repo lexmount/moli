@@ -1542,7 +1542,8 @@ yield; // Publish this scene before reading its geometry.
 "#,
     )
     .expect("the same cached child element should observe the resized iframe viewport");
-    assert_eq!(after, "100|100|80|10px|8px|13px|50px|10px|8px");
+    // The iframe's border box includes the 2px UA border on each side.
+    assert_eq!(after, "104|100|80|10px|8px|13px|50px|10px|8px");
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(child_document),
         updates + 1,
