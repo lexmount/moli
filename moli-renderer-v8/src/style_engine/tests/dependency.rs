@@ -138,6 +138,7 @@ fn viewport_change_updates_the_persistent_style_world_in_place() {
         .note_screen_style_attribute_changes([target]);
     world.document_state.record_style_targets(
         &host,
+        &engine.dom_adapter,
         document,
         [(target, StyleInvalidationScope::Element)],
     );

@@ -44,13 +44,6 @@ impl BranchStyleRequirements {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct CheckedStylePath {
-    observed_at: u64,
-    pub(super) subtree_generation: u64,
-    pub(super) depth: usize,
-}
-
 /// Cache the ancestry inputs used by published styles. An inherited change
 /// updates just the parent entry. A demanded child checks that requirement
 /// when it next reads the path, even if its siblings have already restyled.
@@ -59,27 +52,24 @@ pub(super) struct StylePathCache {
     generation: Cell<u64>,
     minimum_observation: Cell<u64>,
     branches: RefCell<HashMap<DomHandle, BranchStyleRequirements>>,
-    checked_paths: RefCell<HashMap<DomHandle, CheckedStylePath>>,
     #[cfg(test)]
     path_node_visits: Cell<u64>,
 }
 
 impl StylePathCache {
-    pub(super) fn invalidate_paths(&self) {
-        let generation = self.generation().checked_add(1).unwrap_or_else(|| {
-            self.clear();
-            self.minimum_observation.set(1);
-            1
-        });
-        self.generation.set(generation);
+    pub(super) fn invalidate_paths(&self) -> bool {
+        if let Some(generation) = self.generation().checked_add(1) {
+            self.generation.set(generation);
+            return false;
+        }
+        self.clear();
+        self.minimum_observation.set(1);
+        self.generation.set(1);
+        true
     }
 
     pub(super) fn generation(&self) -> u64 {
         self.generation.get()
-    }
-
-    pub(super) fn forget_checked_path(&self, handle: DomHandle) -> bool {
-        self.checked_paths.borrow_mut().remove(&handle).is_some()
     }
 
     pub(super) fn can_compare_after(&self, generation: u64) -> bool {
@@ -147,41 +137,10 @@ impl StylePathCache {
             .max(self.minimum_observation.get())
     }
 
-    pub(super) fn checked_path(&self, handle: DomHandle) -> Option<CheckedStylePath> {
-        self.checked_paths
-            .borrow()
-            .get(&handle)
-            .copied()
-            .filter(|stamp| stamp.observed_at == self.generation())
-    }
-
-    pub(super) fn last_observation(&self, handle: DomHandle) -> u64 {
-        self.checked_paths
-            .borrow()
-            .get(&handle)
-            .map_or(0, |stamp| stamp.observed_at)
-    }
-
-    pub(super) fn mark_path_checked(
-        &self,
-        element: DomHandle,
-        subtree_generation: u64,
-        depth: usize,
-    ) -> CheckedStylePath {
-        let stamp = CheckedStylePath {
-            observed_at: self.generation(),
-            subtree_generation,
-            depth,
-        };
-        self.checked_paths.borrow_mut().insert(element, stamp);
-        stamp
-    }
-
     pub(super) fn clear(&self) {
         self.generation.set(0);
         self.minimum_observation.set(0);
         self.branches.borrow_mut().clear();
-        self.checked_paths.borrow_mut().clear();
         #[cfg(test)]
         self.path_node_visits.set(0);
     }

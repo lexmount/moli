@@ -903,11 +903,18 @@ fn branch_requirement_budget_preserves_deferred_inheritance() {
     ));
     world.document_state.record_style_targets(
         &host,
+        &engine.dom_adapter,
         document,
         [(parent, StyleInvalidationScope::Element)],
     );
+    let unrelated_is_current = || {
+        engine
+            .dom_adapter
+            .style_path(document, unrelated)
+            .is_some_and(|path| path.observed_at == invalidation.generation())
+    };
     assert_eq!(color(&host, unrelated).as_deref(), green);
-    assert!(invalidation.checked_path(unrelated).is_some());
+    assert!(unrelated_is_current());
     assert!(invalidation.can_compare_after(before));
     assert_eq!(invalidation.branch_requirement_count(), 0);
 
@@ -919,7 +926,7 @@ fn branch_requirement_budget_preserves_deferred_inheritance() {
     }
     assert_eq!(peak, MAX_CACHED_BRANCH_REQUIREMENTS);
     assert!(!invalidation.can_compare_after(before));
-    assert!(invalidation.checked_path(unrelated).is_some());
+    assert!(unrelated_is_current());
     assert_eq!(color(&host, deferred).as_deref(), blue);
     assert_eq!(color(&host, unrelated).as_deref(), green);
 }

@@ -55,6 +55,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
         }
         self.document_state.record_style_targets(
             host,
+            self.dom_adapter,
             self.document,
             targets.iter().map(|&(handle, hint)| {
                 let scope = if hint.contains(RestyleHint::RESTYLE_DESCENDANTS) {
@@ -216,6 +217,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
         }
         self.document_state.record_style_targets(
             host,
+            self.dom_adapter,
             self.document,
             roots.iter().copied().map(|root| (root, scope(root))),
         );
