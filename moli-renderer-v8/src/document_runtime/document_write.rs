@@ -2108,7 +2108,7 @@ impl DocumentRuntime {
                 }
             }
             PreparedImportMapSource::ExternalUnsupported => {
-                let _ = self.enqueue_script_event_lifecycle_work(
+                self.enqueue_script_event_lifecycle_work(
                     ScriptEventKind::Error,
                     &host_script_handle,
                 );
