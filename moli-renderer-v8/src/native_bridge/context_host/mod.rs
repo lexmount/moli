@@ -1430,6 +1430,12 @@ impl PageScriptHost {
             return;
         }
         self.page_context_resources_closed = true;
+        #[cfg(all(
+            feature = "media-ext",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        self.discard_video_playbacks_for_teardown();
         self.bridge.web_mcp.clear();
         self.retire_all_window_execution_context_resources_for_teardown();
         self.pending_history_traversal_admissions.clear();

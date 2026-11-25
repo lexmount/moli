@@ -284,6 +284,19 @@ impl PageScriptHost {
         self.retire_media_source_urls(document);
     }
 
+    pub(super) fn discard_video_playbacks_for_teardown(&mut self) {
+        // Retained document wrappers can keep the host alive past page teardown.
+        self.video_playbacks.clear();
+        self.media_source_urls.clear();
+        self.media_element_events.retain(|pending| {
+            !matches!(
+                pending.payload(),
+                PendingMediaElementEventPayload::VideoUpdate(_)
+                    | PendingMediaElementEventPayload::MediaSource(_)
+            )
+        });
+    }
+
     fn remove_video_playback(&mut self, media: DomHandle) -> Option<VideoPlayback> {
         let mut video = self.video_playbacks.remove(&media)?;
         if let Some(task) = video.task.take() {
