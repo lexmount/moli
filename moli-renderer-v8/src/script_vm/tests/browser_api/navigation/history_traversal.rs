@@ -875,3 +875,38 @@ async fn explicit_traversal_scroll_restores_saved_position_even_in_manual_mode()
         .expect("explicit scroll positions should be observable");
     assert_eq!(observed, "#target|56|78|12|34");
 }
+
+#[tokio::test]
+async fn main_same_document_traversal_aborts_the_older_navigation() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://traversal-cancellation.test/start",
+        &loader,
+    );
+
+    vm.eval(
+        r##"
+        history.pushState(null, '', '#first');
+        history.pushState(null, '', '#second');
+        globalThis.order = [];
+        navigation.addEventListener('navigate', event => {
+            order.push(event.navigationType);
+            event.signal.addEventListener('abort', () => order.push('abort'));
+        });
+        navigation.navigate('/pending').finished.catch(error => order.push(error.name));
+        navigation.back().finished.catch(error => order.push(error.name));
+    "##,
+    )
+    .unwrap();
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm.eval("[location.hash, order.join(',')].join('|')")
+            .unwrap(),
+        "#first|push,abort,traverse,AbortError"
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
