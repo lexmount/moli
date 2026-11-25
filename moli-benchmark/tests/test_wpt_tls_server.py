@@ -5,10 +5,11 @@ import ssl
 import tempfile
 import unittest
 from contextlib import ExitStack
-from http.client import HTTPConnection, HTTPSConnection
+from http.client import HTTPConnection, HTTPResponse, HTTPSConnection
 from pathlib import Path
 from unittest.mock import patch
 
+from moli_benchmark.wpt_cross.__main__ import _url_for_case_origin
 from moli_benchmark.wpt_cross.engine import build_driver
 from moli_benchmark.wpt_cross.server import WptFixtureServer, _substitute_wpt_template_variables
 from moli_benchmark.wpt_cross.pipes import WptPipeError
@@ -125,6 +126,35 @@ class WptTlsFixtureTests(unittest.TestCase):
         self.assertEqual(server.url_for_case("a.https.html?x=1"), server.https_base_url + "/a.https.html?x=1")
         self.assertEqual(server.url_for_case("a.html?url=b.https.html"), server.base_url + "/a.html?url=b.https.html")
 
+    def test_mixed_content_case_uses_ordinary_hosts_for_template_origins(self):
+        server = self.server
+        for scope in ("inscope", "outscope"):
+            path = f"service-workers/service-worker/fetch-mixed-content-to-{scope}.https.html"
+            self.assertEqual(
+                _url_for_case_origin(server, path, external=False),
+                f"https://web-platform.test:{server.https_port}/{path}",
+            )
+        path = "service-workers/service-worker/fetch-cors-xhr.https.html"
+        self.assertEqual(_url_for_case_origin(server, path, external=False), f"{server.https_base_url}/{path}")
+
+        (server.wpt_root / "host-info.sub.js").write_text(
+            "http://{{host}}:{{ports[http][0]}}|https://{{hosts[][www1]}}:{{ports[https][0]}}",
+        )
+        remote = "www1.web-platform.test"
+        with socket.create_connection(("127.0.0.1", server.https_port), timeout=3) as raw:
+            with self.context.wrap_socket(raw, server_hostname=remote) as connection:
+                connection.sendall((
+                    f"GET /host-info.sub.js HTTP/1.1\r\nHost: {remote}:{server.https_port}\r\n"
+                    "Connection: close\r\n\r\n"
+                ).encode())
+                with HTTPResponse(connection) as response:
+                    response.begin()
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(
+                        response.read().decode(),
+                        f"http://web-platform.test:{server.port}|https://{remote}:{server.https_port}",
+                    )
+
     def test_https_variables_cannot_silently_reuse_an_http_listener(self):
         with self.assertRaisesRegex(WptPipeError, "TLS listener"):
             _substitute_wpt_template_variables(b"https://localhost:{{ports[https][0]}}/", port=8000)
@@ -150,6 +180,7 @@ class WptTlsFixtureTests(unittest.TestCase):
         ports = (server.port, server.alternate_port, server.https_port, server.alternate_https_port)
         hostnames = (
             "localhost", "web-platform.localhost", "www1.web-platform.localhost",
+            "web-platform.test", "www1.web-platform.test",
             "alt.localhost", "www2.xn--lve-6lad.alt.localhost",
         )
         for host in hostnames:
@@ -157,3 +188,17 @@ class WptTlsFixtureTests(unittest.TestCase):
                 self.assertIn(f"{host}:{port}:127.0.0.1", entries)
         self.assertEqual({int(entry.split(":")[1]) for entry in entries}, set(ports))
         self.assertFalse(any(entry.startswith("*:") for entry in entries))
+
+    def test_engine_commands_resolve_mixed_content_hosts_locally(self):
+        server = self.server
+        entries = server.loopback_host_resolutions()
+        moli = build_driver("moli").with_http_host_resolutions(entries)
+        mapping = f"www1.web-platform.test:{server.port}:127.0.0.1"
+        self.assertIn(mapping, moli.build_command(Path("/bin/moli"), 9222, None))
+        self.assertIn(mapping, moli.cli_fetch_command(Path("/bin/moli"), server.https_base_url, 3.0))
+
+        chrome = build_driver("chrome").with_http_host_resolutions(entries)
+        command = chrome.build_command(Path("/bin/chrome"), 9222, Path("/tmp/profile"))
+        rules = next(arg for arg in command if arg.startswith("--host-resolver-rules="))
+        self.assertIn("MAP www1.web-platform.test 127.0.0.1", rules)
+        self.assertNotIn(".localhost", rules)

@@ -138,12 +138,37 @@ class EngineDriver:
 
     def with_http_host_resolutions(self, entries: tuple[str, ...]) -> "EngineDriver":
         original_command = self.build_command
+        if self.name == "chrome":
+            mappings = {}
+            for entry in entries:
+                hostname, _, address = entry.split(":", 2)
+                if hostname != "localhost" and not hostname.endswith(".localhost"):
+                    mappings[hostname] = address
+            if not mappings:
+                return self
+            rules = ", ".join(f"MAP {hostname} {address}" for hostname, address in mappings.items())
+
+            def command(binary: Path, port: int, profile: Path | None) -> list[str]:
+                argv = original_command(binary, port, profile)
+                argv.insert(1, "--host-resolver-rules=" + rules)
+                return argv
+
+            return replace(self, build_command=command)
+
+        original_fetch = self.cli_fetch_command
         args = [arg for entry in entries for arg in ("--http-host-resolve", entry)]
 
         def command(binary: Path, port: int, profile: Path | None) -> list[str]:
             return [*original_command(binary, port, profile), *args]
 
-        return replace(self, build_command=command)
+        def fetch(binary: Path, url: str, timeout: float) -> list[str]:
+            assert original_fetch is not None
+            return [*original_fetch(binary, url, timeout), *args]
+
+        return replace(
+            self, build_command=command,
+            cli_fetch_command=fetch if original_fetch is not None else None,
+        )
 
     def resolve_binary(self, override: str | None = None) -> Path:
         raw = override or os.environ.get(self.binary_env_var)
