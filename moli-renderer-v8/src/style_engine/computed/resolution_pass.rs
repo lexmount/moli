@@ -29,7 +29,7 @@ use super::{
     DocumentStyleWorld, DomHandle, DomHost, MarkerStyleDecision, MoliStyleEngine,
     StyloAnonymousBoxKind, StyloComputedStyleSnapshot, child_restyle_scope, document_quirks_mode,
     marker_style_decision, populate_inline_style_attribute_for_resolution, record_screen_restyle,
-    stylo_pseudo_element_for_computed_style, with_cached_lazy_pseudo_style,
+    stylo_pseudo_element_for_computed_style, with_cached_pseudo_style,
 };
 
 /// One binding and stylesheet read scope for a stable document world. Create
@@ -291,7 +291,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         primary: &ComputedValues,
     ) -> Option<ServoArc<ComputedValues>> {
         debug_assert!(pseudo.is_lazy());
-        with_cached_lazy_pseudo_style(self.context.world, handle, pseudo, || {
+        with_cached_pseudo_style(self.context.world, handle, pseudo, || {
             self.context.lazy_pseudo_style(element, pseudo, primary)
         })
     }

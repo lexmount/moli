@@ -788,24 +788,25 @@ fn with_resolved_style_in_current_world<R>(
     pseudo_element: Option<&PseudoElement>,
     callback: impl FnOnce(&ServoArc<ComputedValues>, Option<&ElementStyles>) -> Option<R>,
 ) -> Option<R> {
+    #[cfg(test)]
     let computed_cache_generation = world.document_state.computed_cache_generation();
     let invalidation = &world.document_state.style_paths;
     let path_checked =
         invalidation.generation() == 0 || invalidation.checked_path(handle).is_some();
-    if path_checked && host.owner_document_handle(handle) == Some(world.document) {
-        if let Some(pseudo_element) = pseudo_element {
-            let key = ComputedElementStyleCacheKey {
-                computed_cache_generation,
-                handle,
-                pseudo_element: Some(pseudo_element.clone()),
-            };
-            if let Some(style) = world.pseudo_style_cache.get_pseudo(&key) {
-                return callback(&style, None);
-            }
-        } else if let Some(styles) = engine
+    if path_checked
+        && host.owner_document_handle(handle) == Some(world.document)
+        && let Some(styles) = engine
             .dom_adapter
             .clone_clean_element_styles(world.document, handle)
-        {
+    {
+        if let Some(pseudo_element) = pseudo_element {
+            if let Some(style) = styles.pseudos.get(pseudo_element) {
+                return callback(style, None);
+            }
+            if let Some(style) = with_cached_pseudo_style(world, handle, pseudo_element, || None) {
+                return callback(&style, None);
+            }
+        } else {
             #[cfg(test)]
             world
                 .pseudo_style_cache
@@ -818,26 +819,18 @@ fn with_resolved_style_in_current_world<R>(
         let element = pass.prepare(handle)?;
         let canonical_styles = element.borrow_data()?.styles.clone();
         let style = if let Some(pseudo_element) = pseudo_element {
-            let key = ComputedElementStyleCacheKey {
-                computed_cache_generation,
-                handle,
-                pseudo_element: Some(pseudo_element.clone()),
-            };
-            if let Some(style) = world.pseudo_style_cache.get_pseudo(&key) {
-                return callback(&style, None);
-            }
-            let style = canonical_styles
+            canonical_styles
                 .pseudos
                 .get(pseudo_element)
                 .cloned()
                 .or_else(|| {
-                    pass.eager_pseudo_styles_for_read(element, pseudo_element)
-                        .pseudos
-                        .get(pseudo_element)
-                        .cloned()
-                })?;
-            world.pseudo_style_cache.insert_pseudo(key, style.clone());
-            style
+                    with_cached_pseudo_style(world, handle, pseudo_element, || {
+                        pass.eager_pseudo_styles_for_read(element, pseudo_element)
+                            .pseudos
+                            .get(pseudo_element)
+                            .cloned()
+                    })
+                })?
         } else {
             #[cfg(test)]
             world
@@ -957,7 +950,7 @@ fn with_lazily_resolved_pseudo_style_in_current_world<R>(
         |style, _styles| Some(style.clone()),
     )?;
 
-    let style = with_cached_lazy_pseudo_style(world, handle, pseudo_element, || {
+    let style = with_cached_pseudo_style(world, handle, pseudo_element, || {
         engine.dom_adapter.with_bound_host(host, |dom_adapter| {
             let element = dom_adapter.element(host, handle)?;
             with_resolution_context(world, dom_adapter, |mut context| {
@@ -968,7 +961,7 @@ fn with_lazily_resolved_pseudo_style_in_current_world<R>(
     callback(&style)
 }
 
-fn with_cached_lazy_pseudo_style(
+fn with_cached_pseudo_style(
     world: &DocumentStyleWorld,
     handle: DomHandle,
     pseudo: &PseudoElement,
