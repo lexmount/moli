@@ -74,7 +74,7 @@ fn measure(world: &mut LayoutWorld<u8>, inputs: LayoutInput, baselines: bool) ->
 }
 
 #[test]
-fn releasing_screen_paint_preserves_admitted_inline_work() {
+fn releasing_screen_paint_preserves_retained_inline_work() {
     let mut world = text_world(true);
     world.retained_inline_fonts =
         Some(Box::new(crate::DocumentLayoutServices::new().font_inputs()));
@@ -83,7 +83,6 @@ fn releasing_screen_paint_preserves_admitted_inline_work() {
         ..inputs()
     };
     let expected = measure(&mut world, final_inputs, false);
-    assert!(world.estimated_retained_inline_bytes() > 0);
     world.release_paint_storage();
     world.inline_numeric_reuse.as_mut().unwrap().begin_pass(1);
     assert_eq!(measure(&mut world, final_inputs, false), expected);
@@ -98,9 +97,9 @@ fn releasing_screen_paint_preserves_admitted_inline_work() {
             .is_empty()
     );
 
-    world.clear_inline_reuse();
+    world.release_numeric_cache_storage();
     world.release_paint_storage();
-    assert_eq!(world.estimated_retained_inline_bytes(), 0);
+    assert!(world.inline_numeric_reuse.is_none());
     assert!(world.boxes[0].inline_layout.is_none());
 }
 
@@ -125,19 +124,13 @@ fn inline_measurement_baselines_and_purposes_do_not_alias_final_layout() {
     };
     let accepted = signature(&world);
     assert!(!accepted.4.is_empty());
-    let before = world
-        .inline_numeric_reuse
-        .as_ref()
-        .unwrap()
-        .estimated_retained_bytes();
     let plain = measure(&mut world, inputs(), false);
-    assert_eq!(
-        world
+    assert!(
+        !world
             .inline_numeric_reuse
             .as_ref()
             .unwrap()
-            .estimated_retained_bytes(),
-        before,
+            .has_measurement_storage_for_test(),
         "known-size shortcuts must not allocate measurement storage"
     );
     let baseline = measure(&mut world, inputs(), true);

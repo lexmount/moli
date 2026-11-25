@@ -3,7 +3,7 @@
 use style::Atom;
 use taffy::{LayoutOutput, RunMode, Style};
 
-use super::{InlineNumericInputs, allocation, style_allocation};
+use super::InlineNumericInputs;
 use crate::LayoutBoxId;
 
 // Each owner can be probed under several intrinsic/definite constraints. Keep
@@ -154,20 +154,6 @@ impl InlineMeasurements {
             restored: false,
         });
     }
-
-    pub(super) fn estimated_retained_bytes(&self) -> usize {
-        self.owners.iter().fold(
-            std::mem::size_of::<Self>()
-                .saturating_add(allocation(&self.owners))
-                .saturating_add(allocation(&self.slots)),
-            |bytes, owner| {
-                owner.results.iter().fold(
-                    bytes.saturating_add(allocation(&owner.results)),
-                    |bytes, result| bytes.saturating_add(style_allocation(&result.style)),
-                )
-            },
-        )
-    }
 }
 
 #[cfg(test)]
@@ -240,21 +226,12 @@ mod tests {
     fn inline_measurement_owner_retirement_releases_keys_and_never_revives_them() {
         let mut cache = InlineMeasurements::new(3);
         let owner = LayoutBoxId::from_index(2);
-        let style = Style {
-            grid_template_row_names: vec![Vec::with_capacity(1024)],
-            ..Style::default()
-        };
-        cache.store(owner, inputs(100.0), style, LayoutOutput::DEFAULT);
-        let charged = cache.estimated_retained_bytes();
+        let style = Style::default();
+        cache.store(owner, inputs(100.0), style.clone(), LayoutOutput::DEFAULT);
         cache.retain_owners(1, |_| true);
         assert!(!cache.contains(owner));
         assert!(cache.owners.is_empty());
-        assert!(cache.estimated_retained_bytes() < charged);
         cache.retain_owners(3, |_| true);
-        assert!(
-            cache
-                .lookup(owner, inputs(100.0), &Style::default())
-                .is_none()
-        );
+        assert!(cache.lookup(owner, inputs(100.0), &style).is_none());
     }
 }

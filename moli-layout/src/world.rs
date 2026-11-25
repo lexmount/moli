@@ -777,42 +777,12 @@ where
     }
 
     pub(crate) fn release_numeric_cache_storage(&mut self) {
-        self.clear_inline_reuse();
+        self.inline_numeric_reuse = None;
+        self.retained_inline_fonts = None;
         self.box_caches = Vec::new();
         for layout_box in &mut self.boxes {
             layout_box.cache_slot = None;
         }
-    }
-
-    pub(crate) fn clear_inline_reuse(&mut self) {
-        self.inline_numeric_reuse = None;
-        self.retained_inline_fonts = None;
-    }
-
-    pub(crate) fn estimated_retained_inline_bytes(&self) -> usize {
-        let Some(fonts) = &self.retained_inline_fonts else {
-            return 0;
-        };
-        let numeric = self.inline_numeric_reuse.as_deref();
-        let mut bytes = fonts
-            .estimated_metadata_bytes()
-            .saturating_add(numeric.map_or(
-                0,
-                crate::inline::InlineNumericReuse::estimated_retained_bytes,
-            ));
-        for (index, layout_box) in self.boxes.iter().enumerate() {
-            if let Some(context) = &layout_box.inline_layout {
-                let preserve_numeric =
-                    numeric.is_some_and(|numeric| numeric.contains(LayoutBoxId::from_index(index)));
-                bytes = bytes
-                    .saturating_add(std::mem::size_of::<InlineFormattingContext>())
-                    .saturating_add(context.estimated_retained_preparation_bytes(preserve_numeric));
-                if preserve_numeric {
-                    bytes = bytes.saturating_add(context.estimated_retained_numeric_bytes());
-                }
-            }
-        }
-        bytes
     }
 
     pub(crate) fn release_paint_storage(&mut self) {

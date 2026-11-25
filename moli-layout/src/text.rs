@@ -909,39 +909,6 @@ pub(crate) struct LayoutFontInputs {
     web_font_order: WebFontOrder,
 }
 
-impl LayoutFontInputs {
-    /// Admission estimate for this copied registry's metadata. BTreeMap does
-    /// not expose its node capacity, so its nodes use a per-entry model. Font
-    /// payloads remain shared with the document service and are excluded; this
-    /// is neither their resident size nor an allocator-byte upper bound.
-    pub(crate) fn estimated_metadata_bytes(&self) -> usize {
-        let entry_charge = std::mem::size_of::<(String, RegisteredWebFont)>()
-            .saturating_mul(2)
-            .saturating_add(4 * std::mem::size_of::<usize>());
-        let fonts = self.web_fonts.iter().fold(0usize, |bytes, (slot, font)| {
-            bytes
-                .saturating_add(entry_charge)
-                .saturating_add(slot.capacity())
-                .saturating_add(font.source_key.as_ref().map_or(0, String::capacity))
-                .saturating_add(font.face.family_name.capacity())
-                .saturating_add(
-                    font.face
-                        .unicode_ranges
-                        .capacity()
-                        .saturating_mul(std::mem::size_of::<WebFontUnicodeRange>()),
-                )
-        });
-        let order_charge = std::mem::size_of::<(String, WebFontPriority)>()
-            .saturating_mul(2)
-            .saturating_add(4 * std::mem::size_of::<usize>());
-        self.web_font_order.iter().fold(fonts, |bytes, (slot, _)| {
-            bytes
-                .saturating_add(order_charge)
-                .saturating_add(slot.capacity())
-        })
-    }
-}
-
 /// Lazily initialized text resources reused by successive layout demands for
 /// one committed Document.
 ///
