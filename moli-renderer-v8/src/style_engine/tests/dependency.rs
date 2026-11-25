@@ -2698,7 +2698,7 @@ fn viewport_change_updates_the_persistent_style_world_in_place() {
     world
         .document_state
         .note_screen_style_attribute_changes([target]);
-    world.document_state.lazy_invalidation_roots.record_targets(
+    world.document_state.record_style_targets(
         &host,
         document,
         [(target, StyleInvalidationScope::Element)],

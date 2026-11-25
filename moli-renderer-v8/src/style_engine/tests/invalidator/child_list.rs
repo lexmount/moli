@@ -397,14 +397,19 @@ fn reordered_summary_invalidates_ua_styles_when_author_source_has_no_target() {
     // Reordering uses lazy source-scope invalidation, not eager eviction of
     // exact sibling targets. Both cached styles must be stale before a read.
     let world = engine.world_for_document(document);
-    let invalidation = &world.document_state.lazy_invalidation_roots;
+    let invalidation = &world.document_state.style_paths;
     for handle in [first, second] {
         let generation = std::iter::successors(Some(handle), |&node| host.parent_node(node))
             .map(|node| invalidation.subtree_generation(node))
             .max()
-            .unwrap()
-            .max(invalidation.element_generation(handle));
-        assert!(!invalidation.element_is_current(handle, generation));
+            .unwrap();
+        assert!(
+            invalidation.last_observation(handle) < generation
+                || engine
+                    .dom_adapter
+                    .clone_clean_element_styles(document, handle)
+                    .is_none()
+        );
     }
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
     assert_eq!(
