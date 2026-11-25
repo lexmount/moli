@@ -2278,6 +2278,15 @@ impl DomHost {
         self.shadow_hosts_by_root.borrow().contains_key(&handle)
     }
 
+    pub fn declarative_shadow_roots_with_document_registry(&self) -> Vec<DomHandle> {
+        self.shadow_roots_by_host
+            .borrow()
+            .values()
+            .filter(|state| state.declarative && !state.init.null_custom_element_registry())
+            .map(|state| state.handle)
+            .collect()
+    }
+
     pub fn snapshot_shadow_root_bindings(&self) -> Vec<ShadowRootBindingSnapshot> {
         self.shadow_roots_by_host
             .borrow()
