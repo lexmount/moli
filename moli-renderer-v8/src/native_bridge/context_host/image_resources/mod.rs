@@ -237,6 +237,12 @@ impl super::PageScriptHost {
             .ready_for_layout(document, resolved_url)
     }
 
+    pub(crate) fn wait_for_pending_css_images(
+        &self,
+    ) -> futures_util::future::BoxFuture<'static, ()> {
+        self.image_resources.css.wait_for_pending_loads()
+    }
+
     #[cfg(test)]
     pub(crate) fn css_image_resource_observability_for_test(
         &self,

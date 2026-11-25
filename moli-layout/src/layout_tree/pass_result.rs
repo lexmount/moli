@@ -14,6 +14,7 @@ use super::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LayoutCssImagePurpose {
     Background,
+    Border,
     Mask,
 }
 

@@ -764,6 +764,13 @@ where
                 self.css_image_resource(source, image, crate::LayoutCssImagePurpose::Background)
             })
             .collect();
+        let border = self
+            .css_image_resource(
+                source,
+                &computed.get_border().border_image_source,
+                crate::LayoutCssImagePurpose::Border,
+            )
+            .map(Box::new);
         let mask = computed
             .get_svg()
             .mask_image
@@ -771,7 +778,11 @@ where
             .iter()
             .map(|image| self.css_image_resource(source, image, crate::LayoutCssImagePurpose::Mask))
             .collect();
-        crate::source::LayoutCssImageResources { background, mask }
+        crate::source::LayoutCssImageResources {
+            background,
+            border,
+            mask,
+        }
     }
 
     fn css_image_resource(

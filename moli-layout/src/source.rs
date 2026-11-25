@@ -511,7 +511,7 @@ pub struct LayoutImageResource {
     pub svg: Option<Arc<moli_image::SvgImage>>,
 }
 
-/// Pass-local resources aligned with the computed CSS image-layer lists.
+/// Pass-local resources for the computed CSS images.
 ///
 /// The vectors preserve Stylo's layer indices. Missing entries represent a
 /// pending, failed, or unsupported resource and never retain a callback into
@@ -519,6 +519,7 @@ pub struct LayoutImageResource {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LayoutCssImageResources {
     pub(crate) background: Vec<Option<LayoutImageResource>>,
+    pub(crate) border: Option<Box<LayoutImageResource>>,
     pub(crate) mask: Vec<Option<LayoutImageResource>>,
 }
 

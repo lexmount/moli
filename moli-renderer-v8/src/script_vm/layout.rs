@@ -124,6 +124,40 @@ impl ScriptVm {
         Ok(())
     }
 
+    /// One-shot exports discover image URLs before the paint pass so their
+    /// caller can wait for decode without holding the renderer execution lane.
+    pub(crate) fn prepare_screenshot_resources(
+        &mut self,
+    ) -> anyhow::Result<Option<futures_util::future::BoxFuture<'static, ()>>> {
+        if self.is_debugger_paused() {
+            return Ok(None);
+        }
+        let viewport = {
+            let host = self._context_host.borrow();
+            if !host.layout_policy().uses_real_layout() {
+                return Ok(None);
+            }
+            host.layout_viewport_for_document(host.document_handle())
+        };
+        let references = self
+            .with_fresh_layout_pass(
+                moli_layout::LayoutPassRequest::new(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Screenshot,
+                ),
+                LayoutPublicationRequest::Transient,
+                |pass| Ok(pass.css_image_references().to_vec()),
+            )?
+            .unwrap_or_default();
+        if references.is_empty() {
+            return Ok(None);
+        }
+        self.start_css_images_discovered_by_layout(references);
+        Ok(Some(
+            self._context_host.borrow().wait_for_pending_css_images(),
+        ))
+    }
+
     #[cfg(test)]
     pub(crate) fn screenshot_layout_snapshot(
         &mut self,

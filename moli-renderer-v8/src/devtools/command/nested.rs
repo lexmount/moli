@@ -41,6 +41,7 @@ impl RendererPageCommand {
             // Keep this match exhaustive: a new backend command must declare
             // its entry requirement instead of inheriting PageAgent by default.
             Self::EvaluateExpression { .. }
+            | Self::PrepareScreenshotResources
             | Self::EvaluateExpressionByValue { .. }
             | Self::EvaluateExpressionAndFollowPendingNavigation { .. }
             | Self::EvaluateExpressionInExecutionContext { .. }

@@ -562,7 +562,7 @@ pub(super) fn project_url_image_layer<N>(
     }
 }
 
-fn css_image_concrete_object_size(
+pub(super) fn css_image_concrete_object_size(
     resource: &LayoutImageResource,
     default_object: LayoutRect,
 ) -> Option<(f32, f32)> {
