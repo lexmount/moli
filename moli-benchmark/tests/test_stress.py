@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import html
 import json
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from urllib.parse import unquote, urlsplit
 
 from moli_benchmark.sampling import ResourceSampler
 from moli_benchmark.sequential_navigate import summarize_navigation_resource_samples
@@ -203,6 +206,24 @@ class StressTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "no periodic resource samples"):
                 write_stress_report(result_path, root / "report.html")
+
+    def test_report_links_to_result_filename_without_treating_it_as_url_syntax(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            binary = root / "moli"
+            binary.write_bytes(b"moli")
+            result_path = root / "raw" / "result #1?%done.json"
+            result_path.parent.mkdir()
+            result_path.write_text(json.dumps(stress_payload(binary)), encoding="utf-8")
+            report_path = root / "report" / "index.html"
+            write_stress_report(result_path, report_path)
+            document = report_path.read_text(encoding="utf-8")
+            match = re.search(r'<a href="([^"]+)">result.json</a>', document)
+            self.assertIsNotNone(match)
+            link = urlsplit(html.unescape(match.group(1)))
+            self.assertEqual(link.fragment, "")
+            self.assertEqual(link.query, "")
+            self.assertEqual((report_path.parent / unquote(link.path)).resolve(), result_path.resolve())
 
     def test_report_refuses_to_overwrite_its_input(self) -> None:
         with TemporaryDirectory() as temp_dir:
