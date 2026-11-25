@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use moli_selector::StyloSourceInvalidationFallbackReason;
 use selectors::context::SelectorCaches;
 use style::{
@@ -90,7 +90,6 @@ pub(super) enum ScreenStyleInvalidation {
     Pending {
         after: u64,
         targets: IndexMap<DomHandle, StyleInvalidationScope>,
-        damage: IndexMap<DomHandle, ServoRestyleDamage>,
     },
     Full,
 }
@@ -131,6 +130,9 @@ pub(super) struct StyleDocumentState {
     screen_style_comparison_generation: Cell<u64>,
     screen_style_coverage: RefCell<Option<ScreenStyleCoverage>>,
     pub(super) screen_style_invalidation: RefCell<ScreenStyleInvalidation>,
+    // The damage itself belongs to Stylo ElementData. Keep the touched nodes
+    // through a full-layout fallback so a successful publication can clear them.
+    pub(super) screen_damage_nodes: RefCell<IndexSet<DomHandle>>,
     pub(super) style_paths: StylePathCache,
     #[cfg(debug_assertions)]
     completed_style_observation: RefCell<Option<CompletedStyleObservation>>,
@@ -160,6 +162,7 @@ impl StyleDocumentState {
             screen_style_comparison_generation: Cell::new(0),
             screen_style_coverage: RefCell::default(),
             screen_style_invalidation: RefCell::default(),
+            screen_damage_nodes: RefCell::default(),
             style_paths: StylePathCache::default(),
             #[cfg(debug_assertions)]
             completed_style_observation: RefCell::new(None),
@@ -227,7 +230,6 @@ impl StyleDocumentState {
         ScreenStyleInvalidation::Pending {
             after,
             targets: IndexMap::new(),
-            damage: IndexMap::new(),
         }
     }
 
@@ -274,48 +276,43 @@ impl StyleDocumentState {
         handle: DomHandle,
         has_previous_style: bool,
         compare: impl FnOnce() -> Option<ServoRestyleDamage>,
-    ) {
+    ) -> ServoRestyleDamage {
         let mut change = self.screen_style_invalidation.borrow_mut();
         if matches!(*change, ScreenStyleInvalidation::Full)
             || (!has_previous_style && matches!(*change, ScreenStyleInvalidation::Clean))
             || !self.screen_style_dependencies_are_current()
         {
-            return;
+            return ServoRestyleDamage::empty();
         }
 
         let Some(observed) = compare() else {
             *change = ScreenStyleInvalidation::Full;
-            return;
+            return ServoRestyleDamage::empty();
         };
         if observed.is_empty() {
-            return;
+            return observed;
         }
         if matches!(*change, ScreenStyleInvalidation::Clean) {
             *change = Self::pending_screen_style_invalidation(self.style_paths.generation());
         }
-        if let ScreenStyleInvalidation::Pending { damage, .. } = &mut *change {
-            *damage.entry(handle).or_default() |= observed;
-            if damage.len() > MAX_PENDING_SCREEN_RESTYLES {
-                *change = ScreenStyleInvalidation::Full;
-            }
+        let mut nodes = self.screen_damage_nodes.borrow_mut();
+        nodes.insert(handle);
+        if nodes.len() > MAX_PENDING_SCREEN_RESTYLES {
+            *change = ScreenStyleInvalidation::Full;
         }
+        observed
     }
 
     pub(super) fn finish_screen_style_invalidation(&self) {
         let mut change = self.screen_style_invalidation.borrow_mut();
-        let ScreenStyleInvalidation::Pending {
-            after,
-            targets,
-            damage,
-        } = &*change
-        else {
+        let ScreenStyleInvalidation::Pending { after, targets } = &*change else {
             return;
         };
         if !self.screen_style_dependencies_are_current()
             || !self.style_paths.can_compare_after(*after)
         {
             *change = ScreenStyleInvalidation::Full;
-        } else if damage.is_empty() && targets.is_empty() {
+        } else if self.screen_damage_nodes.borrow().is_empty() && targets.is_empty() {
             *change = ScreenStyleInvalidation::Clean;
         }
     }
@@ -365,11 +362,11 @@ impl StyleDocumentState {
 
     pub(super) fn publish_screen_styles(&self, coverage: ScreenStyleCoverage) {
         *self.screen_style_coverage.borrow_mut() = Some(coverage);
-        self.consume_screen_style_work();
     }
 
-    pub(super) fn consume_screen_style_work(&self) {
+    pub(super) fn consume_screen_style_work(&self) -> IndexSet<DomHandle> {
         *self.screen_style_invalidation.borrow_mut() = ScreenStyleInvalidation::Clean;
+        self.screen_damage_nodes.take()
     }
 
     pub(super) fn screen_uses_lazy_pseudo(&self, handle: DomHandle) -> bool {
@@ -377,20 +374,6 @@ impl StyleDocumentState {
             .borrow()
             .as_ref()
             .is_some_and(|coverage| coverage.lazy_pseudo_owners.contains(&handle))
-    }
-
-    pub(super) fn screen_style_target_has_supported_damage(
-        &self,
-        handle: DomHandle,
-        supported: ServoRestyleDamage,
-    ) -> bool {
-        match &*self.screen_style_invalidation.borrow() {
-            ScreenStyleInvalidation::Pending { damage, .. } => damage
-                .get(&handle)
-                .is_none_or(|&damage| supported.contains(damage)),
-            ScreenStyleInvalidation::Clean => true,
-            ScreenStyleInvalidation::Full => false,
-        }
     }
 
     #[cfg(test)]
