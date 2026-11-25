@@ -1,3 +1,5 @@
+use crate::{ParsedCssomProperty, cssom_property::with_detached_style_context};
+use cssparser::Parser;
 use style::{
     moli_declaration_block::{
         CssDeclarationBlock as NativeBlock, CssDeclarationEntry, CssMutationProjection,
@@ -5,7 +7,7 @@ use style::{
     },
     properties::{
         Importance, PropertyDeclaration, PropertyDeclarationBlock, PropertyDeclarationId,
-        PropertyId,
+        PropertyId, parse_property_declaration_list,
     },
     servo_arc::Arc,
     shared_lock::{Locked, SharedRwLock},
@@ -71,10 +73,10 @@ impl CssDeclarationBlock {
         }
     }
 
-    fn mutate<T>(&mut self, operation: impl FnOnce(&mut NativeBlock) -> T) -> T {
-        let mut block = NativeBlock::new(std::mem::take(self).into_inner());
+    fn mutate<T>(&mut self, operation: impl FnOnce(&mut PropertyDeclarationBlock) -> T) -> T {
+        let mut block = std::mem::take(self).into_inner();
         let result = operation(&mut block);
-        *self = Self::new(block.into_inner());
+        *self = Self::new(block);
         result
     }
 
@@ -108,11 +110,7 @@ impl CssDeclarationBlock {
 
     pub fn property_value(&self, name: &str) -> Option<String> {
         let property = PropertyId::parse_enabled_for_all_content(name).ok()?;
-        Some(self.with_declarations(|block| {
-            let mut value = CssString::new();
-            let _ = block.property_value_to_css(&property, &mut value);
-            value
-        }))
+        Some(self.with_declarations(|block| property_value_by_id(block, &property)))
     }
 
     pub fn property_priority(&self, name: &str) -> bool {
@@ -134,7 +132,8 @@ impl CssDeclarationBlock {
     }
 
     pub fn set_property(&mut self, name: &str, value: &str, priority: bool) -> CssSetResult {
-        self.mutate(|block| block.set_property(name, value, priority))
+        self.set_property_with_projection(name, value, priority)
+            .set_result
     }
 
     pub fn set_property_with_projection(
@@ -143,12 +142,80 @@ impl CssDeclarationBlock {
         value: &str,
         priority: bool,
     ) -> CssMutationProjection {
-        self.mutate(|block| block.set_property_with_projection(name, value, priority))
+        let projection = with_detached_style_context(|context| {
+            let property = PropertyId::parse(name, context).ok()?;
+            let affected_names = Self::affected_names_for_property(name)?;
+            if value.is_empty() {
+                let result = self.remove_property_by_id(&property);
+                return Some(CssMutationProjection {
+                    set_result: if result.changed {
+                        CssSetResult::ChangedPropertySet
+                    } else {
+                        CssSetResult::Unchanged
+                    },
+                    entries: Vec::new(),
+                    affected_names,
+                    stored_names: Vec::new(),
+                    has_unresolved_value: false,
+                });
+            }
+            let parsed = ParsedCssomProperty::parse_value(property, value, priority, context)?;
+            let entries = parsed.entries()?;
+            let has_unresolved_value = parsed.has_unresolved_value();
+            let before = self.css_text();
+            let modified_existing = self
+                .with_declarations(|b| b.first_declaration_to_remove(parsed.property()).is_some());
+            self.mutate(|block| parsed.replace_in_declaration_list(block));
+            let set_result = if self.css_text() == before {
+                CssSetResult::Unchanged
+            } else if modified_existing {
+                CssSetResult::ModifiedExisting
+            } else {
+                CssSetResult::ChangedPropertySet
+            };
+            Some(CssMutationProjection {
+                set_result,
+                affected_names,
+                stored_names: entries.iter().map(|entry| entry.name.clone()).collect(),
+                entries,
+                has_unresolved_value,
+            })
+        });
+        projection.unwrap_or_else(|| CssMutationProjection {
+            set_result: CssSetResult::ParseError,
+            affected_names: Vec::new(),
+            entries: Vec::new(),
+            stored_names: Vec::new(),
+            has_unresolved_value: false,
+        })
     }
 
     pub fn remove_property(&mut self, name: &str) -> CssRemoveResult {
-        self.mutate(|block| block.remove_property(name))
+        let Ok(property) = PropertyId::parse_enabled_for_all_content(name) else {
+            return CssRemoveResult::default();
+        };
+        self.remove_property_by_id(&property)
     }
+
+    fn remove_property_by_id(&mut self, property: &PropertyId) -> CssRemoveResult {
+        let Some(first) =
+            self.with_declarations(|block| block.first_declaration_to_remove(property))
+        else {
+            return CssRemoveResult::default();
+        };
+        let old_value = self.with_declarations(|block| property_value_by_id(block, property));
+        self.mutate(|block| block.remove_property(property, first));
+        CssRemoveResult {
+            changed: true,
+            old_value: Some(old_value),
+        }
+    }
+}
+
+fn property_value_by_id(block: &PropertyDeclarationBlock, property: &PropertyId) -> String {
+    let mut value = CssString::new();
+    let _ = block.property_value_to_css(property, &mut value);
+    value
 }
 
 fn serialize_block(block: &PropertyDeclarationBlock) -> String {
@@ -178,13 +245,66 @@ pub(crate) fn declaration_entry(
 }
 
 pub fn parse_declaration_block(text: &str) -> CssDeclarationBlock {
-    let block = style::moli_declaration_block::parse_declaration_block(text);
-    CssDeclarationBlock::new(block.into_inner())
+    with_detached_style_context(|context| {
+        let block = parse_property_declaration_list(context, &mut Parser::new(text), &[]);
+        CssDeclarationBlock::new(block)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declaration_projection_matches_the_stylo_mutation_api() {
+        crate::ensure_stylo_browser_compat_prefs();
+        for (source, name, value, important) in [
+            ("width: 10px; color: red", "width", "10px", false),
+            ("width: 10px !important", "width", "10px", false),
+            ("width: 10px", "width", "10px\u{00a0}", false),
+            ("width: 10px", "width", "", false),
+            ("color: red", "width", "", false),
+            (
+                "margin-left: 3px; margin-top: 6px",
+                "margin",
+                "10px 2px",
+                true,
+            ),
+            (
+                "border-image: url(a.png) 3",
+                "border",
+                "1px solid red",
+                false,
+            ),
+            (
+                "background-image: url(a.png)",
+                "background-image",
+                "url(./a.png)",
+                false,
+            ),
+            (
+                "--Token: old !important",
+                "--Token",
+                "var(--data, red)",
+                false,
+            ),
+            ("--Token: old", "--Token", " ", false),
+            ("", "all", "initial", false),
+            ("", "all", "var(--values)", true),
+        ] {
+            let mut block = parse_declaration_block(source);
+            let mut oracle = style::moli_declaration_block::parse_declaration_block(source);
+            block.publish();
+            assert_eq!(
+                block.set_property_with_projection(name, value, important),
+                oracle.set_property_with_projection(name, value, important),
+                "{source:?} with {name}: {value:?}",
+            );
+            assert_eq!(block.css_text(), oracle.css_text(), "{name}: {value:?}");
+            assert_eq!(block.remove_property(name), oracle.remove_property(name));
+            assert_eq!(block.css_text(), oracle.css_text());
+        }
+    }
 
     #[test]
     fn published_block_keeps_its_values_after_the_next_edit() {

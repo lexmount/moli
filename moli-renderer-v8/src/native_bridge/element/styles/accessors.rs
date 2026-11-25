@@ -72,7 +72,7 @@ fn set_style_css_text<'s>(
     } else {
         let runtime = unsafe { &*runtime_ptr };
         if let Some(attribute) = runtime.dom_host().dom().find_attribute(handle, "style")
-            && attribute.deferred_style().is_some()
+            && attribute.cssom_style().is_some()
         {
             std::borrow::Cow::Borrowed(attribute.value())
         } else if let Some(state) = runtime.element_inline_style_declaration_state(handle) {

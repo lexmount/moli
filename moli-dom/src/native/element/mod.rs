@@ -5,15 +5,14 @@ mod rare_data;
 #[cfg(test)]
 mod tests;
 
-use std::sync::Arc;
-
-pub use attribute::{Attribute, DeferredStyleAttribute, InlineStyleAttribute};
+pub use attribute::{Attribute, InlineStyleAttribute};
 pub use control_state::{ElementControlState, SelectedFile};
 pub use interface_names::{
     html_element_interface_name, is_mathml_namespace, mathml_element_interface_name,
     svg_element_interface_name,
 };
 
+use super::inline_style::CssomStyleAttribute;
 use attribute::{normalized_option_text_content, split_class_names};
 use html5ever::{LocalName, Namespace, Prefix};
 use indexmap::IndexSet;
@@ -226,30 +225,21 @@ impl Element {
         })
     }
 
-    pub(super) fn deferred_style_attribute_mut(
-        &mut self,
-    ) -> Option<&mut Arc<InlineStyleAttribute>> {
-        self.style_attribute_mut()?.deferred_style_mut()
-    }
-
-    pub(super) fn set_cssom_style_attribute(&mut self, source: Box<dyn DeferredStyleAttribute>) {
+    pub(super) fn set_cssom_style_attribute(&mut self, source: Box<CssomStyleAttribute>) {
         if let Some(attribute) = self.style_attribute_mut() {
-            attribute.set_deferred_style(source);
+            attribute.set_cssom_style(source);
         } else {
-            self.attributes.push(Attribute::new_deferred_style(source));
+            self.attributes.push(Attribute::new_cssom_style(source));
         }
     }
 
-    pub(super) fn replace_style_attribute_source(
-        &mut self,
-        source: Box<dyn DeferredStyleAttribute>,
-    ) {
+    pub(super) fn replace_style_attribute_source(&mut self, source: Box<CssomStyleAttribute>) {
         if let Some(attribute) = self.style_attribute_mut() {
-            attribute.set_deferred_style(source);
+            attribute.set_cssom_style(source);
         }
     }
 
-    fn style_attribute_mut(&mut self) -> Option<&mut Attribute> {
+    pub(super) fn style_attribute_mut(&mut self) -> Option<&mut Attribute> {
         self.attributes
             .iter_mut()
             .find(|attribute| attribute.name_matches("style"))
