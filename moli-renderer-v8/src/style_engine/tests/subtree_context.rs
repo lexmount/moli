@@ -311,6 +311,7 @@ fn pending_attribute_mutation_invalidations_merge_for_batch_drain() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: first,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("first".into()),
@@ -321,6 +322,7 @@ fn pending_attribute_mutation_invalidations_merge_for_batch_drain() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: second,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("second".into()),

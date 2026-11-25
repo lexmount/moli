@@ -117,6 +117,7 @@ fn detached_document_mutation_pending_work_uses_owner_document_world() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: detached,
+            namespace: None,
             name: "class".to_owned(),
             old_value: None,
             new_value: Some("active".to_owned()),

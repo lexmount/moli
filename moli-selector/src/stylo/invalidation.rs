@@ -885,6 +885,10 @@ impl MoliStyleMutationSnapshot {
         self.inputs.is_empty() && self.child_list_mutations.is_empty()
     }
 
+    pub fn element_handles(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.inputs.keys().copied()
+    }
+
     fn to_stylo_snapshots(&self, host: &DomHost) -> Option<Vec<StyloStyleInvalidationSnapshot>> {
         self.iter()
             .map(|(handle, input)| stylo_retained_style_snapshot_for_input(host, handle, input))
@@ -2095,6 +2099,29 @@ fn snapshot_map_for_moli_snapshots(
         }
     }
     (snapshot_map, handles)
+}
+
+impl StyleDomHostBinding<'_> {
+    pub fn collect_snapshot_invalidations(
+        &self,
+        host: &DomHost,
+        input: &MoliStyleMutationSnapshot,
+        invalidate: impl FnOnce(&SnapshotMap, &[NodeId]),
+    ) -> Option<
+        Vec<(
+            NodeId,
+            style::invalidation::element::restyle_hints::RestyleHint,
+        )>,
+    > {
+        let snapshots = input.to_stylo_snapshots(host)?;
+        let (map, handles) = snapshot_map_for_moli_snapshots(self, host, &snapshots);
+        if handles.len() != snapshots.len() {
+            return None;
+        }
+        Some(self.collect_native_invalidation_targets(|| {
+            self.with_snapshot_handles(handles.iter().copied(), || invalidate(&map, &handles));
+        }))
+    }
 }
 
 fn servo_snapshot_for_moli_snapshot(snapshot: &StyloStyleInvalidationSnapshot) -> Snapshot {

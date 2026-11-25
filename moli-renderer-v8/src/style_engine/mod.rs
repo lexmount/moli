@@ -39,6 +39,7 @@ mod fallback;
 mod invalidation;
 pub(crate) mod media_list;
 mod mutation_effect;
+mod native_invalidation;
 mod outcome;
 mod pending_invalidation;
 mod pending_mutation;
@@ -974,17 +975,18 @@ impl MoliStyleEngine {
         boundary: StyleInvalidationDrainBoundary,
     ) {
         let world = self.world_for_document(document);
-        self.flush_pending_structural_mutations_for_world(host, &world);
+        let had_structural_mutations =
+            self.flush_pending_structural_mutations_for_world(host, &world);
         let pending = world.pending_invalidations.take();
         let source_stores = world.borrow_source_stores();
         drain_style_invalidations(
             &self.dom_adapter,
-            &world.document_state,
+            &world,
             self.invalidation_cleanup_for_world(&world),
             host,
             &source_stores,
             document_context,
-            document,
+            had_structural_mutations,
             pending,
             boundary,
         );

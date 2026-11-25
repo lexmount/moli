@@ -17,7 +17,7 @@ parking_lot = "0.12"
 percent-encoding = "2.3"
 precomputed-hash = "0.1"
 selectors = "0.41"
-stylo = "0.22"
+stylo = { version = "0.22", features = ["moli"] }
 style_traits = { package = "stylo_traits", version = "0.22" }
 url = "2.5.7"
 

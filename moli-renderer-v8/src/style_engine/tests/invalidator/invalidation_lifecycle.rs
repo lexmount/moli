@@ -31,6 +31,7 @@ fn no_source_no_cache_mutations_do_not_queue_retained_invalidation_work() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: target,
+            namespace: None,
             name: "class".to_owned(),
             old_value: None,
             new_value: Some("active".to_owned()),

@@ -539,12 +539,14 @@ fn retained_stylo_invalidator_uses_batch_snapshot_for_outer_dependency() {
     let effects = [
         StyleMutationEffect::Attribute {
             element: scoped_marker,
+            namespace: None,
             name: "class".to_owned(),
             old_value: Some("marker".to_owned()),
             new_value: Some("other".to_owned()),
         },
         StyleMutationEffect::Attribute {
             element: loose_marker,
+            namespace: None,
             name: "class".to_owned(),
             old_value: Some("marker".to_owned()),
             new_value: Some("other".to_owned()),
@@ -629,12 +631,14 @@ fn retained_stylo_invalidator_uses_attribute_value_snapshot_for_outer_dependency
     let effects = [
         StyleMutationEffect::Attribute {
             element: scoped_marker,
+            namespace: None,
             name: "data-state".to_owned(),
             old_value: Some("old".to_owned()),
             new_value: Some("new".to_owned()),
         },
         StyleMutationEffect::Attribute {
             element: loose_marker,
+            namespace: None,
             name: "data-state".to_owned(),
             old_value: Some("old".to_owned()),
             new_value: Some("new".to_owned()),

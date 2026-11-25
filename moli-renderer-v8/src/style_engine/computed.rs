@@ -34,6 +34,7 @@ use style::{
 
 pub(crate) use marker::{MarkerStyleDecision, marker_style_decision};
 pub(crate) use resolution_pass::StyleResolutionPass;
+pub(super) use resolution_pass::with_resolution_context_and_snapshots;
 pub(super) use resolution_pass::with_style_resolution_pass;
 use resolution_pass::{with_resolution_context, with_style_resolution_pass_in_world};
 

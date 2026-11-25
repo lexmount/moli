@@ -12,6 +12,7 @@ use std::{
 use app_units::Au;
 use dom::ElementState;
 use euclid::default::Size2D;
+use indexmap::IndexMap;
 use selectors::{
     Element as SelectorsElement, OpaqueElement,
     attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstraint},
@@ -120,7 +121,8 @@ struct StyleDomState {
     node_data: RefCell<HashMap<NodeId, Box<StyleNodeData>>>,
     slotted_node_data: RefCell<HashMap<NodeId, Box<[StyleNode<'static>]>>>,
     shadow_cascade_data: ShadowCascadeDataStore,
-    snapshot_handles: RefCell<HashSet<NodeId>>,
+    snapshot_handles: RefCell<HashMap<NodeId, bool>>,
+    native_invalidation_targets: RefCell<Option<IndexMap<NodeId, RestyleHint>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -148,7 +150,15 @@ pub struct StyleDomHostBinding<'a> {
 
 struct SnapshotHandlesReset<'a> {
     state: &'a StyleDomState,
-    previous: Option<HashSet<NodeId>>,
+    previous: Option<HashMap<NodeId, bool>>,
+}
+
+struct NativeInvalidationTargetsReset<'a>(&'a RefCell<Option<IndexMap<NodeId, RestyleHint>>>);
+
+impl Drop for NativeInvalidationTargetsReset<'_> {
+    fn drop(&mut self) {
+        self.0.take();
+    }
 }
 
 impl StyloDomStyleAdapter {
@@ -171,6 +181,7 @@ impl StyloDomStyleAdapter {
                 slotted_node_data: RefCell::default(),
                 shadow_cascade_data: ShadowCascadeDataStore::default(),
                 snapshot_handles: RefCell::default(),
+                native_invalidation_targets: RefCell::default(),
             }),
         }
     }
@@ -556,6 +567,21 @@ impl<'binding> StyleDomHostBinding<'binding> {
         f: impl FnOnce() -> R,
     ) -> R {
         self.state.with_snapshot_handles(handles, f)
+    }
+
+    pub(super) fn collect_native_invalidation_targets(
+        &self,
+        invalidate: impl FnOnce(),
+    ) -> Vec<(NodeId, RestyleHint)> {
+        let targets = &self.state.native_invalidation_targets;
+        assert!(
+            targets.borrow().is_none(),
+            "nested native invalidation capture"
+        );
+        targets.replace(Some(IndexMap::new()));
+        let _reset = NativeInvalidationTargetsReset(targets);
+        invalidate();
+        targets.take().unwrap_or_default().into_iter().collect()
     }
 
     fn ensure_bound_host(&self, host: &DomHost) {
@@ -1617,7 +1643,7 @@ impl StyleDomState {
     ) -> R {
         let previous = self
             .snapshot_handles
-            .replace(handles.into_iter().collect::<HashSet<_>>());
+            .replace(handles.into_iter().map(|handle| (handle, false)).collect());
         let mut reset = SnapshotHandlesReset {
             state: self,
             previous: Some(previous),
@@ -1628,7 +1654,7 @@ impl StyleDomState {
     }
 
     fn has_snapshot(&self, handle: NodeId) -> bool {
-        self.snapshot_handles.borrow().contains(&handle)
+        self.snapshot_handles.borrow().contains_key(&handle)
     }
 }
 
@@ -2162,10 +2188,35 @@ impl<'a> TElement for StyleElement<'a> {
     }
 
     fn handled_snapshot(&self) -> bool {
-        true
+        self.style_state()
+            .snapshot_handles
+            .borrow()
+            .get(&self.handle())
+            .copied()
+            .unwrap_or(false)
     }
 
-    unsafe fn set_handled_snapshot(&self) {}
+    unsafe fn set_handled_snapshot(&self) {
+        if let Some(handled) = self
+            .style_state()
+            .snapshot_handles
+            .borrow_mut()
+            .get_mut(&self.handle())
+        {
+            *handled = true;
+        }
+    }
+
+    fn note_style_invalidation(&self, hint: RestyleHint) {
+        if let Some(targets) = self
+            .style_state()
+            .native_invalidation_targets
+            .borrow_mut()
+            .as_mut()
+        {
+            *targets.entry(self.handle()).or_default() |= hint;
+        }
+    }
 
     unsafe fn set_dirty_descendants(&self) {
         self.style_state()

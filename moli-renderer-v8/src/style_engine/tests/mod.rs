@@ -527,6 +527,7 @@ mod dependency;
 mod eligibility;
 mod invalidator;
 mod lifecycle;
+mod native_snapshots;
 mod outcome;
 mod registered_properties;
 mod slotted_focus;

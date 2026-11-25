@@ -343,7 +343,7 @@ fn apply_retained_stylesheet_invalidations(
     if used_color_scheme_changed {
         invalidation_cleanup.invalidate_subtrees(host, [document]);
     }
-    invalidation_cleanup.retain_stylesheet_invalidation_targets(host, targets);
+    invalidation_cleanup.retain_native_invalidation_targets(host, targets);
     if document_scope_fallback {
         invalidation_cleanup.invalidate_subtrees(host, [document]);
     }

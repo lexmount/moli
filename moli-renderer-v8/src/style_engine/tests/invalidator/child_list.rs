@@ -495,6 +495,7 @@ fn retained_stylo_invalidator_uses_user_agent_attribute_dependencies() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: dialog,
+            namespace: None,
             name: "open".into(),
             old_value: None,
             new_value: Some(String::new()),

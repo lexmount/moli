@@ -6,12 +6,13 @@ use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use super::{
     cause::PendingStyleInvalidationWorkKind,
     cleanup::StyleInvalidationCleanup,
+    document_world::DocumentStyleWorld,
     invalidation::StyleInvalidationCleanupEffects,
+    native_invalidation::{NativeSnapshotBatch, native_snapshot_invalidation_targets},
     outcome::{StyleInvalidationOutcome, retained_source_invalidation_outcome},
     pending_invalidation::{PendingStyleInvalidationBatch, PendingStyleInvalidationWork},
     source_document::DocumentStyleSourceStores,
     source_lifecycle::{StyleSourceDocumentContext, StyleSourceLifecycleReport},
-    state::StyleDocumentState,
     target_queries::PendingStyleInvalidationTargetTraceCountsSink,
 };
 
@@ -233,12 +234,12 @@ impl PendingStyleInvalidationTargetTraceCountsSink for StyleInvalidationDrainSum
 
 pub(super) fn drain_style_invalidations(
     dom_adapter: &StyloDomStyleAdapter,
-    document_state: &StyleDocumentState,
+    world: &DocumentStyleWorld,
     invalidation_cleanup: StyleInvalidationCleanup<'_>,
     host: &DomHost,
     source_stores: &DocumentStyleSourceStores<'_>,
     document_context: StyleSourceDocumentContext<'_>,
-    document: DomHandle,
+    had_structural_mutations: bool,
     pending: PendingStyleInvalidationBatch,
     boundary: StyleInvalidationDrainBoundary,
 ) {
@@ -248,7 +249,7 @@ pub(super) fn drain_style_invalidations(
     let trace_summary = moli_trace::style_invalidation_trace_enabled().then(|| {
         StyleInvalidationDrainSummary::from_work_items(
             host,
-            document,
+            world.document,
             boundary,
             &pending.work_items,
         )
@@ -260,11 +261,23 @@ pub(super) fn drain_style_invalidations(
         document_context,
         &pending,
     );
+    let mut snapshot_batch = NativeSnapshotBatch::default();
+    let mut incomplete_snapshot = had_structural_mutations;
     for work_item in pending.work_items {
-        let PendingStyleInvalidationWork { target_queries, .. } = work_item;
+        let PendingStyleInvalidationWork {
+            target_queries,
+            native_snapshots,
+            ..
+        } = work_item;
+        if let Some(snapshots) = native_snapshots {
+            snapshot_batch.merge_from(snapshots);
+            continue;
+        }
+        incomplete_snapshot = true;
         let cleanup_effects =
             StyleInvalidationCleanupEffects::clear_shadow_cascade_data_for_cleanup_target();
-        let item_outcome = document_state
+        let item_outcome = world
+            .document_state
             .try_with_retained_style_system(|retained| {
                 retained_source_invalidation_outcome(
                     dom_adapter,
@@ -292,6 +305,25 @@ pub(super) fn drain_style_invalidations(
         finalized_result.trace_drain_attempt(&summary);
     }
     invalidation_cleanup.apply_finalized_result(host, finalized_result);
+    if !snapshot_batch.snapshots.is_empty() {
+        // Every comparison needs the same old DOM state. In particular, an
+        // attribute and a state change can affect the same compound selector.
+        // Other mutations can change relations or inputs missing from the
+        // native snapshots.
+        if !incomplete_snapshot
+            && let Some(targets) = native_snapshot_invalidation_targets(
+                dom_adapter,
+                world,
+                host,
+                &snapshot_batch.snapshots,
+            )
+        {
+            invalidation_cleanup.retain_native_invalidation_targets(host, targets);
+        } else {
+            invalidation_cleanup
+                .invalidate_subtrees(host, snapshot_batch.fallback_roots(world, host));
+        }
+    }
 }
 
 fn diagnostic_source_lifecycle_report_for_invalidation_drain(

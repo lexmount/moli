@@ -806,6 +806,7 @@ fn retained_stylo_invalidator_uses_snapshots_for_mixed_attribute_state_batches()
         &host,
         &[StyleMutationEffect::Attribute {
             element: attr_source,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("marker".into()),
@@ -900,6 +901,7 @@ fn retained_stylo_invalidator_accepts_inactive_media_dependency_as_exact_empty()
         &host,
         &[StyleMutationEffect::Attribute {
             element: source,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("probe".into()),
@@ -1087,12 +1089,14 @@ fn retained_stylo_invalidator_uses_snapshots_for_mixed_attribute_focus_batches()
         &[
             StyleMutationEffect::Attribute {
                 element: attr_scoped_marker,
+                namespace: None,
                 name: "class".to_owned(),
                 old_value: Some("marker".to_owned()),
                 new_value: Some("other".to_owned()),
             },
             StyleMutationEffect::Attribute {
                 element: attr_loose_marker,
+                namespace: None,
                 name: "class".to_owned(),
                 old_value: Some("marker".to_owned()),
                 new_value: Some("other".to_owned()),
@@ -1240,12 +1244,14 @@ fn retained_stylo_invalidator_uses_snapshots_for_mixed_attribute_target_batches(
         &[
             StyleMutationEffect::Attribute {
                 element: attr_scoped_marker,
+                namespace: None,
                 name: "class".to_owned(),
                 old_value: Some("marker".to_owned()),
                 new_value: Some("other".to_owned()),
             },
             StyleMutationEffect::Attribute {
                 element: attr_loose_marker,
+                namespace: None,
                 name: "class".to_owned(),
                 old_value: Some("marker".to_owned()),
                 new_value: Some("other".to_owned()),

@@ -80,6 +80,7 @@ fn attr_attribute_invalidation_preserves_unrelated_cached_styles() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: target,
+            namespace: None,
             name: "data-unrelated".into(),
             old_value: None,
             new_value: Some("ignored".into()),
@@ -109,6 +110,7 @@ fn attr_attribute_invalidation_preserves_unrelated_cached_styles() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: target,
+            namespace: None,
             name: "data-value".into(),
             old_value: Some("11".into()),
             new_value: Some("23".into()),
