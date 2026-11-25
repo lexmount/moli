@@ -33,6 +33,13 @@ fn media_ranges_getter<'s>(
     let Some((_host, _handle)) = html_media_element_getter_receiver(scope, receiver, member) else {
         return;
     };
+    let Some(receiver) = moli_webapi_declare::web_api_object_target(scope, receiver) else {
+        return;
+    };
+    let Some(context) = receiver.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let ranges: &[(f64, f64)] = &[];
     #[cfg(all(
         feature = "media-ext",
