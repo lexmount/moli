@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn renderer_uses_the_published_cssom_block_only_in_its_parse_context() {
+    use crate::css_style::{CssInlineStyleDeclarationState, InlineStyleParseContext};
+    use style::{context::QuirksMode, stylesheets::UrlExtraData};
+
+    let mut host = test_host();
+    let document = host.document_handle();
+    let target = host.create_element("div");
+    let source_text = "width: 10px;";
+    assert!(host.append_child(document, target));
+    assert!(host.set_attribute(target, "style", source_text));
+    let source = host
+        .dom()
+        .find_attribute(target, "style")
+        .unwrap()
+        .shared_style_value();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let mut block = moli_css_parse::parse_declaration_block(source_text);
+    let published = block.publish();
+    let mut engine = MoliStyleEngine::new();
+    engine.set_cssom_inline_style(
+        target,
+        CssInlineStyleDeclarationState {
+            block,
+            parse_context: Some(InlineStyleParseContext {
+                document,
+                url_data: UrlExtraData::from(document_url.clone()),
+                quirks_mode: QuirksMode::NoQuirks,
+            }),
+            ..Default::default()
+        },
+        source,
+    );
+    let inputs = FullStyleWorldSnapshot::default();
+    let read = |engine: &MoliStyleEngine| {
+        assert_eq!(
+            engine
+                .computed_style_property_value(
+                    &host,
+                    &document_url,
+                    target,
+                    "width",
+                    None,
+                    &inputs,
+                    None,
+                )
+                .as_deref(),
+            Some("10px")
+        );
+        engine.dom_adapter.with_bound_host(&host, |binding| {
+            binding
+                .element(&host, target)
+                .unwrap()
+                .style_attribute()
+                .unwrap()
+                .clone_arc()
+        })
+    };
+    assert!(ServoArc::ptr_eq(&published, &read(&engine)));
+
+    engine.set_inline_style_base_url_with_host(
+        &host,
+        target,
+        url::Url::parse("https://example.test/changed/").unwrap(),
+    );
+    engine.invalidate_style_subtree(&host, target);
+    assert!(!ServoArc::ptr_eq(&published, &read(&engine)));
+}
+
+#[test]
 fn retained_inline_style_refreshes_only_when_its_parsing_input_changes() {
     let mut host = test_host();
     let document = host.document_handle();

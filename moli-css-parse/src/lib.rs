@@ -4,6 +4,7 @@
 //! the small set of string helpers around them.
 
 mod color;
+mod cssom_block;
 mod cssom_property;
 mod declaration;
 mod font_face;
@@ -22,6 +23,7 @@ pub use color::{
     css_system_color_srgb, parse_absolute_css_color, parse_css_color_scheme_flags,
     parse_css_color_to_opaque_srgb_hex, parse_css_color_to_srgb_bytes,
 };
+pub use cssom_block::{CssDeclarationBlock, parse_declaration_block};
 pub use cssom_property::ParsedCssomProperty;
 pub use declaration::{CssDeclaration, DeclarationParseOptions, parse_declaration_list};
 pub use font_face::{
@@ -47,8 +49,7 @@ pub use media::{
 };
 pub use root_margin::{normalize_root_margin, root_margin_components};
 pub use style::moli_declaration_block::{
-    CssDeclarationBlock, CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult,
-    parse_declaration_block,
+    CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult,
 };
 pub use stylesheet_imports::{
     StylesheetImportPlaceholderLoader, StylesheetImports,

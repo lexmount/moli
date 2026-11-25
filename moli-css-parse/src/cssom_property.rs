@@ -1,8 +1,6 @@
-use std::sync::LazyLock;
-
+use crate::CssDeclarationBlock;
 use style::{
     context::QuirksMode,
-    moli_declaration_block::CssDeclarationBlock,
     properties::{
         Importance, PropertyDeclaration, PropertyId, SourcePropertyDeclaration,
         SourcePropertyDeclarationUpdate, parse_one_declaration_into,
@@ -10,10 +8,6 @@ use style::{
     stylesheets::{CssRuleType, Origin, UrlExtraData},
 };
 use style_traits::{CssString, ParsingMode};
-
-static CSSOM_URL_DATA: LazyLock<UrlExtraData> = LazyLock::new(|| {
-    UrlExtraData::from(url::Url::parse("about:blank").expect("CSSOM parser base URL"))
-});
 
 /// A native property write whose declarations can be applied without projecting
 /// them to CSS text. Callers handle CSSOM compatibility values separately.
@@ -23,7 +17,13 @@ pub struct ParsedCssomProperty {
 }
 
 impl ParsedCssomProperty {
-    pub fn parse(name: &str, value: &str, important: bool) -> Option<Self> {
+    pub fn parse(
+        name: &str,
+        value: &str,
+        important: bool,
+        url_data: &UrlExtraData,
+        quirks_mode: QuirksMode,
+    ) -> Option<Self> {
         if (value.contains(';') && crate::escape_top_level_semicolons(value) != value)
             || crate::split_important_priority(value).1
         {
@@ -36,10 +36,10 @@ impl ParsedCssomProperty {
             property,
             value,
             Origin::Author,
-            &CSSOM_URL_DATA,
+            url_data,
             None,
             ParsingMode::DEFAULT,
-            QuirksMode::NoQuirks,
+            quirks_mode,
             CssRuleType::Style,
         )
         .ok()?;
@@ -66,27 +66,32 @@ impl ParsedCssomProperty {
         target: &mut CssDeclarationBlock,
         compare_single_longhand: bool,
     ) -> bool {
-        let mut block = std::mem::take(target).into_inner();
+        let mut updates = SourcePropertyDeclarationUpdate::default();
         if compare_single_longhand && self.source.declarations.len() == 1 {
-            let mut updates = SourcePropertyDeclarationUpdate::default();
-            if block.prepare_for_update(&self.source, self.importance, &mut updates) {
+            let in_place = target.with_declarations(|block| {
+                block.prepare_for_update(&self.source, self.importance, &mut updates)
+            });
+            if in_place {
                 // Stylo keeps independent longhands in place and moves declarations
                 // across conflicting logical/physical declarations when needed.
+                let mut block = std::mem::take(target).into_inner();
                 block.update(self.source.drain(), self.importance, &mut updates);
                 *target = CssDeclarationBlock::new(block);
                 return true;
             }
             let incoming = self.source.declarations.iter().next().unwrap();
-            let same_serialization = block.declaration_importance_iter().any(|(old, _)| {
-                old.id() == incoming.id() && specified_text(old) == specified_text(incoming)
+            let same_serialization = target.with_declarations(|block| {
+                block.declaration_importance_iter().any(|(old, _)| {
+                    old.id() == incoming.id() && specified_text(old) == specified_text(incoming)
+                })
             });
             if same_serialization {
-                *target = CssDeclarationBlock::new(block);
                 return false;
             }
             // Typed equality can hide a difference in specified CSS text, for
             // example two URL spellings that resolve to the same address.
         }
+        let mut block = std::mem::take(target).into_inner();
         // Preserve the CSSOM order and priority of the existing append path.
         for declaration in &self.source.declarations {
             let property = PropertyId::NonCustom(declaration.id().as_longhand().unwrap().into());
