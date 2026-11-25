@@ -92,24 +92,16 @@ pub(super) enum ScreenStyleInvalidation {
 }
 
 #[derive(Default)]
-pub(crate) struct ScreenStyleChanges {
+pub(crate) struct ScreenRestyleTargets {
     pub(crate) after: u64,
     pub(crate) targets: Vec<(DomHandle, StyleInvalidationScope)>,
-    pub(crate) observed_damage: ServoRestyleDamage,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct ScreenStyleCacheGenerations {
-    computed: u64,
-    retained_world: u64,
-    comparison_cache: u64,
 }
 
 /// Evidence that canonical styles were used by the completed layout. Lazy
 /// pseudo styles that the layout read have no canonical ElementData slot.
 #[derive(Default)]
 pub(crate) struct ScreenStyleCoverage {
-    generations: Option<ScreenStyleCacheGenerations>,
+    context_generation: Option<u64>,
     pub(crate) lazy_pseudo_owners: HashSet<DomHandle>,
 }
 
@@ -124,7 +116,7 @@ pub(super) struct StyleDocumentState {
     /// Source-side invalidation only. The target context also advances when
     /// derived styles are cleared, including temporary capture environments.
     visual_input_generation: Cell<u64>,
-    screen_style_comparison_generation: Cell<u64>,
+    screen_style_context_generation: Cell<u64>,
     screen_style_coverage: RefCell<Option<ScreenStyleCoverage>>,
     pub(super) screen_style_invalidation: RefCell<ScreenStyleInvalidation>,
     // The damage itself belongs to Stylo ElementData. Keep the touched nodes
@@ -156,7 +148,7 @@ impl StyleDocumentState {
             retained_style_system_generation: Cell::new(0),
             target_context_epoch: Cell::new(0),
             visual_input_generation: Cell::new(0),
-            screen_style_comparison_generation: Cell::new(0),
+            screen_style_context_generation: Cell::new(0),
             screen_style_coverage: RefCell::default(),
             screen_style_invalidation: RefCell::default(),
             screen_damage_nodes: RefCell::default(),
@@ -190,6 +182,7 @@ impl StyleDocumentState {
     }
 
     pub(super) fn bump_computed_cache_generation(&self) {
+        self.invalidate_screen_style_comparisons();
         self.computed_cache_generation
             .set(self.computed_cache_generation().saturating_add(1));
     }
@@ -278,8 +271,7 @@ impl StyleDocumentState {
         compare: impl FnOnce() -> Option<ServoRestyleDamage>,
     ) -> ServoRestyleDamage {
         let mut change = self.screen_style_invalidation.borrow_mut();
-        if matches!(*change, ScreenStyleInvalidation::Full)
-            || (!has_previous_style && matches!(*change, ScreenStyleInvalidation::Clean))
+        if (!has_previous_style && matches!(*change, ScreenStyleInvalidation::Clean))
             || !self.screen_style_dependencies_are_current()
         {
             return ServoRestyleDamage::empty();
@@ -296,10 +288,11 @@ impl StyleDocumentState {
             *change = Self::pending_screen_style_invalidation(self.style_paths.generation());
         }
         let mut nodes = self.screen_damage_nodes.borrow_mut();
-        nodes.insert(handle);
-        if nodes.len() > MAX_PENDING_SCREEN_RESTYLES {
+        if nodes.len() == MAX_PENDING_SCREEN_RESTYLES && !nodes.contains(&handle) {
             *change = ScreenStyleInvalidation::Full;
+            return ServoRestyleDamage::empty();
         }
+        nodes.insert(handle);
         observed
     }
 
@@ -317,29 +310,27 @@ impl StyleDocumentState {
         }
     }
 
-    fn style_cache_generations(&self) -> ScreenStyleCacheGenerations {
-        ScreenStyleCacheGenerations {
-            computed: self.computed_cache_generation(),
-            retained_world: self.retained_style_system_generation.get(),
-            comparison_cache: self.screen_style_comparison_generation.get(),
-        }
+    pub(super) fn screen_needs_layout(&self) -> bool {
+        !self.screen_damage_nodes.borrow().is_empty()
+            || matches!(
+                *self.screen_style_invalidation.borrow(),
+                ScreenStyleInvalidation::Full
+            )
     }
 
     pub(super) fn screen_style_dependencies_are_current(&self) -> bool {
-        let coverage = self.screen_style_coverage.borrow();
-        let Some(published) = coverage.as_ref().and_then(|coverage| coverage.generations) else {
-            return false;
-        };
-        let current = self.style_cache_generations();
-        current.computed != u64::MAX
-            && current.retained_world != u64::MAX
-            && current.comparison_cache != u64::MAX
-            && published == current
+        let current = self.screen_style_context_generation.get();
+        current != u64::MAX
+            && self
+                .screen_style_coverage
+                .borrow()
+                .as_ref()
+                .is_some_and(|coverage| coverage.context_generation == Some(current))
     }
 
     pub(super) fn screen_style_coverage(&self) -> ScreenStyleCoverage {
         ScreenStyleCoverage {
-            generations: Some(self.style_cache_generations()),
+            context_generation: Some(self.screen_style_context_generation.get()),
             ..Default::default()
         }
     }
@@ -348,8 +339,8 @@ impl StyleDocumentState {
         // A temporary observation can replace canonical styles while the
         // frozen geometry remains valid. Expire comparison evidence, and
         // require a rebuild when there is work waiting to use it.
-        let generation = self.screen_style_comparison_generation.get();
-        self.screen_style_comparison_generation
+        let generation = self.screen_style_context_generation.get();
+        self.screen_style_context_generation
             .set(generation.saturating_add(1));
         self.note_full_screen_style_invalidation();
     }
@@ -362,6 +353,11 @@ impl StyleDocumentState {
 
     pub(super) fn publish_screen_styles(&self, coverage: ScreenStyleCoverage) {
         *self.screen_style_coverage.borrow_mut() = Some(coverage);
+    }
+
+    pub(super) fn retire_screen_style_publication(&self) {
+        self.screen_style_coverage.take();
+        self.consume_screen_style_work();
     }
 
     pub(super) fn consume_screen_style_work(&self) -> IndexSet<DomHandle> {
@@ -532,6 +528,7 @@ impl StyleDocumentState {
     }
 
     pub(super) fn set_retained_style_system(&self, mut retained: RetainedStyleSystem) {
+        self.invalidate_screen_style_comparisons();
         let mut retained_slot = self.retained_style_system.borrow_mut();
         retained.stylesheet_resource_revision = retained_slot.as_ref().map_or(1, |previous| {
             if previous.stylesheet_resources == retained.stylesheet_resources {
@@ -562,6 +559,7 @@ impl StyleDocumentState {
                 .expect("retained style system should exist before an incremental update");
             update(retained)
         };
+        self.invalidate_screen_style_comparisons();
         self.retained_style_system_generation.set(
             self.retained_style_system_generation
                 .get()
