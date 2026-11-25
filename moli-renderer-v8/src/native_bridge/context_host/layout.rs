@@ -170,6 +170,7 @@ impl PageScriptHost {
                     .borrow_mut()
                     .take_retained_layout(),
             );
+            self.dom_host().track_layout_changes(None);
             self.realtime_layout_state = policy.is_realtime().then(Box::default);
         }
         self.layout_policy = policy;
@@ -471,9 +472,7 @@ impl PageScriptHost {
 
     #[cfg(test)]
     pub(crate) fn has_retained_layout_for_test(&self) -> bool {
-        self.document_layout_state
-            .borrow()
-            .has_reusable_layout_for_test()
+        self.document_layout_state.borrow().has_reusable_layout()
     }
 
     pub(crate) fn build_layout_pass_for_document_in_environment(
@@ -560,6 +559,7 @@ impl PageScriptHost {
                     .numeric_feedback_overflow_recomputed_node_count,
                 box_count = metrics.box_count,
                 retained_box_count = metrics.retained_box_count,
+                pruned_source_count = metrics.pruned_source_count,
                 retained_numeric_layout_hits = metrics.retained_numeric_layout_hits,
                 fragment_count = metrics.fragment_count,
                 paint_event_count = metrics.paint_event_count,

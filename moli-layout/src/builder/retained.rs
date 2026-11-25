@@ -1,5 +1,5 @@
 use super::*;
-use crate::LayoutNamespace;
+use crate::{LayoutNamespace, LayoutSourceChange};
 
 fn can_refresh_style(style: &ResolvedLayoutStyle) -> bool {
     style.uses_horizontal_writing_mode()
@@ -50,6 +50,72 @@ struct RetainedBoxes<N> {
     css_image_sources: HashSet<N>,
     split_inline_sources: HashSet<N>,
     rebuilt_in_place: HashSet<LayoutBoxId>,
+    pruned_sources: bool,
+}
+
+struct DirtyBoxPaths<N> {
+    paths: HashSet<N>,
+    subtrees: HashSet<N>,
+}
+
+impl<N: Copy + std::fmt::Debug + Eq + std::hash::Hash> DirtyBoxPaths<N> {
+    fn collect(
+        source: &impl LayoutSource<NodeId = N>,
+        world: &LayoutWorld<N>,
+        changes: &[LayoutSourceChange<N>],
+    ) -> Option<Self> {
+        let mut dirty = Self {
+            paths: HashSet::new(),
+            subtrees: HashSet::new(),
+        };
+        for &change in changes {
+            let node = match change {
+                LayoutSourceChange::Node(node) => node,
+                LayoutSourceChange::Subtree(node) => {
+                    dirty.subtrees.insert(node);
+                    node
+                }
+            };
+            dirty.mark_path(source, node)?;
+        }
+        // Controls, markers, replaced content, and special formatting
+        // streams still sample pass-local inputs or regenerate their boxes.
+        for layout_box in &world.boxes {
+            if let Some(node) = layout_box.source
+                && (!can_refresh_box(layout_box) || layout_box.text_selection.is_some())
+            {
+                dirty.mark_path(source, node)?;
+            }
+        }
+        for node in world
+            .display_contents_mapping
+            .keys()
+            .copied()
+            .chain(
+                world
+                    .css_image_references
+                    .iter()
+                    .map(|reference| reference.source),
+            )
+            .chain(
+                world
+                    .boxes
+                    .iter()
+                    .filter(|layout_box| layout_box.kind == LayoutBoxKind::InlineContinuation)
+                    .filter_map(|layout_box| layout_box.owner),
+            )
+        {
+            dirty.mark_path(source, node)?;
+        }
+        Some(dirty)
+    }
+
+    fn mark_path(&mut self, source: &impl LayoutSource<NodeId = N>, mut node: N) -> Option<()> {
+        while self.paths.insert(node) && node != source.root() {
+            node = source.flat_parent(node)?;
+        }
+        Some(())
+    }
 }
 
 /// Refresh the owned formatting tree between publications. Construction
@@ -59,7 +125,8 @@ pub(crate) fn update_layout_world<S, R>(
     source: &S,
     styles: &mut R,
     world: &mut LayoutWorld<S::NodeId>,
-) -> Result<Option<(usize, bool)>, LayoutError>
+    changes: Option<&[LayoutSourceChange<S::NodeId>]>,
+) -> Result<Option<(usize, usize, bool)>, LayoutError>
 where
     S: LayoutSource,
     R: LayoutStyleResolver<S::NodeId>,
@@ -87,6 +154,7 @@ where
 
     let original_count = world.boxes.len();
     let original_body = world.viewport_scroll_policy.defining_body();
+    let dirty = changes.and_then(|changes| DirtyBoxPaths::collect(source, world, changes));
     let had_floats = world
         .boxes
         .iter()
@@ -105,6 +173,7 @@ where
             .filter_map(|layout_box| layout_box.owner)
             .collect(),
         rebuilt_in_place: HashSet::new(),
+        pruned_sources: false,
     };
     world.source_mapping.reserve(retained.sources.len());
     world.display_contents_mapping.clear();
@@ -113,9 +182,23 @@ where
         root,
         root_source,
         false,
+        dirty.as_ref(),
         &mut retained,
         &mut Vec::new(),
     )?;
+    let order = world.preorder();
+    let mut pruned_source_count = 0;
+    if retained.pruned_sources {
+        // Recreate the live source index during the existing dense box pass.
+        // Clean branches never return to the DOM or style resolver.
+        let already_mapped = world.source_mapping.len();
+        for &id in &order {
+            if let Some(node) = world.boxes[id.index()].source {
+                world.map_source(node, id);
+            }
+        }
+        pruned_source_count = world.source_mapping.len() - already_mapped;
+    }
     // The reused root still needs the policy derived from the current body.
     builder.finalize_viewport_scroll_policy(world);
     world.css_image_references = builder.css_image_references;
@@ -126,7 +209,6 @@ where
         }
     }
 
-    let order = world.preorder();
     // Taffy's cache key does not include its shared block float context.
     // Preserve box construction work even when that context forces a cold
     // numeric pass.
@@ -139,7 +221,11 @@ where
         .filter(|id| id.index() < original_count && !retained.rebuilt_in_place.contains(id))
         .count();
     world.compact_for_reuse(order);
-    Ok(Some((retained_count, reuse_numeric_layout)))
+    Ok(Some((
+        retained_count,
+        pruned_source_count,
+        reuse_numeric_layout,
+    )))
 }
 
 impl<S, R> BoxBuilder<'_, S, R>
@@ -153,6 +239,7 @@ where
         id: LayoutBoxId,
         node: S::NodeId,
         restyled: bool,
+        dirty: Option<&DirtyBoxPaths<S::NodeId>>,
         retained: &mut RetainedBoxes<S::NodeId>,
         parent_children: &mut Vec<LayoutBoxId>,
     ) -> Result<bool, LayoutError> {
@@ -187,6 +274,7 @@ where
         let mut children = Vec::with_capacity(layout_box.children.len());
         let mut changed = false;
         let mut reattach = restyled;
+        let dirty = dirty.filter(|dirty| !restyled && !dirty.subtrees.contains(&node));
         for child in self.checked_flat_children(node)? {
             // Normalization may wrap a source child in an anonymous box. Its
             // structural owner still identifies the original child stream.
@@ -201,6 +289,14 @@ where
                 // principal subtree. Rebuild its full contribution to the
                 // parent's child stream together.
                 if can_refresh_box(old) && !retained.split_inline_sources.contains(&child) {
+                    if dirty.is_some_and(|dirty| !dirty.paths.contains(&child)) {
+                        if let Some(element) = old.element_semantics() {
+                            self.record_viewport_body_candidate(child, element, &old.style);
+                        }
+                        children.push(previous);
+                        retained.pruned_sources = true;
+                        continue;
+                    }
                     let current = match self.source.node_kind(child) {
                         LayoutSourceKind::Element => {
                             self.styles.can_reuse_element_style(child, &old.style)
@@ -218,6 +314,7 @@ where
                             previous,
                             child,
                             false,
+                            dirty,
                             retained,
                             &mut children,
                         )?;
@@ -227,7 +324,15 @@ where
                         && self.restyle_existing_container(world, previous, child)?
                     {
                         retained.rebuilt_in_place.insert(previous);
-                        self.refresh_box(world, previous, child, true, retained, &mut children)?;
+                        self.refresh_box(
+                            world,
+                            previous,
+                            child,
+                            true,
+                            dirty,
+                            retained,
+                            &mut children,
+                        )?;
                         changed = true;
                         continue;
                     }

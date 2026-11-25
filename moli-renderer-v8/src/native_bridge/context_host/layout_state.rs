@@ -280,8 +280,7 @@ impl DocumentLayoutState {
         Some((self.latest_layout(document)?, &retained.world))
     }
 
-    #[cfg(test)]
-    pub(super) fn has_reusable_layout_for_test(&self) -> bool {
+    pub(super) fn has_reusable_layout(&self) -> bool {
         self.retained_layout
             .as_ref()
             .is_some_and(|retained| retained.world.can_reuse_layout())

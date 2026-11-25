@@ -2580,7 +2580,7 @@ impl PageScriptHost {
                             if !DomHost::attribute_affects_native_layout(name))
             })
         {
-            self.note_realtime_layout_input_change();
+            self.note_realtime_tracked_input_change();
         }
         if style_mutation_effects_affect_layout_metric(effects) {
             self.clear_layout_rect_cache();
@@ -2612,7 +2612,8 @@ impl PageScriptHost {
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
         if self.dom_host().is_connected(root) {
-            self.note_realtime_layout_input_change();
+            self.dom_host().note_tracked_layout_target(root);
+            self.note_realtime_tracked_input_change();
         }
         self.clear_layout_rect_cache();
         let dom_host = self.dom_host() as *const _;

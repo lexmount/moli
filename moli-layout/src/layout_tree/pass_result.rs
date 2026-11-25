@@ -67,6 +67,8 @@ pub struct LayoutPassMetrics {
     pub box_count: usize,
     /// Construction boxes kept from the previous screen layout.
     pub retained_box_count: usize,
+    /// Sources whose retained boxes skipped DOM and style revalidation.
+    pub pruned_source_count: usize,
     /// Final numeric cache hits populated by the previous screen pass.
     pub retained_numeric_layout_hits: usize,
     pub fragment_count: usize,

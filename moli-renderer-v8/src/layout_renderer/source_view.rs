@@ -56,6 +56,10 @@ impl<'a> NativeLayoutSourceView<'a> {
     fn host(&self) -> &DomHost {
         self.runtime.dom_host()
     }
+
+    pub(super) fn has_text_selection(&self) -> bool {
+        !self.text_selections.is_empty()
+    }
 }
 
 pub(crate) fn native_scroll_offset(host: &DomHost, node: DomHandle) -> moli_layout::LayoutPoint {

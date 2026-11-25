@@ -292,7 +292,17 @@ where
     list_marker_elapsed: Duration,
     form_control_elapsed: Duration,
     retained_box_count: usize,
+    pruned_source_count: usize,
     reuse_numeric_layout: bool,
+}
+
+/// A complete retained box update includes every changed native and style
+/// input since the world was last published. A subtree change requires
+/// rechecking its descendants even when the root's primary style is equal.
+#[derive(Clone, Copy)]
+pub enum LayoutSourceChange<N> {
+    Node(N),
+    Subtree(N),
 }
 
 /// Document-owned working tree with optional paint inputs for its publication.
@@ -486,7 +496,7 @@ where
     S: LayoutSource,
     R: LayoutStyleResolver<S::NodeId>,
 {
-    prepare_layout_pass_reusing(source, styles, request, None)
+    prepare_layout_pass_reusing(source, styles, request, None, None)
 }
 
 pub fn prepare_layout_pass_reusing<S, R>(
@@ -494,6 +504,7 @@ pub fn prepare_layout_pass_reusing<S, R>(
     styles: &mut R,
     request: LayoutPassRequest,
     retained: Option<Box<RetainedLayoutWorld<S::NodeId>>>,
+    changes: Option<&[LayoutSourceChange<S::NodeId>]>,
 ) -> Result<PreparedLayoutPass<S::NodeId>, LayoutError>
 where
     S: LayoutSource,
@@ -511,14 +522,15 @@ where
         // Paint metadata indexes the previous publication. Retire it before
         // updating the world, even when the update later requires a cold pass.
         let mut world = retained.into_layout_world();
-        crate::builder::update_layout_world(source, styles, &mut world)?
-            .map(|(count, reuse_numeric_layout)| (world, count, reuse_numeric_layout))
+        crate::builder::update_layout_world(source, styles, &mut world, changes)?.map(
+            |(count, pruned, reuse_numeric_layout)| (world, count, pruned, reuse_numeric_layout),
+        )
     } else {
         None
     };
-    let (mut world, retained_box_count, reuse_numeric_layout) = match reused {
+    let (mut world, retained_box_count, pruned_source_count, reuse_numeric_layout) = match reused {
         Some(reused) => reused,
-        None => (build_layout_world(source, styles)?, 0, false),
+        None => (build_layout_world(source, styles)?, 0, 0, false),
     };
     world.environment = request.environment;
     if request.viewport.mobile_frame_size().is_some() {
@@ -548,6 +560,7 @@ where
         list_marker_elapsed,
         form_control_elapsed,
         retained_box_count,
+        pruned_source_count,
         reuse_numeric_layout,
     })
 }
@@ -687,6 +700,7 @@ where
                 list_marker_elapsed,
                 form_control_elapsed,
                 retained_box_count,
+                pruned_source_count,
                 ..
             },
         inline_preparation_elapsed,
@@ -765,6 +779,7 @@ where
             numeric_feedback_overflow_recomputed_node_count: numeric_metrics
                 .feedback_overflow_recomputed_node_count,
             retained_box_count,
+            pruned_source_count,
             retained_numeric_layout_hits: numeric_metrics.retained_layout_hits,
         },
     )

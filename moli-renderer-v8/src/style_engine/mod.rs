@@ -251,21 +251,7 @@ impl MoliStyleEngine {
         if state.screen_needs_layout() {
             return None;
         }
-        match &*state.screen_style_invalidation.borrow() {
-            ScreenStyleInvalidation::Clean => Some(ScreenRestyleTargets::default()),
-            ScreenStyleInvalidation::Pending { after, targets } => Some(ScreenRestyleTargets {
-                after: *after,
-                targets: targets
-                    .iter()
-                    .filter_map(|(&handle, &scope)| {
-                        (host.is_connected(handle)
-                            && host.owner_document_handle(handle) == Some(document))
-                        .then_some((handle, scope))
-                    })
-                    .collect(),
-            }),
-            ScreenStyleInvalidation::Full => None,
-        }
+        state.screen_restyle_targets(host, document)
     }
 
     #[cfg(test)]
@@ -281,6 +267,33 @@ impl MoliStyleEngine {
             .iter()
             .filter_map(|&handle| self.dom_adapter.element_restyle_damage(document, handle))
             .fold(ServoRestyleDamage::empty(), |all, damage| all | damage)
+    }
+
+    pub(crate) fn screen_layout_style_targets(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+    ) -> Option<Vec<(DomHandle, StyleInvalidationScope)>> {
+        let world = self.document_worlds.active_world(document)?;
+        let state = &world.document_state;
+        if !state.screen_style_dependencies_are_current() {
+            return None;
+        }
+        state.finish_screen_style_invalidation();
+        let mut targets = state.screen_restyle_targets(host, document)?.targets;
+        targets.extend(
+            state
+                .screen_damage_nodes
+                .borrow()
+                .iter()
+                .copied()
+                .filter(|&target| {
+                    host.is_connected(target)
+                        && host.owner_document_handle(target) == Some(document)
+                })
+                .map(|target| (target, StyleInvalidationScope::Subtree)),
+        );
+        Some(targets)
     }
 
     #[cfg(test)]

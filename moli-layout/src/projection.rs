@@ -63,6 +63,7 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) numeric_feedback_invalidated_node_count: usize,
     pub(crate) numeric_feedback_overflow_recomputed_node_count: usize,
     pub(crate) retained_box_count: usize,
+    pub(crate) pruned_source_count: usize,
     pub(crate) retained_numeric_layout_hits: usize,
 }
 
@@ -173,6 +174,7 @@ where
             .numeric_feedback_overflow_recomputed_node_count,
         box_count: projection.boxes.len(),
         retained_box_count: phase_metrics.retained_box_count,
+        pruned_source_count: phase_metrics.pruned_source_count,
         retained_numeric_layout_hits: phase_metrics.retained_numeric_layout_hits,
         fragment_count: projection.fragments.len(),
         paint_event_count: paint_projection_metrics.event_count,
