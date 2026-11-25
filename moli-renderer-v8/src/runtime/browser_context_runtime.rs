@@ -613,6 +613,7 @@ impl RendererBrowserContextRuntime {
                 diagnostics,
                 debugger_enabled,
                 id,
+
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
                 next_auxiliary_window_id: AtomicU64::new(1),
                 message_port_registry,

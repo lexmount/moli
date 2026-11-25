@@ -458,7 +458,7 @@ impl PageScriptHost {
         document: DomHandle,
         request: LayoutPassRequest,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
-        self.build_layout_pass_for_document_in_environment(document, request, None, false)
+        self.build_layout_pass_for_document_in_environment(document, request, None, false, None)
             .map(|pass| pass.map(|(layout, _)| layout))
     }
 
@@ -468,6 +468,7 @@ impl PageScriptHost {
         request: LayoutPassRequest,
         environment_override: Option<StyloStyleEnvironment>,
         collect_screen_style_coverage: bool,
+        working_sets: Option<&mut crate::layout_renderer::NativeLayoutWorkingSetPass>,
     ) -> Result<Option<(LayoutPassResult<DomHandle>, LayoutPassFeedback<'_>)>, LayoutError> {
         let Some(root) = self
             .dom_host()
@@ -495,6 +496,7 @@ impl PageScriptHost {
                         request,
                         environment_override,
                         collect_screen_style_coverage,
+                        working_sets,
                     )
                 },
             )?

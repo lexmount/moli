@@ -258,12 +258,29 @@ where
     R: LayoutStyleResolver<S::NodeId>,
     F: EmbeddedFrameRenderer<S::NodeId>,
 {
-    finish_prepared_layout_pass(
-        prepare_layout_pass(source, styles, request)?,
-        source,
-        services,
-        frames,
-    )
+    build_layout_pass_with_working_set(source, styles, services, request, frames, None)
+}
+
+/// Runs the shared pipeline with optional document-owned computation state.
+/// A failed pass retires its working state; publication of the frozen result
+/// remains the caller's separate responsibility.
+pub fn build_layout_pass_with_working_set<S, R, F>(
+    source: &S,
+    styles: &mut R,
+    services: &mut DocumentLayoutServices,
+    request: LayoutPassRequest,
+    frames: &mut F,
+    mut working_set: Option<&mut crate::LayoutWorkingSet<S::NodeId>>,
+) -> Result<LayoutPassResult<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    R: LayoutStyleResolver<S::NodeId>,
+    F: EmbeddedFrameRenderer<S::NodeId>,
+{
+    let prepared =
+        prepare_layout_pass_with_working_set(source, styles, request, working_set.as_deref_mut())?;
+    let measured = measure_prepared_layout_pass(prepared, services)?;
+    finish_measured_layout_pass_with_working_set(measured, source, frames, working_set)
 }
 
 /// Owned box construction and control preparation for one layout demand.
@@ -290,6 +307,7 @@ where
     inline_preparation_elapsed: Duration,
     numeric_layout_elapsed: Duration,
     numeric_metrics: NumericLayoutMetrics,
+    construction_box_count: Option<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -359,6 +377,7 @@ where
             inline_preparation_elapsed,
             numeric_layout_elapsed,
             numeric_metrics,
+            ..
         } = self;
         let PreparedLayoutPass {
             world,
@@ -438,9 +457,28 @@ where
     S: LayoutSource,
     R: LayoutStyleResolver<S::NodeId>,
 {
+    prepare_layout_pass_with_working_set(source, styles, request, None)
+}
+
+pub fn prepare_layout_pass_with_working_set<S, R>(
+    source: &S,
+    styles: &mut R,
+    request: LayoutPassRequest,
+    working_set: Option<&mut crate::LayoutWorkingSet<S::NodeId>>,
+) -> Result<PreparedLayoutPass<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    R: LayoutStyleResolver<S::NodeId>,
+{
     let started = Instant::now();
+    // Take before any fallible work so an error cannot leave reusable state
+    // associated with inputs whose construction or projection failed.
     let phase_started = Instant::now();
-    let mut world = build_layout_world(source, styles)?;
+    let mut world = if let Some(working_set) = working_set {
+        crate::builder::build_layout_world_with_retained_inputs(source, styles, working_set.take())?
+    } else {
+        build_layout_world(source, styles)?
+    };
     world.environment = request.environment;
     if request.viewport.mobile_frame_size().is_some() {
         // Mobile viewport scrollbars overlay content. Classic scrollbar
@@ -511,6 +549,8 @@ where
     prepare_inline_contexts(world, services);
     let inline_preparation_elapsed = phase_started.elapsed();
     world.validate_invariants()?;
+    // Static-position placeholders appended by the numeric pass are temporary.
+    let construction_box_count = world.construction_inputs.is_some().then(|| world.len());
     let phase_started = Instant::now();
     let numeric_metrics =
         compute_world_layout_with_scrollbars(world, prepared.request.viewport, frozen_scrollbars);
@@ -535,6 +575,7 @@ where
         inline_preparation_elapsed,
         numeric_layout_elapsed,
         numeric_metrics,
+        construction_box_count,
     })
 }
 
@@ -542,6 +583,19 @@ pub fn finish_measured_layout_pass<S, F>(
     measured: MeasuredLayoutPass<S::NodeId>,
     source: &S,
     frames: &mut F,
+) -> Result<LayoutPassResult<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    F: EmbeddedFrameRenderer<S::NodeId>,
+{
+    finish_measured_layout_pass_with_working_set(measured, source, frames, None)
+}
+
+pub fn finish_measured_layout_pass_with_working_set<S, F>(
+    measured: MeasuredLayoutPass<S::NodeId>,
+    source: &S,
+    frames: &mut F,
+    working_set: Option<&mut crate::LayoutWorkingSet<S::NodeId>>,
 ) -> Result<LayoutPassResult<S::NodeId>, LayoutError>
 where
     S: LayoutSource,
@@ -556,10 +610,12 @@ where
                 box_tree_elapsed,
                 list_marker_elapsed,
                 form_control_elapsed,
+                ..
             },
         inline_preparation_elapsed,
         numeric_layout_elapsed,
         numeric_metrics,
+        construction_box_count,
     } = measured;
     let phase_started = Instant::now();
     let object_geometry = prepare_svg_content(&mut world, source);
@@ -615,6 +671,7 @@ where
         request.retains_screen_paint(),
         object_geometry,
         embedded_frames,
+        working_set.zip(construction_box_count),
         crate::projection::LayoutPassPhaseMetrics {
             box_tree_elapsed,
             list_marker_elapsed,

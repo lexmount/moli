@@ -199,6 +199,9 @@ impl PageScriptHost {
         debug_assert_eq!(retired.local_window_id, current.local_window_id);
         let retired = WindowDocumentOwner::Frame(retired);
         let current = WindowDocumentOwner::Frame(current);
+        // Callback residence can follow document.open(), but computation
+        // inputs belong to the retired exact Document and must start cold.
+        self.retire_realtime_layout_working_set_owner(retired);
         let pending_media = self.media_queries.borrow_mut().rebind(retired, current);
         let Some(state) = &self.realtime_layout_state else {
             // The old exact-owner environment task cannot carry sampling work
@@ -240,6 +243,7 @@ impl PageScriptHost {
             return;
         }
         self.retire_realtime_animation_frame_document(retired);
+        self.retire_realtime_layout_working_set_owner(retired);
         self.retire_realtime_font_readiness(retired);
         if let Some(state) = &self.realtime_layout_state {
             state

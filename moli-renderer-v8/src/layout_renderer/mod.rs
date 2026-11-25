@@ -7,15 +7,21 @@ pub(crate) use screen_styles::resolve_screen_style_targets;
 mod source_view;
 pub(crate) use source_view::native_scroll_offset;
 mod style_resolver;
+mod working_sets;
 
 use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
-    LayoutViewport, finish_measured_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
+    LayoutViewport, finish_measured_layout_pass_with_working_set, measure_prepared_layout_pass,
+    prepare_layout_pass_with_working_set,
 };
+
 use moli_page_types::ViewportSurface;
 use moli_selector::QueryContainerSizes;
+pub(crate) use working_sets::{
+    NativeLayoutWorkingSetOwner, NativeLayoutWorkingSetPass, NativeLayoutWorkingSets,
+};
 
 use crate::{
     document_runtime::DomHandle, native_bridge::PageScriptHost, style_engine::ScreenStyleCoverage,
@@ -63,11 +69,16 @@ pub(crate) fn build_native_layout_pass<'a>(
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     collect_screen_style_coverage: bool,
+    working_sets: Option<&mut NativeLayoutWorkingSetPass>,
 ) -> Result<(LayoutPassResult<DomHandle>, LayoutPassFeedback<'a>), moli_layout::LayoutError> {
     let mut feedback = LayoutPassFeedback {
         host: runtime,
         previous: HashMap::new(),
         screen_style_coverage: collect_screen_style_coverage.then(HashMap::new),
+    };
+    let mut tree = NativeLayoutPassTree {
+        document_stack: Vec::new(),
+        working_sets,
     };
     let pass = build_native_layout_pass_recursive(
         runtime,
@@ -76,11 +87,16 @@ pub(crate) fn build_native_layout_pass<'a>(
         embedded_document_services,
         request,
         environment_override,
-        &mut Vec::new(),
+        &mut tree,
         &mut feedback.previous,
         &mut feedback.screen_style_coverage,
     )?;
     Ok((pass, feedback))
+}
+
+struct NativeLayoutPassTree<'a> {
+    document_stack: Vec<DomHandle>,
+    working_sets: Option<&'a mut NativeLayoutWorkingSetPass>,
 }
 
 fn build_native_layout_pass_recursive(
@@ -90,7 +106,7 @@ fn build_native_layout_pass_recursive(
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
-    document_stack: &mut Vec<DomHandle>,
+    tree: &mut NativeLayoutPassTree<'_>,
     original_container_sizes: &mut HashMap<DomHandle, QueryContainerSizes>,
     screen_style_coverage: &mut Option<HashMap<DomHandle, ScreenStyleCoverage>>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
@@ -102,7 +118,11 @@ fn build_native_layout_pass_recursive(
     let request = request.with_environment(moli_layout::LayoutEnvironment {
         scrollbars_hidden: runtime.scrollbars_hidden(),
     });
-    document_stack.push(document);
+    tree.document_stack.push(document);
+    let mut working_set = tree
+        .working_sets
+        .as_deref_mut()
+        .and_then(|working_sets| working_sets.take_document(document, root));
     let source = source_view::NativeLayoutSourceView::with_paint_resources(
         runtime,
         root,
@@ -121,7 +141,7 @@ fn build_native_layout_pass_recursive(
         ScreenStyleCoverage::default()
     });
     let result = (|| {
-        let mut prepare = || {
+        let mut prepare = |working_set: Option<&mut moli_layout::LayoutWorkingSet<DomHandle>>| {
             style_resolver::with_layout_styles(
                 runtime,
                 document,
@@ -132,11 +152,11 @@ fn build_native_layout_pass_recursive(
                     if profile_started.is_some() && styles_ready.is_none() {
                         styles_ready = Some(std::time::Instant::now());
                     }
-                    prepare_layout_pass(&source, styles, request)
+                    prepare_layout_pass_with_working_set(&source, styles, request, working_set)
                 },
             )
         };
-        let prepared = prepare()?;
+        let prepared = prepare(working_set.as_mut().map(|entry| &mut entry.working_set))?;
         let mut frames = NativeEmbeddedFrameRenderer {
             runtime,
             reason: request.reason,
@@ -146,7 +166,7 @@ fn build_native_layout_pass_recursive(
             frame_coverage: request.frame_coverage(),
             retain_scroll_projection: request.retains_scroll_projection(),
             retain_screen_paint: request.retains_screen_paint(),
-            document_stack,
+            tree,
             embedded_document_services,
             original_container_sizes,
             screen_style_coverage,
@@ -185,10 +205,16 @@ fn build_native_layout_pass_recursive(
                 // measurement. Start a fresh checkpoint after changing gutters.
                 previous_scrollbars = (!froze_scrollbars).then(|| measured.auto_scrollbars());
                 feedback.reserve_rebuild(measured.box_count())?;
-                measured =
-                    measured.remeasure(services, &feedback.frozen_scrollbars, &mut prepare)?;
+                measured = measured.remeasure(services, &feedback.frozen_scrollbars, || {
+                    prepare(working_set.as_mut().map(|entry| &mut entry.working_set))
+                })?;
             }
-            finish_measured_layout_pass(measured, &source, &mut frames)
+            finish_measured_layout_pass_with_working_set(
+                measured,
+                &source,
+                &mut frames,
+                working_set.as_mut().map(|entry| &mut entry.working_set),
+            )
         };
         if services.has_stylesheet_web_fonts() {
             let resources = runtime
@@ -238,11 +264,17 @@ fn build_native_layout_pass_recursive(
             success = result.is_ok(),
         );
     }
-    document_stack.pop();
+    tree.document_stack.pop();
+    if result.is_ok()
+        && let Some(working_set) = working_set
+        && let Some(working_sets) = tree.working_sets.as_deref_mut()
+    {
+        working_sets.complete_document(working_set);
+    }
     result
 }
 
-struct NativeEmbeddedFrameRenderer<'a> {
+struct NativeEmbeddedFrameRenderer<'a, 'working> {
     runtime: &'a PageScriptHost,
     reason: moli_layout::LayoutFlushReason,
     capture_paint: bool,
@@ -251,13 +283,13 @@ struct NativeEmbeddedFrameRenderer<'a> {
     frame_coverage: moli_layout::LayoutFrameCoverage,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
-    document_stack: &'a mut Vec<DomHandle>,
+    tree: &'a mut NativeLayoutPassTree<'working>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
     original_container_sizes: &'a mut HashMap<DomHandle, QueryContainerSizes>,
     screen_style_coverage: &'a mut Option<HashMap<DomHandle, ScreenStyleCoverage>>,
 }
 
-impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
+impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_, '_> {
     fn render_embedded_frame(
         &mut self,
         frame: DomHandle,
@@ -269,8 +301,8 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         let Some(document) = self.runtime.child_browsing_context_document_handle(frame) else {
             return Ok(None);
         };
-        if self.document_stack.len() >= MAX_EMBEDDED_DOCUMENT_DEPTH
-            || self.document_stack.contains(&document)
+        if self.tree.document_stack.len() >= MAX_EMBEDDED_DOCUMENT_DEPTH
+            || self.tree.document_stack.contains(&document)
         {
             if self.frame_coverage == moli_layout::LayoutFrameCoverage::AllLayoutBoxes {
                 return Err(moli_layout::LayoutError::source_contract(
@@ -314,7 +346,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             self.embedded_document_services,
             request,
             self.environment_override,
-            self.document_stack,
+            self.tree,
             self.original_container_sizes,
             self.screen_style_coverage,
         );

@@ -582,6 +582,18 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
 }
 
 impl ResolvedLayoutStyle {
+    /// Drop pass-local style allocations before keeping the construction box.
+    /// Source validation resamples the complete style on the next pass.
+    pub(crate) fn prepare_for_construction_retention(&mut self) {
+        let float = self.taffy.float;
+        self.taffy = Style {
+            float,
+            ..Style::default()
+        };
+        self.generated_content = GeneratedContent::None;
+        self.list_marker_type = LayoutListMarkerType::None;
+    }
+
     /// Converts one retained Stylo style while preserving its allocation for
     /// the full lifetime of the pass-local Taffy projection.
     pub fn from_stylo(computed: ServoArc<ComputedValues>) -> Self {

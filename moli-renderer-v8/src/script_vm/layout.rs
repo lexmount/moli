@@ -367,7 +367,7 @@ impl ScriptVm {
         let (document, publishes_layout, result) = {
             let context_host = self._context_host.borrow();
             let document = context_host.document_handle();
-            let publication =
+            let mut publication =
                 context_host.prepare_layout_publication(document, request.viewport, publication)?;
             let publishes_layout = publication.publishes_screen();
             // Screen publication needs geometry from zero-sized frames too.
@@ -379,6 +379,7 @@ impl ScriptVm {
                     request,
                     environment_override,
                     publication.publishes_current_screen(),
+                    publication.working_sets_for_pass(),
                 )
                 .and_then(|pass| {
                     let Some((mut pass, feedback)) = pass else {
@@ -629,6 +630,7 @@ impl ScriptVm {
             request,
             None,
             false,
+            None,
         )
         .map(|(pass, _)| pass)
     }

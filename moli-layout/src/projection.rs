@@ -74,6 +74,7 @@ pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
     retain_screen_paint: bool,
     mut object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
     mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
+    working_set: Option<(&mut crate::LayoutWorkingSet<N>, usize)>,
     phase_metrics: LayoutPassPhaseMetrics,
 ) -> Result<LayoutPassResult<N>, LayoutError>
 where
@@ -146,7 +147,7 @@ where
             }
         }
     }
-    let metrics = LayoutPassMetrics {
+    let mut metrics = LayoutPassMetrics {
         reason,
         elapsed: started.elapsed(),
         box_tree_elapsed: phase_metrics.box_tree_elapsed,
@@ -205,18 +206,24 @@ where
         embedded_frames,
         scroll_projection,
     );
-    let screen_paint = screen_paint_inputs.map(|(paint_metadata, diagnostics)| {
+    let screen_paint = if let Some((paint_metadata, diagnostics)) = screen_paint_inputs {
         world.box_caches = Vec::new();
         world.native_grid_details = HashMap::new();
         world.resolved_grid_tracks = HashMap::new();
         world.table_structures = HashMap::new();
-        Box::new(ScreenPaintLayout {
+        Some(Box::new(ScreenPaintLayout {
             world,
             frames: screen_frames,
             diagnostics,
             paint_metadata,
-        })
-    });
+        }))
+    } else {
+        if let Some((working_set, construction_box_count)) = working_set {
+            working_set.publish(world, construction_box_count);
+            metrics.elapsed = started.elapsed();
+        }
+        None
+    };
     Ok(LayoutPassResult::new(
         tree,
         diagnostics,
