@@ -90,7 +90,7 @@ struct StyloElementDocumentDataStore {
 
 pub struct InlineStyleSnapshot {
     pub document: NodeId,
-    pub source: SharedArc<moli_dom::native::InlineStyleAttribute>,
+    pub source: Option<SharedArc<moli_dom::native::InlineStyleAttribute>>,
     pub url_data: UrlExtraData,
     pub quirks_mode: QuirksMode,
     pub declarations: Arc<Locked<PropertyDeclarationBlock>>,
@@ -323,7 +323,10 @@ impl StyloDomStyleAdapter {
                 style.document == document
                     && style.quirks_mode == quirks_mode
                     && style.url_data.0.as_ref() == base_url
-                    && SharedArc::ptr_eq(&style.source, source)
+                    && style
+                        .source
+                        .as_ref()
+                        .is_some_and(|current| SharedArc::ptr_eq(current, source))
             })
     }
 
@@ -2514,7 +2517,9 @@ mod element_data_store_tests {
         let lock = SharedRwLock::read_only();
         InlineStyleSnapshot {
             document: NodeId::new(0),
-            source: SharedArc::new(moli_dom::native::InlineStyleAttribute::new(String::new())),
+            source: Some(SharedArc::new(moli_dom::native::InlineStyleAttribute::new(
+                String::new(),
+            ))),
             url_data: UrlExtraData::from(url::Url::parse("about:blank").unwrap()),
             quirks_mode: QuirksMode::NoQuirks,
             declarations: Arc::new(lock.wrap(PropertyDeclarationBlock::new())),

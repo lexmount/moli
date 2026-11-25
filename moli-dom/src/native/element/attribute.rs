@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{any::Any, fmt::Debug, sync::Arc};
 
 use super::super::NativeDom;
 use super::super::node::{NativeNodeId, NodeData};
@@ -18,18 +18,37 @@ enum AttributeValue {
     Style(Arc<InlineStyleAttribute>),
 }
 
-/// The shared text and identity of a style attribute or its CSSOM projection.
+/// Shares the source identity with immutable DOM and cascade snapshots.
 #[derive(Debug)]
-pub struct InlineStyleAttribute(Box<str>);
+pub enum InlineStyleAttribute {
+    Text(Box<str>),
+    Deferred(Box<dyn DeferredStyleAttribute>),
+}
 
 impl InlineStyleAttribute {
     pub fn new(text: String) -> Self {
-        Self(text.into_boxed_str())
+        Self::Text(text.into_boxed_str())
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        match self {
+            Self::Text(text) => text,
+            Self::Deferred(source) => source.serialized(),
+        }
     }
+
+    pub fn deferred(&self) -> Option<&dyn DeferredStyleAttribute> {
+        match self {
+            Self::Deferred(source) => Some(source.as_ref()),
+            Self::Text(_) => None,
+        }
+    }
+}
+
+/// A node-owned CSSOM source whose serialized value is available to any DOM
+/// reader, including immutable DOM snapshots and readers outside V8.
+pub trait DeferredStyleAttribute: Any + Debug + Send + Sync {
+    fn serialized(&self) -> &str;
 }
 
 impl AttributeValue {
@@ -124,6 +143,39 @@ impl Attribute {
             AttributeValue::Style(value) => Some(Arc::clone(value)),
             AttributeValue::Text(_) => None,
         }
+    }
+
+    pub fn deferred_style(&self) -> Option<&dyn DeferredStyleAttribute> {
+        match &self.value {
+            AttributeValue::Style(value) => value.deferred(),
+            AttributeValue::Text(_) => None,
+        }
+    }
+
+    pub(super) fn deferred_style_mut(&mut self) -> Option<&mut Arc<InlineStyleAttribute>> {
+        match &mut self.value {
+            AttributeValue::Style(source) if source.deferred().is_some() => Some(source),
+            _ => None,
+        }
+    }
+
+    pub(super) fn set_deferred_style(&mut self, source: Box<dyn DeferredStyleAttribute>) {
+        self.value = AttributeValue::Style(Arc::new(InlineStyleAttribute::Deferred(source)));
+    }
+
+    pub(super) fn new_deferred_style(source: Box<dyn DeferredStyleAttribute>) -> Self {
+        Self {
+            local_name: html5ever::local_name!("style"),
+            namespace: Namespace::default(),
+            prefix: None,
+            value: AttributeValue::Style(Arc::new(InlineStyleAttribute::Deferred(source))),
+        }
+    }
+
+    pub(super) fn materialize_deferred_style(&mut self) -> Option<Arc<InlineStyleAttribute>> {
+        let source = self.deferred_style_mut()?;
+        let text = InlineStyleAttribute::new(source.as_str().to_owned());
+        Some(std::mem::replace(source, Arc::new(text)))
     }
 
     pub(super) fn set_value(&mut self, value: String) {

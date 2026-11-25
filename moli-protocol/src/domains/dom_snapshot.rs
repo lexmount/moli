@@ -666,6 +666,53 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn capture_snapshot_reads_current_cssom_style_attribute() {
+        let mut ctx = TestContext::new();
+        load_document(
+            &mut ctx,
+            "<!doctype html><article id='target'>live</article>",
+        )
+        .await;
+
+        ctx.process_async(json!({
+            "id": 210,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "const style = document.getElementById('target').style; style.width = '18px'; style.height = '12px';"
+            }
+        })).await;
+        let evaluated = ctx.take_response_by_id(210);
+        assert!(
+            evaluated["result"].get("exceptionDetails").is_none(),
+            "{evaluated}"
+        );
+
+        process_via_command_dispatch(
+            &mut ctx,
+            json!({
+                "id": 211,
+                "method": "DOMSnapshot.captureSnapshot",
+                "params": { "computedStyles": [] }
+            }),
+        )
+        .await;
+        let result = take_capture_snapshot(&mut ctx, 211);
+        let index = decoded_node_names(&result)
+            .iter()
+            .position(|name| name == "ARTICLE")
+            .unwrap();
+        let strings = strings(&result);
+        let attributes = result["documents"][0]["nodes"]["attributes"][index]
+            .as_array()
+            .unwrap();
+        let style = attributes.as_chunks::<2>().0.iter().find_map(|attribute| {
+            (decode_string(&strings, &attribute[0]) == "style")
+                .then(|| decode_string(&strings, &attribute[1]))
+        });
+        assert_eq!(style.as_deref(), Some("width: 18px; height: 12px;"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn capture_snapshot_backend_node_ids_use_renderer_registry() {
         let mut ctx = TestContext::new();
         load_document(

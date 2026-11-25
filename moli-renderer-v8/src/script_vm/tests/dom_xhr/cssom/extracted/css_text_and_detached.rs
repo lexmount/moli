@@ -1192,3 +1192,90 @@ fn detached_css_style_standard_idl_batch_uses_pdb_projection() {
 
     assert_eq!(result, "PASS");
 }
+#[test]
+fn inline_cssom_defers_text_through_style_resolution_and_observation() {
+    let mut vm = new_parsed_test_vm(
+        "https://deferred-inline-style.test/",
+        "<!doctype html><div id='box'></div>",
+    );
+    let handle = vm.document_runtime.get_element_by_id("box").unwrap();
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            const box = document.getElementById('box');
+            const simple = new MutationObserver(() => {});
+            simple.observe(box, {attributes:true});
+            box.style.width = '10px';
+            box.style.height = '20px';
+            JSON.stringify([
+                box.hasAttribute('style'), box.matches('[style]'), box.style.width,
+                getComputedStyle(box).height,
+                simple.takeRecords().map(record => record.oldValue)
+            ])
+        "#
+        )
+        .unwrap(),
+        r#"[true,true,"10px","20px",[null,null]]"#,
+    );
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    assert!(
+        !host
+            .borrow()
+            .element_deferred_cssom_style(handle)
+            .unwrap()
+            .is_serialized()
+    );
+    let before_update = vm.document_runtime.dom_host().dom().clone();
+
+    assert_eq!(
+        vm.eval(r#"
+            box.style.width = '12px';
+            const old = new MutationObserver(() => {});
+            old.observe(document.body, {subtree:true, attributeOldValue:true, attributeFilter:['style']});
+            box.style.width = '14px';
+            box.style.height = '22px';
+            JSON.stringify([
+                old.takeRecords().map(record => record.oldValue),
+                simple.takeRecords().length,
+                box.attributes.getNamedItem('style').value, box.style.cssText
+            ])
+        "#).unwrap(),
+        r#"[["width: 12px; height: 20px;","width: 14px; height: 20px;"],3,"width: 14px; height: 22px;","width: 14px; height: 22px;"]"#,
+    );
+    assert_eq!(
+        before_update.get_attribute(handle, "style").as_deref(),
+        Some("width: 10px; height: 20px;"),
+    );
+}
+
+#[test]
+fn inline_cssom_source_survives_document_replacement() {
+    let mut vm = new_parsed_test_vm(
+        "https://deferred-style-document-open.test/",
+        "<!doctype html><div id='box'></div>",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+            window.oldBox = document.getElementById('box');
+            window.oldStyle = oldBox.style;
+            oldStyle.width = '21px';
+            oldStyle.height = '11px';
+            document.open();
+            document.write('<!doctype html><div id="replacement"></div>');
+            document.close();
+            oldStyle.width = '35px';
+            const imported = document.importNode(oldBox, false);
+            oldBox.style.removeProperty('height');
+            JSON.stringify([
+                document.querySelector('#box'), oldBox.isConnected, oldStyle.cssText,
+                imported.getAttributeNS(null, 'style'), imported.style.height,
+                imported.matches('[style*="35px"]')
+            ])
+        "#
+        )
+        .unwrap(),
+        r#"[null,false,"width: 35px;","width: 35px; height: 11px;","11px",true]"#,
+    );
+}

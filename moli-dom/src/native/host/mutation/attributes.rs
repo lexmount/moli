@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::native::{DeferredStyleAttribute, InlineStyleAttribute};
 
 struct AttributeBeforeMutation {
     local_name: String,
@@ -56,6 +57,64 @@ impl DomHost {
                 prior_value: None,
             },
         })
+    }
+
+    pub fn set_deferred_style_attribute(
+        &mut self,
+        handle: DomHandle,
+        source: Box<dyn DeferredStyleAttribute>,
+    ) -> DomMutationEffects {
+        let Some(element) = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+        else {
+            return DomMutationEffects::default();
+        };
+        // The CSSOM fast path applies only to the non-namespaced attribute.
+        if element
+            .find_attribute("style")
+            .is_some_and(|attribute| !attribute.namespace().is_empty())
+        {
+            return DomMutationEffects::default();
+        }
+        element.set_deferred_style_attribute(source);
+        self.deferred_style_attribute_effects(handle)
+    }
+
+    pub fn edit_deferred_style_attribute(
+        &mut self,
+        handle: DomHandle,
+        edit: impl FnOnce(&mut Arc<InlineStyleAttribute>) -> bool,
+    ) -> DomMutationEffects {
+        let changed = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+            .and_then(Element::deferred_style_attribute_mut)
+            .is_some_and(edit);
+        if changed {
+            return self.deferred_style_attribute_effects(handle);
+        }
+        DomMutationEffects::default()
+    }
+
+    pub fn materialize_deferred_style_attribute(
+        &mut self,
+        handle: DomHandle,
+    ) -> Option<Arc<InlineStyleAttribute>> {
+        self.node_mut(handle)?
+            .data_mut()
+            .as_element_mut()?
+            .materialize_deferred_style_attribute()
+    }
+
+    fn deferred_style_attribute_effects(&self, handle: DomHandle) -> DomMutationEffects {
+        self.record_attribute_mutation(handle, None, "style");
+        let mut effects = self.node_update_effects(handle);
+        if self.mutation_records_enabled() {
+            // This path is reserved for writes with no old-value consumer.
+            effects.queue_attribute_mutation_record(handle, "style", None, None, None);
+        }
+        effects
     }
 
     pub fn explicit_element_references(

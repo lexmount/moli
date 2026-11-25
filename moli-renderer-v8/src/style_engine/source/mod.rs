@@ -607,7 +607,7 @@ impl MoliStyleEngine {
         host: &DomHost,
         handle: DomHandle,
     ) -> Option<url::Url> {
-        self.owner_document_world(host, handle)?
+        self.active_owner_document_world(host, handle)?
             .inline_style_metadata
             .base_url(handle)
     }

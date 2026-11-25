@@ -138,6 +138,17 @@ pub(super) fn take_mutation_records<'s>(
     Some(build_mutation_records_array(scope, host_ptr, &records))
 }
 
+pub(crate) fn observes_attribute_old_value(
+    host_ptr: *mut PageScriptHost,
+    target: NativeNodeId,
+    name: &str,
+) -> bool {
+    ObserverHostAccess::new(host_ptr).read(|host| {
+        host.observers(&OBSERVER_STORE_ACCESS)
+            .observes_attribute_old_value(host.dom_host(), target, name)
+    })
+}
+
 pub(crate) fn queue_mutation_records(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
