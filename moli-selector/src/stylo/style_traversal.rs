@@ -204,8 +204,8 @@ impl StyloDomStyleAdapter {
 
     /// Retains the element's last published computed values while marking
     /// them unavailable for the next style observation.
-    pub fn mark_element_style_dirty(&self, handle: NodeId) -> bool {
-        self.state.mark_element_style_dirty(handle)
+    pub fn mark_element_style_dirty(&self, handle: NodeId, hint: RestyleHint) -> bool {
+        self.state.mark_element_style_dirty(handle, hint)
     }
 
     /// Inspect stored attribute dependencies without a traversal binding,
@@ -674,7 +674,7 @@ impl StyloElementDataStore {
         });
     }
 
-    fn mark_style_dirty(&self, handle: NodeId) -> bool {
+    fn mark_style_dirty(&self, handle: NodeId, hint: RestyleHint) -> bool {
         let data = {
             let documents = self.documents.borrow();
             self.document_for_handle(handle)
@@ -694,10 +694,7 @@ impl StyloElementDataStore {
         // SAFETY: ElementDataWrapper is heap-allocated behind a Box and the
         // adapter's side-table contract forbids removing this entry while the
         // returned Stylo borrow is alive.
-        unsafe { &*data }
-            .borrow_mut()
-            .hint
-            .insert(RestyleHint::RESTYLE_SELF | RestyleHint::RESTYLE_PSEUDOS);
+        unsafe { &*data }.borrow_mut().hint.insert(hint);
         true
     }
 
@@ -1491,9 +1488,9 @@ impl StyleDomState {
         self.element_data.clear_selector_flags(handle);
     }
 
-    fn mark_element_style_dirty(&self, handle: NodeId) -> bool {
+    fn mark_element_style_dirty(&self, handle: NodeId, hint: RestyleHint) -> bool {
         self.note_owner_document_if_bound(handle);
-        self.element_data.mark_style_dirty(handle)
+        self.element_data.mark_style_dirty(handle, hint)
     }
 
     fn clear_element_data_for_document(&self, document: NodeId) {

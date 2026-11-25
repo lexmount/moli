@@ -556,9 +556,17 @@ impl MoliStyleEngine {
         let Some(world) = self.active_owner_document_world(host, root) else {
             return;
         };
+        // The inline rule can be replaced when the attribute text is not an
+        // input to selector matching or to any retained attr() value.
+        let can_replace_rules = host.is_connected(root)
+            && !self.has_retained_style_attribute_selector(host, root)
+            && !self
+                .dom_adapter
+                .element_styles_reference_attribute(host, root, "style")
+            && !world.pseudo_style_cache.references_attribute(root, "style");
         world.document_state.note_visual_input_change();
         self.invalidation_cleanup_for_world(&world)
-            .invalidate_inline_style_subtree(host, root);
+            .invalidate_inline_style(host, root, can_replace_rules);
     }
 
     pub(crate) fn invalidate_style_subtree(&mut self, host: &DomHost, root: DomHandle) {
