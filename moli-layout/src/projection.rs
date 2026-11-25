@@ -214,21 +214,7 @@ where
         embedded_frames,
         scroll_projection,
     );
-    let reusable_layout = retain_layout_world && crate::builder::can_retain_root(&world) && {
-        let estimated_bytes = (world.boxes.capacity() * std::mem::size_of::<crate::LayoutBox<N>>())
-            .saturating_add(world.box_caches.capacity() * std::mem::size_of::<taffy::Cache>())
-            .saturating_add(tree.retention_metrics().estimated_geometry_bytes);
-        let fits_layout = estimated_bytes <= crate::MAX_RETAINED_LAYOUT_TREE_BYTES;
-        if fits_layout
-            && world.estimated_retained_inline_bytes()
-                > crate::MAX_RETAINED_LAYOUT_TREE_BYTES - estimated_bytes
-        {
-            // The optional inline cache must not evict the already-admitted
-            // construction and Taffy working set.
-            world.clear_inline_reuse();
-        }
-        fits_layout
-    };
+    let reusable_layout = retain_layout_world && crate::builder::can_retain_root(&world);
     let retained_layout = (reusable_layout || paint.is_some()).then(|| {
         world.native_grid_details = HashMap::new();
         world.resolved_grid_tracks = HashMap::new();

@@ -211,6 +211,11 @@ impl InlineNumericReuse {
         self.measurements.as_ref().map_or(0, |cache| cache.hits())
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_measurement_storage_for_test(&self) -> bool {
+        self.measurements.is_some()
+    }
+
     pub(crate) fn lookup_measurement(
         &mut self,
         owner: LayoutBoxId,
@@ -285,56 +290,4 @@ impl InlineNumericReuse {
             restored: false,
         });
     }
-
-    /// Owned sidecar buffers; shared Atom and computed-style payloads follow
-    /// the working set's existing exclusion from estimated admission charge.
-    pub(crate) fn estimated_retained_bytes(&self) -> usize {
-        self.entries
-            .iter()
-            .fold(
-                std::mem::size_of::<Self>()
-                    .saturating_add(allocation(&self.entries))
-                    .saturating_add(allocation(&self.owner_slots)),
-                |bytes, entry| bytes.saturating_add(style_allocation(&entry.style)),
-            )
-            .saturating_add(
-                self.measurements
-                    .as_ref()
-                    .map_or(0, |cache| cache.estimated_retained_bytes()),
-            )
-    }
-}
-
-fn allocation<T>(values: &Vec<T>) -> usize {
-    values.capacity().saturating_mul(std::mem::size_of::<T>())
-}
-
-fn style_allocation(style: &Style<Atom>) -> usize {
-    fn line_names(names: &Vec<Vec<Atom>>) -> usize {
-        names.iter().fold(allocation(names), |bytes, line| {
-            bytes.saturating_add(allocation(line))
-        })
-    }
-    fn template(tracks: &Vec<taffy::GridTemplateComponent<Atom>>) -> usize {
-        tracks.iter().fold(allocation(tracks), |bytes, track| {
-            let extra = match track {
-                taffy::GridTemplateComponent::Single(_) => 0,
-                taffy::GridTemplateComponent::Repeat(repetition) => allocation(&repetition.tracks)
-                    .saturating_add(line_names(&repetition.line_names)),
-            };
-            bytes.saturating_add(extra)
-        })
-    }
-    template(&style.grid_template_rows)
-        .saturating_add(template(&style.grid_template_columns))
-        .saturating_add(allocation(&style.grid_auto_rows))
-        .saturating_add(allocation(&style.grid_auto_columns))
-        .saturating_add(line_names(&style.grid_template_row_names))
-        .saturating_add(line_names(&style.grid_template_column_names))
-        .saturating_add(
-            style
-                .grid_template_areas
-                .as_ref()
-                .map_or(0, |areas| allocation(&areas.areas)),
-        )
 }
