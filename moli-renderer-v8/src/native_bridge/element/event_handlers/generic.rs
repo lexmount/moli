@@ -1,6 +1,6 @@
 use crate::{
     document_runtime::EventTargetHandle,
-    native_bridge::OwnerDispatchScope,
+    native_bridge::{OwnerDispatchScope, node::reference::NativeNodeReference},
     util::{
         context_host_ptr_from_global_bridge, get_private_value, node_wrapper_from_handle,
         set_private_value, throw_type_error, v8_string, v8str,
@@ -293,11 +293,14 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         return;
     };
     let object = args.this();
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
+    let Some(NativeNodeReference::Tree { object, node }) =
+        NativeNodeReference::from_object(scope, object)
     else {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
+    let runtime_ptr = node.runtime_ptr;
+    let handle = node.handle;
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
@@ -501,11 +504,14 @@ pub(crate) fn node_event_handler_setter_function<'s>(
     };
     let object = args.this();
     let value = args.get(0);
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
+    let Some(NativeNodeReference::Tree { object, node }) =
+        NativeNodeReference::from_object(scope, object)
     else {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
+    let runtime_ptr = node.runtime_ptr;
+    let handle = node.handle;
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
