@@ -3,10 +3,11 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use moli_selector::StyloSourceInvalidationFallbackReason;
 use selectors::context::SelectorCaches;
 use style::{
+    properties::ComputedValues,
     servo::restyle_damage::ServoRestyleDamage,
     servo_arc::Arc as ServoArc,
     stylist::{CascadeData, Stylist},
@@ -112,6 +113,11 @@ struct ScreenStyleCacheGenerations {
 pub(crate) struct ScreenStyleCoverage {
     generations: Option<ScreenStyleCacheGenerations>,
     pub(crate) lazy_pseudo_owners: HashSet<DomHandle>,
+    // Keep construction order for regional validation, which prepares parents
+    // before their children. Ordinary styles remain in canonical ElementData.
+    pub(crate) sources: IndexSet<DomHandle>,
+    pub(crate) markers: HashMap<DomHandle, Option<ServoArc<ComputedValues>>>,
+    pub(crate) placeholders: HashMap<DomHandle, Option<ServoArc<ComputedValues>>>,
 }
 
 pub(super) struct StyleDocumentState {
@@ -241,10 +247,10 @@ impl StyleDocumentState {
             return;
         }
 
-        let Some(observed) = compare() else {
-            *change = ScreenStyleInvalidation::Full;
-            return;
-        };
+        // Unknown descendant damage requires reconstruction of this subtree.
+        // Keep its owner so a regional size consumer can reject damage outside
+        // its region. Full-screen reuse still rejects reconstruction damage.
+        let observed = compare().unwrap_or_else(ServoRestyleDamage::reconstruct);
         if observed.is_empty() {
             return;
         }
@@ -296,6 +302,16 @@ impl StyleDocumentState {
             generations: Some(self.style_cache_generations()),
             ..Default::default()
         }
+    }
+
+    pub(super) fn with_screen_style_coverage<R>(
+        &self,
+        observe: impl FnOnce(&ScreenStyleCoverage) -> R,
+    ) -> Option<R> {
+        if !self.screen_style_dependencies_are_current() {
+            return None;
+        }
+        self.screen_style_coverage.borrow().as_ref().map(observe)
     }
 
     pub(super) fn invalidate_screen_style_comparisons(&self) {

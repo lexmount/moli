@@ -166,7 +166,17 @@ fn node_box_metric_from_object<'s>(
     metric: &str,
 ) -> Result<i32, moli_layout::LayoutError> {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, object) {
-        let metrics = read_element_metrics(unsafe { &*runtime_ptr }, handle)?;
+        let runtime = unsafe { &*runtime_ptr };
+        if matches!(metric, "offsetWidth" | "offsetHeight")
+            && let Some(size) = runtime.try_isolated_offset_size(handle)?
+        {
+            return Ok(rounded_layout_value(if metric == "offsetWidth" {
+                size.width
+            } else {
+                size.height
+            }));
+        }
+        let metrics = read_element_metrics(runtime, handle)?;
         return Ok(metrics
             .as_ref()
             .map(|metrics| layout_box_metric(metrics, metric))

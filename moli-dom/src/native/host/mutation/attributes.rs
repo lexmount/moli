@@ -27,6 +27,13 @@ impl DomHost {
             MutationScope::QueryState,
             affects_native_layout.then_some(handle),
         );
+        // CSS-only attributes still belong to the pending input journal even
+        // though style invalidation owns their geometry revision.
+        if !affects_native_layout
+            && let Some(document) = self.layout_document_for_mutation_target(handle)
+        {
+            self.record_layout_change_root(document, handle);
+        }
     }
 
     fn qualified_attribute_before_mutation(

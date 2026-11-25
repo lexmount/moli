@@ -115,12 +115,12 @@ impl FrameLayoutPublication {
 /// Resets the entry flag on every return path, including unwinding.
 ///
 /// This is a synchronous ownership guard, not a generation or a retry fence.
-struct ActiveLayoutPass<'a> {
+pub(super) struct ActiveLayoutPass<'a> {
     active: &'a std::cell::Cell<bool>,
 }
 
 impl<'a> ActiveLayoutPass<'a> {
-    fn enter(active: &'a std::cell::Cell<bool>) -> Result<Self, LayoutError> {
+    pub(super) fn enter(active: &'a std::cell::Cell<bool>) -> Result<Self, LayoutError> {
         if active.replace(true) {
             return Err(LayoutError::ReentrantLayoutPass);
         }

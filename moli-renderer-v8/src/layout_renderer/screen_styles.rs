@@ -5,8 +5,9 @@ use style::{
 };
 
 use crate::{
-    document_runtime::DomHandle, native_bridge::PageScriptHost,
-    style_engine::StyleInvalidationScope,
+    document_runtime::DomHandle,
+    native_bridge::PageScriptHost,
+    style_engine::{ScreenStyleCoverage, StyleInvalidationScope, computed_style_values_damage},
 };
 
 use super::style_resolver::layout_style_read_scope;
@@ -78,4 +79,53 @@ pub(crate) fn resolve_screen_style_targets(
         );
     }
     resolved
+}
+
+/// Validate the sources consumed by the publication. A broad Document target
+/// is a scope boundary rather than an element, and projected controls can
+/// suppress descendants that were never used by layout.
+pub(crate) fn validate_region_external_styles(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    coverage: &ScreenStyleCoverage,
+    include: impl Fn(DomHandle) -> bool,
+) -> bool {
+    let started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
+    let host = runtime.dom_host();
+    let viewport = runtime.layout_viewport_for_document(document);
+    let mut observation = layout_style_read_scope(runtime, document, viewport, None);
+    let mut visited = 0usize;
+    let valid = observation.with_resolution_pass(document, |pass| {
+        for &handle in &coverage.sources {
+            if !include(handle)
+                || !host.is_connected(handle)
+                || host.owner_document_handle(handle) != Some(document)
+            {
+                continue;
+            }
+            visited += 1;
+            if pass.element_styles(handle).is_none() {
+                return false;
+            }
+            if let Some(previous) = coverage.markers.get(&handle) {
+                let current = pass.marker_for_generation(handle);
+                if !computed_style_values_damage(previous.as_ref(), current.as_ref()).is_empty() {
+                    return false;
+                }
+            }
+            if let Some(previous) = coverage.placeholders.get(&handle) {
+                let current = pass.pseudo_style(handle, "placeholder");
+                if !computed_style_values_damage(previous.as_ref(), current.as_ref()).is_empty() {
+                    return false;
+                }
+            }
+        }
+        true
+    });
+    if let Some(started) = started {
+        tracing::info!(target: "moli_cpu_profile", stage = "isolated_external_style_validation",
+            document = document.index_u32(), compared_nodes = visited,
+            total_us = started.elapsed().as_micros(), valid);
+    }
+    valid
 }

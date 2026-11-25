@@ -2585,7 +2585,10 @@ impl PageScriptHost {
                             if !DomHost::attribute_affects_native_layout(name))
             })
         {
-            self.note_realtime_layout_input_change();
+            // These mutations already advance the Document's native layout
+            // revision. Reserve the non-DOM revision for independent inputs,
+            // so a regional update can distinguish them from local DOM work.
+            self.request_realtime_rendering_opportunity();
         }
         if style_mutation_effects_affect_layout_metric(effects) {
             self.clear_layout_rect_cache();
@@ -2623,7 +2626,7 @@ impl PageScriptHost {
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
         if self.dom_host().is_connected(root) {
-            self.note_realtime_layout_input_change();
+            self.request_realtime_rendering_opportunity();
         }
         self.clear_layout_rect_cache();
         let dom_host = self.dom_host() as *const _;
