@@ -477,6 +477,12 @@ impl PageScriptHost {
             return Ok(None);
         };
         let _active = ActiveLayoutPass::enter(&self.layout_pass_active)?;
+        if collect_screen_styles && let Some(state) = &self.realtime_layout_state {
+            // A full screen pass has been selected. Release the old style
+            // references before constructing their replacements. If the pass
+            // fails, equivalence checks without a baseline rebuild as needed.
+            state.clear_screen_styles();
+        }
         let (pass, feedback) = {
             let mut state = self.document_layout_state.borrow_mut();
             state.retain_live_embedded_document_services(|candidate| {
