@@ -1,12 +1,12 @@
 use super::*;
-use crate::context_bootstrap::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
+use crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
 #[webapi(prototype = "Object", interface = web_api_interfaces::IDBRequest)]
 struct IdbRequestObjectDeclaration {
-    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    #[webapi(slot = crate::context_bootstrap::SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 }
 
@@ -127,5 +127,6 @@ fn create_request_object_in_current_context<'s>(
     };
     register_indexed_db_wrapper_with_owner(scope, request, kind, owner, storage_scope);
     register_indexed_db_request_lifecycle(scope, request, source, transaction_value);
+    initialize_indexed_db_event_target(scope, request, if is_open { None } else { transaction });
     Some(request)
 }
