@@ -1131,7 +1131,7 @@ impl CrossOriginReflection {
 
 impl_reflection_callback_data!(CrossOriginReflection);
 
-pub(super) fn set_reflected_attribute(
+pub(in crate::native_bridge) fn set_reflected_attribute(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut super::super::PageScriptHost,
     handle: DomHandle,

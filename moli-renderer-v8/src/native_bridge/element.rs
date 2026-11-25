@@ -493,6 +493,7 @@ pub(crate) use geometry::{
 };
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::{observable_deep_hit_test, scroll_node_into_view_at_center};
+pub(in crate::native_bridge) use global_attributes::canonical_dir_value;
 use global_attributes::canonical_fetch_priority_value;
 pub(super) use global_attributes::{
     anchor_target_getter_function, anchor_target_setter_function, area_no_href_setter_function,
@@ -647,6 +648,7 @@ pub(super) use query::{
     node_get_elements_by_tag_name_ns_callback, node_matches_callback,
     node_query_selector_all_callback, node_query_selector_callback,
 };
+pub(in crate::native_bridge) use reflection::set_reflected_attribute;
 use reflection::{
     CrossOriginReflection, DomStringReflection, ElementReflectionInterface,
     NullToEmptyDomStringReflection, UnsignedLongReflection, UsvStringReflection,
@@ -657,8 +659,8 @@ use reflection::{
     remove_reflected_attribute, set_attribute_property_on_object_or_detached,
     set_boolean_attribute_property_on_object_or_detached,
     set_dom_string_attribute_property_on_object,
-    set_nullable_dom_string_attribute_property_on_object, set_reflected_attribute,
-    set_reflected_boolean_attribute, set_usv_string_attribute_property_on_object,
+    set_nullable_dom_string_attribute_property_on_object, set_reflected_boolean_attribute,
+    set_usv_string_attribute_property_on_object,
 };
 pub(crate) use shadow_dom::install_element_internals_template_bindings;
 pub(super) use shadow_dom::{
