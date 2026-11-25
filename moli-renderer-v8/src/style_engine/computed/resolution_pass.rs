@@ -421,8 +421,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                         RuleInclusion::All,
                         PseudoElementResolution::IfApplicable,
                     )
-                    .resolve_style_with_default_parents()
-                    .into();
+                    .resolve_style_with_default_parents();
                     context.thread_local.bloom_filter.push(element);
                     styles
                 });

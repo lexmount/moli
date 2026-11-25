@@ -1,4 +1,3 @@
-mod inheritance;
 mod marker;
 mod resolution_pass;
 
@@ -23,6 +22,7 @@ use style::{
     selector_parser::PseudoElement,
     servo::restyle_damage::ServoRestyleDamage,
     servo_arc::Arc as ServoArc,
+    style_resolver::ResolvedElementStyles,
     stylesheets::{CssRuleType, UrlExtraData},
     values::{
         AtomIdent, resolved,
@@ -160,16 +160,25 @@ fn computed_style_damage<E: TElement>(
     new: Option<&ServoArc<ComputedValues>>,
 ) -> ServoRestyleDamage {
     match (old, new) {
-        (Some(old), Some(new)) => {
-            let mut damage = ServoRestyleDamage::compute_style_difference::<E>(old, new).damage;
-            if old.effective_zoom != new.effective_zoom || old.writing_mode != new.writing_mode {
-                damage.insert(ServoRestyleDamage::RELAYOUT);
-            }
-            damage
-        }
+        (Some(old), Some(new)) => layout_adjusted_damage(
+            old,
+            new,
+            ServoRestyleDamage::compute_style_difference::<E>(old, new).damage,
+        ),
         (None, None) => ServoRestyleDamage::empty(),
         _ => ServoRestyleDamage::reconstruct(),
     }
+}
+
+fn layout_adjusted_damage(
+    old: &ComputedValues,
+    new: &ComputedValues,
+    mut damage: ServoRestyleDamage,
+) -> ServoRestyleDamage {
+    if old.effective_zoom != new.effective_zoom || old.writing_mode != new.writing_mode {
+        damage.insert(ServoRestyleDamage::RELAYOUT);
+    }
+    damage
 }
 
 impl StyloComputedStyleSnapshot {
@@ -866,27 +875,49 @@ fn publish_resolved_element_styles<E: TElement>(
     world: &DocumentStyleWorld,
     element: E,
     previous: ElementStyles,
-    styles: ElementStyles,
+    styles: ResolvedElementStyles,
 ) -> RestyleHint {
     let handle = DomHandle::new(element.as_node().debug_id());
+    let root_units_changed = styles.root_font_relative_state_changed().unwrap_or(false);
+    let styles: ElementStyles = styles.into();
     let old_primary = previous.get_primary();
-    let new_primary = styles.get_primary();
+    let new_primary = styles.primary();
+    let (primary_damage, child_hint) = if let Some(old) = old_primary {
+        let difference = ServoRestyleDamage::compute_style_difference::<E>(old, new_primary);
+        let hint = difference.child_restyle_hint(old, new_primary, root_units_changed);
+        let direct_children =
+            RestyleHint::RECASCADE_SELF | RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE;
+        // The lazy path can apply the direct child hints. Other Stylo hints
+        // can reach descendants beyond a child with an unchanged style.
+        let hint = if hint.difference(direct_children).is_empty() {
+            hint
+        } else {
+            RestyleHint::restyle_subtree()
+        };
+        (
+            layout_adjusted_damage(old, new_primary, difference.damage),
+            hint,
+        )
+    } else {
+        (
+            ServoRestyleDamage::reconstruct(),
+            RestyleHint::recascade_subtree(),
+        )
+    };
     world
         .document_state
         .record_screen_style_damage(handle, old_primary.is_some(), || {
             if !element.as_node().is_in_document() {
                 return Some(ServoRestyleDamage::empty());
             }
-            // These inputs can change a descendant independently of the
-            // parent's render damage. Let a full pass resolve that scope.
-            if let (Some(old), Some(new)) = (old_primary, new_primary)
-                && (old.flags.maybe_inherited() != new.flags.maybe_inherited()
-                    || old.clone_container_name() != new.clone_container_name()
-                    || old.clone_container_type() != new.clone_container_type())
+            if child_hint.will_recascade_subtree()
+                || old_primary.is_some_and(|old| {
+                    old.flags.maybe_inherited() != new_primary.flags.maybe_inherited()
+                })
             {
                 return None;
             }
-            let mut damage = computed_style_damage::<E>(old_primary, new_primary);
+            let mut damage = primary_damage;
             for (old, new) in previous
                 .pseudos
                 .as_array()
@@ -897,8 +928,6 @@ fn publish_resolved_element_styles<E: TElement>(
             }
             Some(damage)
         });
-    let child_hint =
-        inheritance::child_restyle_hint(old_primary.map(|style| &**style), styles.primary());
     unsafe {
         let mut data = element.ensure_data();
         data.styles = styles;
