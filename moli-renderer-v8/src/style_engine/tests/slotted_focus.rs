@@ -55,6 +55,7 @@ fn slotted_dependency_invalidation_targets_assigned_nodes() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: slot,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("slot".into()),
@@ -144,6 +145,7 @@ fn slotted_dependency_change_clears_assigned_descendant_cache_via_subtree_cleanu
         &host,
         &[StyleMutationEffect::Attribute {
             element: slot,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("slot".into()),
@@ -242,6 +244,7 @@ fn slotted_relative_anchor_invalidation_preserves_unmatched_assigned_node() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: marker,
+            namespace: None,
             name: "class".into(),
             old_value: Some("other".into()),
             new_value: Some("marker".into()),
@@ -495,6 +498,7 @@ fn slotted_dependency_invalidation_treats_assigned_node_as_shadow_scope() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: assigned,
+            namespace: None,
             name: "class".into(),
             old_value: Some("item".into()),
             new_value: Some(String::new()),
@@ -562,6 +566,7 @@ fn part_dependency_invalidation_targets_shadow_tree() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: shadow_host,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("host".into()),
@@ -637,6 +642,7 @@ fn part_relative_anchor_invalidation_preserves_unmatched_part() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: marker,
+            namespace: None,
             name: "class".into(),
             old_value: Some("other".into()),
             new_value: Some("marker".into()),
@@ -742,6 +748,7 @@ fn document_part_rule_styles_after_part_lang_and_invalidates() {
     assert!(host.set_attribute(part, "lang", "fr"));
     let effects = [StyleMutationEffect::Attribute {
         element: part,
+        namespace: None,
         name: "lang".into(),
         old_value: None,
         new_value: Some("fr".into()),
@@ -857,6 +864,7 @@ fn document_part_rule_styles_after_part_dir_and_invalidates() {
     assert!(host.set_attribute(part, "dir", "rtl"));
     let effects = [StyleMutationEffect::Attribute {
         element: part,
+        namespace: None,
         name: "dir".into(),
         old_value: None,
         new_value: Some("rtl".into()),
@@ -1143,6 +1151,7 @@ fn attribute_relative_dependency_invalidates_outer_sibling_target() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: marker,
+            namespace: None,
             name: "class".into(),
             old_value: Some("other".into()),
             new_value: Some("marker".into()),
@@ -1209,6 +1218,7 @@ fn unrelated_attribute_mutation_ignores_unmatched_has_selector_dependency() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: unrelated,
+            namespace: None,
             name: "data-other".into(),
             old_value: None,
             new_value: Some("active".into()),
@@ -1257,6 +1267,7 @@ fn style_attribute_mutation_keeps_local_subtree_fallback_without_dependency() {
         &host,
         &[StyleMutationEffect::Attribute {
             element,
+            namespace: None,
             name: "style".into(),
             old_value: None,
             new_value: Some("color: red".into()),
@@ -1292,14 +1303,13 @@ fn attribute_sibling_invalidation_is_per_effect() {
 
     let mut engine = MoliStyleEngine::new();
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    engine.set_document_adopted_style_sheet_sources(
-        document,
-        vec![StyloStylesheetSource::new(
-            ".marker + .target { color: red; }".into(),
-            document_url.clone(),
-        )],
+    let source = StyloStylesheetSource::new(
+        ".marker + .target { color: red; }".into(),
+        document_url.clone(),
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
     assert!(
         engine
             .computed_style_property_value(
@@ -1331,15 +1341,19 @@ fn attribute_sibling_invalidation_is_per_effect() {
         2
     );
 
+    assert!(host.set_attribute(first_source, "class", "marker"));
+    assert!(host.set_attribute(second_source, "data-other", "active"));
     let effects = [
         StyleMutationEffect::Attribute {
             element: first_source,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("marker".into()),
         },
         StyleMutationEffect::Attribute {
             element: second_source,
+            namespace: None,
             name: "data-other".into(),
             old_value: None,
             new_value: Some("active".into()),
@@ -1897,6 +1911,7 @@ fn attribute_relative_dependency_uses_impacted_shadow_stylesheet_scope() {
 
     let outside_effect = [StyleMutationEffect::Attribute {
         element: outside,
+        namespace: None,
         name: "data-state".into(),
         old_value: None,
         new_value: Some("active".into()),
@@ -1912,6 +1927,7 @@ fn attribute_relative_dependency_uses_impacted_shadow_stylesheet_scope() {
 
     let shadow_effect = [StyleMutationEffect::Attribute {
         element: shadow_target,
+        namespace: None,
         name: "data-state".into(),
         old_value: None,
         new_value: Some("active".into()),

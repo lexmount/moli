@@ -53,7 +53,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
 
     /// The adapter already set the native hints. Publish their affected scopes
     /// to the demand-driven scheduler and keep the original cascade modes.
-    pub(super) fn retain_stylesheet_invalidation_targets(
+    pub(super) fn retain_native_invalidation_targets(
         &self,
         host: &DomHost,
         targets: Vec<(DomHandle, RestyleHint)>,

@@ -18,6 +18,7 @@ const REMOVED_SUBTREE_SNAPSHOT_NODE_LIMIT: usize = 256;
 pub(crate) enum StyleMutationEffect {
     Attribute {
         element: DomHandle,
+        namespace: Option<Arc<str>>,
         name: String,
         old_value: Option<String>,
         new_value: Option<String>,
@@ -70,6 +71,7 @@ impl StyleMutationEffect {
     ) -> Self {
         Self::Attribute {
             element,
+            namespace: namespace.map(Arc::from),
             name: if namespace.is_some() {
                 name.to_owned()
             } else {
@@ -187,6 +189,7 @@ impl StyleMutationEffect {
             };
             style_effects.insert(Self::Attribute {
                 element: mutation.target(),
+                namespace: mutation.namespace().map(Arc::from),
                 name: normalized_name,
                 old_value: mutation.old_value().map(str::to_owned),
                 new_value: mutation.new_value().map(str::to_owned),

@@ -58,6 +58,7 @@ fn retained_stylo_invalidator_narrows_sibling_cache_invalidation() {
     assert!(host.set_attribute(marker, "class", ""));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: Some("marker".into()),
         new_value: Some(String::new()),
@@ -116,6 +117,7 @@ fn retained_stylo_invalidator_narrows_class_attribute_cache_invalidation() {
     assert!(host.set_attribute(target, "class", ""));
     let effects = [StyleMutationEffect::Attribute {
         element: target,
+        namespace: None,
         name: "class".into(),
         old_value: Some("active".into()),
         new_value: Some(String::new()),
@@ -176,6 +178,7 @@ fn retained_stylo_invalidator_accepts_empty_normal_sibling_result() {
     assert!(host.set_attribute(marker, "class", "marker"));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("marker".into()),
@@ -235,6 +238,7 @@ fn retained_stylo_invalidator_accepts_empty_scope_sibling_result() {
     assert!(host.set_attribute(marker, "class", "marker"));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("marker".into()),
@@ -352,6 +356,7 @@ fn retained_stylo_invalidator_narrows_at_scope_dependency_to_affected_target() {
     assert!(host.set_attribute(marker, "class", "marker"));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("marker".into()),
@@ -501,6 +506,7 @@ fn retained_stylo_invalidator_accepts_exact_empty_at_scope_dependency_result() {
     assert!(host.set_attribute(marker, "class", "marker"));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("marker".into()),
@@ -615,6 +621,7 @@ fn retained_stylo_invalidator_keeps_self_dependency_inheritance_safe() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: parent,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("marker".into()),
@@ -712,6 +719,7 @@ fn retained_stylo_invalidator_ignores_unrelated_shadow_cascade_data() {
     assert!(host.set_attribute(marker, "class", ""));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: Some("marker".into()),
         new_value: Some(String::new()),
@@ -794,6 +802,7 @@ fn retained_stylo_invalidator_ignores_out_of_scope_shadow_cascade_dependency() {
     assert!(host.set_attribute(marker, "class", ""));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: Some("marker".into()),
         new_value: Some(String::new()),
@@ -864,6 +873,7 @@ fn retained_stylo_invalidator_falls_back_for_in_scope_shadow_cascade_dependency(
     assert!(host.set_attribute(shadow_child, "class", ""));
     let effects = [StyleMutationEffect::Attribute {
         element: shadow_child,
+        namespace: None,
         name: "class".into(),
         old_value: Some("marker".into()),
         new_value: Some(String::new()),
@@ -944,6 +954,7 @@ fn retained_stylo_invalidator_narrows_shadow_tree_sibling_dependency() {
     assert!(host.set_attribute(marker, "class", ""));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: Some("marker".into()),
         new_value: Some(String::new()),
@@ -1016,6 +1027,7 @@ fn retained_stylo_invalidator_treats_shadow_host_as_shadow_scope() {
     assert!(host.set_attribute(shadow_host, "class", "marker"));
     let effects = [StyleMutationEffect::Attribute {
         element: shadow_host,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("marker".into()),
@@ -1093,6 +1105,7 @@ fn retained_stylo_invalidator_narrows_shadow_host_descendant_dependency() {
     assert!(host.set_attribute(shadow_host, "class", "marker"));
     let effects = [StyleMutationEffect::Attribute {
         element: shadow_host,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("marker".into()),
@@ -1171,6 +1184,7 @@ fn retained_stylo_invalidator_uses_shadow_relative_dependency() {
     assert!(host.set_attribute(marker, "class", "marker"));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: Some("other".into()),
         new_value: Some("marker".into()),
@@ -1244,6 +1258,7 @@ fn retained_stylo_invalidator_lazily_refreshes_shadow_tree_has_descendants() {
     assert!(host.set_attribute(shadow_child, "class", "descendant"));
     let effects = [StyleMutationEffect::Attribute {
         element: shadow_child,
+        namespace: None,
         name: "class".into(),
         old_value: Some("other".into()),
         new_value: Some("descendant".into()),
@@ -1351,6 +1366,7 @@ fn retained_stylo_invalidator_lazily_refreshes_shadow_host_context_subject() {
     assert!(host.set_attribute(host_parent, "class", "active"));
     let effects = [StyleMutationEffect::Attribute {
         element: host_parent,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("active".into()),
@@ -1435,6 +1451,7 @@ fn retained_stylo_invalidator_keeps_shadow_host_self_dependency_conservative() {
     assert!(host.set_attribute(shadow_host, "class", "marker"));
     let effects = [StyleMutationEffect::Attribute {
         element: shadow_host,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("marker".into()),
@@ -1518,6 +1535,7 @@ fn retained_stylo_invalidator_ignores_unrelated_relative_selector_fallback() {
     assert!(host.set_attribute(marker, "class", ""));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: Some("marker".into()),
         new_value: Some(String::new()),
@@ -1585,6 +1603,7 @@ fn retained_stylo_invalidator_uses_snapshot_roots_for_has_class_dependency() {
     assert!(host.set_attribute(marker, "class", "marker"));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("marker".into()),
@@ -1664,6 +1683,7 @@ fn retained_stylo_invalidator_accepts_empty_snapshot_relative_result_for_has_cla
     assert!(host.set_attribute(outside, "class", "marker"));
     let effects = [StyleMutationEffect::Attribute {
         element: outside,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("marker".into()),
@@ -1774,6 +1794,7 @@ fn target_query_drain_uses_selector_wrapper_fallback_without_retained_system() {
     assert!(host.set_attribute(marker, "class", ""));
     let effects = [StyleMutationEffect::Attribute {
         element: marker,
+        namespace: None,
         name: "class".into(),
         old_value: Some("marker".into()),
         new_value: Some(String::new()),

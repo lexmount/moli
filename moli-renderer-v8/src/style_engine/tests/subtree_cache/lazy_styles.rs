@@ -539,6 +539,7 @@ fn inherited_ancestor_change_lazily_refreshes_descendant_style() {
     assert!(host.set_attribute(ancestor, "class", "theme"));
     let effects = [StyleMutationEffect::Attribute {
         element: ancestor,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("theme".into()),
@@ -646,6 +647,7 @@ fn custom_property_ancestor_change_lazily_refreshes_descendant_style() {
     assert!(host.set_attribute(ancestor, "class", "theme"));
     let effects = [StyleMutationEffect::Attribute {
         element: ancestor,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("theme".into()),
@@ -723,6 +725,7 @@ fn reset_style_change_recascades_only_children_that_explicitly_inherit() {
     assert!(host.set_attribute(ancestor, "class", "theme"));
     let effects = [StyleMutationEffect::Attribute {
         element: ancestor,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("theme".into()),
@@ -823,6 +826,7 @@ fn lazy_child_restyle_keeps_earlier_inheritance_and_stops_at_an_override() {
             &host,
             &[StyleMutationEffect::Attribute {
                 element: parent,
+                namespace: None,
                 name: "class".into(),
                 old_value: old.map(Into::into),
                 new_value: Some(new.into()),
@@ -964,6 +968,7 @@ fn shadow_host_inherited_change_lazily_refreshes_shadow_descendant() {
     assert!(host.set_attribute(shadow_host, "class", "theme"));
     let effects = [StyleMutationEffect::Attribute {
         element: shadow_host,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("theme".into()),
@@ -1059,6 +1064,7 @@ fn lazy_pseudo_inherited_change_is_evicted_when_owner_is_observed() {
     assert!(host.set_attribute(ancestor, "class", "theme"));
     let effects = [StyleMutationEffect::Attribute {
         element: ancestor,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("theme".into()),
@@ -1192,6 +1198,7 @@ fn lazy_pseudo_custom_property_change_is_evicted_when_owner_is_observed() {
     assert!(host.set_attribute(ancestor, "class", "theme"));
     let effects = [StyleMutationEffect::Attribute {
         element: ancestor,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("theme".into()),

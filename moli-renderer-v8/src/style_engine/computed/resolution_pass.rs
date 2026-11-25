@@ -34,7 +34,7 @@ use super::{
 
 /// One binding and stylesheet read scope for a stable document world. Create
 /// Stylo's thread-local state only when an element actually needs resolving.
-pub(super) struct ResolutionContext<'a, 'dom> {
+pub(in crate::style_engine) struct ResolutionContext<'a, 'dom> {
     world: &'a DocumentStyleWorld,
     adapter: &'dom StyloDomHostBinding<'dom>,
     shared: &'a SharedStyleContext<'a>,
@@ -50,7 +50,7 @@ impl<'dom> ResolutionContext<'_, 'dom> {
         }
     }
 
-    pub(super) fn with_stylo<R>(
+    pub(in crate::style_engine) fn with_stylo<R>(
         &mut self,
         resolve: impl FnOnce(&mut StyleContext<'_, StyloElement<'dom>>) -> R,
     ) -> R {
@@ -102,8 +102,16 @@ pub(super) fn with_resolution_context<'dom, R>(
     adapter: &'dom StyloDomHostBinding<'dom>,
     resolve: impl FnOnce(ResolutionContext<'_, 'dom>) -> R,
 ) -> R {
+    with_resolution_context_and_snapshots(world, adapter, &SnapshotMap::new(), resolve)
+}
+
+pub(in crate::style_engine) fn with_resolution_context_and_snapshots<'dom, R>(
+    world: &DocumentStyleWorld,
+    adapter: &'dom StyloDomHostBinding<'dom>,
+    snapshot_map: &SnapshotMap,
+    resolve: impl FnOnce(ResolutionContext<'_, 'dom>) -> R,
+) -> R {
     let guard = adapter.shared_lock().read();
-    let snapshot_map = SnapshotMap::new();
     let empty_painters = EmptyRegisteredSpeculativePainters;
     let _layout_thread_state = StyloLayoutThreadStateGuard::enter();
     world.document_state.with_retained_style_system(|retained| {
@@ -119,7 +127,7 @@ pub(super) fn with_resolution_context<'dom, R>(
             guards: StylesheetGuards::same(&guard),
             current_time_for_animations: 0.0,
             traversal_flags: TraversalFlags::SkipAnimationUpdates,
-            snapshot_map: &snapshot_map,
+            snapshot_map,
             animations: DocumentAnimationSet::default(),
             registered_speculative_painters: &empty_painters,
         };

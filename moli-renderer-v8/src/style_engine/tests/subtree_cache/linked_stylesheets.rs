@@ -671,6 +671,7 @@ fn unrelated_document_linked_source_does_not_disable_no_source_fast_path() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: active,
+            namespace: None,
             name: "class".to_owned(),
             old_value: None,
             new_value: Some("active".to_owned()),
@@ -717,6 +718,7 @@ fn uninstalled_link_and_unrelated_url_do_not_disable_no_source_fast_path() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: active,
+            namespace: None,
             name: "class".to_owned(),
             old_value: None,
             new_value: Some("active".to_owned()),

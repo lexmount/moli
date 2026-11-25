@@ -220,8 +220,10 @@ impl MoliStyleEngine {
         &self,
         host: &DomHost,
         world: &DocumentStyleWorld,
-    ) {
-        for group in world.pending_structural_mutations.take() {
+    ) -> bool {
+        let groups = world.pending_structural_mutations.take();
+        let had_structural_mutations = !groups.is_empty();
+        for group in groups {
             let (mut effects, input_count) = group.effects.into_effects();
             // Exhausted fragments can still contribute detached roots and source
             // ownership. Resolve these against the full history before pruning.
@@ -261,6 +263,7 @@ impl MoliStyleEngine {
                 PendingStyleInvalidationCause::Mutation(pending_effects),
             );
         }
+        had_structural_mutations
     }
 
     fn invalidate_mutation_dependent_subtrees(
@@ -591,11 +594,31 @@ impl MoliStyleEngine {
         let Some(source_scope) = source_scope else {
             return;
         };
-        let source_stores = world.borrow_source_stores();
         if !world_has_style_state(self, world) {
             world.document_state.note_style_input_change();
             return;
         }
+        if let Some(snapshots) = super::native_invalidation::snapshots_for_native_invalidation(
+            &self.dom_adapter,
+            world,
+            host,
+            &cause,
+            emulated_media,
+            viewport,
+        ) {
+            world.document_state.note_style_input_change();
+            if !snapshots.snapshots.is_empty() {
+                world.pending_invalidations.extend_work(
+                    super::pending_invalidation::PendingStyleInvalidationWork::with_native_snapshots(
+                        cause.work_kind(),
+                        snapshots,
+                        cause.pending_merge_class(),
+                    ),
+                );
+            }
+            return;
+        }
+        let source_stores = world.borrow_source_stores();
         queue_style_invalidation_for_scope(
             &world.pending_invalidations,
             &world.document_state,

@@ -58,6 +58,7 @@ fn retained_stylo_invalidator_narrows_assigned_node_slotted_dependency() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: assigned,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("item".into()),
@@ -139,6 +140,7 @@ fn retained_stylo_invalidator_accepts_empty_slotted_result() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: slot,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("slot".into()),
@@ -205,6 +207,7 @@ fn retained_stylo_invalidator_narrows_part_dependency() {
     assert!(host.set_attribute(shadow_host, "class", "host"));
     let effects = [StyleMutationEffect::Attribute {
         element: shadow_host,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("host".into()),
@@ -327,6 +330,7 @@ fn retained_stylo_invalidator_accepts_empty_part_result() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: shadow_host,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("host".into()),

@@ -8580,7 +8580,7 @@ dependencies = [
 [[package]]
 name = "selectors"
 version = "0.41.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "bitflags",
  "cssparser",
@@ -8755,7 +8755,7 @@ dependencies = [
 [[package]]
 name = "servo_arc"
 version = "0.5.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "serde",
  "stable_deref_trait",
@@ -9217,7 +9217,7 @@ dependencies = [
 [[package]]
 name = "stylo"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "app_units",
  "arrayvec",
@@ -9273,7 +9273,7 @@ dependencies = [
 [[package]]
 name = "stylo_atoms"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "string_cache 0.11.0",
  "string_cache_codegen 0.11.2",
@@ -9282,7 +9282,7 @@ dependencies = [
 [[package]]
 name = "stylo_derive"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "darling 0.20.11",
  "proc-macro2",
@@ -9294,7 +9294,7 @@ dependencies = [
 [[package]]
 name = "stylo_dom"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "bitflags",
  "stylo_malloc_size_of",
@@ -9303,7 +9303,7 @@ dependencies = [
 [[package]]
 name = "stylo_malloc_size_of"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "app_units",
  "cssparser",
@@ -9321,7 +9321,7 @@ dependencies = [
 [[package]]
 name = "stylo_static_prefs"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "toml",
 ]
@@ -9340,7 +9340,7 @@ dependencies = [
 [[package]]
 name = "stylo_traits"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "app_units",
  "bitflags",
@@ -9895,7 +9895,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "to_shmem"
 version = "0.6.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "cssparser",
  "servo_arc",
@@ -9908,7 +9908,7 @@ dependencies = [
 [[package]]
 name = "to_shmem_derive"
 version = "0.2.0"
-source = "git+https://github.com/lexmount/stylo?rev=5aca06381f726d289acef01f06cf7871fc477c7c#5aca06381f726d289acef01f06cf7871fc477c7c"
+source = "git+https://github.com/lexmount/stylo?rev=a93f106262e1bb48a923dbd717ed2713e75e8c4e#a93f106262e1bb48a923dbd717ed2713e75e8c4e"
 dependencies = [
  "darling 0.20.11",
  "proc-macro2",

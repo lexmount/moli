@@ -84,6 +84,7 @@ fn retained_stylo_invalidator_refreshes_nth_child_of_selector_list_on_class_chan
         &host,
         &[StyleMutationEffect::Attribute {
             element: middle,
+            namespace: None,
             name: "class".into(),
             old_value: Some("c".into()),
             new_value: Some("".into()),

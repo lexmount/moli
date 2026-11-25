@@ -416,6 +416,7 @@ fn active_document_light_tree_mutation_matches_related_shadow_sources() {
 
     let effect = [StyleMutationEffect::Attribute {
         element: light_child,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("marker".into()),
@@ -2273,6 +2274,7 @@ fn linked_owner_keeps_processed_source_when_base_href_changes() {
     assert!(host.set_attribute(base, "href", "/theme/"));
     let effects = [StyleMutationEffect::Attribute {
         element: base,
+        namespace: None,
         name: "href".into(),
         old_value: Some("/assets/".into()),
         new_value: Some("/theme/".into()),
@@ -2832,6 +2834,7 @@ fn attribute_mutation_without_source_dependency_skips_style_invalidation() {
     assert!(host.set_attribute(target, "data-state", "active"));
     let effects = [StyleMutationEffect::Attribute {
         element: target,
+        namespace: None,
         name: "data-state".to_owned(),
         old_value: None,
         new_value: Some("active".to_owned()),
@@ -2839,9 +2842,16 @@ fn attribute_mutation_without_source_dependency_skips_style_invalidation() {
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(&host, &effects, &media);
 
+    let generation = engine.style_invalidation_generation_for_document_for_test(document);
     assert_eq!(
         engine.pending_style_invalidation_work_item_count_for_document_for_test(document),
         0,
+        "unobserved attributes should not queue snapshots",
+    );
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+    assert_eq!(
+        engine.style_invalidation_generation_for_document_for_test(document),
+        generation,
         "attribute changes with no retained source dependency should not fall back to document invalidation"
     );
 }
@@ -2891,6 +2901,7 @@ fn attribute_mutation_with_source_dependency_still_invalidates_style() {
     assert!(host.set_attribute(script, "async", ""));
     let effects = [StyleMutationEffect::Attribute {
         element: script,
+        namespace: None,
         name: "async".to_owned(),
         old_value: None,
         new_value: Some(String::new()),
@@ -2908,6 +2919,7 @@ fn attribute_mutation_with_source_dependency_still_invalidates_style() {
 fn attribute_dependency_change_extracts_class_token_delta() {
     let effect = StyleMutationEffect::Attribute {
         element: NativeNodeId::new(1),
+        namespace: None,
         name: "class".into(),
         old_value: Some("a b a kept".into()),
         new_value: Some("kept c b c".into()),
@@ -2927,12 +2939,14 @@ fn attribute_dependency_change_extracts_class_token_delta() {
 fn attribute_dependency_change_requires_pre_normalized_class_and_id_names() {
     let class_effect = StyleMutationEffect::Attribute {
         element: NativeNodeId::new(1),
+        namespace: None,
         name: "CLASS".into(),
         old_value: Some("old".into()),
         new_value: Some("new".into()),
     };
     let id_effect = StyleMutationEffect::Attribute {
         element: NativeNodeId::new(1),
+        namespace: None,
         name: "ID".into(),
         old_value: Some("old".into()),
         new_value: Some("new".into()),
@@ -2971,10 +2985,11 @@ fn direct_namespaced_attribute_style_effect_preserves_case_on_html_elements() {
         effect,
         StyleMutationEffect::Attribute {
             element: target,
+            namespace: Some(namespace),
             name,
             old_value: None,
             new_value: Some(value),
-        } if target == element && name == "DATA-State" && value == "marker"
+        } if target == element && namespace.as_ref() == "urn:test" && name == "DATA-State" && value == "marker"
     ));
 }
 #[test]
@@ -2992,12 +3007,14 @@ fn removed_element_dependency_snapshot_dedupes_class_tokens() {
 fn attribute_dependency_change_keeps_id_delta_and_attribute_probe() {
     let id_effect = StyleMutationEffect::Attribute {
         element: NativeNodeId::new(1),
+        namespace: None,
         name: "id".into(),
         old_value: Some("old".into()),
         new_value: Some("new".into()),
     };
     let data_effect = StyleMutationEffect::Attribute {
         element: NativeNodeId::new(1),
+        namespace: None,
         name: "data-state".into(),
         old_value: Some("inactive".into()),
         new_value: Some("active".into()),
@@ -3031,6 +3048,7 @@ fn typed_attribute_style_effect_captures_exact_new_value_without_observer_record
         effect,
         StyleMutationEffect::Attribute {
             element: target,
+            namespace: None,
             name,
             old_value,
             new_value,
@@ -3057,6 +3075,7 @@ fn typed_attribute_style_effect_normalizes_html_attribute_name() {
         effect,
         StyleMutationEffect::Attribute {
             element: target,
+            namespace: None,
             name,
             old_value,
             new_value,
@@ -3085,10 +3104,12 @@ fn typed_attribute_style_effect_preserves_namespaced_attribute_name() {
         effect,
         StyleMutationEffect::Attribute {
             element: target,
+            namespace: Some(namespace),
             name,
             old_value,
             new_value,
         } if *target == element
+            && namespace.as_ref() == "urn:test"
             && name == "DATA-State"
             && old_value.is_none()
             && new_value.as_deref() == Some("marker")
