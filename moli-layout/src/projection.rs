@@ -226,9 +226,16 @@ where
             })),
             None,
         )
-    } else if retain_layout_world && crate::builder::can_retain_world(&world) {
+    } else if retain_layout_world && crate::builder::can_retain_root(&world) {
+        world.native_grid_details = HashMap::new();
+        world.resolved_grid_tracks = HashMap::new();
+        world.table_structures = HashMap::new();
+        world.collapsed_table_borders = HashMap::new();
         for layout_box in &mut world.boxes {
             layout_box.inline_layout = None;
+            layout_box.table_measure_cache = None;
+            layout_box.replaced_image = None;
+            layout_box.css_images = Default::default();
         }
         let estimated_bytes = world.boxes.capacity() * std::mem::size_of::<crate::LayoutBox<N>>()
             + world.box_caches.capacity() * std::mem::size_of::<taffy::Cache>()
