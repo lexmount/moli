@@ -5,7 +5,7 @@
 
 use crate::web_api_interfaces;
 use crate::{
-    native_bridge::{node_runtime_and_handle_from_object_or_detached, throw_dom_exception},
+    native_bridge::throw_dom_exception,
     util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
     webidl,
 };
@@ -43,25 +43,9 @@ pub(super) fn install_bindings<'s>(
 
 pub(super) fn create_svg_rect<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
+    _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let is_svg_root = node_runtime_and_handle_from_object_or_detached(scope, args.this())
-        .ok()
-        .is_some_and(|(host, handle)| {
-            unsafe { &*host }
-                .dom_host()
-                .node(handle)
-                .and_then(crate::dom::native::Node::as_element)
-                .is_some_and(|element| element.is_svg_element("svg"))
-        });
-    if !is_svg_root {
-        webidl::throw_type_error(
-            scope,
-            "SVGSVGElement.createSVGRect called on incompatible receiver.",
-        );
-        return;
-    }
     rv.set(new_svg_rect(scope, [0.0; 4]).into());
 }
 
