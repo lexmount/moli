@@ -691,6 +691,8 @@ where
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) fixed_viewport_layout: Option<Box<ViewportLayoutState>>,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
+    pub(crate) inline_numeric_reuse: Option<Box<crate::inline::InlineNumericReuse>>,
+    pub(crate) retained_inline_fonts: Option<Box<crate::text::LayoutFontInputs>>,
     /// Full numeric measurement retains baselines without publishing layouts.
     pub(crate) measure_baselines: bool,
     /// The active table cell's used height need not be a percentage guarantee.
@@ -729,6 +731,8 @@ where
             viewport_layout: ViewportLayoutState::default(),
             fixed_viewport_layout: None,
             css_image_references: Vec::new(),
+            inline_numeric_reuse: None,
+            retained_inline_fonts: None,
             measure_baselines: false,
             table_cell_percentage_height: None,
             numeric_layout_tracking: false,
@@ -773,16 +777,64 @@ where
     }
 
     pub(crate) fn release_numeric_cache_storage(&mut self) {
+        self.clear_inline_reuse();
         self.box_caches = Vec::new();
         for layout_box in &mut self.boxes {
             layout_box.cache_slot = None;
         }
     }
 
+    pub(crate) fn clear_inline_reuse(&mut self) {
+        self.inline_numeric_reuse = None;
+        self.retained_inline_fonts = None;
+    }
+
+    pub(crate) fn estimated_retained_inline_bytes(&self) -> usize {
+        let Some(fonts) = &self.retained_inline_fonts else {
+            return 0;
+        };
+        let numeric = self.inline_numeric_reuse.as_deref();
+        let mut bytes = fonts
+            .estimated_metadata_bytes()
+            .saturating_add(numeric.map_or(
+                0,
+                crate::inline::InlineNumericReuse::estimated_retained_bytes,
+            ));
+        for (index, layout_box) in self.boxes.iter().enumerate() {
+            if let Some(context) = &layout_box.inline_layout {
+                let preserve_numeric =
+                    numeric.is_some_and(|numeric| numeric.contains(LayoutBoxId::from_index(index)));
+                bytes = bytes
+                    .saturating_add(std::mem::size_of::<InlineFormattingContext>())
+                    .saturating_add(context.estimated_retained_preparation_bytes(preserve_numeric));
+                if preserve_numeric {
+                    bytes = bytes.saturating_add(context.estimated_retained_numeric_bytes());
+                }
+            }
+        }
+        bytes
+    }
+
     pub(crate) fn release_paint_storage(&mut self) {
         self.collapsed_table_borders = HashMap::new();
-        for layout_box in &mut self.boxes {
-            layout_box.inline_layout = None;
+        if let Some(numeric) = &mut self.inline_numeric_reuse {
+            numeric.retain_owners_for_box_count(self.boxes.len(), |id| {
+                self.boxes[id.index()]
+                    .inline_layout
+                    .as_ref()
+                    .is_some_and(|context| context.laid_out.is_some())
+            });
+        }
+        for (index, layout_box) in self.boxes.iter_mut().enumerate() {
+            if self.retained_inline_fonts.is_none() {
+                layout_box.inline_layout = None;
+            } else if let Some(context) = &mut layout_box.inline_layout {
+                let preserve_numeric = self
+                    .inline_numeric_reuse
+                    .as_ref()
+                    .is_some_and(|numeric| numeric.contains(LayoutBoxId::from_index(index)));
+                context.prepare_for_retention(preserve_numeric);
+            }
             layout_box.table_measure_cache = None;
             layout_box.replaced_image = None;
         }
@@ -796,6 +848,7 @@ where
     }
 
     pub(crate) fn replace_retained_box(&mut self, id: LayoutBoxId, mut replacement: LayoutBox<N>) {
+        self.invalidate_retained_inline(id);
         self.clear_layout_caches(id);
         let old = &mut self.boxes[id.index()];
         replacement.structural_parent = old.structural_parent;
@@ -804,6 +857,15 @@ where
         replacement.children = std::mem::take(&mut old.children);
         replacement.inline_formatting_context = old.inline_formatting_context;
         self.boxes[id.index()] = replacement;
+    }
+
+    /// Retained paragraphs borrow their identity from the current box graph.
+    /// Retire their numeric keys before replacing styles with borrowed lengths.
+    pub(crate) fn invalidate_retained_inline(&mut self, id: LayoutBoxId) {
+        if let Some(numeric) = &mut self.inline_numeric_reuse {
+            numeric.discard_owner(id);
+        }
+        self.boxes[id.index()].inline_layout = None;
     }
 
     pub(crate) fn numeric_cache(&mut self, id: LayoutBoxId) -> Option<&mut Cache> {
@@ -1029,6 +1091,26 @@ where
             positions[displaced] = previous;
             positions[old] = new;
             remap[old] = Some(LayoutBoxId::from_index(new));
+        }
+        if let Some(numeric) = &mut self.inline_numeric_reuse {
+            let unchanged = |id: LayoutBoxId| remap.get(id.index()) == Some(&Some(id));
+            numeric.retain_owners_for_box_count(live_count, |id| {
+                unchanged(id)
+                    && self.boxes[id.index()]
+                        .inline_layout
+                        .as_ref()
+                        .is_some_and(|context| context.references_only(unchanged))
+            });
+            for (index, layout_box) in self.boxes[..live_count].iter_mut().enumerate() {
+                if !unchanged(LayoutBoxId::from_index(index))
+                    || layout_box
+                        .inline_layout
+                        .as_ref()
+                        .is_some_and(|context| !context.references_only(unchanged))
+                {
+                    layout_box.inline_layout = None;
+                }
+            }
         }
         self.boxes.truncate(live_count);
         self.remap_construction_links(&remap);

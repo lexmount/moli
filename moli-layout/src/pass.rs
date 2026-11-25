@@ -588,10 +588,29 @@ where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
     let world = &mut prepared.world;
+    let retain_inline = prepared.request.retains_layout_world();
+    if retain_inline {
+        let fonts = services.font_inputs();
+        if world.retained_inline_fonts.as_deref() != Some(&fonts) {
+            for layout_box in &mut world.boxes {
+                layout_box.inline_layout = None;
+            }
+            world.inline_numeric_reuse = None;
+            world.retained_inline_fonts = Some(Box::new(fonts));
+            prepared.reuse_numeric_layout = false;
+        }
+        let box_count = world.len();
+        if let Some(numeric) = &mut world.inline_numeric_reuse {
+            numeric.begin_pass(box_count);
+        } else {
+            world.inline_numeric_reuse =
+                Some(Box::new(crate::inline::InlineNumericReuse::new(box_count)));
+        }
+    }
     let mut invalidated = Vec::new();
     if prepared.reuse_numeric_layout {
-        // IFCs are prepared afresh, including their fragment storage. A
-        // retained layout covering one of these boxes must run to fill it.
+        // Revisit cached Taffy branches that cover IFC fragments. Their
+        // inline results are restored or rebuilt under the current inputs.
         invalidated.extend(
             world
                 .boxes
@@ -606,7 +625,11 @@ where
         );
     }
     let phase_started = Instant::now();
-    prepare_inline_contexts(world, services);
+    if retain_inline {
+        crate::inline::prepare_inline_contexts_with_retained_inputs(world, services, true);
+    } else {
+        prepare_inline_contexts(world, services);
+    }
     let inline_preparation_elapsed = phase_started.elapsed();
     world.validate_invariants()?;
     let phase_started = Instant::now();
@@ -631,6 +654,10 @@ where
                 * std::mem::size_of::<Option<std::num::NonZeroU32>>(),
             estimated_cache_bytes = world.box_caches.capacity()
                 * std::mem::size_of::<taffy::Cache>(),
+            retained_inline_layout_hits = world.inline_numeric_reuse.as_deref()
+                .map_or(0, crate::inline::InlineNumericReuse::hits),
+            retained_inline_measurement_hits = world.inline_numeric_reuse.as_deref()
+                .map_or(0, crate::inline::InlineNumericReuse::measurement_hits),
         );
     }
     Ok(MeasuredLayoutPass {

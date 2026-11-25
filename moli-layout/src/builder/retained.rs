@@ -161,9 +161,11 @@ where
         // Labels are also used in diagnostic output after an ID change.
         layout_box.source_label = self.source.label(node);
         if layout_box.kind == LayoutBoxKind::Text {
-            layout_box.text_selection = self.source.text_selection(node);
+            let selection = self.source.text_selection(node);
+            let changed = layout_box.text_selection != selection;
+            layout_box.text_selection = selection;
             parent_children.push(id);
-            return Ok(false);
+            return Ok(changed);
         }
         layout_box.scroll_offset = self.sample_scroll_offset(node, &layout_box.style);
         if !restyled && retained.css_image_sources.contains(&node) {
@@ -262,6 +264,7 @@ where
             parent_children.push(id);
         }
         if changed {
+            world.invalidate_retained_inline(id);
             world.clear_layout_caches(id);
         }
         Ok(changed)
