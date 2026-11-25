@@ -121,8 +121,13 @@ pub(crate) fn style_css_text_setter_callback<'s>(
         return;
     }
     let base_url = style_base_url(unsafe { &*runtime_ptr }, handle);
-    unsafe { &mut *runtime_ptr }.set_element_inline_style_base_url(handle, base_url.clone());
-    set_inline_style_css_text_with_pdb_storage(scope, runtime_ptr, handle, &parsed.value);
+    set_inline_style_css_text_with_pdb_storage(
+        scope,
+        runtime_ptr,
+        handle,
+        &parsed.value,
+        &base_url,
+    );
     rv.set_undefined();
 }
 
