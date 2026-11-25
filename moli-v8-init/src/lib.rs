@@ -24,6 +24,9 @@ pub fn ensure_v8_initialized_with_flags(
         if let Some(flags) = flags {
             v8::V8::set_flags_from_string(flags);
         }
+        // OHOS shell processes cannot make anonymous memory executable.
+        #[cfg(target_env = "ohos")]
+        v8::V8::set_flags_from_string("--jitless");
         let platform = create_platform();
         v8::V8::initialize_platform(platform);
         v8::V8::initialize();

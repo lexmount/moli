@@ -14,7 +14,7 @@ use std::{
 use moli_css_parse::{
     FontSelectionCapabilities as WebFontCapabilities, FontSelectionRange, font_family_name_key,
 };
-use moli_system_fonts::SystemFontFamilyResolver;
+use moli_system_fonts::{SystemFontFamilyResolver, font_collection};
 use parley::{
     FontContext, FontFamily, FontFamilyName, LayoutContext, TextStyle,
     fontique::{
@@ -1377,10 +1377,7 @@ fn build_parley_services(
     web_fonts: &BTreeMap<String, RegisteredWebFont>,
     web_font_order: &WebFontOrder,
 ) -> ParleyDocumentServices {
-    let mut collection = Collection::new(CollectionOptions {
-        shared: false,
-        system_fonts: system_font_policy.is_enabled(),
-    });
+    let mut collection = font_collection(system_font_policy.is_enabled());
     let system_font_family_resolver = system_font_policy
         .is_enabled()
         .then(|| SystemFontFamilyResolver::new(&mut collection));

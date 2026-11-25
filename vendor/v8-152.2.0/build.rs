@@ -69,7 +69,10 @@ fn main() {
     "GN_ARGS",
     "HOST",
     "LIBCLANG_PATH",
+    "MOLI_OHOS_V8_CXX",
+    "MOLI_OHOS_V8_SOURCE",
     "NINJA",
+    "OHOS_SDK_NATIVE",
     "OUT_DIR",
     "RUSTY_V8_ARCHIVE",
     "RUSTY_V8_ARCHIVE_SHA256",
@@ -406,6 +409,9 @@ fn build_moli_v8_ext(sources: &[PathBuf]) {
     .include("v8/include")
     .std("c++20")
     .flag_if_supported("-w");
+  if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("ohos") {
+    configure_ohos_moli_v8_ext(&mut build);
+  }
   if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
     // V8's Windows build and public headers require Clang intrinsics such as
     // `__builtin_frame_address`. clang-cl preserves the MSVC ABI used by the
@@ -435,6 +441,43 @@ fn build_moli_v8_ext(sources: &[PathBuf]) {
     build.file(source);
   }
   build.compile("rusty_v8_moli_ext");
+}
+
+fn configure_ohos_moli_v8_ext(build: &mut cc::Build) {
+  let sdk = PathBuf::from(env::var_os("OHOS_SDK_NATIVE").expect(
+    "OHOS_SDK_NATIVE must point to the native SDK (see scripts/build-ohos-arm64.sh)",
+  ));
+  let source = PathBuf::from(env::var_os("MOLI_OHOS_V8_SOURCE").expect(
+    "MOLI_OHOS_V8_SOURCE must contain the matching rusty_v8 sources (see scripts/build-ohos-arm64.sh)",
+  ));
+  let compiler = env::var_os("MOLI_OHOS_V8_CXX").unwrap_or_else(|| "clang++".into());
+  // The ARM64 musl archive includes Chromium's libc++ with its own ABI namespace.
+  build
+    .compiler(compiler)
+    .cpp_link_stdlib(None)
+    .flag("--sysroot")
+    .flag(sdk.join("sysroot"))
+    .flag("-nostdinc++")
+    .include(source.join("buildtools/third_party/libc++"))
+    .include(source.join("third_party/libc++/src/include"))
+    .include(source.join("third_party/libc++abi/src/include"))
+    .define("__MUSL__", None)
+    .define("_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS", None)
+    .define("_LIBCPP_HARDENING_MODE", Some("_LIBCPP_HARDENING_MODE_NONE"));
+
+  // Rust links with -nodefaultlibs. V8's instruction cache flush needs
+  // __clear_cache from the SDK's compiler-rt archive.
+  let target = env::var("TARGET").unwrap();
+  let output = Command::new(sdk.join("llvm/bin").join(format!("{target}-clang")))
+    .arg("-print-libgcc-file-name")
+    .output()
+    .expect("query OHOS compiler-rt path");
+  assert!(output.status.success(), "query OHOS compiler-rt path");
+  let path = String::from_utf8(output.stdout).expect("OHOS compiler-rt path");
+  let archive = Path::new(path.trim());
+  assert!(archive.is_file(), "missing OHOS compiler-rt archive: {archive:?}");
+  println!("cargo:rustc-link-search=native={}", archive.parent().unwrap().display());
+  println!("cargo:rustc-link-lib=static:+verbatim={}", archive.file_name().unwrap().display());
 }
 
 /// Builds the explicit Linux header-search arguments for bindgen.
