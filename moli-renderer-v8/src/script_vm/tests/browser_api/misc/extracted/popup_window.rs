@@ -3203,3 +3203,37 @@ fn window_open_retains_lightweight_popup_position_on_named_reuse() {
         "[[51,51,73,73],[51,51,73,73],true,[0,0]]"
     );
 }
+
+#[tokio::test]
+async fn lightweight_popup_projects_parser_readiness_and_dom_content_loaded() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://popup-readiness.test/",
+        &loader,
+    );
+    vm.eval(
+        r#"
+      globalThis.popupReadiness = [];
+      const html = `<!doctype html><script>
+        const record = name => opener.popupReadiness.push(name + ':' + document.readyState);
+        record('script');
+        document.addEventListener('readystatechange', () => record('state'));
+        document.addEventListener('DOMContentLoaded', event => {
+          record('dcl');
+          opener.popupReadiness.push(String(event.isTrusted));
+        });
+        window.addEventListener('load', () => record('load'));
+      </script>`;
+      open(URL.createObjectURL(new Blob([html], {type: 'text/html'})));
+    "#,
+    )
+    .expect("start popup navigation");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "popupReadiness.join('|')",
+        "script:loading|state:interactive|dcl:interactive|true|state:complete|load:complete",
+        "popup Document lifecycle",
+    )
+    .await;
+}
