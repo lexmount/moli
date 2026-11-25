@@ -391,6 +391,7 @@ async fn media_source_buffers_h264_and_aac() {
         vm.eval(
             r#"
             globalThis.media = document.createElement('video');
+            media.id = 'media';
             globalThis.source = new MediaSource();
             globalThis.result = null;
             const types = {
@@ -453,6 +454,22 @@ async fn media_source_buffers_h264_and_aac() {
         assert_eq!(vm.eval("media.videoWidth").unwrap(), "48");
         assert_eq!(vm.eval("media.buffered.length").unwrap(), "1");
         assert_eq!(vm.eval("source.readyState").unwrap(), "ended");
+
+        assert_eq!(vm.eval("(media.play(), media.paused)").unwrap(), "false");
+        let media = vm
+            ._context_host
+            .borrow()
+            .dom_host()
+            .element_handle_by_id("media")
+            .unwrap();
+        assert!(vm._context_host.borrow().video_current_time(media).unwrap() > 0.0);
+
+        vm.close_page_context_resources_for_context_teardown();
+
+        assert!(
+            !vm._context_host.borrow().manages_video(media),
+            "page teardown should release playback while its document host still exists"
+        );
     }
 }
 
