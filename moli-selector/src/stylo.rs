@@ -41,6 +41,7 @@ pub(crate) use selector_parse::{
 pub use style_traversal::{
     InlineStyleSnapshot, QueryContainerSizes, StyloDocument, StyloDomHostBinding,
     StyloDomStyleAdapter, StyloElement, StyloElementDataStore, StyloNode, StyloShadowRoot,
+    StyloStylePath,
 };
 
 /// Query-only `DomHost` wrapper around Stylo `dom_apis`.

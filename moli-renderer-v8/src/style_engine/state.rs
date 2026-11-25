@@ -4,6 +4,7 @@ use std::{
 };
 
 use indexmap::{IndexMap, IndexSet};
+use moli_selector::StyloDomStyleAdapter;
 use selectors::context::SelectorCaches;
 use style::{
     servo::restyle_damage::ServoRestyleDamage,
@@ -235,6 +236,7 @@ impl StyleDocumentState {
     pub(super) fn record_style_targets(
         &self,
         host: &DomHost,
+        dom_adapter: &StyloDomStyleAdapter,
         document: DomHandle,
         targets: impl IntoIterator<Item = (DomHandle, StyleInvalidationScope)>,
     ) {
@@ -250,7 +252,9 @@ impl StyleDocumentState {
             return;
         }
         let mut screen = self.screen_style_invalidation.borrow_mut();
-        self.style_paths.invalidate_paths();
+        if self.style_paths.invalidate_paths() {
+            dom_adapter.clear_style_paths(document);
+        }
 
         for (handle, scope) in targets {
             if scope == StyleInvalidationScope::Subtree {

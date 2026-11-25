@@ -4,6 +4,7 @@ use std::{
     fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
+    num::NonZeroUsize,
     ptr::NonNull,
     sync::Arc as SharedArc,
     vec,
@@ -78,7 +79,7 @@ pub struct StyloElementDataStore {
 
 #[derive(Default)]
 struct StyloElementDocumentDataStore {
-    data: HashMap<NodeId, Box<ElementDataWrapper>>,
+    data: HashMap<NodeId, Box<StoredElementStyle>>,
     inline_styles: HashMap<NodeId, InlineStyleSnapshot>,
     selector_flags: HashMap<NodeId, ElementSelectorFlags>,
     /// Stylo's equivalent of Blink's `ChildNeedsStyleInvalidation` breadcrumb.
@@ -88,6 +89,33 @@ struct StyloElementDocumentDataStore {
     /// document side table lets Moli follow only dirty branches later instead
     /// of rediscovering them by scanning every published `ElementData` entry.
     dirty_descendants: HashSet<NodeId>,
+}
+
+#[derive(Default)]
+struct StoredElementStyle {
+    stylo: ElementDataWrapper,
+    path: Cell<Option<StyloStylePath>>,
+}
+
+#[derive(Clone, Copy)]
+pub struct StyloStylePath {
+    pub observed_at: u64,
+    pub subtree_generation: u64,
+    depth: NonZeroUsize,
+}
+
+impl StyloStylePath {
+    pub fn new(observed_at: u64, subtree_generation: u64, depth: usize) -> Self {
+        Self {
+            observed_at,
+            subtree_generation,
+            depth: NonZeroUsize::new(depth + 1).expect("nonzero encoded style depth"),
+        }
+    }
+
+    pub fn depth(self) -> usize {
+        self.depth.get() - 1
+    }
 }
 
 pub struct InlineStyleSnapshot {
@@ -350,16 +378,50 @@ impl StyloDomStyleAdapter {
         self.state.has_element_styles_for_document(document)
     }
 
-    /// Clones the published styles for a locally clean entry. The caller
-    /// validates document ownership and inherited style invalidation.
+    /// Clones published styles whose inherited path and native hints are
+    /// current for the supplied document and invalidation generation.
     pub fn clone_clean_element_styles(
         &self,
         document: NodeId,
         handle: NodeId,
+        path_generation: u64,
     ) -> Option<ElementStyles> {
         let documents = self.state.element_data.documents.borrow();
-        let data = documents.get(&document)?.data.get(&handle)?.borrow();
+        let entry = documents.get(&document)?.data.get(&handle)?;
+        if path_generation != 0
+            && !entry
+                .path
+                .get()
+                .is_some_and(|path| path.observed_at == path_generation)
+        {
+            return None;
+        }
+        let data = entry.stylo.borrow();
         (data.has_styles() && data.hint.is_empty()).then(|| data.styles.clone())
+    }
+
+    pub fn style_path(&self, document: NodeId, handle: NodeId) -> Option<StyloStylePath> {
+        let documents = self.state.element_data.documents.borrow();
+        documents.get(&document)?.data.get(&handle)?.path.get()
+    }
+
+    pub fn set_style_path(&self, document: NodeId, handle: NodeId, path: StyloStylePath) {
+        let documents = self.state.element_data.documents.borrow();
+        if let Some(data) = documents
+            .get(&document)
+            .and_then(|bucket| bucket.data.get(&handle))
+        {
+            data.path.set(Some(path));
+        }
+    }
+
+    pub fn clear_style_paths(&self, document: NodeId) {
+        let documents = self.state.element_data.documents.borrow();
+        if let Some(bucket) = documents.get(&document) {
+            for data in bucket.data.values() {
+                data.path.set(None);
+            }
+        }
     }
 
     pub fn inline_style_attribute_matches(
@@ -709,7 +771,8 @@ impl StyloElementDataStore {
         let bucket = documents.entry(document).or_default();
         if let Some(data) = moved_data {
             // Layout damage is tied to the publication in the previous world.
-            data.borrow_mut().damage = ServoRestyleDamage::empty();
+            data.stylo.borrow_mut().damage = ServoRestyleDamage::empty();
+            data.path.set(None);
             bucket.data.insert(handle, data);
         }
         if let Some(inline_style) = moved_inline_style {
@@ -743,8 +806,8 @@ impl StyloElementDataStore {
                 .or_default()
                 .data
                 .entry(handle)
-                .or_insert_with(|| Box::new(ElementDataWrapper::default()));
-            &**entry as *const ElementDataWrapper
+                .or_default();
+            &entry.stylo as *const ElementDataWrapper
         };
         // SAFETY: ElementDataWrapper is heap-allocated behind a Box, so its
         // address remains stable across HashMap rehashes. The TElement data API
@@ -790,12 +853,12 @@ impl StyloElementDataStore {
             self.document_for_handle(handle)
                 .and_then(|document| documents.get(&document))
                 .and_then(|bucket| bucket.data.get(&handle))
-                .map(|data| &**data as *const ElementDataWrapper)
+                .map(|data| &data.stylo as *const ElementDataWrapper)
                 .or_else(|| {
                     documents
                         .values()
                         .find_map(|bucket| bucket.data.get(&handle))
-                        .map(|data| &**data as *const ElementDataWrapper)
+                        .map(|data| &data.stylo as *const ElementDataWrapper)
                 })
         };
         let Some(data) = data else {
@@ -864,7 +927,12 @@ impl StyloElementDataStore {
         self.documents
             .borrow()
             .get(&document)
-            .is_some_and(|bucket| bucket.data.values().any(|data| data.borrow().has_styles()))
+            .is_some_and(|bucket| {
+                bucket
+                    .data
+                    .values()
+                    .any(|data| data.stylo.borrow().has_styles())
+            })
     }
 
     fn len(&self) -> usize {
@@ -914,7 +982,7 @@ impl StyloElementDataStore {
             documents
                 .get(&document)
                 .and_then(|bucket| bucket.data.get(&handle))
-                .map(|data| &**data as *const ElementDataWrapper)
+                .map(|data| &data.stylo as *const ElementDataWrapper)
         }?;
         // SAFETY: See ensure_for_document(); returning a borrow after releasing
         // the map borrow relies on the TElement caller not clearing this element
@@ -953,7 +1021,7 @@ impl StyloElementDataStore {
             documents
                 .get(&document)
                 .and_then(|bucket| bucket.data.get(&handle))
-                .map(|data| &**data as *const ElementDataWrapper)
+                .map(|data| &data.stylo as *const ElementDataWrapper)
         }?;
         // SAFETY: See ensure_for_document(); returning a mutable borrow after
         // releasing the map borrow relies on the TElement caller not clearing
@@ -1282,11 +1350,11 @@ impl StyloElementDataStore {
                 .get(&document)
                 .and_then(|bucket| bucket.data.get(&handle))
         {
-            return Some(data);
+            return Some(&data.stylo);
         }
         documents
             .values()
-            .find_map(|bucket| bucket.data.get(&handle).map(|data| &**data))
+            .find_map(|bucket| bucket.data.get(&handle).map(|data| &data.stylo))
     }
 
     fn find_inline_style<'a>(
@@ -2809,6 +2877,34 @@ mod element_data_store_tests {
         store.unset_dirty_descendants_for_document(new_document, handle);
         assert_eq!(store.document_for_handle(handle), None);
         assert!(store.documents.borrow().is_empty());
+    }
+
+    #[test]
+    fn checked_style_paths_retire_with_their_owner_context() {
+        let adapter = StyloDomStyleAdapter::new();
+        let store = &adapter.state.element_data;
+        let old_document = NodeId::new(0);
+        let new_document = NodeId::new(1);
+        let handle = NodeId::new(2);
+
+        drop(store.ensure_for_document(old_document, handle));
+        adapter.set_style_path(old_document, handle, StyloStylePath::new(5, 4, 1));
+        assert_eq!(
+            adapter
+                .style_path(old_document, handle)
+                .unwrap()
+                .observed_at,
+            5
+        );
+
+        store.note_owner_document(handle, new_document);
+        assert!(store.has_for_document(new_document, handle));
+        assert!(adapter.style_path(old_document, handle).is_none());
+        assert!(adapter.style_path(new_document, handle).is_none());
+
+        adapter.set_style_path(new_document, handle, StyloStylePath::new(5, 5, 1));
+        store.clear_data_for_document(new_document);
+        assert!(adapter.style_path(new_document, handle).is_none());
     }
 
     #[test]

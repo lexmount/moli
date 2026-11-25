@@ -635,6 +635,7 @@ impl MoliStyleEngine {
 
     #[cfg(test)]
     pub(crate) fn clear_retained_style_system_for_document_for_test(&self, document: DomHandle) {
+        self.dom_adapter.clear_style_paths(document);
         self.world_for_document(document)
             .document_state
             .clear_retained_style_system();
@@ -835,10 +836,14 @@ impl MoliStyleEngine {
             if host.is_connected(handle) {
                 world.document_state.invalidate_screen_style_comparisons();
             }
-            let invalidation = &world.document_state.style_paths;
-            if invalidation.forget_checked_path(handle) {
+            if self
+                .dom_adapter
+                .style_path(world.document, handle)
+                .is_some()
+            {
                 world.document_state.record_style_targets(
                     host,
+                    &self.dom_adapter,
                     world.document,
                     [(handle, StyleInvalidationScope::Subtree)],
                 );

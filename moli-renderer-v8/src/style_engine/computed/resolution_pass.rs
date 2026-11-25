@@ -356,20 +356,23 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
     }
 
     pub(super) fn prepare(&mut self, handle: DomHandle) -> Option<StyloElement<'dom>> {
-        if self.host.owner_document_handle(handle) != Some(self.document()) {
+        let document = self.document();
+        if self.host.owner_document_handle(handle) != Some(document) {
             return None;
         }
         let element = self.context.adapter.element(self.host, handle)?;
 
         let world = self.context.world;
         let invalidation = &world.document_state.style_paths;
+        let dom_adapter = &self.engine.dom_adapter;
 
         let mut current = Some(element);
         let mut parent = None;
         while let Some(ancestor) = current {
             let handle = DomHandle::new(ancestor.as_node().debug_id());
             invalidation.note_path_node_visit();
-            if let Some(path) = invalidation.checked_path(handle)
+            if let Some(path) = dom_adapter.style_path(document, handle)
+                && path.observed_at == invalidation.generation()
                 && ancestor
                     .borrow_data()
                     .is_some_and(|data| data.has_styles() && data.hint.is_empty())
@@ -386,7 +389,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
             let (depth, inherited_subtree, child_restyles) =
                 parent.map_or((0, 0, Default::default()), |(parent, path)| {
                     (
-                        path.depth + 1,
+                        path.depth() + 1,
                         path.subtree_generation,
                         invalidation.branch_requirements(parent),
                     )
@@ -410,7 +413,9 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                         .flags
                         .contains(ComputedValueFlags::INHERITS_RESET_STYLE)
                 });
-            let last_observation = invalidation.last_observation(handle);
+            let last_observation = dom_adapter
+                .style_path(document, handle)
+                .map_or(0, |path| path.observed_at);
             let mut hint = data.as_ref().map_or(RestyleHint::empty(), |data| data.hint);
             if subtree_generation > last_observation {
                 hint.insert(RestyleHint::RESTYLE_SELF);
@@ -459,7 +464,12 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
             }
             self.validations += 1;
             subtree_generation = subtree_generation.max(invalidation.subtree_generation(handle));
-            let path = invalidation.mark_path_checked(handle, subtree_generation, depth);
+            let path = moli_selector::StyloStylePath::new(
+                invalidation.generation(),
+                subtree_generation,
+                depth,
+            );
+            dom_adapter.set_style_path(document, handle, path);
             parent = Some((handle, path));
         }
         Some(element)

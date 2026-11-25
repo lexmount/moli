@@ -398,10 +398,14 @@ fn reordered_summary_invalidates_ua_styles_when_author_source_has_no_target() {
             .max()
             .unwrap();
         assert!(
-            invalidation.last_observation(handle) < generation
+            engine
+                .dom_adapter
+                .style_path(document, handle)
+                .map_or(0, |path| path.observed_at)
+                < generation
                 || engine
                     .dom_adapter
-                    .clone_clean_element_styles(document, handle)
+                    .clone_clean_element_styles(document, handle, 0)
                     .is_none()
         );
     }

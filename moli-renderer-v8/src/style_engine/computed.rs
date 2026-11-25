@@ -791,14 +791,12 @@ fn with_resolved_style_in_current_world<R>(
 ) -> Option<R> {
     #[cfg(test)]
     let computed_cache_generation = world.document_state.computed_cache_generation();
-    let invalidation = &world.document_state.style_paths;
-    let path_checked =
-        invalidation.generation() == 0 || invalidation.checked_path(handle).is_some();
-    if path_checked
-        && host.owner_document_handle(handle) == Some(world.document)
-        && let Some(styles) = engine
-            .dom_adapter
-            .clone_clean_element_styles(world.document, handle)
+    let path_generation = world.document_state.style_paths.generation();
+    if host.owner_document_handle(handle) == Some(world.document)
+        && let Some(styles) =
+            engine
+                .dom_adapter
+                .clone_clean_element_styles(world.document, handle, path_generation)
     {
         if let Some(pseudo_element) = pseudo_element {
             if let Some(style) = styles.pseudos.get(pseudo_element) {
