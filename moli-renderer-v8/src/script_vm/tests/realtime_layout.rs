@@ -116,6 +116,60 @@ fn realtime_retained_numeric_layout_matches_fresh_geometry_and_paint() {
 }
 
 #[test]
+fn realtime_retained_inline_roles_match_fresh_geometry_and_paint() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0}p{margin:0;width:180px}",
+        "#shift{vertical-align:3px}#atomic{display:inline-block;width:30px;height:24px}",
+        "#floatBox{float:left;width:24px;height:24px}#absoluteBox{position:absolute}",
+        "#stable{width:120px;background:blue}</style>",
+        "<p id=owner>   <span>alpha <span id=shift>beta </span></span>",
+        "<span id=atomic>atomic</span><span id=floatBox>float</span>",
+        "<span id=absoluteBox>absolute</span><br>tail   </p>",
+        "<p id=stable>Unaffected text</p>",
+    ));
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+
+    for edit in [
+        "atomic.style.width='45px';floatBox.style.width='49px'",
+        "shift.textContent='changed nested text'",
+        "owner.style.width='120px'",
+        "shift.remove()",
+        "owner.insertAdjacentHTML('beforeend',' <span id=added>new text</span>')",
+    ] {
+        vm.eval(edit).unwrap();
+        let retained = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+        let host = host.borrow();
+        let fresh = host
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::with_paint(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Screenshot,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(&retained), fresh.paint_snapshot(), "{edit}");
+        for name in ["owner", "atomic", "floatBox", "stable"] {
+            let node = vm.document_runtime.get_element_by_id(name).unwrap();
+            let retained = host
+                .with_latest_layout_tree_for_document(document, |tree| {
+                    tree.client_rects_for_source(node)
+                })
+                .unwrap();
+            assert_eq!(
+                retained,
+                fresh.client_rects_for_source(node),
+                "{edit} {name}"
+            );
+        }
+    }
+}
+
+#[test]
 fn realtime_rebuilds_only_the_changed_box_branch() {
     let mut vm = realtime_vm(concat!(
         "<!doctype html><style>body{margin:0;display:flex;height:200px;align-items:flex-start}",

@@ -24,7 +24,7 @@ use super::shared_worker_runtime::SharedWorkerRuntimeOwnerWake;
 // Override that spawned-thread default so this thread stays aligned with the
 // larger pthread / Chromium renderer stack budget and preserves enough native
 // headroom for fresh V8 entry points.
-const RENDER_RUNTIME_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const RENDER_RUNTIME_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
 #[cfg(feature = "molio")]
 type PendingViewportWheel = Mutex<Option<RendererViewportWheelInput>>;
