@@ -98,6 +98,14 @@ fn detached_body_legacy_accessors_use_owner_prototype() {
     if (!condition) throw new Error(message);
   };
   const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
   const accessor = (prototype, name) => {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
     assert(!!descriptor, `${prototype.constructor.name}.${name} descriptor missing`);
@@ -136,13 +144,26 @@ fn detached_body_legacy_accessors_use_owner_prototype() {
     assert(body.vLink === `${label}-vlink` && body.getAttribute("vlink") === `${label}-vlink`, `${label}.vLink`);
     assert(body.aLink === `${label}-alink` && body.getAttribute("alink") === `${label}-alink`, `${label}.aLink`);
     assert(body.background === `${label}-background` && body.getAttribute("background") === `${label}-background`, `${label}.background`);
+    for (const name of ["text", "link", "vLink", "aLink"]) {
+      body[name] = null;
+      const attribute = name.toLowerCase();
+      assert(body[name] === "", `${label}.${name} null getter`);
+      assert(body.getAttribute(attribute) === "", `${label}.${name} null attribute`);
+    }
     for (const name of names) {
       assert(!own(body, name), `${label}.${name} should not be own after set`);
       assert(delete body[name], `${label}.${name} delete`);
       assert(!own(body, name), `${label}.${name} should stay inherited`);
     }
     assert(body.onload === handler, `${label}.onload after delete`);
-    assert(body.text === `${label}-text`, `${label}.text after delete`);
+    assert(body.text === "", `${label}.text after delete`);
+  }
+  for (const name of ["text", "link", "vLink", "aLink"]) {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLBodyElement.prototype, name);
+    for (const receiver of [document.createElement("div"), {}]) {
+      assert(throwsTypeError(() => descriptor.get.call(receiver)), `${name} getter receiver`);
+      assert(throwsTypeError(() => descriptor.set.call(receiver, "wrong")), `${name} setter receiver`);
+    }
   }
   window.onload = null;
   return "ok";

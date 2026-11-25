@@ -1,4 +1,3 @@
-use super::super::global_attributes::set_dom_string_treat_null_as_empty_on_object;
 use super::super::{
     attribute_property_getter_from_object_or_detached, element_attribute,
     html_element_getter_receiver, html_element_setter_receiver, property_dom_string_value,
@@ -112,34 +111,6 @@ macro_rules! body_attr_reflection {
     };
 }
 
-body_attr_reflection!(
-    body_text_getter_function,
-    body_text_setter_function,
-    "text",
-    "text",
-    set_dom_string_treat_null_as_empty_on_object
-);
-body_attr_reflection!(
-    body_link_getter_function,
-    body_link_setter_function,
-    "link",
-    "link",
-    set_dom_string_treat_null_as_empty_on_object
-);
-body_attr_reflection!(
-    body_v_link_getter_function,
-    body_v_link_setter_function,
-    "vlink",
-    "vLink",
-    set_dom_string_treat_null_as_empty_on_object
-);
-body_attr_reflection!(
-    body_a_link_getter_function,
-    body_a_link_setter_function,
-    "alink",
-    "aLink",
-    set_dom_string_treat_null_as_empty_on_object
-);
 body_attr_reflection!(
     body_background_getter_function,
     body_background_setter_function,

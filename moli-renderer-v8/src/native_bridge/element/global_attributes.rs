@@ -1117,6 +1117,31 @@ pub(super) fn set_dom_string_treat_null_as_empty_on_object<'s>(
     set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value);
 }
 
+pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(descriptor) =
+        NullToEmptyDomStringReflection::descriptor_from_callback_data(scope, args.data())
+    else {
+        return;
+    };
+    if let Some(local_name) = descriptor.html_local_name
+        && html_element_getter_receiver(
+            scope,
+            args.this(),
+            descriptor.interface,
+            descriptor.member,
+            local_name,
+        )
+        .is_none()
+    {
+        return;
+    }
+    attribute_property_getter_from_object_or_detached(scope, args.this(), descriptor.attribute, rv);
+}
+
 pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
