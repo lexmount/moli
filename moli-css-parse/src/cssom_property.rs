@@ -70,14 +70,8 @@ impl ParsedCssomProperty {
         })
     }
 
-    pub fn is_resolved_longhand_list(&self) -> bool {
-        !self.source.declarations.is_empty()
-            && self
-                .source
-                .declarations
-                .iter()
-                .all(|declaration| declaration.id().as_longhand().is_some())
-            && !self.has_unresolved_value()
+    pub fn is_ordinary_declaration_list(&self) -> bool {
+        !self.source.declarations.is_empty() && !self.has_unresolved_value()
     }
 
     pub fn has_unresolved_value(&self) -> bool {
@@ -123,7 +117,7 @@ impl ParsedCssomProperty {
         Some(value)
     }
 
-    pub fn is_single_longhand(&self) -> bool {
+    pub fn is_single_declaration(&self) -> bool {
         self.source.declarations.len() == 1
     }
 
@@ -137,7 +131,9 @@ impl ParsedCssomProperty {
         compare_single_longhand: bool,
     ) -> bool {
         let mut updates = SourcePropertyDeclarationUpdate::default();
-        if compare_single_longhand && self.is_single_longhand() && self.is_resolved_longhand_list()
+        if compare_single_longhand
+            && self.is_single_declaration()
+            && self.is_ordinary_declaration_list()
         {
             let in_place = target.with_declarations(|block| {
                 block.prepare_for_update(&self.source, self.importance, &mut updates)

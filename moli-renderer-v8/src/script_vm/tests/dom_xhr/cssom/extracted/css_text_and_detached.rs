@@ -1289,6 +1289,45 @@ fn inline_cssom_defers_text_through_style_resolution_and_observation() {
 }
 
 #[test]
+fn inline_cssom_custom_properties_use_the_node_declaration_block() {
+    let mut vm = new_parsed_test_vm(
+        "https://custom-inline-style.test/",
+        "<!doctype html><div id='box'></div>",
+    );
+    let handle = vm.document_runtime.get_element_by_id("box").unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"
+            const box = document.getElementById('box');
+            box.style.setProperty('--Tone', 'red', 'important');
+            box.style.setProperty('--alias', 'var(--Tone)');
+            box.style.width = '10px';
+            JSON.stringify([
+                box.style.getPropertyValue('--Tone'),
+                box.style.getPropertyPriority('--Tone'),
+                box.style.getPropertyValue('--tone'),
+                getComputedStyle(box).getPropertyValue('--alias').trim(),
+            ])
+        "#
+        )
+        .unwrap(),
+        r#"["red","important","","red"]"#,
+    );
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    assert!(
+        host.borrow()
+            .element_inline_style_declaration_state(handle)
+            .unwrap()
+            .compatibility
+            .is_none()
+    );
+    assert_eq!(
+        vm.eval("box.style.removeProperty('--Tone')").unwrap(),
+        "red",
+    );
+}
+
+#[test]
 fn inline_cssom_source_survives_document_replacement() {
     let mut vm = new_parsed_test_vm(
         "https://deferred-style-document-open.test/",

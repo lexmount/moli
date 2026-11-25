@@ -30,6 +30,7 @@ fn renderer_uses_the_published_cssom_block_only_in_its_parse_context() {
                 ..Default::default()
             },
             source_text.to_owned(),
+            None,
             true,
         )),
     );
@@ -145,11 +146,7 @@ fn detached_document_inline_style_metadata_uses_owner_document_world() {
     let document_url = url::Url::parse("https://example.test/page.html").unwrap();
     let detached_base_url = url::Url::parse("https://detached.test/cssom/").unwrap();
     engine.set_inline_style_base_url_with_host(&host, detached, detached_base_url.clone());
-    engine.set_inline_style_resolution_text_with_host(
-        &host,
-        detached,
-        "background-image: url(icon.png);".to_owned(),
-    );
+    set_test_inline_render_text(&mut host, detached, "background-image: url(icon.png);");
 
     assert_eq!(
         engine.inline_style_base_url_count_for_document_for_test(document),
@@ -177,7 +174,6 @@ fn detached_document_inline_style_metadata_uses_owner_document_world() {
     );
 
     engine.clear_inline_style_base_url_with_host(&host, detached);
-    engine.clear_inline_style_resolution_text_with_host(&host, detached);
 
     assert_eq!(
         engine.inline_style_base_url_count_for_document_for_test(detached_document),
@@ -197,11 +193,7 @@ fn inline_style_metadata_moves_to_current_owner_document_world() {
     let document_url = url::Url::parse("https://example.test/page.html").unwrap();
     let cssom_base_url = url::Url::parse("https://example.test/cssom/").unwrap();
     engine.set_inline_style_base_url_with_host(&host, target, cssom_base_url);
-    engine.set_inline_style_resolution_text_with_host(
-        &host,
-        target,
-        "background-image: url(icon.png);".to_owned(),
-    );
+    set_test_inline_render_text(&mut host, target, "background-image: url(icon.png);");
     assert_eq!(
         engine.inline_style_base_url_count_for_document_for_test(document),
         1
@@ -230,6 +222,19 @@ fn inline_style_metadata_moves_to_current_owner_document_world() {
             None,
         ),
         Some("url(\"https://example.test/cssom/icon.png\")".into())
+    );
+}
+
+fn set_test_inline_render_text(host: &mut DomHost, node: DomHandle, text: &str) {
+    assert!(host.set_attribute(node, "style", ""));
+    host.replace_style_attribute_source(
+        node,
+        Box::new(crate::css_style::CssomStyleAttribute::with_text(
+            Default::default(),
+            String::new(),
+            Some(text.to_owned()),
+            true,
+        )),
     );
 }
 

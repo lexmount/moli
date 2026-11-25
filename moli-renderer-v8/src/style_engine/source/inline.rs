@@ -1,5 +1,4 @@
-use moli_dom::native::InlineStyleAttribute;
-use std::{cell::RefCell, collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap};
 
 use crate::document_runtime::DomHandle;
 
@@ -11,7 +10,6 @@ pub(in crate::style_engine) struct InlineStyleMetadataStore {
 #[derive(Clone, Debug, Default)]
 pub(in crate::style_engine) struct InlineStyleMetadata {
     base_url: Option<url::Url>,
-    resolution_text: Option<Arc<InlineStyleAttribute>>,
     csp_state: InlineStyleCspState,
 }
 
@@ -53,35 +51,6 @@ impl InlineStyleMetadataStore {
             .borrow()
             .get(&handle)
             .and_then(|metadata| metadata.base_url.clone())
-    }
-
-    pub(in crate::style_engine) fn set_resolution_text(&self, handle: DomHandle, text: String) {
-        let mut entries = self.metadata_by_handle.borrow_mut();
-        let metadata = entries.entry(handle).or_default();
-        if metadata
-            .resolution_text
-            .as_ref()
-            .map(|source| source.as_str())
-            != Some(text.as_str())
-        {
-            metadata.resolution_text = Some(Arc::new(InlineStyleAttribute::new(text)));
-        }
-    }
-
-    pub(in crate::style_engine) fn clear_resolution_text(&self, handle: DomHandle) {
-        self.update(handle, |metadata| {
-            metadata.resolution_text = None;
-        });
-    }
-
-    pub(in crate::style_engine) fn resolution_text(
-        &self,
-        handle: DomHandle,
-    ) -> Option<Arc<InlineStyleAttribute>> {
-        self.metadata_by_handle
-            .borrow()
-            .get(&handle)
-            .and_then(|metadata| metadata.resolution_text.clone())
     }
 
     pub(in crate::style_engine) fn set_csp_state(
@@ -132,9 +101,6 @@ impl InlineStyleMetadataStore {
         if metadata.base_url.is_none() {
             metadata.base_url = incoming.base_url;
         }
-        if metadata.resolution_text.is_none() {
-            metadata.resolution_text = incoming.resolution_text;
-        }
         if metadata.csp_state == InlineStyleCspState::Unchecked {
             metadata.csp_state = incoming.csp_state;
         }
@@ -170,8 +136,6 @@ impl InlineStyleMetadataStore {
 
 impl InlineStyleMetadata {
     fn is_empty(&self) -> bool {
-        self.base_url.is_none()
-            && self.resolution_text.is_none()
-            && self.csp_state == InlineStyleCspState::Unchecked
+        self.base_url.is_none() && self.csp_state == InlineStyleCspState::Unchecked
     }
 }
