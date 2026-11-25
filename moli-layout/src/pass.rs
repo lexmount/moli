@@ -293,6 +293,7 @@ where
     list_marker_elapsed: Duration,
     form_control_elapsed: Duration,
     retained_box_count: usize,
+    reuse_numeric_layout: bool,
 }
 
 /// Document-owned construction state with no borrows into the live source.
@@ -476,22 +477,16 @@ where
 {
     let started = Instant::now();
     let phase_started = Instant::now();
-    let mut retained_box_count = 0;
-    let retained = if let Some(mut retained) = retained
+    let (mut world, retained_box_count, reuse_numeric_layout) = if let Some(mut retained) = retained
         && request.retains_layout_world()
         && retained.viewport == request.viewport
         && retained.world.environment == request.environment
-        && let Some(count) =
+        && let Some((count, reuse_numeric_layout)) =
             crate::builder::update_layout_world(source, styles, &mut retained.world)?
     {
-        retained_box_count = count;
-        Some(retained.world)
+        (retained.world, count, reuse_numeric_layout)
     } else {
-        None
-    };
-    let mut world = match retained {
-        Some(world) => world,
-        None => build_layout_world(source, styles)?,
+        (build_layout_world(source, styles)?, 0, false)
     };
     world.environment = request.environment;
     if request.viewport.mobile_frame_size().is_some() {
@@ -521,6 +516,7 @@ where
         list_marker_elapsed,
         form_control_elapsed,
         retained_box_count,
+        reuse_numeric_layout,
     })
 }
 
@@ -561,7 +557,7 @@ where
 {
     let world = &mut prepared.world;
     let mut invalidated = Vec::new();
-    if prepared.retained_box_count != 0 {
+    if prepared.reuse_numeric_layout {
         // IFCs are prepared afresh, including their fragment storage. A
         // retained layout covering one of these boxes must run to fill it.
         invalidated.extend(
@@ -586,7 +582,7 @@ where
         world,
         prepared.request.viewport,
         frozen_scrollbars,
-        prepared.retained_box_count != 0,
+        prepared.reuse_numeric_layout,
         invalidated,
     );
     let numeric_layout_elapsed = phase_started.elapsed();
@@ -632,6 +628,7 @@ where
                 list_marker_elapsed,
                 form_control_elapsed,
                 retained_box_count,
+                ..
             },
         inline_preparation_elapsed,
         numeric_layout_elapsed,

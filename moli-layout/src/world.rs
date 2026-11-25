@@ -782,6 +782,7 @@ where
 
     pub(crate) fn replace_retained_leaf(&mut self, id: LayoutBoxId, source: N) {
         let replacement = self.boxes.pop().expect("the new leaf was appended");
+        self.numeric_layout_touched_marks.pop();
         self.replace_retained_box(id, replacement);
         self.source_mapping.insert(source, id);
     }
@@ -983,17 +984,6 @@ where
 
     pub(crate) fn map_source(&mut self, source: N, id: LayoutBoxId) {
         self.source_mapping.entry(source).or_insert(id);
-    }
-
-    pub(crate) fn unmap_box_subtree(&mut self, root: LayoutBoxId) {
-        let mut pending = vec![root];
-        while let Some(id) = pending.pop() {
-            let layout_box = &self.boxes[id.index()];
-            if let Some(source) = layout_box.source {
-                self.source_mapping.remove(&source);
-            }
-            pending.extend(layout_box.children.iter().copied());
-        }
     }
 
     pub(crate) fn preorder(&self) -> Vec<LayoutBoxId> {

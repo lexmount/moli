@@ -26,7 +26,7 @@ use crate::{
 use style::values::generics::image::GenericImage;
 
 mod retained;
-pub(crate) use retained::{can_retain_world, update_layout_world};
+pub(crate) use retained::{can_retain_root, update_layout_world};
 
 /// Constructs a complete pass-local CSS box tree from a borrowed source view.
 pub fn build_layout_world<S, R>(
@@ -288,19 +288,7 @@ where
                 return Ok(Vec::new());
             };
             let (mut style, before, after) = styles.into_parts();
-            if self.viewport_body_candidate.is_none()
-                && self.root_is_html
-                && self
-                    .source_root
-                    .is_some_and(|root| self.source.flat_parent(source_node) == Some(root))
-                && semantics.is_html_element("body")
-            {
-                self.viewport_body_candidate = Some(ViewportBodyCandidate {
-                    source: source_node,
-                    overflow: style.overflow_modes(),
-                    blocks_propagation: style.applies_any_viewport_containment(),
-                });
-            }
+            self.record_viewport_body_candidate(source_node, &semantics, &style);
             let metrics = self.source.replaced_metrics(source_node);
             if semantics.is_replaced() {
                 style.mark_replaced(
@@ -365,6 +353,27 @@ where
 
         self.active_sources.remove(&source_node);
         result
+    }
+
+    fn record_viewport_body_candidate(
+        &mut self,
+        node: S::NodeId,
+        semantics: &LayoutElementSemantics,
+        style: &ResolvedLayoutStyle,
+    ) {
+        if self.viewport_body_candidate.is_none()
+            && self.root_is_html
+            && semantics.is_html_element("body")
+            && self
+                .source_root
+                .is_some_and(|root| self.source.flat_parent(node) == Some(root))
+        {
+            self.viewport_body_candidate = Some(ViewportBodyCandidate {
+                source: node,
+                overflow: style.overflow_modes(),
+                blocks_propagation: style.applies_any_viewport_containment(),
+            });
+        }
     }
 
     /// Converts the construction-only body candidate into the final viewport

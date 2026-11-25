@@ -46,7 +46,7 @@ fn retained_layout_world_belongs_to_realtime_screen_publication() {
     ] {
         let mut vm = new_parsed_test_vm(
             "https://realtime-layout.test/",
-            "<!doctype html><div id=target style='width:100px'></div>",
+            "<!doctype html><div style='display:grid'><input value=Grid></div>",
         );
         vm.set_layout_policy(mode);
         vm.publish_layout_for_test().unwrap();
@@ -130,28 +130,25 @@ fn realtime_rebuilds_only_the_changed_box_branch() {
     let viewport = host.borrow().layout_viewport_for_document(document);
     let mut inserted = None;
 
-    for (action, expected_height, can_reuse) in [
-        ("edited.style.width='120px'", "24", true),
+    for (action, expected_height) in [
+        ("edited.style.width='120px'", "24"),
         (
             "window.added=document.createElement('div');added.id='added';edited.prepend(added)",
             "36",
-            true,
         ),
-        ("edited.append(added)", "36", true),
-        ("added.remove()", "24", true),
-        ("first.style.display='none'", "12", true),
-        ("first.style.display='block'", "24", true),
-        ("stable.append(first)", "12", false),
+        ("edited.append(added)", "36"),
+        ("added.remove()", "24"),
+        ("first.style.display='none'", "12"),
+        ("first.style.display='block'", "24"),
+        ("stable.append(first)", "12"),
     ] {
         let height = vm
             .eval(&format!("{action};String(edited.offsetHeight)"))
             .unwrap();
         assert_eq!(height, expected_height);
         let metrics = vm.layout_pass_observability_for_test().3.unwrap();
-        assert_eq!(metrics.retained_box_count > 0, can_reuse, "{action}");
-        if can_reuse {
-            assert!(metrics.retained_numeric_layout_hits > 0, "{action}");
-        }
+        assert!(metrics.retained_box_count > 0, "{action}");
+        assert!(metrics.retained_numeric_layout_hits > 0, "{action}");
         inserted = vm.document_runtime.get_element_by_id("added").or(inserted);
         let sources = ["edited", "first", "second", "stable", "neighbor"]
             .into_iter()
@@ -172,6 +169,100 @@ fn realtime_rebuilds_only_the_changed_box_branch() {
                 })
                 .unwrap();
             assert_eq!(retained, fresh.client_rects_for_source(source), "{action}");
+        }
+    }
+}
+
+#[test]
+fn realtime_retained_layout_rebuilds_complex_branches_without_losing_sibling_caches() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;background:white}",
+        "#stable>div{width:100px;height:12px;background:blue}",
+        "#grid{display:grid;grid-template-columns:30px 60px}#grid>div{height:8px}",
+        "#tableBox{border-collapse:collapse}#cell{border:1px solid}",
+        "#anchor{position:relative;height:20px}#positioned{position:absolute;left:20px}",
+        "#contents{display:contents}#splitBlock{display:block;height:12px}</style>",
+        "Unwrapped text <span id=split>before<div id=splitBlock></div>after</span>",
+        "<section id=stable><div id=edited></div><div id=neighbor></div></section>",
+        "<section id=grid><div id=gridItem></div><div></div></section>",
+        "<table id=tableBox><tr><td id=cell>Table</td></tr></table>",
+        "<img id=picture width=20 height=16 alt=Image><input id=field value='old value'>",
+        "<div id=anchor><div id=positioned>Positioned</div></div>",
+        "<div id=contents><div id=contentsChild>Flattened</div></div>",
+    ));
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+
+    for (action, reuse_numeric_layout) in [
+        ("edited.style.width='121px'", true),
+        ("grid.style.gridTemplateColumns='50px 60px'", true),
+        (
+            "cell.textContent='Wider table';picture.width=42;field.value='new value'",
+            true,
+        ),
+        (
+            "positioned.style.left='53px';splitBlock.style.display='inline'",
+            true,
+        ),
+        (
+            "anchor.style.position='static';contents.style.display='block'",
+            true,
+        ),
+        (
+            "contents.style.display='contents';splitBlock.style.display='block'",
+            true,
+        ),
+        ("grid.style.float='left'", false),
+        ("grid.style.float='none'", false),
+        ("edited.style.width='122px'", true),
+    ] {
+        vm.eval(action).unwrap();
+        let incremental = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+        let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+        assert!(metrics.retained_box_count >= 3, "{action}: {metrics:?}");
+        assert_eq!(
+            metrics.retained_numeric_layout_hits > 0,
+            reuse_numeric_layout,
+            "{action}: {metrics:?}"
+        );
+        let host = host.borrow();
+        let fresh = host
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::with_paint(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Screenshot,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(&incremental), fresh.paint_snapshot(), "{action}");
+        for name in [
+            "edited",
+            "neighbor",
+            "gridItem",
+            "cell",
+            "picture",
+            "field",
+            "positioned",
+            "split",
+            "splitBlock",
+            "contents",
+            "contentsChild",
+        ] {
+            let node = vm.document_runtime.get_element_by_id(name).unwrap();
+            let retained = host
+                .with_latest_layout_tree_for_document(document, |tree| {
+                    tree.client_rects_for_source(node)
+                })
+                .unwrap();
+            assert_eq!(
+                retained,
+                fresh.client_rects_for_source(node),
+                "{action}: {name}"
+            );
         }
     }
 }
