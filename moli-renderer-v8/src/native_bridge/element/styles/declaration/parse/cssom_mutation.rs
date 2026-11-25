@@ -443,8 +443,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_
     css_text: &str,
 ) {
     crate::style_engine::ensure_stylo_browser_compat_prefs();
-    let declarations = parse_css_declaration_list(css_text);
-    let mut state = if let Some(state) = inline_css_text_pdb_storage_state(css_text, &declarations)
+    let (declarations, source_preserved) = crate::css_style::scan_inline_css_text(css_text);
+    let mut state = if let Some(state) =
+        inline_css_text_pdb_storage_state(css_text, &declarations, source_preserved)
     {
         state
     } else {

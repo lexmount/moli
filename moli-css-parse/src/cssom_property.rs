@@ -1,4 +1,7 @@
-use crate::{CssDeclarationBlock, CssDeclarationEntry, cssom_block::declaration_entry};
+use crate::{
+    CssDeclarationBlock, CssDeclarationEntry, cssom_block::declaration_entry,
+    declaration::split_declaration_priority,
+};
 use cssparser::Parser;
 use style::{
     context::QuirksMode,
@@ -34,7 +37,7 @@ impl ParsedCssomProperty {
     ) -> Option<Self> {
         if value.is_empty()
             || (value.contains(';') && crate::escape_top_level_semicolons(value) != value)
-            || crate::split_important_priority(value).1
+            || split_declaration_priority(value).is_some_and(|(_, important)| important)
         {
             return None;
         }
