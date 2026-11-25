@@ -6,7 +6,6 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use dom::ElementState as StyloElementState;
 use moli_selector::{QueryContainerSizes, StyloDomStyleAdapter};
-#[cfg(test)]
 use style::servo::restyle_damage::ServoRestyleDamage;
 
 mod active_stylesheets;
@@ -242,16 +241,57 @@ impl MoliStyleEngine {
         &self,
         host: &DomHost,
         document: DomHandle,
+        allow_repaint: bool,
     ) -> Option<ScreenRestyleTargets> {
         let Some(world) = self.document_worlds.active_world(document) else {
             return Some(ScreenRestyleTargets::default());
         };
         let state = &world.document_state;
         state.finish_screen_style_invalidation();
-        if state.screen_needs_layout() {
+        if !allow_repaint && state.screen_needs_layout() {
             return None;
         }
         state.screen_restyle_targets(host, document)
+    }
+
+    /// Read canonical damage only after settling each affected path.
+    pub(crate) fn screen_repaint_styles(
+        &self,
+        document: DomHandle,
+    ) -> Option<
+        Vec<(
+            DomHandle,
+            style::servo_arc::Arc<style::properties::ComputedValues>,
+        )>,
+    > {
+        let Some(world) = self.document_worlds.active_world(document) else {
+            return Some(Vec::new());
+        };
+        let state = &world.document_state;
+        state.finish_screen_style_invalidation();
+        if state.screen_restyle_is_full() {
+            return None;
+        }
+        state
+            .screen_damage_nodes
+            .borrow()
+            .iter()
+            .map(|&handle| {
+                let damage = self.dom_adapter.element_restyle_damage(document, handle)?;
+                if !ServoRestyleDamage::REPAINT.contains(damage) {
+                    return None;
+                }
+                let styles = self.dom_adapter.clone_clean_element_styles(
+                    document,
+                    handle,
+                    state.style_paths.generation(),
+                )?;
+                let (primary, before, after) =
+                    StyloComputedStyleSnapshot::from_element_styles(&styles)
+                        .into_element_computed_values();
+                (before.is_none() && after.is_none()).then_some((handle, primary))
+            })
+            .collect()
     }
 
     #[cfg(test)]

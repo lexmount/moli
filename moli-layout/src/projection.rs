@@ -260,6 +260,120 @@ where
 }
 
 impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
+    /// Apply canonical REPAINT damage while retaining the published geometry.
+    /// Prepare all replacements before changing the world, so an unsupported
+    /// box or brush can fall back to the regular pass.
+    pub fn update_repaint_styles(
+        &mut self,
+        styles: Vec<(N, style::servo_arc::Arc<style::properties::ComputedValues>)>,
+    ) -> bool {
+        let world = &mut self.world;
+        let mut replacements = HashMap::new();
+        for (source, computed) in styles {
+            let Some(&id) = world.source_mapping.get(&source) else {
+                return false;
+            };
+            let old = &world.boxes[id.index()];
+            let next = crate::ResolvedLayoutStyle::from_stylo(computed);
+            if old.element_semantics.as_ref().is_none_or(|element| {
+                element.namespace != crate::LayoutNamespace::Html
+                    || element.category != crate::LayoutElementCategory::Generic
+            }) || crate::table::is_table_root(old.kind)
+                || old.kind.is_internal_table_box()
+                || old.kind == crate::LayoutBoxKind::TableCaption
+                || !old.style.can_repaint_with(&next)
+            {
+                return false;
+            }
+            replacements.insert(id, next);
+        }
+
+        let mut brush_updates = Vec::new();
+        let mut text_styles = Vec::new();
+        for (index, layout_box) in world.boxes.iter().enumerate() {
+            if layout_box.kind == crate::LayoutBoxKind::Text
+                && let Some(parent) = layout_box.structural_parent
+                && let Some(style) = replacements.get(&parent)
+            {
+                text_styles.push((index, crate::ResolvedLayoutStyle::text_leaf_from(style)));
+            }
+            if layout_box.source.is_none()
+                && layout_box.kind != crate::LayoutBoxKind::Text
+                && layout_box
+                    .owner
+                    .and_then(|node| world.source_mapping.get(&node))
+                    .is_some_and(|owner| replacements.contains_key(owner))
+            {
+                return false;
+            }
+            let Some(inline) = &layout_box.inline_layout else {
+                continue;
+            };
+            let Some(shaped) = inline
+                .laid_out
+                .as_ref()
+                .or(inline.measurement_layout.as_ref())
+            else {
+                continue;
+            };
+            let mut brushes = inline
+                .repaint_brushes
+                .as_deref()
+                .unwrap_or_default()
+                .to_vec();
+            let mut changed = false;
+            for (slot, (shaped, parent)) in shaped
+                .styles()
+                .iter()
+                .zip(&inline.style_parents)
+                .enumerate()
+            {
+                let Some(style) = replacements.get(parent) else {
+                    continue;
+                };
+                let original = inline.paint_brush(slot, &shaped.brush);
+                let mut current = style.parley_text_style().brush;
+                current.paint = original.paint;
+                if &current == original {
+                    continue;
+                }
+                let mut colors_only = original.clone();
+                colors_only.color = current.color;
+                colors_only.decoration.color = current.decoration.color;
+                if colors_only != current || inline.selection.is_some() {
+                    return false;
+                }
+                match brushes.binary_search_by_key(&slot, |(index, _)| *index) {
+                    Ok(index) => brushes[index].1 = current,
+                    Err(index) => brushes.insert(index, (slot, current)),
+                }
+                changed = true;
+            }
+            if changed {
+                brush_updates.push((index, brushes.into_boxed_slice()));
+            }
+        }
+
+        for (id, replacement) in replacements {
+            world.clear_layout_caches(id);
+            if let Some(numeric) = &mut world.inline_numeric_reuse {
+                numeric.discard_owner(id);
+            }
+            world.boxes[id.index()].style = replacement;
+        }
+        for (index, replacement) in text_styles {
+            world.boxes[index].style = replacement;
+        }
+        for (index, brushes) in brush_updates {
+            world.boxes[index]
+                .inline_layout
+                .as_mut()
+                .expect("validated inline context")
+                .repaint_brushes = Some(brushes);
+        }
+        true
+    }
+
     /// Projects the viewport of the paired tree, using its latest scroll offsets.
     pub fn paint(
         &self,

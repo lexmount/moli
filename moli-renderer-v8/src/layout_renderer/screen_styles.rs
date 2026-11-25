@@ -10,12 +10,13 @@ use crate::{
 use super::style_resolver::layout_style_read_scope;
 
 /// Settle outstanding selector work while the current screen layout may still
-/// be reused. Canonical damage produced anywhere on the path ends this check.
+/// be reused. The caller checks canonical paint damage after settling the paths.
 pub(crate) fn screen_targets_allow_layout_reuse(
     runtime: &PageScriptHost,
     document: DomHandle,
     targets: Vec<(DomHandle, StyleInvalidationScope)>,
     after: u64,
+    allow_repaint: bool,
 ) -> bool {
     let host = runtime.dom_host();
     // Affected subtrees may cross slot inheritance and have lazy pseudos
@@ -42,7 +43,9 @@ pub(crate) fn screen_targets_allow_layout_reuse(
             {
                 return false;
             }
-            let Some(child_hint) = pass.resolve_screen_target_for_reuse(handle, after) else {
+            let Some(child_hint) =
+                pass.resolve_screen_target_for_reuse(handle, after, allow_repaint)
+            else {
                 return false;
             };
             let subtree =

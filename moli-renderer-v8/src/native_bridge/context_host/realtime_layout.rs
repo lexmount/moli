@@ -494,7 +494,9 @@ impl PageScriptHost {
         if resolve_style_changes {
             self.prepare_current_screen_styles(&inputs);
         }
-        if self.screen_layout_matches_inputs(state, &inputs)
+        let inline_style_update = resolve_style_changes
+            && self.published_layout_matches_inline_style_update(state, &inputs);
+        if (self.screen_layout_matches_inputs(state, &inputs) || inline_style_update)
             && (!resolve_style_changes || self.screen_styles_allow_layout_reuse(&inputs))
             && (inputs.documents[0].root.is_none()
                 || !state.scroll_projection_dirty.get()
@@ -506,6 +508,10 @@ impl PageScriptHost {
                     self.style_engine
                         .consume_screen_style_work(document.document);
                 }
+            }
+            if inline_style_update {
+                *state.published.borrow_mut() = Some(inputs);
+                self.dom_host().track_layout_changes(Some(document));
             }
             state.scroll_projection_dirty.set(false);
             return Ok(());
@@ -614,6 +620,39 @@ impl PageScriptHost {
                     .is_some())
     }
 
+    fn published_layout_matches_inline_style_update(
+        &self,
+        state: &RealtimeLayoutState,
+        inputs: &ScreenLayoutInputs,
+    ) -> bool {
+        let document = self.document_handle();
+        if inputs.documents.len() != 1
+            || !inputs.permits_reuse()
+            || !self
+                .dom_host()
+                .tracked_layout_changes_are_inline_style_only(document)
+            || !self.document_layout_state.borrow().has_reusable_layout()
+        {
+            return false;
+        }
+        let published = state.published.borrow();
+        let Some(published) = published
+            .as_ref()
+            .filter(|previous| previous.documents.len() == 1)
+        else {
+            return false;
+        };
+        let previous_document = &published.documents[0];
+        let current = &inputs.documents[0];
+        published.viewport == inputs.viewport
+            && published.environment == inputs.environment
+            && published.scrollbars_hidden == inputs.scrollbars_hidden
+            && previous_document.document == current.document
+            && previous_document.target == current.target
+            && previous_document.root == current.root
+            && previous_document.stylesheet_sources == current.stylesheet_sources
+    }
+
     fn has_screen_style_invalidations(&self, inputs: &ScreenLayoutInputs) -> bool {
         inputs.documents.iter().any(|document| {
             self.style_engine
@@ -622,11 +661,16 @@ impl PageScriptHost {
     }
 
     fn screen_styles_allow_layout_reuse(&self, inputs: &ScreenLayoutInputs) -> bool {
-        inputs.documents.iter().all(|document| {
-            let Some(restyles) = self
-                .style_engine
-                .screen_restyle_targets(self.dom_host(), document.document)
-            else {
+        // Embedded worlds have their own paint publication, so settle the
+        // regular layout-only checks when the page owns embedded documents.
+        let allow_repaint = inputs.documents.len() == 1
+            && self.document_layout_state.borrow().has_reusable_layout();
+        if !inputs.documents.iter().all(|document| {
+            let Some(restyles) = self.style_engine.screen_restyle_targets(
+                self.dom_host(),
+                document.document,
+                allow_repaint,
+            ) else {
                 return false;
             };
             restyles.targets.is_empty()
@@ -635,8 +679,23 @@ impl PageScriptHost {
                     document.document,
                     restyles.targets,
                     restyles.after,
+                    allow_repaint,
                 )
-        })
+        }) {
+            return false;
+        }
+        if !allow_repaint {
+            return true;
+        }
+        self.style_engine
+            .screen_repaint_styles(self.document_handle())
+            .is_some_and(|styles| {
+                styles.is_empty()
+                    || self
+                        .document_layout_state
+                        .borrow_mut()
+                        .update_repaint_styles(styles)
+            })
     }
 
     fn prepare_current_screen_styles(&self, inputs: &ScreenLayoutInputs) {

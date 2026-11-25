@@ -23,9 +23,10 @@ impl DomHost {
     ) {
         let affects_native_layout =
             namespace.is_some() || Self::attribute_affects_native_layout(local_name);
-        self.record_mutation(
+        self.record_mutation_and_layout_input(
             MutationScope::QueryState,
             affects_native_layout.then_some(handle),
+            namespace.is_none() && local_name == "style",
         );
     }
 

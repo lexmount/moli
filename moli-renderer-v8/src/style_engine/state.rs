@@ -339,12 +339,15 @@ impl StyleDocumentState {
         }
     }
 
+    pub(super) fn screen_restyle_is_full(&self) -> bool {
+        matches!(
+            *self.screen_style_invalidation.borrow(),
+            ScreenStyleInvalidation::Full
+        )
+    }
+
     pub(super) fn screen_needs_layout(&self) -> bool {
-        !self.screen_damage_nodes.borrow().is_empty()
-            || matches!(
-                *self.screen_style_invalidation.borrow(),
-                ScreenStyleInvalidation::Full
-            )
+        !self.screen_damage_nodes.borrow().is_empty() || self.screen_restyle_is_full()
     }
 
     pub(super) fn screen_style_dependencies_are_current(&self) -> bool {
