@@ -4,6 +4,7 @@ use moli_layout::{
     LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, LayoutViewport,
     ScrollProjectionRefresh,
 };
+use style::servo::restyle_damage::ServoRestyleDamage;
 
 use super::realtime_animation_frames::RealtimeAnimationFrames;
 use super::realtime_environment::RealtimeEnvironmentState;
@@ -16,7 +17,7 @@ use super::screencast_paint::{
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
-    layout_renderer::{LayoutPassFeedback, ScreenStyleBaseline, screen_styles_are_equivalent},
+    layout_renderer::{LayoutPassFeedback, ScreenStyleBaseline, screen_styles_damage},
     style_engine::StyloStyleEnvironment,
 };
 
@@ -440,12 +441,19 @@ impl PageScriptHost {
             self.prepare_current_screen_styles(&inputs);
         }
         if self.screen_layout_matches_inputs(state, &inputs)
-            && (!resolve_style_changes || self.reuse_equivalent_screen_styles(state, &inputs))
+            && let Some(checked_documents) = if resolve_style_changes {
+                self.validate_reusable_screen_styles(state, &inputs)
+            } else {
+                Some(Vec::new())
+            }
             && (inputs.documents[0].root.is_none()
                 || !state.scroll_projection_dirty.get()
                 || self.refresh_published_scroll_projection()?
                     != ScrollProjectionRefresh::Unavailable)
         {
+            for document in checked_documents {
+                self.style_engine.publish_screen_styles(document);
+            }
             state.scroll_projection_dirty.set(false);
             return Ok(());
         }
@@ -517,6 +525,14 @@ impl PageScriptHost {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn observed_screen_style_damage_for_test(&self) -> ServoRestyleDamage {
+        self.style_engine
+            .screen_style_changes(self.document_handle())
+            .expect("complete screen style invalidation")
+            .observed_damage
+    }
+
     fn screen_layout_matches_inputs(
         &self,
         state: &RealtimeLayoutState,
@@ -539,32 +555,37 @@ impl PageScriptHost {
         })
     }
 
-    fn reuse_equivalent_screen_styles(
+    fn validate_reusable_screen_styles(
         &self,
         state: &RealtimeLayoutState,
         inputs: &ScreenLayoutInputs,
-    ) -> bool {
+    ) -> Option<Vec<DomHandle>> {
+        // The frozen tree and retained paint inputs share a publication.
+        // Changes that require refreshing either one still use a full pass.
+        const SUPPORTED_DAMAGE: ServoRestyleDamage = ServoRestyleDamage::empty();
         let baseline = state.screen_styles.borrow();
         let mut checked_documents = Vec::new();
         for document in &inputs.documents {
-            let Some(roots) = self
-                .style_engine
-                .affected_screen_style_roots(document.document)
-            else {
-                return false;
-            };
-            if roots.is_empty() {
+            let changes = self.style_engine.screen_style_changes(document.document)?;
+            if !SUPPORTED_DAMAGE.contains(changes.observed_damage) {
+                return None;
+            }
+            if changes.roots.is_empty() {
                 continue;
             }
-            if !screen_styles_are_equivalent(self, document.document, roots, &baseline) {
-                return false;
+            let damage = screen_styles_damage(
+                self,
+                document.document,
+                changes.roots,
+                &baseline,
+                SUPPORTED_DAMAGE,
+            );
+            if !SUPPORTED_DAMAGE.contains(damage) {
+                return None;
             }
             checked_documents.push(document.document);
         }
-        for document in checked_documents {
-            self.style_engine.publish_screen_styles(document);
-        }
-        true
+        Some(checked_documents)
     }
 
     fn prepare_current_screen_styles(&self, inputs: &ScreenLayoutInputs) {

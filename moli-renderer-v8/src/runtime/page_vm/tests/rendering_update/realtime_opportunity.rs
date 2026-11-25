@@ -507,6 +507,8 @@ attributeValue.dataset.width = '180px';
 
 #[test]
 fn realtime_geometry_compares_styles_to_the_screen_publication() {
+    use style::servo::restyle_damage::ServoRestyleDamage;
+
     run_page_vm_large_stack_async_test("realtime-equivalent-style", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
@@ -520,6 +522,7 @@ document.body.innerHTML = `
   <style>
     .sameA { width: 120px }
     .sameB { width: 120px }
+    .repaint { width: 120px; color: red; background-color: blue }
     .grow { width: 200px }
     .pseudo { width: 200px }
     .pseudo::before { content: "x"; display: block; height: 24px }
@@ -543,26 +546,57 @@ document.body.innerHTML = `
             "120",
         );
         assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+
         assert_eq!(
             page.vm_mut()
-                .eval(
-                    r#"
-probe.className = 'grow';
-getComputedStyle(probe).color;
-String(probe.offsetWidth)
-"#
-                )
+                .eval("probe.className = 'repaint'; getComputedStyle(probe).color")
                 .unwrap(),
-            "200",
+            "rgb(255, 0, 0)",
+        );
+        assert_eq!(
+            host.borrow().observed_screen_style_damage_for_test(),
+            ServoRestyleDamage::REPAINT,
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetWidth)").unwrap(),
+            "120"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
+        assert!(
+            host.borrow()
+                .observed_screen_style_damage_for_test()
+                .is_empty()
+        );
+
+        page.vm_mut()
+            .eval("probe.className = 'grow'; getComputedStyle(probe).color")
+            .unwrap();
+        assert!(
+            host.borrow()
+                .observed_screen_style_damage_for_test()
+                .contains(ServoRestyleDamage::RELAYOUT)
         );
         assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
         assert_eq!(
-            page.vm_mut()
-                .eval("probe.className = 'pseudo'; String(probe.offsetHeight)")
-                .unwrap(),
-            "34",
+            page.vm_mut().eval("String(probe.offsetWidth)").unwrap(),
+            "200",
         );
         assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
+
+        page.vm_mut()
+            .eval("probe.className = 'pseudo'; getComputedStyle(probe).color")
+            .unwrap();
+        assert_eq!(
+            host.borrow().observed_screen_style_damage_for_test(),
+            ServoRestyleDamage::reconstruct(),
+        );
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetHeight)").unwrap(),
+            "34",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 3);
     });
 }
 
