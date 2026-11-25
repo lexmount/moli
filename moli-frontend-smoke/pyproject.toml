@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
   "tinycss2>=1.5,<2",
-  "websockets>=13,<16",
+  "websockets>=15,<16",
 ]
 
 [project.scripts]
