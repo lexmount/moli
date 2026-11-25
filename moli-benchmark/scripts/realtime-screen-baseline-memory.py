@@ -6,6 +6,7 @@ For the ablation and overlap audit, apply realtime-screen-baseline-ablation.patc
 in a scratch checkout of 528552da7df and build with cargo build --locked -p moli.
 With an ordinary build, use the default mode to measure that binary's behavior.
 Pass --candidate to interleave samples from a second ordinary build.
+Builds that publish styles without a retained baseline report zero table entries.
 
 Each sample covers the full RSS high-water window after two warm-up layouts.
 The overlap audit separately counts table entry storage estimates and the
@@ -171,10 +172,11 @@ async def run_sample(args, binary: Path, mode: str, elements: int, style: str) -
             trace = ANSI_ESCAPE.sub("", log.read_text())[len(before_trace):]
             layouts = trace.count('stage="layout_pass"')
             publications = [tuple(map(int, row)) for row in BASELINE_LINE.findall(trace)]
-            if layouts != args.passes or len(publications) != args.passes:
+            publication_count = len(publications) + trace.count('stage="screen_style_publication"')
+            if layouts != args.passes or publication_count != args.passes:
                 raise RuntimeError(
                     f"expected {args.passes} full screen passes, observed {layouts} layouts "
-                    f"and {len(publications)} screen publications"
+                    f"and {publication_count} screen publications"
                 )
             if any(
                 count != 0 if mode == "no-baseline" else count < elements
@@ -194,8 +196,8 @@ async def run_sample(args, binary: Path, mode: str, elements: int, style: str) -
                 "style": style, "elements": elements, "revision": version["revision"],
                 "layout_passes": layouts, "elapsed_ms": elapsed_ms, "peak_rss_bytes": peak,
                 "before": before, "after": after,
-                "baseline_entries": max(entries for entries, _ in publications),
-                "baseline_entry_estimate_bytes": max(size for _, size in publications),
+                "baseline_entries": max((entries for entries, _ in publications), default=0),
+                "baseline_entry_estimate_bytes": max((size for _, size in publications), default=0),
                 "overlap": [
                     {
                         "old_entries": old_entries, "old_entry_estimate_bytes": old_bytes,

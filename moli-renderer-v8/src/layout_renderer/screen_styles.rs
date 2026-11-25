@@ -1,31 +1,25 @@
 use std::collections::HashMap;
 
-use style::servo::restyle_damage::ServoRestyleDamage;
+use style::{
+    invalidation::element::restyle_hints::RestyleHint, servo::restyle_damage::ServoRestyleDamage,
+};
 
 use crate::{
-    document_runtime::DomHandle,
-    native_bridge::PageScriptHost,
-    style_engine::{ScreenStyleScope, StyloComputedStyleSnapshot},
+    document_runtime::DomHandle, native_bridge::PageScriptHost,
+    style_engine::StyleInvalidationScope,
 };
 
 use super::style_resolver::layout_style_read_scope;
 
-pub(super) type DocumentScreenStyles = HashMap<DomHandle, StyloComputedStyleSnapshot>;
-pub(crate) type ScreenStyleBaseline = HashMap<DomHandle, DocumentScreenStyles>;
-
-/// Returns the observed damage. Once it exceeds the consumer's capacity the
-/// remaining subtrees can be left for layout to resolve.
-pub(crate) fn screen_styles_damage(
+/// Resolve pending targets through the canonical style commit. Unsupported
+/// scopes and damage are left for a full screen layout.
+pub(crate) fn resolve_screen_style_targets(
     runtime: &PageScriptHost,
     document: DomHandle,
-    targets: Vec<(DomHandle, ScreenStyleScope)>,
-    baseline: &ScreenStyleBaseline,
+    targets: Vec<(DomHandle, StyleInvalidationScope)>,
+    after: u64,
     supported: ServoRestyleDamage,
-    mut record_damage: impl FnMut(DomHandle, ServoRestyleDamage),
-) -> ServoRestyleDamage {
-    let Some(published) = baseline.get(&document) else {
-        return ServoRestyleDamage::reconstruct();
-    };
+) -> bool {
     let host = runtime.dom_host();
     // Affected subtrees may cross slot inheritance and have lazy pseudos
     // with their own style inputs. Check only subtrees with complete coverage.
@@ -34,57 +28,54 @@ pub(crate) fn screen_styles_damage(
             || host.owner_document_handle(root) != Some(document)
             || host.containing_shadow_root(root).is_some()
     }) {
-        return ServoRestyleDamage::reconstruct();
+        return false;
     }
     let viewport = runtime.layout_viewport_for_document(document);
     let mut observation = layout_style_read_scope(runtime, document, viewport, None);
     let mut visited = HashMap::new();
-    let damage = observation.with_resolution_pass(document, |pass| {
+    let resolved = observation.with_resolution_pass(document, |pass| {
         let mut remaining = targets;
-        let mut damage = ServoRestyleDamage::empty();
         while let Some((handle, scope)) = remaining.pop() {
             if visited.get(&handle).is_some_and(|&seen| seen >= scope) {
                 continue;
             }
             visited.insert(handle, scope);
-            let Some(previous) = published.get(&handle) else {
-                return ServoRestyleDamage::reconstruct();
-            };
             if host.shadow_root_handle(handle).is_some()
                 || host.assigned_slot_for_node(handle).is_some()
             {
-                return ServoRestyleDamage::reconstruct();
+                return false;
             }
-            let Some(current) = pass.element_styles(handle) else {
-                return ServoRestyleDamage::reconstruct();
+            let Some(child_hint) = pass.resolve_screen_style_target(handle, after, supported)
+            else {
+                return false;
             };
-            let node_damage = previous.rendering_damage(&current);
-            if !node_damage.is_empty() {
-                record_damage(handle, node_damage);
-                damage |= node_damage;
-            }
-            if !supported.contains(damage) {
-                return damage;
-            }
-            if scope == ScreenStyleScope::Subtree || previous.descendant_inputs_changed(&current) {
-                remaining.extend(
-                    host.child_handles(handle)
-                        .filter(|&child| host.node(child).is_some_and(|node| node.is_element()))
-                        .map(|child| (child, ScreenStyleScope::Subtree)),
-                );
+            let subtree =
+                scope == StyleInvalidationScope::Subtree || child_hint.will_recascade_subtree();
+            if subtree || !child_hint.is_empty() {
+                let child_scope = if subtree {
+                    StyleInvalidationScope::Subtree
+                } else {
+                    StyleInvalidationScope::Element
+                };
+                let only_reset = !subtree
+                    && child_hint.contains(RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE);
+                remaining.extend(host.child_handles(handle).filter_map(|child| {
+                    (host.node(child).is_some_and(|node| node.is_element())
+                        && (!only_reset || pass.may_inherit_reset_style(child)))
+                    .then_some((child, child_scope))
+                }));
             }
         }
-        damage
+        true
     });
     if moli_trace::cpu_profile_enabled() {
         tracing::info!(
             target: "moli_cpu_profile",
-            stage = "screen_style_comparison",
+            stage = "screen_style_validation",
             document = document.index_u32(),
-            compared_nodes = visited.len(),
-            unchanged = damage.is_empty(),
-            ?damage,
+            visited_nodes = visited.len(),
+            resolved,
         );
     }
-    damage
+    resolved
 }

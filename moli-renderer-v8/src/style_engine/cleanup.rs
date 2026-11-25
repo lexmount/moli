@@ -8,11 +8,12 @@ use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use super::{
     cache::PseudoStyleCache,
     invalidation::handle_is_in_style_subtrees,
+    lazy_invalidation::StyleInvalidationScope,
     outcome::{
         FinalizedStyleInvalidationResult, StyleInvalidationCleanupApplicationContext,
         StyleInvalidationCleanupApplicationSink, StyleInvalidationCleanupApplicationSubtrees,
     },
-    state::{ScreenStyleScope, StyleDocumentState},
+    state::StyleDocumentState,
 };
 
 pub(super) struct StyleInvalidationCleanup<'a> {
@@ -152,9 +153,9 @@ impl<'a> StyleInvalidationCleanup<'a> {
         let eagerly_invalidated_roots = self
             .record_lazy_invalidation_targets(host, &affected_roots, |handle| {
                 if complete_selector_targets && !subtree_roots.contains(&handle) {
-                    ScreenStyleScope::Element
+                    StyleInvalidationScope::Element
                 } else {
-                    ScreenStyleScope::Subtree
+                    StyleInvalidationScope::Subtree
                 }
             })
             .expect("subtree cleanup application should carry an existing root");
@@ -180,7 +181,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
         &self,
         context: &StyleInvalidationCleanupApplicationContext,
     ) {
-        self.document_state.note_full_screen_style_invalidation();
+        self.document_state.invalidate_screen_style_comparisons();
         let generations_before = self.document_state.generation_snapshot();
         self.document_state
             .record_invalidation_clear_all_fallback_reasons(
@@ -262,35 +263,22 @@ impl<'a> StyleInvalidationCleanup<'a> {
         host: &DomHost,
         roots: &IndexSet<DomHandle>,
     ) -> Option<IndexSet<DomHandle>> {
-        self.record_lazy_invalidation_targets(host, roots, |_| ScreenStyleScope::Subtree)
+        self.record_lazy_invalidation_targets(host, roots, |_| StyleInvalidationScope::Subtree)
     }
 
     fn record_lazy_invalidation_targets(
         &self,
         host: &DomHost,
         roots: &IndexSet<DomHandle>,
-        scope: impl Fn(DomHandle) -> ScreenStyleScope,
+        scope: impl Fn(DomHandle) -> StyleInvalidationScope,
     ) -> Option<IndexSet<DomHandle>> {
         if roots.is_empty() {
             return None;
         }
-        self.document_state.note_affected_screen_styles(
-            roots
-                .iter()
-                .copied()
-                .filter(|&root| {
-                    host.is_connected(root)
-                        && host.owner_document_handle(root) == Some(self.document)
-                })
-                .map(|root| (root, scope(root))),
-        );
-        // Canonical styles are demanded independently of screen updates. Keep
-        // their existing inheritance coverage until that path can consume
-        // the computed differences as well.
-        self.document_state.lazy_invalidation_roots.record_roots(
+        self.document_state.lazy_invalidation_roots.record_targets(
             host,
             self.document,
-            roots.iter().copied(),
+            roots.iter().copied().map(|root| (root, scope(root))),
         );
 
         // Dirty the roots themselves immediately. Descendants are handled

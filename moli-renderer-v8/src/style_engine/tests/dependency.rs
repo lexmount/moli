@@ -2663,7 +2663,8 @@ fn viewport_change_updates_the_persistent_style_world_in_place() {
     let retained_updates_after_cached_reads =
         engine.retained_style_system_update_count_for_document_for_test(document);
 
-    engine.publish_screen_styles(document);
+    let world = engine.world_for_document(document);
+    engine.publish_screen_styles(document, world.document_state.screen_style_coverage());
     engine.ensure_retained_style_system_for_document(&host, document, viewport_key, &inputs);
 
     assert_eq!(
@@ -2694,11 +2695,14 @@ fn viewport_change_updates_the_persistent_style_world_in_place() {
         engine.retained_style_system_update_count_for_document_for_test(document),
         retained_updates_after_cached_reads + 1
     );
-    let world = engine.world_for_document(document);
-    world.document_state.note_screen_style_attribute_change();
     world
         .document_state
-        .note_affected_screen_styles([(target, ScreenStyleScope::Element)]);
+        .note_screen_style_attribute_changes([target]);
+    world.document_state.lazy_invalidation_roots.record_targets(
+        &host,
+        document,
+        [(target, StyleInvalidationScope::Element)],
+    );
     world.document_state.finish_screen_style_invalidation();
     assert!(
         matches!(

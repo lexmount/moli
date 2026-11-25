@@ -693,6 +693,261 @@ probe.insertAdjacentHTML('beforeend', '<div class="item"></div>'.repeat(799));
 }
 
 #[test]
+fn cssom_equivalent_parent_style_reuses_cached_descendant_styles_in_all_layout_modes() {
+    run_page_vm_large_stack_async_test("cssom-exact-style-targets", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        for policy in [
+            LayoutPolicy::Mock,
+            LayoutPolicy::OnDemand,
+            LayoutPolicy::Realtime,
+        ] {
+            let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/cssom").unwrap(),
+            );
+            page.vm_mut().set_layout_policy(policy);
+            assert_eq!(
+                page.vm_mut().eval(r#"
+document.body.innerHTML = '<style>.one, .two { color: blue }</style><div id="root" class="one"></div>';
+root.innerHTML = '<span></span>'.repeat(800);
+function allBlue() {
+  return String(Array.from(root.children).every(el => getComputedStyle(el).color === 'rgb(0, 0, 255)'));
+}
+allBlue()
+"#).unwrap(),
+                "true",
+            );
+            let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+            let resolutions = host.borrow().element_style_resolutions_for_test();
+            let passes = page.vm().layout_pass_observability_for_test().1;
+            assert_eq!(
+                page.vm_mut()
+                    .eval("root.className = 'two'; allBlue()")
+                    .unwrap(),
+                "true",
+            );
+            assert_eq!(
+                host.borrow().element_style_resolutions_for_test(),
+                resolutions + 1,
+                "{policy:?}"
+            );
+            assert_eq!(
+                page.vm().layout_pass_observability_for_test().1,
+                passes,
+                "{policy:?}"
+            );
+        }
+    });
+}
+
+#[test]
+fn realtime_style_reuse_preserves_lazy_pseudo_coverage() {
+    run_page_vm_large_stack_async_test("realtime-lazy-pseudo-coverage", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.vm_mut()
+            .eval(
+                r#"
+document.body.innerHTML = `
+  <style>
+    .sameA, .sameB { width: 120px }
+    li::marker { color: blue; content: attr(data-label) ' ' }
+    li.red::marker { color: red }
+  </style>
+  <div id="probe" class="sameA"><ol><li id="item" data-label="A">Item</li></ol></div>`;
+"#,
+            )
+            .unwrap();
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetWidth)").unwrap(),
+            "120"
+        );
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        assert_eq!(
+            page.vm_mut()
+                .eval("probe.className = 'sameB'; String(probe.offsetWidth)")
+                .unwrap(),
+            "120",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+
+        // The equivalent parent update leaves the child's lazy pseudo cache
+        // subject to the canonical style path's inherited invalidation.
+        page.vm_mut().eval("getComputedStyle(item).color").unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    "item.dataset.label = 'B'; probe.offsetWidth; \
+                 String(getComputedStyle(item, '::marker').content.includes('B'))",
+                )
+                .unwrap(),
+            "true",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    "item.className = 'red'; getComputedStyle(item).color; \
+                 probe.offsetWidth; getComputedStyle(item, '::marker').color",
+                )
+                .unwrap(),
+            "rgb(255, 0, 0)",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
+    });
+}
+
+#[test]
+fn realtime_style_reuse_expires_when_canonical_styles_are_lost() {
+    run_page_vm_large_stack_async_test("realtime-style-cache-loss", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.vm_mut()
+            .eval("document.body.innerHTML='<style>.sameA,.sameB{width:120px}</style><div id=probe class=sameA></div>'")
+            .unwrap();
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetWidth)").unwrap(),
+            "120"
+        );
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let probe = page
+            .vm()
+            .document_runtime
+            .get_element_by_id("probe")
+            .unwrap();
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+
+        // Simulate losing an entry that was used to produce the frozen tree.
+        host.borrow()
+            .retire_computed_style_for_inactive_handle(probe);
+        page.vm_mut().eval("getComputedStyle(probe).color").unwrap();
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(
+            page.vm_mut()
+                .eval("probe.className = 'sameB'; String(probe.offsetWidth)")
+                .unwrap(),
+            "120",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
+    });
+}
+
+#[test]
+fn named_container_change_reaches_cssom_descendants_past_an_unchanged_parent() {
+    run_page_vm_large_stack_async_test("cssom-named-container-invalidation", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/cssom").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    r#"
+document.body.innerHTML = `
+  <style>
+    #container { container-type: inline-size; width: 240px }
+    #container.named { container-name: card }
+    #probe { width: 100px; color: blue }
+    @container card (min-width: 200px) { #probe { width: 60px; color: red } }
+  </style>
+  <div id="container"><div id="middle"><div id="probe"></div></div></div>`;
+String(probe.offsetWidth) + '/' + getComputedStyle(probe).color
+"#
+                )
+                .unwrap(),
+            "100/rgb(0, 0, 255)",
+        );
+        assert_eq!(
+            page.vm_mut()
+                .eval(
+                    r#"
+container.className = 'named';
+getComputedStyle(container).containerName;
+getComputedStyle(middle).color;
+getComputedStyle(probe).color + '/' + probe.offsetWidth
+"#
+                )
+                .unwrap(),
+            "rgb(255, 0, 0)/60",
+        );
+    });
+}
+
+#[test]
+fn realtime_style_reuse_expires_after_a_temporary_container_size() {
+    run_page_vm_large_stack_async_test("realtime-style-container-restore", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime").unwrap(),
+        );
+        page.vm_mut()
+            .eval(
+                r#"
+document.body.innerHTML = `
+  <style>
+    #container { container-type: inline-size; width: 150px }
+    #probe { width: attr(data-width type(<length>), 120px); color: blue }
+    @container (min-width: 200px) { #probe { width: 60px; color: red } }
+  </style>
+  <div id="container"><div id="probe"></div></div>`;
+"#,
+            )
+            .unwrap();
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetWidth)").unwrap(),
+            "120"
+        );
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let container = page
+            .vm()
+            .document_runtime
+            .get_element_by_id("container")
+            .unwrap();
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let document = host.borrow().document_handle();
+        let temporary = moli_selector::QueryContainerSizes::from([(
+            container,
+            euclid::default::Size2D::new(Some(app_units::Au::from_px(240)), None),
+        )]);
+        let original = host
+            .borrow()
+            .replace_layout_container_sizes(document, temporary)
+            .unwrap();
+        assert_eq!(
+            page.vm_mut().eval("getComputedStyle(probe).color").unwrap(),
+            "rgb(255, 0, 0)",
+        );
+        host.borrow()
+            .replace_layout_container_sizes(document, original)
+            .unwrap();
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetWidth)").unwrap(),
+            "120"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(
+            page.vm_mut()
+                .eval("probe.dataset.width = '140px'; String(probe.offsetWidth)")
+                .unwrap(),
+            "140",
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
+    });
+}
+
+#[test]
 fn realtime_same_css_text_observer_record_keeps_layout_current() {
     run_page_vm_large_stack_async_test("realtime-cssom-same-value-observed", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

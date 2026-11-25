@@ -3,7 +3,7 @@ mod inline_svg;
 mod screen_styles;
 #[cfg(test)]
 pub(crate) use inline_svg::parse_count as svg_parse_count;
-pub(crate) use screen_styles::{ScreenStyleBaseline, screen_styles_damage};
+pub(crate) use screen_styles::resolve_screen_style_targets;
 mod source_view;
 pub(crate) use source_view::native_scroll_offset;
 mod style_resolver;
@@ -17,7 +17,9 @@ use moli_layout::{
 use moli_page_types::ViewportSurface;
 use moli_selector::QueryContainerSizes;
 
-use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
+use crate::{
+    document_runtime::DomHandle, native_bridge::PageScriptHost, style_engine::ScreenStyleCoverage,
+};
 use container_feedback::ContainerQueryFeedback;
 
 pub(crate) fn layout_viewport_for_surface(surface: ViewportSurface) -> LayoutViewport {
@@ -35,13 +37,13 @@ pub(crate) fn layout_viewport_for_surface(surface: ViewportSurface) -> LayoutVie
 pub(crate) struct LayoutPassFeedback<'a> {
     host: &'a PageScriptHost,
     previous: HashMap<DomHandle, QueryContainerSizes>,
-    screen_styles: Option<ScreenStyleBaseline>,
+    screen_style_coverage: Option<HashMap<DomHandle, ScreenStyleCoverage>>,
 }
 
 impl LayoutPassFeedback<'_> {
-    pub(crate) fn commit(mut self) -> Option<ScreenStyleBaseline> {
+    pub(crate) fn commit(mut self) -> HashMap<DomHandle, ScreenStyleCoverage> {
         self.previous.clear();
-        self.screen_styles.take()
+        self.screen_style_coverage.take().unwrap_or_default()
     }
 }
 
@@ -60,12 +62,12 @@ pub(crate) fn build_native_layout_pass<'a>(
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
-    collect_screen_styles: bool,
+    collect_screen_style_coverage: bool,
 ) -> Result<(LayoutPassResult<DomHandle>, LayoutPassFeedback<'a>), moli_layout::LayoutError> {
     let mut feedback = LayoutPassFeedback {
         host: runtime,
         previous: HashMap::new(),
-        screen_styles: collect_screen_styles.then(ScreenStyleBaseline::new),
+        screen_style_coverage: collect_screen_style_coverage.then(HashMap::new),
     };
     let pass = build_native_layout_pass_recursive(
         runtime,
@@ -76,7 +78,7 @@ pub(crate) fn build_native_layout_pass<'a>(
         environment_override,
         &mut Vec::new(),
         &mut feedback.previous,
-        &mut feedback.screen_styles,
+        &mut feedback.screen_style_coverage,
     )?;
     Ok((pass, feedback))
 }
@@ -90,7 +92,7 @@ fn build_native_layout_pass_recursive(
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     document_stack: &mut Vec<DomHandle>,
     original_container_sizes: &mut HashMap<DomHandle, QueryContainerSizes>,
-    screen_styles: &mut Option<ScreenStyleBaseline>,
+    screen_style_coverage: &mut Option<HashMap<DomHandle, ScreenStyleCoverage>>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
     let document = runtime
@@ -114,20 +116,18 @@ fn build_native_layout_pass_recursive(
     );
     let source_ready = profile_started.map(|_| std::time::Instant::now());
     let mut styles_ready = None;
-    let mut document_styles = screen_styles
-        .as_ref()
-        .map(|_| screen_styles::DocumentScreenStyles::new());
+    let mut document_coverage = screen_style_coverage.as_ref().map(|_| {
+        runtime.begin_screen_style_layout(document);
+        ScreenStyleCoverage::default()
+    });
     let result = (|| {
         let mut prepare = || {
-            if let Some(styles) = &mut document_styles {
-                styles.clear();
-            }
             style_resolver::with_layout_styles(
                 runtime,
                 document,
                 request.viewport,
                 environment_override,
-                document_styles.as_mut(),
+                document_coverage.as_mut(),
                 |styles| {
                     if profile_started.is_some() && styles_ready.is_none() {
                         styles_ready = Some(std::time::Instant::now());
@@ -149,7 +149,7 @@ fn build_native_layout_pass_recursive(
             document_stack,
             embedded_document_services,
             original_container_sizes,
-            screen_styles,
+            screen_style_coverage,
         };
         let finish = |services: &mut DocumentLayoutServices| {
             let mut measured = measure_prepared_layout_pass(prepared, services)?;
@@ -215,9 +215,10 @@ fn build_native_layout_pass_recursive(
         }
     })();
     if result.is_ok()
-        && let (Some(baseline), Some(styles)) = (screen_styles.as_mut(), document_styles)
+        && let (Some(coverage), Some(document_coverage)) =
+            (screen_style_coverage.as_mut(), document_coverage)
     {
-        baseline.insert(document, styles);
+        coverage.insert(document, document_coverage);
     }
     if let (Some(started), Some(source_ready), Some(styles_ready)) =
         (profile_started, source_ready, styles_ready)
@@ -253,7 +254,7 @@ struct NativeEmbeddedFrameRenderer<'a> {
     document_stack: &'a mut Vec<DomHandle>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
     original_container_sizes: &'a mut HashMap<DomHandle, QueryContainerSizes>,
-    screen_styles: &'a mut Option<ScreenStyleBaseline>,
+    screen_style_coverage: &'a mut Option<HashMap<DomHandle, ScreenStyleCoverage>>,
 }
 
 impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
@@ -315,7 +316,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             self.environment_override,
             self.document_stack,
             self.original_container_sizes,
-            self.screen_styles,
+            self.screen_style_coverage,
         );
         self.embedded_document_services.insert(document, services);
         let output = result?;

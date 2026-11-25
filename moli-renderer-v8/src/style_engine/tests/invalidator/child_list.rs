@@ -399,13 +399,12 @@ fn reordered_summary_invalidates_ua_styles_when_author_source_has_no_target() {
     let world = engine.world_for_document(document);
     let invalidation = &world.document_state.lazy_invalidation_roots;
     for handle in [first, second] {
-        assert!(
-            invalidation
-                .validation_path(&host, document, handle)
-                .iter()
-                .any(|entry| entry.element == handle
-                    && !invalidation.element_is_current(handle, entry.required_generation))
-        );
+        let generation = std::iter::successors(Some(handle), |&node| host.parent_node(node))
+            .map(|node| invalidation.subtree_generation(node))
+            .max()
+            .unwrap()
+            .max(invalidation.element_generation(handle));
+        assert!(!invalidation.element_is_current(handle, generation));
     }
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
     assert_eq!(

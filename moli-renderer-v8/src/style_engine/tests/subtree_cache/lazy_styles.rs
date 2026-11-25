@@ -653,16 +653,18 @@ fn custom_property_ancestor_change_lazily_refreshes_descendant_style() {
 }
 
 #[test]
-fn non_inherited_exact_change_lazily_recascades_descendant_conservatively() {
+fn reset_style_change_recascades_only_children_that_explicitly_inherit() {
     let mut host = test_host();
     let document = host.document_handle();
     let ancestor = host.create_element("section");
     let descendant = host.create_element("span");
-    let unrelated = host.create_element("aside");
-    let source_text = ".theme { background-color: rgb(1, 2, 3); }";
+    let inheriting = host.create_element("span");
+    let source_text = ".theme { background-color: rgb(1, 2, 3); transition-duration: 2s; }\n\
+                       .inherits { background-color: inherit; transition-duration: inherit; }";
     assert!(host.append_child(document, ancestor));
     assert!(host.append_child(ancestor, descendant));
-    assert!(host.append_child(document, unrelated));
+    assert!(host.set_attribute(inheriting, "class", "inherits"));
+    assert!(host.append_child(ancestor, inheriting));
 
     let mut engine = MoliStyleEngine::new();
     let document_url = url::Url::parse("https://example.test/").unwrap();
@@ -670,7 +672,7 @@ fn non_inherited_exact_change_lazily_recascades_descendant_conservatively() {
     engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
     let mut inputs = FullStyleWorldSnapshot::default();
     inputs.document_stylesheet_sources.push(source);
-    for handle in [descendant, unrelated] {
+    for handle in [descendant, inheriting] {
         assert!(
             engine
                 .computed_style_property_value(
@@ -706,13 +708,12 @@ fn non_inherited_exact_change_lazily_recascades_descendant_conservatively() {
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
         2,
-        "subtree invalidation must not enumerate published descendants"
+        "invalidation must leave the existing styles available for comparison"
     );
     assert!(
         engine.computed_style_cache_contains_handle_for_document_for_test(document, descendant),
-        "the conservative descendant recascade is deferred until observation"
+        "a reset-style change should leave the independent child style intact"
     );
-    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
     assert!(
         engine
             .computed_style_property_value(
@@ -729,9 +730,96 @@ fn non_inherited_exact_change_lazily_recascades_descendant_conservatively() {
     let descendant_after = retained_primary_style_for_test(&engine, &host, descendant)
         .expect("observed descendant style should be republished");
     assert!(
-        !ServoArc::ptr_eq(&descendant_before, &descendant_after),
-        "the lazy subtree contract remains inheritance-safe even for a non-inherited change"
+        ServoArc::ptr_eq(&descendant_before, &descendant_after),
+        "the independent child should reuse its canonical style"
     );
+    for (property, expected) in [
+        ("background-color", "rgb(1, 2, 3)"),
+        ("transition-duration", "2s"),
+    ] {
+        assert_eq!(
+            engine.computed_style_property_value(
+                &host,
+                &document_url,
+                inheriting,
+                property,
+                None,
+                &inputs,
+                None,
+            ),
+            Some(expected.into()),
+        );
+    }
+}
+
+#[test]
+fn lazy_child_restyle_keeps_earlier_inheritance_and_stops_at_an_override() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let parent = host.create_element("section");
+    let inherited = host.create_element("span");
+    let override_color = host.create_element("aside");
+    let grandchild = host.create_element("span");
+    assert!(host.append_child(document, parent));
+    assert!(host.append_child(parent, inherited));
+    assert!(host.append_child(parent, override_color));
+    assert!(host.append_child(override_color, grandchild));
+    let mut engine = MoliStyleEngine::new();
+    let url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(
+        "section { color: red; } section.blue { color: blue; }\n\
+         section.bg { background-color: lime; } aside { color: green; }"
+            .into(),
+        url.clone(),
+    );
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let inputs = FullStyleWorldSnapshot {
+        document_stylesheet_sources: vec![source],
+        ..Default::default()
+    };
+    let color = |engine: &MoliStyleEngine, host: &DomHost, target| {
+        engine.computed_style_property_value(host, &url, target, "color", None, &inputs, None)
+    };
+    assert_eq!(
+        color(&engine, &host, inherited).as_deref(),
+        Some("rgb(255, 0, 0)")
+    );
+    assert_eq!(
+        color(&engine, &host, grandchild).as_deref(),
+        Some("rgb(0, 128, 0)")
+    );
+    let grandchild_before = retained_primary_style_for_test(&engine, &host, grandchild).unwrap();
+
+    let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    for (old, new) in [(None, "blue"), (Some("blue"), "blue bg")] {
+        assert!(host.set_attribute(parent, "class", new));
+        engine.invalidate_for_mutations(
+            &host,
+            &[StyleMutationEffect::Attribute {
+                element: parent,
+                name: "class".into(),
+                old_value: old.map(Into::into),
+                new_value: Some(new.into()),
+            }],
+            &media,
+        );
+        engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+        assert_eq!(
+            color(&engine, &host, parent).as_deref(),
+            Some("rgb(0, 0, 255)")
+        );
+    }
+
+    assert_eq!(
+        color(&engine, &host, inherited).as_deref(),
+        Some("rgb(0, 0, 255)")
+    );
+    assert_eq!(
+        color(&engine, &host, grandchild).as_deref(),
+        Some("rgb(0, 128, 0)")
+    );
+    let grandchild_after = retained_primary_style_for_test(&engine, &host, grandchild).unwrap();
+    assert!(ServoArc::ptr_eq(&grandchild_before, &grandchild_after));
 }
 
 #[test]

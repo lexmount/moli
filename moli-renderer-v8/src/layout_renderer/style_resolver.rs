@@ -9,7 +9,8 @@ use crate::{
     dom_presentation::suppresses_noscript_box,
     native_bridge::{PageScriptHost, element::StyleObservation},
     style_engine::{
-        StyleResolutionPass, StyleViewport, StyloAnonymousBoxKind, StyloStyleEnvironment,
+        ScreenStyleCoverage, StyleResolutionPass, StyleViewport, StyloAnonymousBoxKind,
+        StyloStyleEnvironment,
     },
 };
 
@@ -17,7 +18,7 @@ pub(super) struct NativeLayoutStyleResolver<'a, 'world, 'dom> {
     runtime: &'a PageScriptHost,
     pass: &'a mut StyleResolutionPass<'world, 'dom>,
     scripting_enabled: bool,
-    screen_styles: Option<&'a mut super::screen_styles::DocumentScreenStyles>,
+    screen_style_coverage: Option<&'a mut ScreenStyleCoverage>,
     profile: Option<NativeLayoutStyleResolverProfile>,
 }
 
@@ -42,17 +43,20 @@ pub(super) fn with_layout_styles<R>(
     document: DomHandle,
     viewport: LayoutViewport,
     environment_override: Option<StyloStyleEnvironment>,
-    screen_styles: Option<&mut super::screen_styles::DocumentScreenStyles>,
+    mut screen_style_coverage: Option<&mut ScreenStyleCoverage>,
     prepare: impl FnOnce(&mut NativeLayoutStyleResolver<'_, '_, '_>) -> R,
 ) -> R {
     let mut observation =
         layout_style_read_scope(runtime, document, viewport, environment_override);
     observation.with_resolution_pass(document, |pass| {
+        if let Some(coverage) = screen_style_coverage.as_deref_mut() {
+            *coverage = pass.screen_style_coverage();
+        }
         let mut resolver = NativeLayoutStyleResolver {
             runtime,
             pass,
             scripting_enabled: runtime.document_scripting_enabled(document),
-            screen_styles,
+            screen_style_coverage,
             profile: moli_trace::cpu_profile_enabled()
                 .then(NativeLayoutStyleResolverProfile::default),
         };
@@ -140,9 +144,6 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
             }
             return Ok(None);
         };
-        if let Some(screen_styles) = &mut self.screen_styles {
-            screen_styles.insert(node, style.clone());
-        }
         let (computed, before, after) = style.into_element_computed_values();
         let eager_pseudo_count = u64::from(before.is_some()) + u64::from(after.is_some());
         if let Some(profile) = self.profile.as_mut() {
@@ -199,8 +200,8 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         &mut self,
         node: DomHandle,
     ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
-        if let Some(screen_styles) = &mut self.screen_styles {
-            screen_styles.remove(&node);
+        if let Some(coverage) = &mut self.screen_style_coverage {
+            coverage.lazy_pseudo_owners.insert(node);
         }
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let computed = self.pass.marker_for_generation(node);
@@ -230,8 +231,8 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         &mut self,
         node: DomHandle,
     ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
-        if let Some(screen_styles) = &mut self.screen_styles {
-            screen_styles.remove(&node);
+        if let Some(coverage) = &mut self.screen_style_coverage {
+            coverage.lazy_pseudo_owners.insert(node);
         }
         Ok(self.pass.pseudo_style(node, "placeholder").map(|computed| {
             ResolvedLayoutPseudoStyle::new(ResolvedLayoutStyle::from_stylo(computed))

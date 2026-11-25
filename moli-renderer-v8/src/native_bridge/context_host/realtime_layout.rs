@@ -1,4 +1,7 @@
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+};
 
 use moli_layout::{
     LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, LayoutViewport,
@@ -17,8 +20,8 @@ use super::screencast_paint::{
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
-    layout_renderer::{LayoutPassFeedback, ScreenStyleBaseline, screen_styles_damage},
-    style_engine::StyloStyleEnvironment,
+    layout_renderer::{LayoutPassFeedback, resolve_screen_style_targets},
+    style_engine::{ScreenStyleCoverage, StyloStyleEnvironment},
 };
 
 /// The consumer explicitly decides whether a pass may update screen geometry.
@@ -72,7 +75,6 @@ pub(super) struct RealtimeLayoutState {
     non_dom_revision: Cell<Option<u64>>,
     scroll_projection_dirty: Cell<bool>,
     published: RefCell<Option<ScreenLayoutInputs>>,
-    screen_styles: RefCell<ScreenStyleBaseline>,
     #[cfg(feature = "devtools")]
     screencast_paint: ScreencastPaintState,
     pub(super) frame: RefCell<RealtimeFrameState>,
@@ -88,7 +90,6 @@ impl Default for RealtimeLayoutState {
             non_dom_revision: Cell::new(Some(0)),
             scroll_projection_dirty: Cell::new(false),
             published: RefCell::new(None),
-            screen_styles: RefCell::default(),
             #[cfg(feature = "devtools")]
             screencast_paint: ScreencastPaintState::default(),
             frame: RefCell::new(RealtimeFrameState::default()),
@@ -113,13 +114,8 @@ impl RealtimeLayoutState {
 
     pub(super) fn clear_publication(&self) {
         self.published.borrow_mut().take();
-        self.clear_screen_styles();
         #[cfg(feature = "devtools")]
         self.screencast_paint.publish(None);
-    }
-
-    pub(super) fn clear_screen_styles(&self) {
-        self.screen_styles.borrow_mut().clear();
     }
 
     pub(super) fn reset(&self) {
@@ -247,32 +243,40 @@ impl PageScriptHost {
                 #[cfg(not(feature = "devtools"))]
                 let _ = paint_generation;
                 self.publish_layout_pass_for_document(document, pass);
-                *state.screen_styles.borrow_mut() = feedback.commit().unwrap_or_default();
                 #[cfg(feature = "devtools")]
                 state.screencast_paint.publish(paint);
-                self.did_publish_screen_layout(state, inputs);
+                self.did_publish_screen_layout(state, inputs, feedback.commit());
             }
             LayoutPublication::Transient => {}
         }
         Ok(())
     }
 
-    fn did_publish_screen_layout(&self, state: &RealtimeLayoutState, inputs: ScreenLayoutInputs) {
-        for document in &inputs.documents {
-            self.style_engine.publish_screen_styles(document.document);
-        }
+    pub(crate) fn begin_screen_style_layout(&self, document: DomHandle) {
+        self.style_engine.begin_screen_layout(document);
+    }
+
+    fn did_publish_screen_layout(
+        &self,
+        state: &RealtimeLayoutState,
+        inputs: ScreenLayoutInputs,
+        mut coverage: HashMap<DomHandle, ScreenStyleCoverage>,
+    ) {
         if moli_trace::cpu_profile_enabled() {
-            let baseline = state.screen_styles.borrow();
             tracing::info!(
                 target: "moli_cpu_profile",
-                stage = "screen_style_baseline",
-                element_count = baseline.values().map(|styles| styles.len()).sum::<usize>(),
-                entry_storage_bytes = baseline.values().map(|styles| {
-                    styles.capacity() * std::mem::size_of::<(
-                        DomHandle,
-                        crate::style_engine::StyloComputedStyleSnapshot,
-                    )>()
-                }).sum::<usize>(),
+                stage = "screen_style_publication",
+                documents = coverage.len(),
+                lazy_pseudo_owners = coverage
+                    .values()
+                    .map(|document| document.lazy_pseudo_owners.len())
+                    .sum::<usize>(),
+            );
+        }
+        for document in &inputs.documents {
+            self.style_engine.publish_screen_styles(
+                document.document,
+                coverage.remove(&document.document).unwrap_or_default(),
             );
         }
         // Attach the verified inputs after the geometry update retires the previous validity.
@@ -446,7 +450,7 @@ impl PageScriptHost {
         }
         if self.screen_layout_matches_inputs(state, &inputs)
             && let Some(checked_documents) = if resolve_style_changes {
-                self.validate_reusable_screen_styles(state, &inputs)
+                self.validate_reusable_screen_styles(&inputs)
             } else {
                 Some(Vec::new())
             }
@@ -456,7 +460,7 @@ impl PageScriptHost {
                     != ScrollProjectionRefresh::Unavailable)
         {
             for document in checked_documents {
-                self.style_engine.publish_screen_styles(document);
+                self.style_engine.consume_screen_style_work(document);
             }
             state.scroll_projection_dirty.set(false);
             return Ok(());
@@ -490,7 +494,7 @@ impl PageScriptHost {
                 .borrow_mut()
                 .clear_latest_layout();
             state.clear_publication();
-            self.did_publish_screen_layout(state, inputs);
+            self.did_publish_screen_layout(state, inputs, HashMap::new());
             return Ok(());
         };
         self.finish_layout_publication(
@@ -532,7 +536,7 @@ impl PageScriptHost {
     #[cfg(test)]
     pub(crate) fn observed_screen_style_damage_for_test(&self) -> ServoRestyleDamage {
         self.style_engine
-            .screen_style_changes(self.document_handle())
+            .screen_style_changes(self.dom_host(), self.document_handle())
             .expect("complete screen style invalidation")
             .observed_damage
     }
@@ -576,38 +580,29 @@ impl PageScriptHost {
 
     fn validate_reusable_screen_styles(
         &self,
-        state: &RealtimeLayoutState,
         inputs: &ScreenLayoutInputs,
     ) -> Option<Vec<DomHandle>> {
         // The frozen tree and retained paint inputs share a publication.
         // Changes that require refreshing either one still use a full pass.
         const SUPPORTED_DAMAGE: ServoRestyleDamage = ServoRestyleDamage::empty();
-        let baseline = state.screen_styles.borrow();
         let mut checked_documents = Vec::new();
         for document in &inputs.documents {
-            let changes = self.style_engine.screen_style_changes(document.document)?;
+            let changes = self
+                .style_engine
+                .screen_style_changes(self.dom_host(), document.document)?;
             if !SUPPORTED_DAMAGE.contains(changes.observed_damage) {
                 return None;
             }
-            if changes.targets.is_empty() {
-                continue;
-            }
-            let damage = screen_styles_damage(
-                self,
-                document.document,
-                changes.targets,
-                &baseline,
-                SUPPORTED_DAMAGE,
-                |handle, damage| {
-                    self.style_engine.record_compared_screen_style_damage(
-                        document.document,
-                        handle,
-                        damage,
-                    );
-                },
-            );
+            let resolved = changes.targets.is_empty()
+                || resolve_screen_style_targets(
+                    self,
+                    document.document,
+                    changes.targets,
+                    changes.after,
+                    SUPPORTED_DAMAGE,
+                );
             // Resolving a target can also publish damage on its ancestors.
-            if !SUPPORTED_DAMAGE.contains(damage)
+            if !resolved
                 || !self
                     .style_engine
                     .has_supported_screen_style_damage(document.document, SUPPORTED_DAMAGE)
