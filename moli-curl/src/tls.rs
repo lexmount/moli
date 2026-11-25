@@ -3,6 +3,9 @@ use std::{fmt, path::PathBuf};
 use anyhow::{Context, Result};
 use curl::easy::{Easy2, Handler};
 
+#[cfg(target_env = "ohos")]
+const OHOS_SYSTEM_CA_PATH: &str = "/etc/security/certificates";
+
 /// Owned TLS settings shared by HTTP and WebSocket connections.
 #[derive(Clone, PartialEq, Eq)]
 pub struct CurlTlsConfig {
@@ -64,7 +67,15 @@ impl CurlTlsConfig {
                 )
             })?;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(target_env = "ohos")]
+        if self.ca_cert.is_none()
+            && std::env::var_os("SSL_CERT_FILE").is_none()
+            && std::env::var_os("SSL_CERT_DIR").is_none()
+        {
+            easy.capath(OHOS_SYSTEM_CA_PATH)
+                .context("configure HarmonyOS system CA certificates")?;
+        }
+        #[cfg(any(target_os = "macos", target_env = "ohos"))]
         if self.ca_cert.is_some() {
             // An explicit CA file overrides SSL_CERT_DIR as well as
             // SSL_CERT_FILE, which curl-rust applies to a fresh handle.
@@ -133,28 +144,33 @@ impl CurlTlsConfig {
                 )
             })?;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_env = "ohos"))]
         if self.ca_cert.is_some() {
             clear_ca_directory(easy, curl_sys::CURLOPT_PROXY_CAPATH)?;
         } else if self.verify {
-            // curl-rust applies explicit certificate environment variables to
-            // the origin. Moli shares these sources with HTTPS proxies too.
-            // Leave every CA option untouched when no override was supplied:
-            // libcurl then selects its built-in Apple SecTrust verifier.
-            if let Some(file) = std::env::var_os("SSL_CERT_FILE") {
+            // curl-rust applies explicit certificate environment variables
+            // to the origin. Share the same trust sources with HTTPS proxies.
+            let file = std::env::var_os("SSL_CERT_FILE");
+            let directory = std::env::var_os("SSL_CERT_DIR");
+            if let Some(file) = &file {
                 easy.proxy_cainfo(file.to_str().context("SSL_CERT_FILE is not valid UTF-8")?)
                     .context("failed to configure HTTPS proxy SSL_CERT_FILE")?;
             }
-            if let Some(directory) = std::env::var_os("SSL_CERT_DIR") {
-                easy.proxy_capath(std::path::Path::new(&directory))
+            if let Some(directory) = &directory {
+                easy.proxy_capath(std::path::Path::new(directory))
                     .context("failed to configure HTTPS proxy SSL_CERT_DIR")?;
+            }
+            #[cfg(target_env = "ohos")]
+            if file.is_none() && directory.is_none() {
+                easy.proxy_capath(OHOS_SYSTEM_CA_PATH)
+                    .context("configure HarmonyOS system CA certificates for the proxy")?;
             }
         }
         Ok(())
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_env = "ohos"))]
 fn clear_ca_directory<H: Handler>(easy: &mut Easy2<H>, option: curl_sys::CURLoption) -> Result<()> {
     // SAFETY: the caller supplies a CA directory string option, `easy` is
     // exclusively borrowed, and libcurl accepts NULL to clear this setting.
