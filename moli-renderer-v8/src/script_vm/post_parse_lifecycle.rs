@@ -384,6 +384,7 @@ impl ScriptVm {
                 module_failure_policy,
                 source_network_result,
                 error_constructor,
+                ..
             }) => {
                 let _ = (
                     id,
