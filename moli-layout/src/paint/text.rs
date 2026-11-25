@@ -119,7 +119,8 @@ fn project_text_phase<N>(
         phase,
         text,
     };
-    for (line_index, line) in text_layout.lines().enumerate() {
+    let visible_lines = context.visible_lines(text_layout.len());
+    for (line_index, line) in text_layout.lines().take(visible_lines).enumerate() {
         let mut mapped_run = None;
         let mut cluster_ranges = Vec::new().into_iter();
         metrics.text_line_count = metrics.text_line_count.saturating_add(1);
@@ -182,6 +183,26 @@ fn project_text_phase<N>(
                 &glyph_run.style().brush,
             );
             paint.project_run(&glyph_run, brush, vertical_offset, clusters, snapshot);
+        }
+        if line_index + 1 == visible_lines
+            && !matches!(mask_scope, Some(TextClipMaskScope::InlineBox(_)))
+            && let Some((marker, position)) =
+                context.clamp_marker(text_layout, &context.line_placements)
+            && let Some(line) = marker.get(0)
+        {
+            let marker_paint = TextRunPaint {
+                origin_x: origin_x + position.x,
+                origin_y: origin_y + position.y,
+                transform,
+                phase,
+                text: None,
+            };
+            let brush = layout_box.style.parley_text_style().brush;
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(run) = item {
+                    marker_paint.project_run(&run, &brush, 0.0, Vec::new(), snapshot);
+                }
+            }
         }
     }
 }
@@ -521,6 +542,9 @@ pub(super) fn range_selection_rects<N>(
     let anchor = Cursor::from_byte_index(text_layout, range.start, Affinity::Downstream);
     let focus = Cursor::from_byte_index(text_layout, range.end, Affinity::Downstream);
     Selection::new(anchor, focus).geometry_with(text_layout, |rect, line_index| {
+        if line_index >= context.visible_lines(text_layout.len()) {
+            return;
+        }
         let rect = selection_rect(
             context,
             line_index,
@@ -559,6 +583,9 @@ pub(super) fn caret_rect<N>(layout_box: &LayoutBox<N>) -> Option<LayoutRect> {
         .find(|(_, line)| line.text_range().contains(offset))
         .map(|(index, _)| index)
         .unwrap_or_else(|| text_layout.lines().count().saturating_sub(1));
+    if line_index >= context.visible_lines(text_layout.len()) {
+        return None;
+    }
     let rect = selection_rect(
         context,
         line_index,

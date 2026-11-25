@@ -32,7 +32,9 @@ use crate::{
     text::{DocumentLayoutServices, InlineFontMetrics},
 };
 
+mod line_clamp;
 mod numeric_reuse;
+use line_clamp::InlineLineClamp;
 pub(crate) use numeric_reuse::{InlineMeasurementInputs, InlineNumericInputs, InlineNumericReuse};
 
 /// Resolve the relative inset applied after Parley has positioned an atomic
@@ -182,6 +184,7 @@ pub(crate) struct InlineFormattingContext {
     /// kept separate from the reusable measurement layout so a later intrinsic
     /// probe cannot overwrite the last accepted line layout.
     pub(crate) laid_out: Option<Layout<TextBrush>>,
+    pub(crate) line_clamp: Option<Box<InlineLineClamp>>,
     /// Pass-local memo for intrinsic widths of a pure-text paragraph. Numeric
     /// positioning buffers intentionally remain probe-local: retaining their
     /// capacity on every IFC increases the peak footprint of the fresh layout
@@ -434,6 +437,7 @@ pub(crate) struct InlineLinePlacement {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct InlineLineMetrics {
     pub(crate) line_expansion: f32,
+    pub(crate) clamped_block_size: Option<f32>,
     pub(crate) first_baseline: Option<f32>,
     pub(crate) last_baseline: Option<f32>,
     pub(crate) has_non_phantom_line: bool,
@@ -485,6 +489,20 @@ struct InlineBoxBlockPlacement {
 }
 
 impl InlineFormattingContext {
+    pub(crate) fn visible_lines(&self, total: usize) -> usize {
+        self.line_clamp
+            .as_ref()
+            .map_or(total, |clamp| total.min(clamp.limit))
+    }
+
+    pub(crate) fn clamp_marker(
+        &self,
+        layout: &Layout<TextBrush>,
+        placements: &[InlineLinePlacement],
+    ) -> Option<(&Layout<TextBrush>, crate::PaintPoint)> {
+        self.line_clamp.as_ref()?.marker_layout(layout, placements)
+    }
+
     /// Validate all retained construction IDs before transferring an IFC into
     /// a different graph. Parley styles/objects use local indices into these
     /// maps; none may silently name an unrelated fresh construction slot.
@@ -838,6 +856,26 @@ pub(crate) fn build_inline_fragments(
         }
     }
 
+    let visible_lines = context.visible_lines(layout.len());
+    for hidden in &mut fragments.lines[visible_lines..] {
+        hidden.paint_bounds = InlinePaintBounds::Empty;
+    }
+    if let Some((marker, origin)) = context.clamp_marker(layout, line_placements)
+        && let Some(line) = fragments.lines.get_mut(visible_lines.saturating_sub(1))
+        && let Some(style) = marker.styles().first()
+    {
+        let rect = PaintRect::new(origin.x, origin.y, marker.width(), marker.height());
+        if let Some(outsets) = text_style_paint_outsets(style) {
+            let guard = marker
+                .get(0)
+                .and_then(|line| line.runs().next())
+                .map_or(1.0, |run| run.font_size().max(0.0) * 2.0 + 1.0);
+            line.paint_bounds.include(outsets.outset(rect, guard));
+        } else {
+            line.paint_bounds = InlinePaintBounds::Unbounded;
+        }
+    }
+
     let mut box_fragments = box_fragments.into_iter().collect::<Vec<_>>();
     box_fragments.sort_unstable_by_key(|(key, _)| *key);
     fragments.boxes = box_fragments
@@ -950,65 +988,77 @@ fn text_style_paint_outsets(style: &parley::layout::Style<TextBrush>) -> Option<
     Some(outsets)
 }
 
-/// Breaks a shared IFC text stream while preserving CSS `break-spaces`
-/// trailing-space semantics that Parley 0.10 does not model directly.
+/// Breaks the IFC text, allowing for preserved trailing spaces and a clamp
+/// marker. Lines beyond a clamp retain range and scroll geometry.
 pub(crate) fn break_inline_lines(
     context: &InlineFormattingContext,
     layout: &mut Layout<TextBrush>,
     max_advance: Option<f32>,
-) {
+) -> bool {
     layout.break_all_lines(max_advance);
     let Some(width) = max_advance.filter(|width| width.is_finite() && *width > 0.0) else {
-        return;
+        return false;
     };
-    if !context
-        .text_units
-        .iter()
-        .any(|unit| unit.break_spaces_opportunity)
-    {
-        return;
-    }
+    let marker = context
+        .line_clamp
+        .as_ref()
+        .and_then(|clamp| clamp.marker_reservation(layout, width));
 
     // Parley hangs an overflowing U+0020 on the preceding line. That is
     // correct for normal whitespace but not for `break-spaces`, where every
     // preserved space occupies line width. Identify only the lines where the
     // initial break actually overflowed through trailing whitespace.
     let tolerance = width.abs().max(1.0) * f32::EPSILON * 8.0;
-    let adjust_lines = layout
-        .lines()
-        .map(|line| {
-            let metrics = line.metrics();
-            let line_range = line.text_range();
-            metrics.hanging_advance > 0.0
-                && metrics.advance > width + tolerance
-                && overlapping_output_ranges(&context.text_units, &line_range)
-                    .iter()
-                    .any(|unit| unit.break_spaces_opportunity)
-        })
-        .collect::<Vec<_>>();
-    if !adjust_lines.iter().any(|adjust| *adjust) {
-        return;
+    let adjust_lines = if context
+        .text_units
+        .iter()
+        .any(|unit| unit.break_spaces_opportunity)
+    {
+        layout
+            .lines()
+            .map(|line| {
+                let metrics = line.metrics();
+                let line_range = line.text_range();
+                metrics.hanging_advance > 0.0
+                    && metrics.advance > width + tolerance
+                    && overlapping_output_ranges(&context.text_units, &line_range)
+                        .iter()
+                        .any(|unit| unit.break_spaces_opportunity)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    if marker.is_none() && !adjust_lines.iter().any(|adjust| *adjust) {
+        return false;
     }
 
     // Moving the affected line width one representable step inward makes the
     // last fitting preserved space use Parley's normal overflowing-space
     // commit. Restore the real CSS width on every committed line so alignment
     // and fragments still observe the containing block, not the breaker shim.
-    let adjusted_width = (width - tolerance).max(0.0);
+    let rtl = layout.is_rtl();
     let mut breaker = layout.break_lines();
     breaker.state_mut().set_layout_max_advance(width);
     let mut line_index = 0;
     let mut use_normal_breaking = false;
     while !breaker.is_done() {
+        let reserved = marker
+            .filter(|&(line, _)| line == line_index)
+            .map_or(0.0, |(_, width)| width);
+        let available = width - reserved;
         let line_width = if adjust_lines.get(line_index).copied().unwrap_or(false) {
-            adjusted_width
+            (available - tolerance).max(0.0)
         } else {
-            width
+            available
         };
         breaker.state_mut().set_line_max_advance(line_width);
+        breaker
+            .state_mut()
+            .set_line_x(if rtl { reserved } else { 0.0 });
         match breaker.break_next() {
             Some(parley::YieldData::LineBreak(_)) => {
-                breaker.set_prior_line_width(width);
+                breaker.set_prior_line_width(available);
                 line_index += 1;
             }
             Some(
@@ -1026,7 +1076,9 @@ pub(crate) fn break_inline_lines(
     breaker.finish();
     if use_normal_breaking {
         layout.break_all_lines(Some(width));
+        return false;
     }
+    marker.is_some()
 }
 
 /// Reads Parley's line items together with their CSS content contribution.
@@ -1161,6 +1213,7 @@ fn resolve_inline_lines(
     let mut result = InlineLineMetrics::default();
     let mut preceding_adjustment = 0.0;
     let mut unadjusted_line_top = 0.0;
+    let visible_lines = context.visible_lines(layout.len());
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
@@ -1479,10 +1532,13 @@ fn resolve_inline_lines(
         }
         let root_baseline = raw_top + preceding_adjustment - bounds.top;
 
-        if !phantom {
+        if !phantom && line_index < visible_lines {
             result.has_non_phantom_line = true;
             result.first_baseline.get_or_insert(root_baseline);
             result.last_baseline = Some(root_baseline);
+        }
+        if line_index + 1 == visible_lines && visible_lines < layout.len() {
+            result.clamped_block_size = Some(raw_top + preceding_adjustment + line_height);
         }
 
         // Intrinsic and flex/grid probes need only the resolved line height
@@ -2446,6 +2502,18 @@ impl InlineBuildInput {
                     .includes_used_font_metrics(),
             });
         }
+        let line_clamp = self
+            .objects
+            .iter()
+            .all(|(_, object, _)| {
+                matches!(
+                    object.role,
+                    InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
+                )
+            })
+            .then(|| InlineLineClamp::new(root_style, parley))
+            .flatten()
+            .map(Box::new);
         let objects = self
             .objects
             .drain(..)
@@ -2456,6 +2524,7 @@ impl InlineBuildInput {
             root_style: self.root_style,
             measurement_layout: Some(layout),
             laid_out: None,
+            line_clamp,
             content_widths: InlineContentWidthsMemo::default(),
             text_units: self.units,
             source_map: self.source_map,
@@ -3699,6 +3768,7 @@ mod tests {
             root_style: root,
             measurement_layout: Some(layout.clone()),
             laid_out: None,
+            line_clamp: None,
             content_widths: InlineContentWidthsMemo::default(),
             text_units: Vec::new(),
             source_map: Vec::new(),
@@ -3816,6 +3886,7 @@ mod tests {
                     root_style: root,
                     measurement_layout: None,
                     laid_out: None,
+                    line_clamp: None,
                     content_widths: InlineContentWidthsMemo::default(),
                     text_units: Vec::new(),
                     source_map,

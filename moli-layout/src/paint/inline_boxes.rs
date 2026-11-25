@@ -137,8 +137,12 @@ pub(super) fn project_inline_box_fragments<N>(
     let fragments =
         selected_fragment.map_or(0..context.fragments.boxes.len(), |index| index..index + 1);
     let projected_fragments = projection.inline_fragments(owner_id);
+    let visible_lines = context.visible_lines(context.fragments.lines.len());
     for index in fragments {
         let fragment = &context.fragments.boxes[index];
+        if fragment.line_index >= visible_lines {
+            continue;
+        }
         let Some(inline_box) = world.box_by_id(fragment.box_id) else {
             continue;
         };
