@@ -80,9 +80,10 @@ mod source_owner_text;
 mod source_record;
 mod source_scope_plan;
 mod state;
+pub(crate) use lazy_invalidation::StyleInvalidationScope;
 #[cfg(debug_assertions)]
 pub(crate) use state::ComputedStyleObservationInputEpochs;
-pub(crate) use state::ScreenStyleScope;
+pub(crate) use state::ScreenStyleCoverage;
 use state::{ScreenStyleChanges, ScreenStyleInvalidation};
 mod stylesheet;
 mod stylesheet_resources;
@@ -277,35 +278,34 @@ impl MoliStyleEngine {
     }
 
     /// Incomplete invalidation coverage requires a full layout.
-    pub(crate) fn screen_style_changes(&self, document: DomHandle) -> Option<ScreenStyleChanges> {
+    pub(crate) fn screen_style_changes(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+    ) -> Option<ScreenStyleChanges> {
         let Some(world) = self.document_worlds.active_world(document) else {
             return Some(ScreenStyleChanges::default());
         };
-        match &*world.document_state.screen_style_invalidation.borrow() {
+        let state = &world.document_state;
+        state.finish_screen_style_invalidation();
+        match &*state.screen_style_invalidation.borrow() {
             ScreenStyleInvalidation::Clean => Some(ScreenStyleChanges::default()),
-            ScreenStyleInvalidation::Affected(affected) => Some(ScreenStyleChanges {
-                targets: affected
-                    .iter()
-                    .filter_map(|(&handle, work)| work.scope.map(|scope| (handle, scope)))
+            ScreenStyleInvalidation::Pending { after, damage } => Some(ScreenStyleChanges {
+                after: *after,
+                targets: state
+                    .lazy_invalidation_roots
+                    .targets_after(*after)?
+                    .into_iter()
+                    .filter(|&(handle, _)| {
+                        host.is_connected(handle)
+                            && host.owner_document_handle(handle) == Some(document)
+                    })
                     .collect(),
-                observed_damage: affected
+                observed_damage: damage
                     .values()
-                    .fold(Default::default(), |all, work| all | work.damage),
+                    .fold(Default::default(), |all, damage| all | *damage),
             }),
-            ScreenStyleInvalidation::Pending | ScreenStyleInvalidation::Full => None,
-        }
-    }
-
-    pub(crate) fn record_compared_screen_style_damage(
-        &self,
-        document: DomHandle,
-        handle: DomHandle,
-        damage: ServoRestyleDamage,
-    ) {
-        if let Some(world) = self.document_worlds.active_world(document) {
-            world
-                .document_state
-                .record_screen_style_damage(handle, || damage);
+            ScreenStyleInvalidation::Full => None,
         }
     }
 
@@ -321,10 +321,10 @@ impl MoliStyleEngine {
                 state.finish_screen_style_invalidation();
                 match &*state.screen_style_invalidation.borrow() {
                     ScreenStyleInvalidation::Clean => true,
-                    ScreenStyleInvalidation::Affected(affected) => affected
-                        .values()
-                        .all(|work| supported.contains(work.damage)),
-                    ScreenStyleInvalidation::Pending | ScreenStyleInvalidation::Full => false,
+                    ScreenStyleInvalidation::Pending { damage, .. } => {
+                        damage.values().all(|&damage| supported.contains(damage))
+                    }
+                    ScreenStyleInvalidation::Full => false,
                 }
             })
     }
@@ -337,17 +337,29 @@ impl MoliStyleEngine {
     ) -> Option<ServoRestyleDamage> {
         let world = self.document_worlds.active_world(document)?;
         match &*world.document_state.screen_style_invalidation.borrow() {
-            ScreenStyleInvalidation::Affected(affected) => affected
+            ScreenStyleInvalidation::Pending { damage, .. } => damage
                 .get(&handle)
-                .map(|work| work.damage)
+                .copied()
                 .filter(|damage| !damage.is_empty()),
             _ => None,
         }
     }
 
-    pub(crate) fn publish_screen_styles(&self, document: DomHandle) {
+    pub(crate) fn begin_screen_layout(&self, document: DomHandle) {
         if let Some(world) = self.document_worlds.active_world(document) {
-            world.document_state.publish_screen_styles();
+            world.document_state.begin_screen_layout();
+        }
+    }
+
+    pub(crate) fn publish_screen_styles(&self, document: DomHandle, coverage: ScreenStyleCoverage) {
+        if let Some(world) = self.document_worlds.active_world(document) {
+            world.document_state.publish_screen_styles(coverage);
+        }
+    }
+
+    pub(crate) fn consume_screen_style_work(&self, document: DomHandle) {
+        if let Some(world) = self.document_worlds.active_world(document) {
+            world.document_state.consume_screen_style_work();
         }
     }
 
@@ -841,6 +853,7 @@ impl MoliStyleEngine {
             .dom_adapter
             .replace_query_container_sizes(document, sizes)?;
         let world = self.world_for_document(document);
+        world.document_state.invalidate_screen_style_comparisons();
         self.invalidation_cleanup_for_world(&world)
             .invalidate_subtrees(host, changed);
         Some(previous)
@@ -862,7 +875,24 @@ impl MoliStyleEngine {
     /// This is deliberately target-local. Subtree invalidation remains lazy;
     /// a disconnected `getComputedStyle()` read must not reintroduce the old
     /// document-wide scan merely to retire the one target it observes.
-    pub(crate) fn retire_computed_style_for_inactive_handle(&self, handle: DomHandle) {
+    pub(crate) fn retire_computed_style_for_inactive_handle(
+        &self,
+        host: &DomHost,
+        handle: DomHandle,
+    ) {
+        if let Some(world) = self.active_owner_document_world(host, handle) {
+            if host.is_connected(handle) {
+                world.document_state.invalidate_screen_style_comparisons();
+            }
+            let invalidation = &world.document_state.lazy_invalidation_roots;
+            if invalidation.forget_checked_path(handle) {
+                invalidation.record_targets(
+                    host,
+                    world.document,
+                    [(handle, StyleInvalidationScope::Subtree)],
+                );
+            }
+        }
         self.dom_adapter.clear_element_data(handle);
         self.document_worlds
             .invalidate_cached_pseudos_for_handle(handle);

@@ -1668,7 +1668,7 @@ impl PageScriptHost {
 
     pub(crate) fn retire_computed_style_for_inactive_handle(&self, handle: DomHandle) {
         self.style_engine
-            .retire_computed_style_for_inactive_handle(handle);
+            .retire_computed_style_for_inactive_handle(self.dom_host(), handle);
     }
 
     pub(crate) fn stylesheet_resource_snapshot_for_document(

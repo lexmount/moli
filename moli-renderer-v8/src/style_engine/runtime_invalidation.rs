@@ -82,12 +82,15 @@ impl MoliStyleEngine {
             let document = *document;
             let document_effects = document_effects.as_ref();
             let world = self.world_for_document(document);
-            if document_effects.iter().any(|effect| {
-                matches!(effect, StyleMutationEffect::Attribute { element, name, .. }
-                    if !DomHost::attribute_affects_native_layout(name) && host.is_connected(*element))
-            }) {
-                world.document_state.note_screen_style_attribute_change();
-            }
+            world.document_state.note_screen_style_attribute_changes(
+                document_effects.iter().filter_map(|effect| {
+                    let StyleMutationEffect::Attribute { element, name, .. } = effect else {
+                        return None;
+                    };
+                    (!DomHost::attribute_affects_native_layout(name) && host.is_connected(*element))
+                        .then_some(*element)
+                }),
+            );
             let no_cached_style_started = profile_enabled.then(std::time::Instant::now);
             if self.style_invalidation_without_cached_styles_is_complete(document_effects, &world) {
                 no_cached_style_us += no_cached_style_started
