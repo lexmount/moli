@@ -53,6 +53,7 @@ impl DomHost {
             dom,
             dom_version: Cell::new(0),
             document_layout_versions: RefCell::new(HashMap::new()),
+            tracked_layout_changes: RefCell::default(),
             query_version: Cell::new(0),
             shadow_root_binding_version: Cell::new(0),
             connected_shadow_roots_version: Cell::new(0),
@@ -208,6 +209,52 @@ impl DomHost {
             .unwrap_or(0)
     }
 
+    /// Start collecting changes for the newly published world, or retire it.
+    pub fn track_layout_changes(&self, document: Option<DomHandle>) {
+        let mut tracking = self.tracked_layout_changes.borrow_mut();
+        if let Some(tracked) = tracking.as_mut()
+            && document == Some(tracked.document)
+        {
+            tracked.targets.clear();
+            return;
+        }
+        *tracking = document.map(|document| {
+            Box::new(TrackedLayoutChanges {
+                document,
+                targets: IndexSet::new(),
+            })
+        });
+    }
+
+    pub fn tracked_layout_targets(&self, document: DomHandle) -> Option<Vec<DomHandle>> {
+        self.tracked_layout_changes
+            .borrow()
+            .as_ref()
+            .filter(|tracked| tracked.document == document)
+            .map(|tracked| tracked.targets.iter().copied().collect())
+    }
+
+    /// A native source such as scrolling changed without a DOM mutation.
+    pub fn note_tracked_layout_target(&self, target: DomHandle) {
+        if let Some(document) = self.layout_document_for_mutation_target(target) {
+            self.record_tracked_layout_target(document, target);
+        }
+    }
+
+    fn record_tracked_layout_target(&self, document: DomHandle, target: DomHandle) {
+        const MAX_TRACKED_LAYOUT_TARGETS: usize = 1_024;
+
+        let mut tracking = self.tracked_layout_changes.borrow_mut();
+        if let Some(tracked) = tracking.as_mut()
+            && tracked.document == document
+        {
+            tracked.targets.insert(target);
+            if tracked.targets.len() > MAX_TRACKED_LAYOUT_TARGETS {
+                *tracking = None;
+            }
+        }
+    }
+
     pub fn shadow_root_binding_version(&self) -> u64 {
         self.shadow_root_binding_version.get()
     }
@@ -246,6 +293,7 @@ impl DomHost {
                 self.document_layout_versions
                     .borrow_mut()
                     .insert(document, revision);
+                self.record_tracked_layout_target(document, handle);
             }
         }
         if matches!(scope, MutationScope::QueryState) {

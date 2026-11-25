@@ -6,7 +6,7 @@ use std::{
 
 use moli_layout::{
     LayoutCssImageReference, LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult,
-    LayoutViewport, ScrollProjectionRefresh,
+    LayoutSourceChange, LayoutViewport, ScrollProjectionRefresh,
 };
 #[cfg(test)]
 use style::servo::restyle_damage::ServoRestyleDamage;
@@ -21,7 +21,7 @@ use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
     layout_renderer::{LayoutPassFeedback, screen_targets_allow_layout_reuse},
-    style_engine::{ScreenStyleCoverage, StyloStyleEnvironment},
+    style_engine::{ScreenStyleCoverage, StyleInvalidationScope, StyloStyleEnvironment},
 };
 
 /// The consumer explicitly decides whether a pass may update screen geometry.
@@ -296,6 +296,12 @@ impl PageScriptHost {
             );
         }
         // Attach the verified inputs after the geometry update retires the previous validity.
+        self.dom_host().track_layout_changes(
+            self.document_layout_state
+                .borrow()
+                .has_reusable_layout()
+                .then(|| self.document_handle()),
+        );
         *state.published.borrow_mut() = Some(inputs);
         state.scroll_projection_dirty.set(false);
         crate::observer_runtime::did_publish_realtime_resize_observer_layout(self);
@@ -363,6 +369,11 @@ impl PageScriptHost {
     /// Called at native source commits, before any callback can observe them.
     /// Legacy modes do not allocate state, advance revisions, or enqueue work.
     pub(crate) fn note_realtime_layout_input_change(&self) {
+        self.dom_host().track_layout_changes(None);
+        self.note_realtime_tracked_input_change();
+    }
+
+    pub(super) fn note_realtime_tracked_input_change(&self) {
         if let Some(state) = &self.realtime_layout_state {
             state.invalidate();
             self.request_realtime_rendering_opportunity();
@@ -370,6 +381,7 @@ impl PageScriptHost {
     }
 
     pub(super) fn note_selection_paint_change(&self) {
+        self.dom_host().track_layout_changes(None);
         #[cfg(feature = "devtools")]
         if self.realtime_layout_state.is_some() {
             let mut layout = self.document_layout_state.borrow_mut();
@@ -380,12 +392,37 @@ impl PageScriptHost {
 
     /// Scrolling changes the projection and lifecycle demand, but leaves the
     /// dimensions that were computed by the last layout pass intact.
-    pub(crate) fn note_realtime_scroll_change(&self) {
+    pub(crate) fn note_realtime_scroll_change(&self, target: Option<DomHandle>) {
         if let Some(state) = &self.realtime_layout_state {
+            if let Some(target) = target {
+                self.dom_host().note_tracked_layout_target(target);
+            }
             state.scroll_projection_dirty.set(true);
             self.invalidate_layout_projection();
             self.request_realtime_rendering_opportunity();
         }
+    }
+
+    pub(crate) fn retained_box_tree_changes(
+        &self,
+        document: DomHandle,
+    ) -> Option<Vec<LayoutSourceChange<DomHandle>>> {
+        let host = self.dom_host();
+        let mut changes: Vec<_> = host
+            .tracked_layout_targets(document)?
+            .into_iter()
+            .map(LayoutSourceChange::Node)
+            .collect();
+        changes.extend(
+            self.style_engine
+                .screen_layout_style_targets(host, document)?
+                .into_iter()
+                .map(|(target, scope)| match scope {
+                    StyleInvalidationScope::Element => LayoutSourceChange::Node(target),
+                    StyleInvalidationScope::Subtree => LayoutSourceChange::Subtree(target),
+                }),
+        );
+        Some(changes)
     }
 
     /// Public geometry and coordinate input share this policy decision.

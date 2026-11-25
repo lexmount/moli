@@ -241,6 +241,90 @@ fn realtime_rebuilds_only_the_changed_box_branch() {
 }
 
 #[test]
+fn realtime_dirty_box_tree_skips_clean_sources_and_matches_fresh_layout() {
+    let markup = format!(
+        "<!doctype html><style>
+           body {{ margin: 0; overflow: hidden }}
+           #edited {{ width: 30px; height: 10px; background: blue }}
+           #trigger.active + #edited {{ width: 42px }}
+           #scroller {{ width: 100px; height: 20px; overflow: scroll }}
+           #scrolled {{ height: 80px; background: red }}
+           article div {{ height: 8px }}
+         </style>
+         <div id=scroller><div id=scrolled></div></div>
+         <div id=trigger></div><div id=edited></div><section id=local></section>
+         <main>{}</main>",
+        "<article><div><div></div></div></article>".repeat(1_024)
+    );
+    let mut vm = realtime_vm(&markup);
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+
+    // Finish a scroll-only projection before changing an independent branch.
+    assert_eq!(
+        vm.eval("scroller.scrollTop=15; String(scrolled.getBoundingClientRect().top)")
+            .unwrap(),
+        "-15"
+    );
+    for (edit, width) in [
+        ("edited.style.width='38px'", "38"),
+        (
+            "edited.style.removeProperty('width'); trigger.classList.add('active')",
+            "42",
+        ),
+        ("trigger.classList.remove('active')", "30"),
+        (
+            "local.appendChild(document.createTextNode('inserted text'))",
+            "30",
+        ),
+        ("local.firstChild.data='edited text'", "30"),
+        ("local.firstChild.remove()", "30"),
+    ] {
+        // An earlier computed-style observation can already commit the style
+        // change. Layout still has to consume its pending damage.
+        vm.eval(&format!("{edit}; getComputedStyle(edited).color"))
+            .unwrap();
+        let retained = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+        let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+        assert!(metrics.pruned_source_count >= 3_072, "{edit}: {metrics:?}");
+        assert!(
+            metrics.retained_numeric_layout_hits > 0,
+            "{edit}: {metrics:?}"
+        );
+        assert_eq!(vm.eval("String(edited.offsetWidth)").unwrap(), width);
+        assert_eq!(
+            vm.eval("String(scrolled.getBoundingClientRect().top)")
+                .unwrap(),
+            "-15"
+        );
+        let host = host.borrow();
+        let fresh = host
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::with_paint(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Screenshot,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(&retained), fresh.paint_snapshot(), "{edit}");
+        let incremental = host
+            .with_latest_layout_tree_for_document(document, |tree| {
+                ["edited", "local", "scrolled"]
+                    .map(|id| vm.document_runtime.get_element_by_id(id).unwrap())
+                    .map(|source| (source, tree.client_rects_for_source(source)))
+            })
+            .unwrap();
+        for (source, rects) in incremental {
+            assert_eq!(rects, fresh.client_rects_for_source(source), "{edit}");
+        }
+    }
+}
+
+#[test]
 fn realtime_retained_layout_rebuilds_complex_branches_without_losing_sibling_caches() {
     let mut vm = realtime_vm(concat!(
         "<!doctype html><style>body{margin:0;background:white}",

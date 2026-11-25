@@ -128,10 +128,8 @@ fn build_native_layout_pass_recursive(
     );
     let source_ready = profile_started.map(|_| std::time::Instant::now());
     let mut styles_ready = None;
-    let mut document_coverage = screen_style_coverage.as_ref().map(|_| {
-        runtime.begin_screen_style_layout(document);
-        ScreenStyleCoverage::default()
-    });
+    let collect_screen_styles = screen_style_coverage.is_some();
+    let mut document_coverage = collect_screen_styles.then(ScreenStyleCoverage::default);
     let result = (|| {
         let mut prepare = || {
             style_resolver::with_layout_styles(
@@ -144,7 +142,21 @@ fn build_native_layout_pass_recursive(
                     if profile_started.is_some() && styles_ready.is_none() {
                         styles_ready = Some(std::time::Instant::now());
                     }
-                    prepare_layout_pass_reusing(&source, styles, request, retained.take())
+                    let changes = if retained.is_some() && !source.has_text_selection() {
+                        runtime.retained_box_tree_changes(document)
+                    } else {
+                        None
+                    };
+                    if collect_screen_styles {
+                        runtime.begin_screen_style_layout(document);
+                    }
+                    prepare_layout_pass_reusing(
+                        &source,
+                        styles,
+                        request,
+                        retained.take(),
+                        changes.as_deref(),
+                    )
                 },
             )
         };

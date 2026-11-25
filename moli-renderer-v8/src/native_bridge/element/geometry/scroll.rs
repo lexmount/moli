@@ -57,7 +57,7 @@ pub(super) fn set_node_scroll_position(
     if changed {
         // Freshness must be visible even while ActionBatch defers events and
         // observer work until its checkpoint.
-        unsafe { &*runtime_ptr }.note_realtime_scroll_change();
+        unsafe { &*runtime_ptr }.note_realtime_scroll_change(Some(handle));
     }
     if changed && queue_observable_effects {
         // Admission only: ActionBatch still owns its checkpoints and the

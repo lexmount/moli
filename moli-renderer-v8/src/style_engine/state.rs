@@ -242,6 +242,7 @@ impl StyleDocumentState {
             return;
         }
         let mut screen = self.screen_style_invalidation.borrow_mut();
+        let after = self.style_paths.generation();
         if self.style_paths.invalidate_paths() {
             dom_adapter.clear_style_paths(document);
         }
@@ -250,8 +251,14 @@ impl StyleDocumentState {
             if scope == StyleInvalidationScope::Subtree {
                 self.style_paths.invalidate_subtree(handle);
             }
-            // Temporary layout inputs also invalidate cached style paths.
-            // Only collect them for screen comparison when screen work is pending.
+            // The canonical layout also needs restyles discovered while
+            // draining native mutations or serving CSSOM reads.
+            if host.is_connected(handle)
+                && matches!(*screen, ScreenStyleInvalidation::Clean)
+                && self.screen_style_dependencies_are_current()
+            {
+                *screen = Self::pending_screen_style_invalidation(after);
+            }
             if let ScreenStyleInvalidation::Pending { targets, .. } = &mut *screen
                 && host.is_connected(handle)
             {
@@ -307,6 +314,28 @@ impl StyleDocumentState {
             *change = ScreenStyleInvalidation::Full;
         } else if self.screen_damage_nodes.borrow().is_empty() && targets.is_empty() {
             *change = ScreenStyleInvalidation::Clean;
+        }
+    }
+
+    pub(super) fn screen_restyle_targets(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+    ) -> Option<ScreenRestyleTargets> {
+        match &*self.screen_style_invalidation.borrow() {
+            ScreenStyleInvalidation::Clean => Some(ScreenRestyleTargets::default()),
+            ScreenStyleInvalidation::Pending { after, targets } => Some(ScreenRestyleTargets {
+                after: *after,
+                targets: targets
+                    .iter()
+                    .filter_map(|(&handle, &scope)| {
+                        (host.is_connected(handle)
+                            && host.owner_document_handle(handle) == Some(document))
+                        .then_some((handle, scope))
+                    })
+                    .collect(),
+            }),
+            ScreenStyleInvalidation::Full => None,
         }
     }
 
