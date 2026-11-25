@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use style::invalidation::element::restyle_hints::RestyleHint;
+use style::{
+    invalidation::element::restyle_hints::RestyleHint, servo::restyle_damage::ServoRestyleDamage,
+};
 
 use crate::{
     document_runtime::DomHandle, native_bridge::PageScriptHost,
@@ -16,7 +18,7 @@ pub(crate) fn screen_targets_allow_layout_reuse(
     document: DomHandle,
     targets: Vec<(DomHandle, StyleInvalidationScope)>,
     after: u64,
-    allow_repaint: bool,
+    supported_damage: ServoRestyleDamage,
 ) -> bool {
     let host = runtime.dom_host();
     // Affected subtrees may cross slot inheritance and have lazy pseudos
@@ -44,7 +46,7 @@ pub(crate) fn screen_targets_allow_layout_reuse(
                 return false;
             }
             let Some(child_hint) =
-                pass.resolve_screen_target_for_reuse(handle, after, allow_repaint)
+                pass.resolve_screen_target_for_reuse(handle, after, supported_damage)
             else {
                 return false;
             };
