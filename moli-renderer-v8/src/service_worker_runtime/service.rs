@@ -153,6 +153,7 @@ use client_registry::{
     claim_live_scope_clients_locked, controller_change_deliveries_for_controlled_clients_locked,
     service_worker_client_snapshot, service_worker_client_snapshot_with_controlled,
 };
+use registration_jobs::ServiceWorkerQueuedRegisterJobStart;
 use registration_lookup::{
     active_registration_id_for_scope_locked, select_controller_for_new_client_locked,
     service_worker_registration_can_see_client, service_worker_registration_matches_client,

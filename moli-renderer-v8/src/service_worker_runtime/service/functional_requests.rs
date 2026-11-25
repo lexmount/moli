@@ -1,5 +1,21 @@
 use super::*;
 
+fn running_or_ready_starting_host(
+    running_state: &ServiceWorkerVersionRunningState,
+) -> Option<&SharedRendererServiceWorkerHost> {
+    match running_state {
+        ServiceWorkerVersionRunningState::Running { host } => Some(host),
+        // On restart of an already-installed worker, top-level
+        // self.registration.update() can arrive before start completion
+        // transitions running_state from Starting to Running.
+        ServiceWorkerVersionRunningState::Starting { host } if host.has_running_worker() => {
+            Some(host)
+        }
+        ServiceWorkerVersionRunningState::Starting { .. }
+        | ServiceWorkerVersionRunningState::Stopped => None,
+    }
+}
+
 impl ServiceWorkerRuntimeService {
     pub(super) fn finish_registration_update_requested(
         &self,
@@ -7,17 +23,14 @@ impl ServiceWorkerRuntimeService {
         run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
-        let (launch, update_check, completed_register_callbacks) = {
+        let start = {
             let mut state = self.inner.state.lock();
             let reject = |host: SharedRendererServiceWorkerHost,
                           error: ServiceWorkerRegistrationError| {
-                (
-                    None,
-                    None,
-                    Some((
-                        vec![ServiceWorkerRegisterJob::worker(request.request_id, host)],
-                        Err(error),
-                    )),
+                ServiceWorkerQueuedRegisterJobStart::completed(
+                    vec![ServiceWorkerRegisterJob::worker(request.request_id, host)],
+                    Err(error),
+                    Vec::new(),
                 )
             };
             match state.versions.get(&request.version_id) {
@@ -55,8 +68,8 @@ impl ServiceWorkerRuntimeService {
                         ),
                     )
                 }
-                Some(version) => match &version.running_state {
-                    ServiceWorkerVersionRunningState::Running { host } => {
+                Some(version) => match running_or_ready_starting_host(&version.running_state) {
+                    Some(host) => {
                         let host = host.clone();
                         let queued_job = state
                             .registrations
@@ -126,8 +139,7 @@ impl ServiceWorkerRuntimeService {
                             ),
                         }
                     }
-                    ServiceWorkerVersionRunningState::Starting { .. }
-                    | ServiceWorkerVersionRunningState::Stopped => reject(
+                    None => reject(
                         source_host,
                         ServiceWorkerRegistrationError::type_error(
                             "Failed to execute 'update' on 'ServiceWorkerRegistration': service worker is not running.",
@@ -136,7 +148,7 @@ impl ServiceWorkerRuntimeService {
                 },
             }
         };
-        self.finish_queued_register_job_start(launch, update_check, completed_register_callbacks);
+        self.finish_queued_register_job_start(start);
     }
 
     pub(super) fn finish_show_notification_requested(

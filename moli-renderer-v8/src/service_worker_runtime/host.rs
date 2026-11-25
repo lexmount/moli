@@ -713,9 +713,7 @@ impl RendererServiceWorkerHost {
             script,
             bootstrap_completion_tx,
         );
-        if let Some(receiver) = handle.take_receiver() {
-            spawn_parent_message_pump(service.clone(), Arc::clone(self), receiver);
-        }
+        let receiver = handle.take_receiver();
         let mut state = self.state.lock();
         if !matches!(*state, RendererServiceWorkerHostState::Loading) {
             drop(state);
@@ -726,6 +724,9 @@ impl RendererServiceWorkerHost {
             handle: Some(handle),
         };
         drop(state);
+        if let Some(receiver) = receiver {
+            spawn_parent_message_pump(service.clone(), Arc::clone(self), receiver);
+        }
         #[cfg(feature = "devtools")]
         if service.take_devtools_evaluation_release_for_version(params.run_owner.version_id()) {
             self.run_if_waiting_for_debugger_for_devtools();

@@ -62,7 +62,13 @@ impl ServiceWorkerRuntimeService {
                     return;
                 }
                 version.final_script_url = Some(final_script_url);
-                version.main_script_resource = script_resource;
+                // Preserve an already-installed version's stored main script resource across
+                // restarts so an in-flight update check started during Starting does not go stale.
+                if version.lifecycle_state == ServiceWorkerVersionLifecycleState::Installing
+                    || version.main_script_resource.is_none()
+                {
+                    version.main_script_resource = script_resource;
+                }
                 version.fetch_handler_existence = match fetch_handler_type {
                     ServiceWorkerFetchHandlerType::NoHandler => {
                         ServiceWorkerFetchHandlerExistence::DoesNotExist

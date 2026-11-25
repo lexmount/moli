@@ -1874,3 +1874,168 @@ async fn service_worker_global_scope_registration_update_rejects_while_installin
         .await
         .expect("service worker self update server should finish");
 }
+
+#[tokio::test]
+async fn service_worker_global_scope_top_level_update_succeeds_after_worker_restart() {
+    let worker_v1 = r#"
+        const topLevelUpdatePromise = self.registration.update().then(
+          updated => ({
+            outcome: "resolved",
+            sameRegistration: updated === self.registration
+          }),
+          error => ({
+            outcome: "rejected",
+            name: error && error.name,
+            message: String(error && error.message)
+          })
+        );
+        self.addEventListener("install", event => {
+          event.waitUntil(self.skipWaiting());
+        });
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+        self.addEventListener("message", event => {
+          event.waitUntil(
+            topLevelUpdatePromise.then(result => {
+              event.ports[0].postMessage(JSON.stringify({
+                version: "v1",
+                topLevelUpdate: result
+              }));
+            })
+          );
+        });
+    "#;
+    let worker_v2 = r#"
+        self.addEventListener("install", event => {
+          event.waitUntil(self.skipWaiting());
+        });
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+        self.addEventListener("message", event => {
+          event.ports[0].postMessage(JSON.stringify({ version: "v2" }));
+        });
+    "#;
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            worker_v1,
+        ),
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            worker_v1,
+        ),
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            worker_v2,
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+        (() => {
+          globalThis.__swRestartStep1Done = false;
+          globalThis.__swRestartStep1Probe = "pending";
+          globalThis.__swRestartAskWorker = worker => new Promise(resolve => {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = event => resolve(JSON.parse(event.data));
+            worker.postMessage("status", [channel.port2]);
+          });
+          (async () => {
+            const reg = await navigator.serviceWorker.register("worker.js", { scope: "./" });
+            await navigator.serviceWorker.ready;
+            globalThis.__swRestartReg = reg;
+            const initialReply = await globalThis.__swRestartAskWorker(reg.active);
+            globalThis.__swRestartStep1Probe = JSON.stringify({
+              version: initialReply.version,
+              outcome: initialReply.topLevelUpdate.outcome,
+              name: initialReply.topLevelUpdate.name,
+              mentionsInstalling: String(initialReply.topLevelUpdate.message).includes("installing")
+            });
+          })().catch(error => {
+            globalThis.__swRestartStep1Probe =
+              "error:" + (error && error.name) + ":" + (error && error.message);
+          }).finally(() => {
+            globalThis.__swRestartStep1Done = true;
+          });
+        })()
+        "#,
+    )
+    .expect("step 1 probe should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__swRestartStep1Done)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__swRestartStep1Probe)").unwrap(),
+        r#"{"version":"v1","outcome":"rejected","name":"TypeError","mentionsInstalling":true}"#
+    );
+
+    // Stop the active worker so the next message restarts it while already installed.
+    browser_context_runtime
+        .service_worker_runtime()
+        .stop_all_running_hosts_for_test();
+
+    vm.eval(
+        r#"
+        (() => {
+          globalThis.__swRestartStep2Done = false;
+          globalThis.__swRestartStep2Probe = "pending";
+          (async () => {
+            const reg = globalThis.__swRestartReg;
+            const controllerChanged = new Promise(resolve => {
+              navigator.serviceWorker.addEventListener("controllerchange", () => resolve(true), { once: true });
+            });
+            const restartedReply = await globalThis.__swRestartAskWorker(reg.active);
+            await controllerChanged;
+            const updatedReply = await globalThis.__swRestartAskWorker(reg.active);
+            globalThis.__swRestartStep2Probe = JSON.stringify({
+              restartedVersion: restartedReply.version,
+              topLevelOutcome: restartedReply.topLevelUpdate.outcome,
+              topLevelSameRegistration: restartedReply.topLevelUpdate.sameRegistration,
+              afterVersion: updatedReply.version
+            });
+          })().catch(error => {
+            globalThis.__swRestartStep2Probe =
+              "error:" + (error && error.name) + ":" + (error && error.message);
+          }).finally(() => {
+            globalThis.__swRestartStep2Done = true;
+          });
+        })()
+        "#,
+    )
+    .expect("step 2 probe should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__swRestartStep2Done)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__swRestartStep2Probe)").unwrap(),
+        r#"{"restartedVersion":"v1","topLevelOutcome":"resolved","topLevelSameRegistration":true,"afterVersion":"v2"}"#
+    );
+
+    server
+        .await
+        .expect("service worker restart update server should finish");
+}
