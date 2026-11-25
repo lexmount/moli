@@ -332,3 +332,13 @@ mod ui_properties;
 pub(in crate::context_bootstrap) use ui_properties::ui_event_which_getter_function;
 
 pub(crate) use self::base::event_trusted;
+
+pub(crate) fn construct_original_before_unload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let event = new_uninitialized_before_unload_event(scope)?;
+    let backing = event_backing(scope, event);
+    base::initialize_event_object(scope, backing, "beforeunload", false, true);
+    mark_event_trusted(scope, event);
+    Some(event)
+}
