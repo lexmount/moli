@@ -690,8 +690,9 @@ fn stylo_pdb_style_property(
     value: &str,
     priority: bool,
 ) -> Option<(ParsedStylePropertyEntries, Option<ParsedCssomProperty>)> {
-    let affected_names = moli_css_parse::CssDeclarationBlock::affected_names_for_property(name)?;
     if value.is_empty() {
+        let affected_names =
+            moli_css_parse::CssDeclarationBlock::affected_names_for_property(name)?;
         return Some((
             ParsedStylePropertyEntries {
                 entries: Vec::new(),
@@ -700,7 +701,7 @@ fn stylo_pdb_style_property(
             None,
         ));
     }
-    let native = ParsedCssomProperty::parse_without_document(name, value, priority)?;
+    let native = moli_css_parse::parse_cssom_property_without_document(name, value, priority)?;
     let unresolved =
         native.has_unresolved_value() || css_value_uses_unresolved_cssom_storage(value);
     let block_entries = if unresolved {
@@ -712,19 +713,16 @@ fn stylo_pdb_style_property(
     } else {
         native.entries()?
     };
-    let stored_names = block_entries
-        .iter()
-        .map(|entry| entry.name.clone())
-        .collect::<Vec<_>>();
     let mut entries = Vec::with_capacity(block_entries.len());
     for entry in block_entries {
         let entry_name = canonical_style_property_name(&entry.name);
         let is_declared_empty_custom_property =
             entry.value.is_empty() && moli_css_parse::is_cssom_custom_property_name(&entry_name);
+        let renamed = entry_name != entry.name && entry_name != name;
         if entry_name.is_empty()
             || entry.value.is_empty() && !is_declared_empty_custom_property
             || entry.priority != priority
-            || entry_name != name && !stored_names.contains(&entry_name)
+            || renamed && (unresolved || !native.contains_entry_name(&entry_name))
         {
             return None;
         }
@@ -737,7 +735,7 @@ fn stylo_pdb_style_property(
     Some((
         ParsedStylePropertyEntries {
             entries,
-            affected_names,
+            affected_names: native.affected_names(),
         },
         (name != "all" && !unresolved).then_some(native),
     ))
