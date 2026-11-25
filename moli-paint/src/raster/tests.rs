@@ -966,6 +966,7 @@ fn html_text_shadow_uses_fill_ink_in_both_paint_orders() {
     }
 }
 
+#[cfg(feature = "molio")]
 #[test]
 fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
     let mut first = snapshot(96, 120, 2.0);

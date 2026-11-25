@@ -13,7 +13,9 @@ mod filters;
 #[cfg(test)]
 mod tests;
 
-use crate::geometry::{device_transform, to_backend_rect, to_backend_shape};
+#[cfg(feature = "molio")]
+use crate::geometry::to_backend_rect;
+use crate::geometry::{device_transform, to_backend_shape};
 use crate::scene::{paint_fragment, sanitize_unit, to_backend_blend_mode, to_backend_color};
 use crate::validation::validate_fragment_stream;
 use crate::{PaintError, RasterImage};
@@ -21,15 +23,17 @@ use anyrender::ImageRenderer;
 use anyrender::PaintScene;
 use anyrender_vello_cpu::VelloCpuImageRenderer;
 use filters::{apply_software_color_filter, is_software_color_filter};
-use moli_layout::{
-    PaintCaptureSurface, PaintColor, PaintFragment, PaintSnapshot, pixel_snap_paint_rect,
-};
+#[cfg(feature = "molio")]
+use moli_layout::pixel_snap_paint_rect;
+use moli_layout::{PaintCaptureSurface, PaintColor, PaintFragment, PaintSnapshot};
 use peniko::kurbo::{Affine, Rect};
 use peniko::{
     Blob, Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
     ImageSampler,
 };
-use std::{ops::Range, sync::Arc};
+#[cfg(feature = "molio")]
+use std::ops::Range;
+use std::sync::Arc;
 
 /// Maximum estimated RGBA bytes simultaneously owned by the output and nested
 /// filter surfaces in one raster call.
@@ -100,6 +104,7 @@ pub fn raster_snapshot_into(
 /// Finds the affected device-pixel rows when a snapshot only changes raster
 /// image contents. Anything that may change other paint or sample outside the
 /// damaged rows conservatively invalidates the viewport.
+#[cfg(feature = "molio")]
 pub fn raster_damage_rows(
     previous: &PaintSnapshot,
     current: &PaintSnapshot,
@@ -173,6 +178,7 @@ pub fn raster_damage_rows(
 /// Repaints full-width rows of an existing viewport buffer, rounded out to
 /// backend tile rows. Other rows retain the pixels established by damage
 /// tracking. Filter-bearing snapshots use the regular full-surface path.
+#[cfg(feature = "molio")]
 pub fn raster_snapshot_rows_into(
     snapshot: &PaintSnapshot,
     pixels: &mut [u8],
