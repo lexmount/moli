@@ -176,6 +176,44 @@ fn native_snapshot_batch_observes_attribute_and_state_changes_together() {
 }
 
 #[test]
+fn media_playing_invalidates_cached_style_without_a_paused_rule() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let video = host.create_element("video");
+    assert!(host.append_child(document, video));
+
+    let mut engine = MoliStyleEngine::new();
+    let url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(
+        "video { color: blue } video:playing { color: red }".into(),
+        url.clone(),
+    );
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
+    let color = |engine: &MoliStyleEngine, host: &DomHost| {
+        engine
+            .computed_style_property_value(host, &url, video, "color", None, &inputs, None)
+            .unwrap()
+    };
+    assert_eq!(color(&engine, &host), "rgb(0, 0, 255)");
+
+    let emulated_media = crate::protocol_types::EmulatedMediaOverrides::default();
+    for (paused, expected) in [(false, "rgb(255, 0, 0)"), (true, "rgb(0, 0, 255)")] {
+        let old_state = engine.retained_current_element_state(&host, video).unwrap();
+        assert!(host.set_media_paused(video, paused));
+        engine.invalidate_for_element_state_change_with_old_state(
+            &host,
+            video,
+            dom::ElementState::PAUSED,
+            Some(old_state),
+            &emulated_media,
+        );
+        assert_eq!(color(&engine, &host), expected);
+    }
+}
+
+#[test]
 fn namespaced_attribute_mutation_updates_a_cached_sibling() {
     let mut host = test_host();
     let document = host.document_handle();

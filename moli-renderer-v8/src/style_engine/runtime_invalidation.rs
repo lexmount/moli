@@ -230,6 +230,9 @@ impl MoliStyleEngine {
             self.invalidation_cleanup_for_world(&world)
                 .invalidate_subtrees(host, [element]);
         }
+        // The snapshot matcher tests PAUSED positively for :playing.
+        // Recheck these state changes with the native invalidation walk.
+        let old_state = old_state.filter(|_| !state.contains(StyloElementState::PAUSED));
         self.queue_state_snapshot(
             &world,
             host,
