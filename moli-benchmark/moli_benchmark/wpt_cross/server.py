@@ -645,6 +645,7 @@ _HOST_TEMPLATE_RE = re.compile(
 # keys retain Unicode while the resulting hostnames use ASCII IDNA labels.
 _WPT_SUBDOMAIN_LABELS = ("www", "www1", "www2", "天気の良い日", "élève")
 _WPT_ALTERNATE_HOSTNAME = "alt.localhost"
+WPT_MIXED_CONTENT_HOSTNAME = "web-platform.test"
 _WPT_SUBDOMAIN_PREFIXES = {
     b"": b"",
     **{
@@ -2402,6 +2403,13 @@ requestExecutor("{executor_uuid}", {start_on_js});
             https_port = int(getattr(self.server, "wpt_https_port", port))
             alternate_https_port = int(getattr(self.server, "wpt_alternate_https_port", https_port))
             hostname = _host_header_hostname(self.headers.get("Host"))
+            primary_hostname = str(getattr(self.server, "wpt_primary_hostname", hostname))
+            normalized_hostname = hostname.lower()
+            if (
+                normalized_hostname == WPT_MIXED_CONTENT_HOSTNAME
+                or normalized_hostname.endswith("." + WPT_MIXED_CONTENT_HOSTNAME)
+            ):
+                primary_hostname = WPT_MIXED_CONTENT_HOSTNAME
             return {
                 "port": port, "alternate_port": alternate_port,
                 "remote_port": int(getattr(self.server, "wpt_remote_port", alternate_port)),
@@ -2410,7 +2418,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 "request_port": int(self.server.server_address[1]),
                 "request_scheme": str(getattr(self.server, "wpt_request_scheme", "http")),
                 "request_path": path, "request_hostname": hostname,
-                "primary_hostname": str(getattr(self.server, "wpt_primary_hostname", hostname)),
+                "primary_hostname": primary_hostname,
                 "request_headers": self.headers,
             }
 
@@ -4493,7 +4501,10 @@ class WptFixtureServer:
             self.fetch_stash, self._stopping,
         )
         self.external_host = _global_ipv6_address()
-        self.tls = FixtureCertificateAuthority(self.primary_hostname, self.external_host)
+        self.tls = FixtureCertificateAuthority(
+            self.primary_hostname, self.external_host,
+            additional_hostnames=(WPT_MIXED_CONTENT_HOSTNAME,),
+        )
         self._listeners: list[ThreadingHTTPServer] = []
         self._listener_threads: list[threading.Thread] = []
 
@@ -4630,7 +4641,7 @@ class WptFixtureServer:
     def loopback_host_resolutions(self) -> tuple[str, ...]:
         """Resolve the fixture's template hostnames directly to its local listeners."""
         hostnames = {"localhost"}
-        for base in (self.primary_hostname, _WPT_ALTERNATE_HOSTNAME):
+        for base in (self.primary_hostname, _WPT_ALTERNATE_HOSTNAME, WPT_MIXED_CONTENT_HOSTNAME):
             hostnames.update(prefix.decode("ascii") + base for prefix in _WPT_SUBDOMAIN_PREFIXES.values())
         ports = (self.port, self.alternate_port, self.https_port, self.alternate_https_port)
         return tuple(f"{host}:{port}:127.0.0.1" for host in sorted(hostnames) for port in ports)
@@ -4658,10 +4669,15 @@ class WptFixtureServer:
         }.items():
             setattr(httpd, name, value)
 
-    def url_for_case(self, case_path: str, *, external: bool = False) -> str:
+    def url_for_case(
+        self, case_path: str, *, external: bool = False, mixed_content: bool = False,
+    ) -> str:
         # This is the authored WPT transport flag, not a change to the case.
         secure = ".https." in urlsplit(case_path).path
-        if secure:
+        if mixed_content:
+            scheme, port = ("https", self.https_port) if secure else ("http", self.port)
+            base = f"{scheme}://{WPT_MIXED_CONTENT_HOSTNAME}:{port}"
+        elif secure:
             base = self.external_https_base_url if external and self.external_https_base_url else self.https_base_url
         else:
             base = self.external_base_url if external and self.external_base_url else self.base_url

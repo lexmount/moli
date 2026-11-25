@@ -103,6 +103,10 @@ NON_TRUSTWORTHY_ORIGIN_CASES = frozenset(
         "pointerevents/pointerevent_constructor.html",
     }
 )
+MIXED_CONTENT_ORIGIN_CASES = frozenset({
+    "service-workers/service-worker/fetch-mixed-content-to-inscope.https.html",
+    "service-workers/service-worker/fetch-mixed-content-to-outscope.https.html",
+})
 
 
 def _positive_parallelism(value: str) -> int:
@@ -130,9 +134,17 @@ def _case_requires_non_trustworthy_origin(case_path: str) -> bool:
     )
 
 
+def _case_requires_mixed_content_origin(case_path: str) -> bool:
+    return urlsplit(case_path).path.lstrip("/") in MIXED_CONTENT_ORIGIN_CASES
+
+
 def _url_for_case_origin(server: Any, case_path: str, *, external: bool) -> str:
     if external:
         return server.url_for_case(case_path, external=True)
+    if _case_requires_mixed_content_origin(case_path):
+        # An HTTP .localhost target is potentially trustworthy even when the
+        # test needs a trustworthy HTTPS client and an insecure HTTP target.
+        return server.url_for_case(case_path, mixed_content=True)
     if _case_requires_trustworthy_origin(case_path):
         return server.url_for_case(case_path, external=False)
     if _case_requires_non_trustworthy_origin(case_path) and server.external_base_url:
@@ -717,6 +729,7 @@ def main(argv: list[str] | None = None) -> int:
     engine_results: dict[str, list[dict[str, Any]]] = {}
     engine_metadata: dict[str, dict[str, Any]] = {}
 
+    mixed_content_fixture = any(_case_requires_mixed_content_origin(case.case_path) for case in cases)
     with WptFixtureServer(args.wpt_root, primary_hostname="web-platform.localhost") as server:
         meta_path = output_dir / "fixture-server.json"
         meta_path.write_text(
@@ -835,7 +848,7 @@ def main(argv: list[str] | None = None) -> int:
                     parallelism=args.parallelism,
                 )
             else:
-                if engine == "moli":
+                if engine == "moli" or (engine == "chrome" and mixed_content_fixture):
                     driver = driver.with_http_host_resolutions(server.loopback_host_resolutions())
                 print(
                     f"[wpt-cross] running {engine} (CDP mode) on {len(cases_for_engine)} cases via fixture origins",
