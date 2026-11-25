@@ -10,22 +10,20 @@ pub(in crate::context_bootstrap::css_runtime::supports) fn css_supports_property
     value: &str,
 ) -> bool {
     let property_trimmed = property.trim();
-    let value_trimmed = value.trim();
     if property_trimmed.is_empty()
-        || value_trimmed.is_empty()
+        || value.is_empty()
         || property_trimmed != property
         || property_trimmed.contains(char::is_whitespace)
         || property_trimmed.contains(':')
         || property_trimmed.contains('\\')
-        || value_trimmed.contains('\n')
-        || moli_css_parse::split_important_priority(value_trimmed).1
+        || moli_css_parse::split_important_priority(value).1
     {
         return false;
     }
 
     let property_lower = property_trimmed.to_ascii_lowercase();
     let canonical_property = moli_css_parse::canonical_style_property_name(property_trimmed);
-    let value_lower = value_trimmed.to_ascii_lowercase();
+    let value_lower = value.trim().to_ascii_lowercase();
 
     if property_lower.starts_with("--")
         && !moli_css_parse::is_cssom_custom_property_name(property_trimmed)
@@ -38,19 +36,22 @@ pub(in crate::context_bootstrap::css_runtime::supports) fn css_supports_property
         return false;
     }
 
-    if !moli_css_parse::css_declaration_value_has_valid_env_functions(value_trimmed) {
+    if !moli_css_parse::css_declaration_value_has_valid_env_functions(value) {
         return false;
     }
 
     if crate::detached_css_style::css_style_declaration_is_shell_property(&canonical_property) {
-        return crate::css_style::parse_css_style_shell_keyword(value_trimmed).is_some();
+        return crate::css_style::parse_css_style_shell_keyword(value).is_some();
     }
 
-    if super::stylo_supports_property_value(&canonical_property, value_trimmed) {
+    // Preserve the value token stream: newlines can be CSS whitespace or a
+    // string continuation, and whitespace-only custom values are valid.
+    if super::stylo_supports_property_value(&canonical_property, value) {
         return true;
     }
 
-    if values::is_css_wide_keyword(&value_lower) && supports_css_wide_keywords(&canonical_property)
+    if crate::css_style::parse_css_style_shell_keyword(value).is_some()
+        && supports_css_wide_keywords(&canonical_property)
     {
         return true;
     }
@@ -63,7 +64,7 @@ pub(in crate::context_bootstrap::css_runtime::supports) fn css_supports_property
         return false;
     }
 
-    cssom_write_compat_supports_property_value(&canonical_property, value_trimmed)
+    cssom_write_compat_supports_property_value(&canonical_property, value)
 }
 
 fn supports_css_wide_keywords(property: &str) -> bool {
@@ -89,6 +90,58 @@ fn legacy_css_supports_property_name(property: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn css_supports_preserves_multiline_value_tokens() {
+        for (property, value) in [
+            ("color", "rgb(\n0 128 0\n)"),
+            ("color", "var(--color,\nred)"),
+            ("content", "\"a\\\nb\""),
+            ("width", "calc(1px +\n2px)"),
+            ("font-variation-settings", "\"wght\"\n600"),
+            ("--tokens", "a\nb"),
+            ("--tokens", "\n"),
+            ("--tokens", " \t\r\n\x0c "),
+        ] {
+            assert!(
+                css_supports_property_value(property, value),
+                "{property}: {value:?}"
+            );
+            assert!(super::super::css_supports_condition_text(&format!(
+                "({property}: {value})"
+            )));
+        }
+        assert!(!css_supports_property_value("content", "\"a\nb\""));
+        assert!(!css_supports_property_value("color", "\n"));
+        assert!(!css_supports_property_value("color", "/**/"));
+        assert!(!css_supports_property_value("--tokens", ""));
+    }
+
+    #[test]
+    fn css_supports_preserves_literal_names_and_value_fragment_boundaries() {
+        for property in [" color", "color ", "co\\6cor", "color/**/", "--"] {
+            assert!(!css_supports_property_value(property, "initial"));
+        }
+        for (property, value) in [
+            ("color", "red; color: blue"),
+            ("color", "red !important"),
+            ("color", "red !impor\\74 ant"),
+            ("font-optical-sizing", "initial !important"),
+            ("timeline-trigger", "initial !important"),
+            ("--tokens", "value !important"),
+            ("--tokens", "a;b"),
+        ] {
+            assert!(!css_supports_property_value(property, value));
+        }
+        assert!(css_supports_property_value("COLOR", "red"));
+        assert!(css_supports_property_value("content", "\"!important\""));
+        assert!(super::super::css_supports_condition_text(
+            "(color: red !important)"
+        ));
+        assert!(super::super::css_supports_condition_text(
+            "(timeline-trigger: initial !important)"
+        ));
+    }
 
     #[test]
     fn css_supports_matches_chromium_for_former_gecko_property_gates() {
