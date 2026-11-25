@@ -781,14 +781,20 @@ where
     }
 
     pub(crate) fn replace_retained_leaf(&mut self, id: LayoutBoxId, source: N) {
-        let mut replacement = self.boxes.pop().expect("the new leaf was appended");
+        let replacement = self.boxes.pop().expect("the new leaf was appended");
+        self.replace_retained_box(id, replacement);
+        self.source_mapping.insert(source, id);
+    }
+
+    pub(crate) fn replace_retained_box(&mut self, id: LayoutBoxId, mut replacement: LayoutBox<N>) {
         self.clear_layout_caches(id);
-        let old = &self.boxes[id.index()];
+        let old = &mut self.boxes[id.index()];
         replacement.structural_parent = old.structural_parent;
         replacement.parent = old.parent;
         replacement.cache_slot = old.cache_slot;
+        replacement.children = std::mem::take(&mut old.children);
+        replacement.inline_formatting_context = old.inline_formatting_context;
         self.boxes[id.index()] = replacement;
-        self.source_mapping.insert(source, id);
     }
 
     pub(crate) fn numeric_cache(&mut self, id: LayoutBoxId) -> Option<&mut Cache> {
@@ -979,6 +985,77 @@ where
         self.source_mapping.entry(source).or_insert(id);
     }
 
+    pub(crate) fn unmap_box_subtree(&mut self, root: LayoutBoxId) {
+        let mut pending = vec![root];
+        while let Some(id) = pending.pop() {
+            let layout_box = &self.boxes[id.index()];
+            if let Some(source) = layout_box.source {
+                self.source_mapping.remove(&source);
+            }
+            pending.extend(layout_box.children.iter().copied());
+        }
+    }
+
+    pub(crate) fn preorder(&self) -> Vec<LayoutBoxId> {
+        let mut order = Vec::with_capacity(self.boxes.len());
+        let mut pending = vec![self.root];
+        while let Some(id) = pending.pop() {
+            order.push(id);
+            pending.extend(self.boxes[id.index()].children.iter().rev().copied());
+        }
+        order
+    }
+
+    /// Keeps the existing box allocation and restores dense source order.
+    /// The numeric relationships are recomputed before the next measurement.
+    pub(crate) fn compact_for_reuse(&mut self, order: Vec<LayoutBoxId>) {
+        let previous_len = self.boxes.len();
+        if order.len() == previous_len
+            && order
+                .iter()
+                .enumerate()
+                .all(|(new, old)| old.index() == new)
+        {
+            return;
+        }
+        let live_count = order.len();
+        let mut remap = vec![None; previous_len];
+        let mut positions: Vec<_> = (0..previous_len).collect();
+        let mut original_ids = positions.clone();
+        for (new, old) in order.into_iter().enumerate() {
+            let old = old.index();
+            let previous = positions[old];
+            let displaced = original_ids[new];
+            self.boxes.swap(previous, new);
+            original_ids.swap(previous, new);
+            positions[displaced] = previous;
+            positions[old] = new;
+            remap[old] = Some(LayoutBoxId::from_index(new));
+        }
+        self.boxes.truncate(live_count);
+        self.remap_construction_links(&remap);
+        self.numeric_layout_touched_marks.truncate(self.boxes.len());
+        self.compact_cache_slots();
+    }
+
+    fn compact_cache_slots(&mut self) {
+        let mut owners = vec![None; self.box_caches.len()];
+        for (index, layout_box) in self.boxes.iter().enumerate() {
+            if let Some(slot) = layout_box.cache_slot {
+                owners[(slot.get() - 1) as usize] = Some(index);
+            }
+        }
+        let mut next = 0;
+        for (old, owner) in owners.into_iter().enumerate() {
+            if let Some(owner) = owner {
+                self.box_caches.swap(old, next);
+                next += 1;
+                self.boxes[owner].cache_slot = NonZeroU32::new(next as u32);
+            }
+        }
+        self.box_caches.truncate(next);
+    }
+
     pub(crate) fn map_display_contents_source(&mut self, source: N, child_boxes: &[LayoutBoxId]) {
         self.display_contents_mapping
             .entry(source)
@@ -1089,23 +1166,36 @@ where
         }
 
         let mut compacted = Vec::with_capacity(next_index);
-        for (index, mut layout_box) in self.boxes.drain(..).enumerate() {
+        for (index, layout_box) in self.boxes.drain(..).enumerate() {
             if !reachable[index] {
                 continue;
             }
+            compacted.push(layout_box);
+        }
+        self.boxes = compacted;
+        self.remap_construction_links(&remap);
+    }
+
+    fn remap_construction_links(&mut self, remap: &[Option<LayoutBoxId>]) {
+        for layout_box in &mut self.boxes {
             layout_box.structural_parent = layout_box
                 .structural_parent
                 .and_then(|parent| remap[parent.index()]);
             layout_box.parent = layout_box.parent.and_then(|parent| remap[parent.index()]);
-            layout_box.children = layout_box
-                .children
-                .into_iter()
-                .filter_map(|child| remap[child.index()])
-                .collect();
-            compacted.push(layout_box);
+            layout_box.children.retain_mut(|child| {
+                let Some(remapped) = remap[child.index()] else {
+                    return false;
+                };
+                *child = remapped;
+                true
+            });
         }
-        self.boxes = compacted;
         self.root = remap[self.root.index()].expect("the layout root is always reachable");
+        if let ViewportDefiningBox::Body(body) = self.viewport_scroll_policy.defining_box {
+            self.viewport_scroll_policy.defining_box = ViewportDefiningBox::Body(
+                remap[body.index()].expect("reusable viewport body must remain attached"),
+            );
+        }
         self.source_mapping.retain(|_, id| {
             let Some(remapped) = remap[id.index()] else {
                 return false;
