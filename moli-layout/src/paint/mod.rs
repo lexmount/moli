@@ -16,14 +16,14 @@ mod text;
 use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use background::{project_background_color, project_background_layers};
-use border::{BorderImageRasters, project_box_border};
+use border::{BorderImageGeometry, BorderImageRasters, border_image_area, project_box_border};
 use clip_path::{ClipPathUnsupported, project_clip_path};
 use cull::{PaintCullPlan, PaintCullRegion};
 use filters::{expanded_filter_clip, project_filters};
 use form_controls::project_form_control_appearance;
 use geometry::{BoxAreas, BoxModelBox, canonical_shape, inset_radii};
 use image::project_replaced_image;
-use inline_boxes::project_inline_box_fragments;
+use inline_boxes::{InlineBorderImages, inline_border_images, project_inline_box_fragments};
 use mask::{CssMaskPlan, inspect_css_mask, project_css_mask};
 use scrollbar::project_scrollbars;
 use style::values::generics::image::GenericImage;
@@ -188,7 +188,8 @@ where
     snapshot
         .diagnostics
         .extend_from_slice(projection.diagnostics);
-    let cull_plan = PaintCullPlan::build(projection);
+    let inline_images = inline_border_images(projection);
+    let cull_plan = PaintCullPlan::build(projection, &inline_images);
     let mut border_rasters = BorderImageRasters::default();
     let mut metrics = PaintProjectionMetrics {
         event_count: projection.metadata.events.len(),
@@ -480,6 +481,7 @@ where
                     capture.include_backgrounds,
                     current_cull,
                     &mut metrics,
+                    &inline_images,
                     &mut border_rasters,
                     &mut snapshot,
                 );
@@ -534,6 +536,7 @@ where
                     capture.include_backgrounds,
                     current_cull,
                     &mut metrics,
+                    &inline_images,
                     &mut border_rasters,
                     &mut snapshot,
                 );
@@ -920,11 +923,18 @@ fn project_box_background<N>(
         snapshot.push_fragment(PaintFragment::BoxShadow(shadow.clone()));
     }
     if !layout_box.collapsed_table_border_part {
+        let border_image =
+            border_image_area(&layout_box.style, rect, widths).map(|area| BorderImageGeometry {
+                area,
+                widths,
+                fragment_clip: None,
+            });
         project_box_border(
             layout_box,
             rect,
             widths,
             radii,
+            border_image,
             paint_space,
             || {
                 cull.local_rect(
@@ -1134,6 +1144,7 @@ fn project_inline_contents<N>(
     include_backgrounds: bool,
     cull: PaintCullRegion,
     metrics: &mut PaintProjectionMetrics,
+    inline_images: &InlineBorderImages,
     border_rasters: &mut BorderImageRasters,
     snapshot: &mut PaintSnapshot,
 ) where
@@ -1158,11 +1169,12 @@ fn project_inline_contents<N>(
         );
     };
     project_inline_box_fragments(
-        projection.world,
-        layout_box,
+        projection,
+        id,
         selected_fragment,
         paint_space,
         include_backgrounds,
+        inline_images,
         border_rasters,
         snapshot,
         local_cull,

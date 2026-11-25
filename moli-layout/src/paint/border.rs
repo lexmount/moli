@@ -1,14 +1,11 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Debug, hash::Hash, ops::Range, sync::Arc};
 
-use style::{
-    properties::style_structs::Border,
-    values::{
-        computed::{
-            Length, NonNegativeLengthOrNumber, NumberOrPercentage, border::BorderImageSideWidth,
-        },
-        generics::{image::GenericImage, length::GenericLengthOrNumber, rect::Rect},
-        specified::{border::BorderImageRepeatKeyword as Repeat, image::ImageRendering},
+use style::values::{
+    computed::{
+        Length, NonNegativeLengthOrNumber, NumberOrPercentage, border::BorderImageSideWidth,
     },
+    generics::{image::GenericImage, length::GenericLengthOrNumber, rect::Rect},
+    specified::{border::BorderImageRepeatKeyword as Repeat, image::ImageRendering},
 };
 
 use super::{PaintSpace, background::css_image_concrete_object_size, push_diagnostic_once};
@@ -19,11 +16,25 @@ use crate::{
     pixel_snap_paint_rect,
 };
 
+#[derive(Clone, Copy)]
+pub(super) struct BorderImageGeometry {
+    pub(super) area: LayoutRect,
+    pub(super) widths: PaintEdgeSizes,
+    pub(super) fragment_clip: Option<LayoutRect>,
+}
+
+impl BorderImageGeometry {
+    pub(super) fn ink_bounds(self) -> LayoutRect {
+        self.fragment_clip.unwrap_or(self.area)
+    }
+}
+
 pub(super) fn project_box_border<N>(
     layout_box: &LayoutBox<N>,
     rect: LayoutRect,
     widths: PaintEdgeSizes,
     radii: PaintCornerRadii,
+    border_image: Option<BorderImageGeometry>,
     paint_space: PaintSpace,
     local_cull: impl FnOnce() -> Option<LayoutRect>,
     rasters: &mut BorderImageRasters,
@@ -31,15 +42,16 @@ pub(super) fn project_box_border<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    if project_border_image(
-        layout_box,
-        rect,
-        widths,
-        paint_space,
-        local_cull,
-        rasters,
-        snapshot,
-    ) {
+    if let Some(geometry) = border_image
+        && project_border_image(
+            layout_box,
+            geometry,
+            paint_space,
+            local_cull,
+            rasters,
+            snapshot,
+        )
+    {
         return;
     }
     let colors = layout_box.style.border_colors();
@@ -60,11 +72,18 @@ pub(super) fn border_image_area(
     rect: LayoutRect,
     widths: PaintEdgeSizes,
 ) -> Option<LayoutRect> {
-    let computed = style.stylo_computed_values()?;
-    outset_area(computed.get_border(), rect, widths)
+    Some(outset_border_image_rect(
+        rect,
+        border_image_outsets(style, widths)?,
+    ))
 }
 
-fn outset_area(border: &Border, rect: LayoutRect, widths: PaintEdgeSizes) -> Option<LayoutRect> {
+pub(super) fn border_image_outsets(
+    style: &ResolvedLayoutStyle,
+    widths: PaintEdgeSizes,
+) -> Option<PaintEdgeSizes> {
+    let computed = style.stylo_computed_values()?;
+    let border = computed.get_border();
     if !matches!(
         border.border_image_source,
         GenericImage::Gradient(_) | GenericImage::Url(_)
@@ -79,22 +98,30 @@ fn outset_area(border: &Border, rect: LayoutRect, widths: PaintEdgeSizes) -> Opt
     }
 
     let Rect(top, right, bottom, left) = border.border_image_outset;
-    let top = resolve(top, widths.top);
-    let right = resolve(right, widths.right);
-    let bottom = resolve(bottom, widths.bottom);
-    let left = resolve(left, widths.left);
-    Some(LayoutRect::new(
-        rect.x - left,
-        rect.y - top,
-        rect.width + left + right,
-        rect.height + top + bottom,
+    Some(PaintEdgeSizes::new(
+        resolve(top, widths.top),
+        resolve(right, widths.right),
+        resolve(bottom, widths.bottom),
+        resolve(left, widths.left),
     ))
+}
+
+pub(super) fn outset_border_image_rect(rect: LayoutRect, outsets: PaintEdgeSizes) -> LayoutRect {
+    LayoutRect::new(
+        rect.x - outsets.left,
+        rect.y - outsets.top,
+        rect.width + outsets.left + outsets.right,
+        rect.height + outsets.top + outsets.bottom,
+    )
 }
 
 fn project_border_image<N>(
     layout_box: &LayoutBox<N>,
-    rect: LayoutRect,
-    widths: PaintEdgeSizes,
+    BorderImageGeometry {
+        area,
+        widths,
+        fragment_clip,
+    }: BorderImageGeometry,
     paint_space: PaintSpace,
     local_cull: impl FnOnce() -> Option<LayoutRect>,
     rasters: &mut BorderImageRasters,
@@ -107,16 +134,14 @@ where
         return false;
     };
     let border = computed.get_border();
-    let Some(area) = outset_area(border, rect, widths) else {
-        return false;
-    };
     if ![area.x, area.y, area.width, area.height]
         .into_iter()
         .all(f32::is_finite)
     {
         return false;
     }
-    let (source, image_width, image_height, natural_width, natural_height) =
+    let zoom = layout_box.style.effective_zoom();
+    let (source, image_width, image_height, natural_width, natural_height, slice_scale) =
         match &border.border_image_source {
             GenericImage::Gradient(gradient) => {
                 let image = LayoutRect::new(0.0, 0.0, area.width, area.height);
@@ -132,6 +157,7 @@ where
                     area.height,
                     false,
                     false,
+                    (zoom, zoom),
                 )
             }
             GenericImage::Url(_) => {
@@ -155,9 +181,19 @@ where
                         height,
                         true,
                         true,
+                        (1.0, 1.0),
                     )
                 } else if let Some(svg) = &resource.svg {
                     let metadata = svg.metadata();
+                    // Intrinsic SVG dimensions stay in source units. An SVG
+                    // dimension supplied by the default object size follows
+                    // that axis of the zoomed border image area.
+                    let unzoomed_area =
+                        LayoutRect::new(0.0, 0.0, area.width / zoom, area.height / zoom);
+                    let slice_scale = css_image_concrete_object_size(resource, unzoomed_area)
+                        .map_or((1.0, 1.0), |(unzoomed_width, unzoomed_height)| {
+                            (width / unzoomed_width, height / unzoomed_height)
+                        });
                     let image = snapshot.add_svg_image(svg.clone());
                     (
                         BorderImageSource::Svg(image),
@@ -165,6 +201,7 @@ where
                         height,
                         metadata.intrinsic_width.is_some(),
                         metadata.intrinsic_height.is_some(),
+                        slice_scale,
                     )
                 } else {
                     return false;
@@ -179,19 +216,19 @@ where
         return true;
     }
     let slice = &border.border_image_slice;
-    fn slice_offset(value: NumberOrPercentage, extent: f32) -> f32 {
+    fn slice_offset(value: NumberOrPercentage, extent: f32, scale: f32) -> f32 {
         match value {
-            NumberOrPercentage::Number(number) => number,
+            NumberOrPercentage::Number(number) => number * scale,
             NumberOrPercentage::Percentage(percentage) => percentage.0 * extent,
         }
         .clamp(0.0, extent)
     }
     let Rect(top, right, bottom, left) = slice.offsets;
     let slices = [
-        slice_offset(top.0, image_height),
-        slice_offset(right.0, image_width),
-        slice_offset(bottom.0, image_height),
-        slice_offset(left.0, image_width),
+        slice_offset(top.0, image_height, slice_scale.1),
+        slice_offset(right.0, image_width, slice_scale.0),
+        slice_offset(bottom.0, image_height, slice_scale.1),
+        slice_offset(left.0, image_width, slice_scale.0),
     ];
 
     fn resolve_width(
@@ -213,13 +250,13 @@ where
     let border_widths = [widths.top, widths.right, widths.bottom, widths.left];
     let area_extents = [area.height, area.width, area.height, area.width];
     let has_natural_extent = [natural_height, natural_width, natural_height, natural_width];
-    let zoom = layout_box.style.effective_zoom();
+    let slice_scales = [slice_scale.1, slice_scale.0, slice_scale.1, slice_scale.0];
     let [width_top, width_right, width_bottom, width_left] = std::array::from_fn(|side| {
         resolve_width(
             image_widths[side],
             area_extents[side],
             border_widths[side],
-            has_natural_extent[side].then_some(slices[side] * zoom),
+            has_natural_extent[side].then_some(slices[side] * zoom / slice_scales[side]),
         )
     });
     // If either pair of opposite sides overlaps, shrink all four together.
@@ -247,6 +284,15 @@ where
     let scale_y = scales(width_top / top, width_bottom / bottom);
     let repeat = border.border_image_repeat;
     let local_cull = local_cull();
+    let fragment_coverage = match fragment_clip {
+        Some(clip) => {
+            let Some(clip) = pixel_snap_paint_rect(paint_space.pre_transform_rect(clip)) else {
+                return true;
+            };
+            Some(clip)
+        }
+        None => None,
+    };
     for (row, (src_row, dst_row)) in src_y.into_iter().zip(dst_y).enumerate() {
         for (column, (src_column, dst_column)) in src_x.into_iter().zip(dst_x).enumerate() {
             if row == 1 && column == 1 && !slice.fill {
@@ -267,7 +313,9 @@ where
             } else {
                 (dst.height, Repeat::Stretch)
             };
-            let Some(visible) = intersect(dst, local_cull.unwrap_or(dst)) else {
+            let Some(visible) = intersect(dst, fragment_clip.unwrap_or(dst))
+                .and_then(|visible| intersect(visible, local_cull.unwrap_or(visible)))
+            else {
                 continue;
             };
             let x = AxisTiles::new(dst.x, dst.width, tile_width, repeat_x);
@@ -286,6 +334,9 @@ where
                 continue;
             }
             let Some(coverage) = pixel_snap_paint_rect(paint_space.pre_transform_rect(dst)) else {
+                continue;
+            };
+            let Some(coverage) = intersect(coverage, fragment_coverage.unwrap_or(coverage)) else {
                 continue;
             };
             if columns.is_empty() || rows.is_empty() {

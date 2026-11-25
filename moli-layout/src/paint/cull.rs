@@ -12,12 +12,13 @@ use super::{
     border::border_image_area,
     filters::{expanded_filter_clip, project_filters},
     geometry::BoxAreas,
+    inline_boxes::InlineBorderImages,
     text::{caret_rect, range_selection_rects},
 };
 use crate::{
-    LayoutBoxId, LayoutFragment, LayoutFragmentKind, LayoutPoint, LayoutRect, LayoutTransform2D,
-    PaintEdgeSizes, PaintFilter, PaintFragment, inline::InlinePaintBounds,
-    projection::PaintProjection, stacking::PaintOrderEvent,
+    LayoutBoxId, LayoutFragmentKind, LayoutPoint, LayoutRect, LayoutTransform2D, PaintEdgeSizes,
+    PaintFilter, PaintFragment, inline::InlinePaintBounds, projection::PaintProjection,
+    stacking::PaintOrderEvent,
 };
 
 const CULL_ANTIALIAS_MARGIN: f32 = 1.0;
@@ -106,7 +107,10 @@ pub(super) struct PaintCullPlan {
 }
 
 impl PaintCullPlan {
-    pub(super) fn build<N>(projection: &PaintProjection<'_, N>) -> Self
+    pub(super) fn build<N>(
+        projection: &PaintProjection<'_, N>,
+        inline_images: &InlineBorderImages,
+    ) -> Self
     where
         N: Copy + Debug + Eq + Hash,
     {
@@ -144,7 +148,7 @@ impl PaintCullPlan {
                     }
                 }
                 _ => {
-                    let bounds = event_ink_bounds(projection, event);
+                    let bounds = event_ink_bounds(projection, inline_images, event);
                     entries[index] = PaintCullPlanEntry {
                         bounds,
                         matching_pop: None,
@@ -176,6 +180,7 @@ impl PaintCullPlan {
 
 fn event_ink_bounds<N>(
     projection: &PaintProjection<'_, N>,
+    inline_images: &InlineBorderImages,
     event: PaintOrderEvent,
 ) -> PaintCullBounds
 where
@@ -197,8 +202,8 @@ where
                     matches!(fragment.kind, LayoutFragmentKind::InlineBox { .. })
                 })
             {
-                if let Some(area) = inline_border_image_area(projection, fragment) {
-                    bounds.include(map_box_rect(projection, id, area));
+                if let Some(image) = inline_images.get(&fragment.id) {
+                    bounds.include(map_box_rect(projection, id, image.ink_bounds()));
                 }
             }
             bounds
@@ -222,7 +227,9 @@ where
         }
         PaintOrderEvent::InlineBox { owner, fragment } => {
             let fragment = &projection.inline_fragments(owner)[fragment];
-            let rect = inline_border_image_area(projection, fragment).unwrap_or(fragment.rect);
+            let rect = inline_images
+                .get(&fragment.id)
+                .map_or(fragment.rect, |image| image.ink_bounds());
             map_box_rect(projection, owner, rect)
         }
         PaintOrderEvent::InlineText { owner, line, .. } => {
@@ -269,30 +276,6 @@ where
     } else {
         bounds
     }
-}
-
-fn inline_border_image_area<N>(
-    projection: &PaintProjection<'_, N>,
-    fragment: &LayoutFragment,
-) -> Option<LayoutRect>
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let LayoutFragmentKind::InlineBox { box_id, .. } = fragment.kind else {
-        return None;
-    };
-    let model = fragment.box_model.as_ref()?;
-    let widths = PaintEdgeSizes::new(
-        model.padding.y - model.border.y,
-        model.border.right() - model.padding.right(),
-        model.border.bottom() - model.padding.bottom(),
-        model.padding.x - model.border.x,
-    );
-    border_image_area(
-        &projection.world.boxes[box_id.index()].style,
-        model.border,
-        widths,
-    )
 }
 
 fn box_contents_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) -> PaintCullBounds
