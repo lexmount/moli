@@ -7,7 +7,9 @@ pub(in crate::native_bridge) use self::clone_adopt::{
     bridge_adopt_node_into_document_callback, bridge_clone_node_into_document_callback,
     bridge_detached_clone_node_callback,
 };
-pub(in crate::native_bridge::document) use self::document_methods::create_detached_element_for_document;
+pub(in crate::native_bridge::document) use self::document_methods::{
+    DocumentCreateCdataSectionArgs, create_detached_element_for_document, validate_cdata_section,
+};
 pub(in crate::native_bridge) use self::document_methods::{
     bridge_create_cdata_section_not_supported_callback,
     bridge_detached_create_cdata_section_callback, bridge_detached_create_comment_callback,

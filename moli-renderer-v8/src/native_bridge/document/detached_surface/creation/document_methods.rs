@@ -27,9 +27,9 @@ struct DetachedDocumentCreateProcessingInstructionArgs {
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createCDATASection")]
-struct DocumentCreateCdataSectionArgs {
+pub(in crate::native_bridge::document) struct DocumentCreateCdataSectionArgs {
     #[webidl(required)]
-    data: String,
+    pub(in crate::native_bridge::document) data: String,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -147,13 +147,7 @@ pub(in crate::native_bridge) fn bridge_detached_create_cdata_section_callback<'s
     else {
         return;
     };
-    if parsed.data.contains("]]>") {
-        throw_dom_exception(
-            scope,
-            "InvalidCharacterError",
-            5,
-            "String contains an invalid character",
-        );
+    if !validate_cdata_section(scope, &parsed.data, false) {
         return;
     }
     match build_detached_cdata_section_object(scope, document, &parsed.data) {
@@ -170,13 +164,33 @@ pub(in crate::native_bridge) fn bridge_create_cdata_section_not_supported_callba
     let Some(parsed) = webidl::parse_args::<DocumentCreateCdataSectionArgs>(scope, &args) else {
         return;
     };
-    let _ = parsed.data;
-    throw_dom_exception(
-        scope,
-        "NotSupportedError",
-        9,
-        "This operation is not supported for HTML documents",
-    );
+    validate_cdata_section(scope, &parsed.data, true);
+}
+
+pub(in crate::native_bridge::document) fn validate_cdata_section(
+    scope: &mut v8::PinScope<'_, '_>,
+    data: &str,
+    html_document: bool,
+) -> bool {
+    if html_document {
+        throw_dom_exception(
+            scope,
+            "NotSupportedError",
+            9,
+            "This operation is not supported for HTML documents",
+        );
+        return false;
+    }
+    if data.contains("]]>") {
+        throw_dom_exception(
+            scope,
+            "InvalidCharacterError",
+            5,
+            "String contains an invalid character",
+        );
+        return false;
+    }
+    true
 }
 
 pub(in crate::native_bridge::document) fn create_detached_element_for_document<'s>(

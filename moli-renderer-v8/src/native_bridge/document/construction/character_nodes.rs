@@ -1,8 +1,8 @@
 use super::*;
 use crate::native_bridge::document::{
-    bridge_create_cdata_section_not_supported_callback,
     detached_create_cdata_section_html_method_callback,
     detached_create_cdata_section_method_callback,
+    detached_surface::{DocumentCreateCdataSectionArgs, validate_cdata_section},
 };
 use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 
@@ -117,7 +117,7 @@ pub(in crate::native_bridge) fn node_create_processing_instruction_callback<'s>(
 pub(in crate::native_bridge) fn node_create_cdata_section_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if let Some(kind) = detached_document_receiver_kind(scope, &args) {
         match kind {
@@ -130,5 +130,22 @@ pub(in crate::native_bridge) fn node_create_cdata_section_callback<'s>(
         }
         return;
     }
-    bridge_create_cdata_section_not_supported_callback(scope, args, rv);
+    let Ok((runtime_ptr, document_handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+        rv.set_null();
+        return;
+    };
+    let Some(parsed) = webidl::parse_args::<DocumentCreateCdataSectionArgs>(scope, &args) else {
+        return;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    if !validate_cdata_section(
+        scope,
+        &parsed.data,
+        is_html_document(runtime, document_handle),
+    ) {
+        return;
+    }
+    let handle = runtime.create_cdata_section_for_document(document_handle, &parsed.data);
+    runtime.capture_node_creation_stack_trace(scope, handle);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(handle));
 }

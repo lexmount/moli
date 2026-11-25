@@ -245,3 +245,23 @@ async fn child_document_write_converts_arguments_before_parser_constructor_guard
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_xml_documents_create_native_cdata_sections() -> Result<()> {
+    let result = evaluate_child_xml_probe(
+        r#"const frame = await loadFrame('application/xml', '<root/>');
+        const doc = frame.contentDocument;
+        const node = doc.createCDATASection('text <tag>');
+        doc.documentElement.append(node);
+        let invalid;
+        try { doc.createCDATASection(']]>'); }
+        catch (error) { invalid = error.name; }
+        return [node.nodeType, node.ownerDocument === doc, node.data, invalid];"#,
+    )
+    .await?;
+    assert_eq!(
+        result,
+        serde_json::json!([4, true, "text <tag>", "InvalidCharacterError"])
+    );
+    Ok(())
+}
