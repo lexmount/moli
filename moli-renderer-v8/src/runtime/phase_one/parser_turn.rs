@@ -993,7 +993,6 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     .claim_pending_script_preload_for_parser(&script);
                 let source_decision = prepare_main_parser_blocking_source_load(
                     page_vm,
-                    self.loader,
                     self.buffered_document_preloads,
                     &mut script,
                 );
