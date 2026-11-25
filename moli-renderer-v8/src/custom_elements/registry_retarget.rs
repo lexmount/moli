@@ -6,14 +6,17 @@ pub(crate) fn registry_association_retargets_before_removal(
     root: DomHandle,
 ) -> Vec<RegistryAssociationRetarget> {
     let host = unsafe { &*host_ptr };
-    if !host.has_explicit_custom_element_registry_associations()
-        && !host.dom_host().has_shadow_roots()
-    {
+    let has_shadow_roots = host.dom_host().has_shadow_roots();
+    if !has_shadow_roots && !host.has_explicit_custom_element_registry_associations() {
         return Vec::new();
     }
     let mut retargets = Vec::new();
     for handle in host.dom_host().shadow_including_subtree(root) {
         if !should_record_import_clone_registry_association(host.dom_host(), handle) {
+            continue;
+        }
+        let has_explicit_registry = host.custom_element_registry_association(handle).is_some();
+        if !has_shadow_roots && !has_explicit_registry {
             continue;
         }
         let current = host.effective_custom_element_registry_association(handle);
@@ -22,8 +25,7 @@ pub(crate) fn registry_association_retargets_before_removal(
         };
         let document_default =
             host.default_custom_element_registry_association_for_document(owner_document);
-        if current != document_default || host.custom_element_registry_association(handle).is_some()
-        {
+        if current != document_default || has_explicit_registry {
             retargets.push(RegistryAssociationRetarget {
                 handle,
                 association: current,
