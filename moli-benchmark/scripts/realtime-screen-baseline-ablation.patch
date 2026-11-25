@@ -1,0 +1,90 @@
+diff --git a/moli-renderer-v8/src/layout_renderer/mod.rs b/moli-renderer-v8/src/layout_renderer/mod.rs
+index b4ca0f5b560..254b4e03cbf 100644
+--- a/moli-renderer-v8/src/layout_renderer/mod.rs
++++ b/moli-renderer-v8/src/layout_renderer/mod.rs
+@@ -39,6 +39,10 @@ pub(crate) struct LayoutPassFeedback<'a> {
+ }
+
+ impl LayoutPassFeedback<'_> {
++    pub(crate) fn screen_styles_for_probe(&self) -> Option<&ScreenStyleBaseline> {
++        self.screen_styles.as_ref()
++    }
++
+     pub(crate) fn commit(mut self) -> Option<ScreenStyleBaseline> {
+         self.previous.clear();
+         self.screen_styles.take()
+diff --git a/moli-renderer-v8/src/native_bridge/context_host/realtime_layout.rs b/moli-renderer-v8/src/native_bridge/context_host/realtime_layout.rs
+index 7c3deac1b09..3129097c4fc 100644
+--- a/moli-renderer-v8/src/native_bridge/context_host/realtime_layout.rs
++++ b/moli-renderer-v8/src/native_bridge/context_host/realtime_layout.rs
+@@ -241,6 +241,28 @@ impl PageScriptHost {
+                 };
+                 #[cfg(not(feature = "devtools"))]
+                 let _ = paint_generation;
++                if std::env::var_os("MOLI_PROBE_SCREEN_BASELINE_OVERLAP").is_some() {
++                    let old = state.screen_styles.borrow();
++                    let table_bytes = |baseline: &ScreenStyleBaseline| {
++                        baseline.values().map(|styles| {
++                            styles.capacity() * std::mem::size_of::<(
++                                DomHandle, crate::style_engine::StyloComputedStyleSnapshot,
++                            )>()
++                        }).sum::<usize>()
++                    };
++                    tracing::info!(
++                        target: "moli_cpu_profile",
++                        stage = "screen_style_overlap",
++                        old_entries = old.values().map(|styles| styles.len()).sum::<usize>(),
++                        old_entry_storage_bytes = table_bytes(&old),
++                        new_entry_storage_bytes = feedback.screen_styles_for_probe().map_or(0, table_bytes),
++                        old_unique_style_bytes = old
++                            .values()
++                            .flat_map(|styles| styles.values())
++                            .map(|style| style.exclusive_computed_value_bytes_for_probe())
++                            .sum::<usize>(),
++                    );
++                }
+                 self.publish_layout_pass_for_document(document, pass);
+                 *state.screen_styles.borrow_mut() = feedback.commit().unwrap_or_default();
+                 #[cfg(feature = "devtools")]
+@@ -452,6 +474,10 @@ impl PageScriptHost {
+
+         // Native invalidation/geometry only: no input dispatch, callbacks,
+         // network admission, or nested event-loop checkpoint at this boundary.
++        let baseline_mode = std::env::var("MOLI_PROBE_SCREEN_BASELINE").unwrap_or_default();
++        if baseline_mode == "release-old" {
++            state.screen_styles.borrow_mut().clear();
++        }
+         if !resolve_style_changes {
+             self.prepare_current_screen_styles(&inputs);
+         }
+@@ -462,7 +488,9 @@ impl PageScriptHost {
+             .with_scroll_projection(true)
+             .with_screen_paint(paint_generation.is_some());
+         let Some((pass, feedback)) =
+-            self.build_layout_pass_for_document_in_environment(document, request, None, true)?
++            self.build_layout_pass_for_document_in_environment(
++                document, request, None, baseline_mode != "no-baseline",
++            )?
+         else {
+             if self.dom_host().dom_version() != source_dom_version
+                 || self.screen_layout_inputs(state)? != inputs
+diff --git a/moli-renderer-v8/src/style_engine/computed.rs b/moli-renderer-v8/src/style_engine/computed.rs
+index 6b82102346e..08d947d1a5a 100644
+--- a/moli-renderer-v8/src/style_engine/computed.rs
++++ b/moli-renderer-v8/src/style_engine/computed.rs
+@@ -156,6 +156,15 @@ pub(crate) struct ComputedRenderedStyleFacts {
+ }
+
+ impl StyloComputedStyleSnapshot {
++    pub(crate) fn exclusive_computed_value_bytes_for_probe(&self) -> usize {
++        std::iter::once(&self.primary)
++            .chain(&self.before)
++            .chain(&self.after)
++            .filter(|style| style.is_unique())
++            .count()
++            * std::mem::size_of::<ComputedValues>()
++    }
++
+     pub(crate) fn has_same_rendering_as(&self, current: &Self) -> bool {
+         fn eq(old: &ComputedValues, new: &ComputedValues) -> bool {
+             use style::{matching::StyleChange, servo::restyle_damage::ServoRestyleDamage};

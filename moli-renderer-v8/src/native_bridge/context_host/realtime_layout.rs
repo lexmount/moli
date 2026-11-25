@@ -113,9 +113,13 @@ impl RealtimeLayoutState {
 
     pub(super) fn clear_publication(&self) {
         self.published.borrow_mut().take();
-        self.screen_styles.borrow_mut().clear();
+        self.clear_screen_styles();
         #[cfg(feature = "devtools")]
         self.screencast_paint.publish(None);
+    }
+
+    pub(super) fn clear_screen_styles(&self) {
+        self.screen_styles.borrow_mut().clear();
     }
 
     pub(super) fn reset(&self) {
