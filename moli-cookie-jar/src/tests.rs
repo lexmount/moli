@@ -1952,6 +1952,61 @@ fn delete_cookies_matching_preserves_partitions_and_invalidates_document_cookie(
 }
 
 #[test]
+fn clear_response_site_cookies_respects_private_registries_and_request_partition() {
+    let mut store = BrowserCookieStore::default();
+    let url = parse("https://www.project.github.io/clear");
+    let sibling = parse("https://docs.project.github.io/account");
+    let unrelated = parse("https://other.github.io/account");
+    let context_for_partition = |site: &str, has_cross_site_ancestor| {
+        let mut context = NetworkCookieRequestContext::subresource("GET");
+        context.browser_context =
+            context
+                .browser_context
+                .with_cookie_partition_key(StoredCookiePartitionKey::site(
+                    site.to_owned(),
+                    has_cross_site_ancestor,
+                ));
+        context
+    };
+    let current = context_for_partition("https://embedder.example", true);
+    let other_site = context_for_partition("https://elsewhere.example", true);
+    let other_ancestor = context_for_partition("https://embedder.example", false);
+
+    for (url, context, value) in [
+        (&url, &current, "domain=shared; Domain=project.github.io"),
+        (&sibling, &current, "host=hidden; HttpOnly; Path=/account"),
+        (&sibling, &current, "chip=current; Secure; Partitioned"),
+        (
+            &sibling,
+            &other_site,
+            "chip=other-site; Secure; Partitioned",
+        ),
+        (
+            &sibling,
+            &other_ancestor,
+            "chip=other-ancestor; Secure; Partitioned",
+        ),
+        (&unrelated, &current, "host=unrelated"),
+    ] {
+        let reports = store.store_response_headers_with_context_reports(
+            url,
+            &[("Set-Cookie".to_owned(), value.as_bytes().to_vec())],
+            context,
+        );
+        assert!(reports[0].is_accepted(), "{value}: {reports:?}");
+    }
+    assert_eq!(store.clear_cookies_for_response_site(&url, &current), 3);
+    assert_eq!(
+        store
+            .cookies()
+            .into_iter()
+            .map(|cookie| cookie.value)
+            .collect::<Vec<_>>(),
+        ["other-site", "other-ancestor", "unrelated"]
+    );
+}
+
+#[test]
 fn delete_cookies_updates_network_visible_cookie_header() {
     let mut store = BrowserCookieStore::default();
     let response_url = parse("https://sub.example.com/app/index.html");
