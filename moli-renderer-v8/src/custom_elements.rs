@@ -6,6 +6,7 @@ mod construction;
 mod construction_failure;
 mod construction_fallback;
 mod construction_invocation;
+pub(crate) use self::construction_invocation::can_perform_custom_element_microtask_checkpoint;
 mod construction_result;
 mod construction_runtime;
 pub(crate) use construction::PendingCustomElementConstruction;
