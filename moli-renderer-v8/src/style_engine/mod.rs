@@ -290,11 +290,7 @@ impl MoliStyleEngine {
         state.finish_screen_style_invalidation();
         match &*state.screen_style_invalidation.borrow() {
             ScreenStyleInvalidation::Clean => Some(ScreenStyleChanges::default()),
-            ScreenStyleInvalidation::Pending {
-                after,
-                targets,
-                damage,
-            } => Some(ScreenStyleChanges {
+            ScreenStyleInvalidation::Pending { after, targets } => Some(ScreenStyleChanges {
                 after: *after,
                 targets: targets
                     .iter()
@@ -304,12 +300,23 @@ impl MoliStyleEngine {
                         .then_some((handle, scope))
                     })
                     .collect(),
-                observed_damage: damage
-                    .values()
-                    .fold(Default::default(), |all, damage| all | *damage),
+                observed_damage: self.pending_screen_damage(&world),
             }),
             ScreenStyleInvalidation::Full => None,
         }
+    }
+
+    fn pending_screen_damage(&self, world: &DocumentStyleWorld) -> ServoRestyleDamage {
+        world
+            .document_state
+            .screen_damage_nodes
+            .borrow()
+            .iter()
+            .filter_map(|&handle| {
+                self.dom_adapter
+                    .element_restyle_damage(world.document, handle)
+            })
+            .fold(ServoRestyleDamage::empty(), |all, damage| all | damage)
     }
 
     pub(crate) fn has_supported_screen_style_damage(
@@ -324,8 +331,8 @@ impl MoliStyleEngine {
                 state.finish_screen_style_invalidation();
                 match &*state.screen_style_invalidation.borrow() {
                     ScreenStyleInvalidation::Clean => true,
-                    ScreenStyleInvalidation::Pending { damage, .. } => {
-                        damage.values().all(|&damage| supported.contains(damage))
+                    ScreenStyleInvalidation::Pending { .. } => {
+                        supported.contains(self.pending_screen_damage(&world))
                     }
                     ScreenStyleInvalidation::Full => false,
                 }
@@ -338,14 +345,9 @@ impl MoliStyleEngine {
         document: DomHandle,
         handle: DomHandle,
     ) -> Option<ServoRestyleDamage> {
-        let world = self.document_worlds.active_world(document)?;
-        match &*world.document_state.screen_style_invalidation.borrow() {
-            ScreenStyleInvalidation::Pending { damage, .. } => damage
-                .get(&handle)
-                .copied()
-                .filter(|damage| !damage.is_empty()),
-            _ => None,
-        }
+        self.dom_adapter
+            .element_restyle_damage(document, handle)
+            .filter(|damage| !damage.is_empty())
     }
 
     pub(crate) fn begin_screen_layout(&self, document: DomHandle) {
@@ -357,12 +359,15 @@ impl MoliStyleEngine {
     pub(crate) fn publish_screen_styles(&self, document: DomHandle, coverage: ScreenStyleCoverage) {
         if let Some(world) = self.document_worlds.active_world(document) {
             world.document_state.publish_screen_styles(coverage);
+            self.dom_adapter
+                .consume_restyle_damage(document, world.document_state.consume_screen_style_work());
         }
     }
 
     pub(crate) fn consume_screen_style_work(&self, document: DomHandle) {
         if let Some(world) = self.document_worlds.active_world(document) {
-            world.document_state.consume_screen_style_work();
+            self.dom_adapter
+                .consume_restyle_damage(document, world.document_state.consume_screen_style_work());
         }
     }
 

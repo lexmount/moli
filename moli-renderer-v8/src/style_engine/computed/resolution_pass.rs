@@ -7,11 +7,12 @@ use style::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
     },
-    data::ElementStyles,
+    data::{ElementDataFlags, ElementStyles},
     dom::{TElement, TNode},
     invalidation::element::restyle_hints::RestyleHint,
     properties::ComputedValues,
     selector_parser::{PseudoElement, SnapshotMap},
+    servo::restyle_damage::ServoRestyleDamage,
     servo_arc::Arc as ServoArc,
     shared_lock::StylesheetGuards,
     stylist::RuleInclusion,
@@ -19,6 +20,8 @@ use style::{
     traversal::{resolve_style, restyle_element},
     traversal_flags::TraversalFlags,
 };
+
+use super::super::ScreenStyleInvalidation;
 
 #[cfg(test)]
 use super::STYLE_RESOLUTION_CONTEXTS;
@@ -194,7 +197,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         &mut self,
         handle: DomHandle,
         after: u64,
-        supported: style::servo::restyle_damage::ServoRestyleDamage,
+        supported: ServoRestyleDamage,
     ) -> Option<RestyleHint> {
         let state = &self.context.world.document_state;
         if !state.screen_style_dependencies_are_current() || state.screen_uses_lazy_pseudo(handle) {
@@ -204,7 +207,15 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         let invalidation = &state.style_paths;
         // Preparing a target can coalesce the history this traversal read.
         if !invalidation.can_compare_after(after)
-            || !state.screen_style_target_has_supported_damage(handle, supported)
+            || matches!(
+                *state.screen_style_invalidation.borrow(),
+                ScreenStyleInvalidation::Full
+            )
+            || self
+                .engine
+                .dom_adapter
+                .element_restyle_damage(self.document(), handle)
+                .is_some_and(|damage| !supported.contains(damage))
         {
             return None;
         }
@@ -413,6 +424,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                 let mut data = unsafe { element.ensure_data() };
                 data.hint = hint;
                 let previous = data.styles.clone();
+                let pending_damage = std::mem::take(&mut data.damage);
                 let child_hint = self.context.with_stylo(|context| {
                     context.thread_local.current_dom_depth = depth;
                     let mut child_hint =
@@ -430,8 +442,9 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                 } else {
                     RestyleHint::recascade_subtree()
                 };
-                record_screen_restyle(world, element, &previous, &data, child_hint);
-                data.clear_restyle_flags_and_damage();
+                let damage = record_screen_restyle(world, element, &previous, &data, child_hint);
+                data.flags.remove(ElementDataFlags::WAS_RESTYLED);
+                data.damage = pending_damage | damage;
                 if previous.get_primary().is_some() {
                     invalidation.record_child_requirements(handle, child_hint, subtree_generation);
                 }

@@ -867,7 +867,7 @@ fn record_screen_restyle<E: TElement>(
     previous: &ElementStyles,
     data: &ElementData,
     child_hint: RestyleHint,
-) {
+) -> ServoRestyleDamage {
     let handle = DomHandle::new(element.as_node().debug_id());
     let old_primary = previous.get_primary();
     let new_primary = data.styles.get_primary();
@@ -894,7 +894,7 @@ fn record_screen_restyle<E: TElement>(
                 damage |= layout_damage_for_style_change(old.as_ref(), new.as_ref());
             }
             Some(damage)
-        });
+        })
 }
 
 fn with_lazily_resolved_pseudo_style<R>(

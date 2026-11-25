@@ -235,6 +235,47 @@ document.body.innerHTML = '<div id="probe"></div>';
 }
 
 #[test]
+fn realtime_print_keeps_screen_layout_work_after_a_cssom_read() {
+    use style::servo::restyle_damage::ServoRestyleDamage;
+
+    run_page_vm_large_stack_async_test("realtime-print-screen-damage", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = fixture(&loader).await;
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let target = page
+            .vm()
+            .document_runtime
+            .get_element_by_id("target")
+            .unwrap();
+        let builds = page.vm().layout_pass_observability_for_test().1;
+
+        page.vm_mut()
+            .eval("target.style.width = '65px'; getComputedStyle(target).color")
+            .unwrap();
+        assert!(
+            host.borrow()
+                .screen_style_damage_for_node_for_test(target)
+                .unwrap()
+                .contains(ServoRestyleDamage::RELAYOUT)
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+
+        page.capture_screenshot(print_request()).unwrap();
+        assert!(!host.borrow().realtime_screen_layout_is_current());
+
+        assert_eq!(
+            page.vm_mut().eval("String(target.offsetWidth)").unwrap(),
+            "65"
+        );
+        assert_eq!(
+            host.borrow().screen_style_damage_for_node_for_test(target),
+            None
+        );
+        assert!(host.borrow().realtime_screen_layout_is_current());
+    });
+}
+
+#[test]
 fn realtime_print_success_and_failure_preserve_pending_animation_work() {
     run_page_vm_large_stack_async_test("realtime-print-pending", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

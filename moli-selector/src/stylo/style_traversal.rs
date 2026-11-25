@@ -28,6 +28,7 @@ use style::{
         ComputedValues, PropertyDeclarationBlock, longhands::display::computed_value::T as Display,
     },
     selector_parser::{AttrValue as SelectorAttrValue, Lang, PseudoElement, SelectorImpl},
+    servo::restyle_damage::ServoRestyleDamage,
     servo_arc::{Arc, ArcBorrow},
     shared_lock::{Locked, SharedRwLock},
     stylesheets::UrlExtraData,
@@ -206,6 +207,33 @@ impl StyloDomStyleAdapter {
     /// them unavailable for the next style observation.
     pub fn mark_element_style_dirty(&self, handle: NodeId, hint: RestyleHint) -> bool {
         self.state.mark_element_style_dirty(handle, hint)
+    }
+
+    pub fn element_restyle_damage(
+        &self,
+        document: NodeId,
+        handle: NodeId,
+    ) -> Option<ServoRestyleDamage> {
+        self.state
+            .element_data
+            .borrow_for_document(document, handle)
+            .map(|data| data.damage)
+    }
+
+    pub fn consume_restyle_damage(
+        &self,
+        document: NodeId,
+        handles: impl IntoIterator<Item = NodeId>,
+    ) {
+        for handle in handles {
+            if let Some(mut data) = self
+                .state
+                .element_data
+                .mutate_for_document(document, handle)
+            {
+                data.damage = ServoRestyleDamage::empty();
+            }
+        }
     }
 
     /// Inspect stored attribute dependencies without a traversal binding,
@@ -600,6 +628,8 @@ impl StyloElementDataStore {
 
         let bucket = documents.entry(document).or_default();
         if let Some(data) = moved_data {
+            // Layout damage is tied to the publication in the previous world.
+            data.borrow_mut().damage = ServoRestyleDamage::empty();
             bucket.data.insert(handle, data);
         }
         if let Some(inline_style) = moved_inline_style {
