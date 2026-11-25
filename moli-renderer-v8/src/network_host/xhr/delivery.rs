@@ -13,11 +13,11 @@ pub(crate) use self::failure::{
 };
 pub(super) use self::pending::{queue_xhr_failure_delivery, queue_xhr_response_delivery};
 pub(in crate::network_host::xhr) use self::progress::clear_xhr_progress_throttle;
-pub(super) use self::response::apply_xhr_response_pending_body;
 pub(crate) use self::response::{
     apply_xhr_response, apply_xhr_response_body_source,
     apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_response_body_source,
     apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head,
+    xhr_streaming_text_decoder,
 };
 pub(crate) use self::timeout::apply_xhr_timeout;
 pub(super) use self::timeout::{

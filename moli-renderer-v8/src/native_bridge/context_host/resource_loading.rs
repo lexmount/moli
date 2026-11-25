@@ -1738,6 +1738,20 @@ impl PageScriptHost {
             .is_some_and(|state| state.event_source_parser.is_some())
     }
 
+    pub(crate) fn set_streaming_xhr_response_decoder(
+        &mut self,
+        internal_id: u64,
+        decoder: Option<moli_encoding::XhrResponseDecoder>,
+    ) {
+        if let Some(xhr) = self
+            .streaming_subresource_fetches
+            .get_mut(&internal_id)
+            .and_then(|state| state.xhr_response.as_mut())
+        {
+            xhr.decoder = decoder;
+        }
+    }
+
     pub(crate) fn streaming_subresource_is_xhr(&self, body_source_id: NetworkBodySourceId) -> bool {
         self.streaming_subresource_fetches
             .values()
