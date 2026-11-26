@@ -27,6 +27,7 @@ import errno
 import hashlib
 import html
 import http.client
+import io
 import json
 import math
 import mimetypes
@@ -107,6 +108,7 @@ SERVICE_WORKER_REQUEST_RESOURCE_PATHS = {
 }
 EVENTSOURCE_MESSAGE_PATH = "/eventsource/resources/message.py"
 CLEAR_SITE_DATA_COOKIE_PATH = "/clear-site-data/support/clear-site-data-cookie.py"
+CLEAR_SITE_DATA_CACHE_PATH = "/clear-site-data/support/clear-site-data-cache.py"
 IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
 DISPATCHER_PATH = "/common/dispatcher/dispatcher.py"
 REMOTE_CONTEXT_EXECUTOR_PATH = (
@@ -1972,6 +1974,102 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 headers=[("Content-Type", "text/html"), *ordered],
             )
 
+        def _serve_clear_site_data_cache(self, query: str) -> None:
+            params = parse_qs(query, keep_blank_values=True)
+            try:
+                cache_helper = str(uuid.UUID(params["cache_helper"][0]))
+                kind = params["response"][0]
+            except (KeyError, ValueError):
+                self.send_error(400)
+                return
+
+            max_age = "public, max-age=31536000, immutable"
+            headers = [("Cache-Control", max_age if "cache" in params else "no-store")]
+            clear = params.get("clear", [None])[0]
+            if "clear_first" in params:
+                count = fetch_stash.increment(cache_helper, path=CLEAR_SITE_DATA_CACHE_PATH)
+                if count == 1:
+                    clear = params["clear_first"][0]
+            if clear is not None:
+                directive = '"*"' if clear == "all" else f'"{clear}"'
+                if not _valid_static_response_header("Clear-Site-Data", directive):
+                    self.send_error(400)
+                    return
+                headers.append(("Clear-Site-Data", directive))
+
+            def resource_url(resource: str, **extra: str) -> str:
+                resource_query = urlencode(
+                    {"response": resource, "cache_helper": cache_helper, "cache": "", **extra}
+                )
+                return f"{CLEAR_SITE_DATA_CACHE_PATH}?{resource_query}"
+
+            identifier = json.dumps(str(uuid.uuid4()))
+            report = "(window.opener || window.parent).postMessage"
+            mime = "text/html"
+            if kind == "single_html":
+                if "iframe" in params:
+                    target = params["iframe"][0]
+                    if urlsplit(target).scheme not in {"http", "https"}:
+                        self.send_error(400)
+                        return
+                    body = (
+                        "<!doctype html><script>"
+                        f'addEventListener("message", event => {{ {report}(event.data, "*"); close(); }});'
+                        f'</script><iframe src="{html_escape(target)}"></iframe>'
+                    )
+                else:
+                    body = f'<!doctype html><script>{report}({identifier}, "*"); close();</script>'
+            elif kind == "json":
+                mime, body = "application/json", f"[{identifier}]"
+            elif kind == "image":
+                from PIL import Image
+
+                mime = "image/png"
+                with io.BytesIO() as png:
+                    Image.new("RGB", (random.randint(1, 1024), random.randint(1, 1024))).save(png, "PNG")
+                    body = png.getvalue()
+            elif kind == "css":
+                mime, body = "text/css", f":root {{ --uuid: {identifier}; }}"
+            elif kind == "js":
+                mime, body = "text/javascript", f'{report}({identifier}, "*"); close();'
+            elif kind == "html_embed_json":
+                source = json.dumps(resource_url("json"))
+                body = (
+                    f"<!doctype html><script>fetch({source}).then(response => response.json())"
+                    f'.then(([id]) => {{ {report}(id, "*"); close(); }});</script>'
+                )
+            elif kind == "html_embed_image":
+                images = "".join(
+                    f'<img src="{html_escape(resource_url("image", img=str(index)))}">'
+                    for index in range(2)
+                )
+                body = (
+                    "<!doctype html><script>"
+                    'addEventListener("load", () => {'
+                    "const sizes = Array.from(document.images, img => [img.naturalWidth, img.naturalHeight]);"
+                    f'{report}(JSON.stringify(sizes), "*"); close();'
+                    f"}});</script>{images}"
+                )
+            elif kind == "html_embed_css":
+                source = html_escape(resource_url("css"))
+                body = (
+                    f'<!doctype html><link rel="stylesheet" href="{source}"><script>'
+                    'const id = getComputedStyle(document.documentElement).getPropertyValue("--uuid").trim();'
+                    f'{report}(id, "*"); close();</script>'
+                )
+            elif kind == "html_embed_js":
+                source = html_escape(resource_url("js"))
+                body = f'<!doctype html><script src="{source}"></script>'
+            else:
+                self.send_error(400)
+                return
+
+            self._send_python_handler_response(
+                CLEAR_SITE_DATA_CACHE_PATH, query,
+                body.encode("utf-8") if isinstance(body, str) else body,
+                headers=[("Content-Type", mime), *headers],
+            )
+
         def _send_python_handler_response(
             self, path: str, query: str, body: bytes | None,
             *, headers: list[tuple[str, str]] | None = None,
@@ -2830,6 +2928,9 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if path == CLEAR_SITE_DATA_COOKIE_PATH:
                 self._serve_clear_site_data_cookie(parsed.query)
+                return
+            if path == CLEAR_SITE_DATA_CACHE_PATH:
+                self._serve_clear_site_data_cache(parsed.query)
                 return
             if path == FETCH_INSPECT_HEADERS_PATH:
                 self._serve_fetch_inspect_headers(parsed.query, emit_body=emit_body)
