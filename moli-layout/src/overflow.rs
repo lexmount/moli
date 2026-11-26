@@ -239,7 +239,9 @@ impl OverflowProjection {
     {
         let mut overflow = self.geometries[id.index()].local_overflow;
         for child in self.children[id.index()].iter().copied() {
-            overflow = overflow.union(self.child_contribution(world, id, child));
+            if let Some(contribution) = self.child_contribution(world, id, child) {
+                overflow = overflow.union(contribution);
+            }
         }
         self.scrollable_overflow[id.index()] = overflow;
     }
@@ -249,7 +251,7 @@ impl OverflowProjection {
         world: &LayoutWorld<N>,
         parent: LayoutBoxId,
         child: LayoutBoxId,
-    ) -> LayoutRect
+    ) -> Option<LayoutRect>
     where
         N: Copy + Debug + Eq + Hash,
     {
@@ -271,14 +273,36 @@ impl OverflowProjection {
                 visual_overflow.height = geometry.border_box.height;
             }
         }
-        let location = world.boxes[child.index()].final_layout.location;
+        let child_box = &world.boxes[child.index()];
+        let location = child_box.final_layout.location;
         let layout_translation = LayoutTransform2D::translation(location.x, location.y);
         let local_to_parent = layout_translation.concatenate(geometry.resolved_transform.transform);
+        let visual_bounds = local_to_parent
+            .map_rect(visual_overflow.union(geometry.border_box))
+            .bounding_rect();
+        let contribution = has_area(visual_bounds).then_some(visual_bounds);
+        // Positioned boxes contribute their transformed overflow. They have
+        // no normal-flow margin bounds for the parent to scroll to.
+        if child_box.style.is_out_of_flow() {
+            return contribution;
+        }
+
         let parent_box = &world.boxes[parent.index()];
-        let relative =
-            if world.boxes[child.index()].style.position() == crate::LayoutPosition::Relative {
+        let parent_is_grid = matches!(
+            parent_box.style.display(),
+            LayoutDisplay::Grid | LayoutDisplay::InlineGrid
+        );
+        let scrolls_in_flow_bounds = !parent_is_grid && establishes_scroll_container(world, parent);
+        let margin_bounds = if parent_is_grid {
+            // Grid tracks already supply the untransformed area. Keep the
+            // item's margin bounds in the same space as its transformed box.
+            local_to_parent
+                .map_rect(geometry.margin_box)
+                .bounding_rect()
+        } else {
+            let relative = if child_box.style.position() == crate::LayoutPosition::Relative {
                 crate::inline::relative_atomic_inset_offset(
-                    &world.boxes[child.index()].style.taffy,
+                    &child_box.style.taffy,
                     taffy::Size {
                         width: self.geometries[parent.index()].content_box.width,
                         height: self.geometries[parent.index()].content_box.height,
@@ -288,47 +312,30 @@ impl OverflowProjection {
             } else {
                 taffy::Point::ZERO
             };
-        let normal_flow_translation =
-            LayoutTransform2D::translation(location.x - relative.x, location.y - relative.y);
-        let parent_is_grid = matches!(
-            parent_box.style.display(),
-            LayoutDisplay::Grid | LayoutDisplay::InlineGrid
-        );
-        let margin_to_parent =
-            if parent_is_grid && !world.boxes[child.index()].style.is_out_of_flow() {
-                // A grid's untransformed floor is its grid area, not the original
-                // border box of an item overflowing its track. Keep the item's
-                // margins in the same transformed physical space as its border.
-                local_to_parent
+            let margin_box = if scrolls_in_flow_bounds {
+                extend_end_padding(
+                    geometry.margin_box,
+                    parent_box.final_layout.padding,
+                    parent_box.style.reversed_scroll_axes(),
+                )
             } else {
-                normal_flow_translation
+                geometry.margin_box
             };
-        let mut contribution = local_to_parent
-            .map_rect(visual_overflow.union(geometry.border_box))
-            .bounding_rect()
-            .union(
-                margin_to_parent
-                    .map_rect(geometry.margin_box)
-                    .bounding_rect(),
-            );
-        if establishes_scroll_container(world, parent)
-            && !world.boxes[child.index()].style.is_out_of_flow()
-            && !parent_is_grid
-        {
-            // End padding extends the direct in-flow margin box, not its
-            // escaping descendants or transformed visual bounds. A grid
-            // item's overflow does not grow its containing grid area.
-            let padding = parent_box.final_layout.padding;
-            let padded = extend_end_padding(
-                geometry.margin_box,
-                padding,
-                parent_box.style.reversed_scroll_axes(),
-            );
-            contribution =
-                contribution.union(normal_flow_translation.map_rect(padded).bounding_rect());
+            LayoutTransform2D::translation(location.x - relative.x, location.y - relative.y)
+                .map_rect(margin_box)
+                .bounding_rect()
+        };
+        // A scroller still includes its direct in-flow bounds. Empty bounds
+        // from other descendants do not propagate to ancestors.
+        if scrolls_in_flow_bounds || has_area(margin_bounds) {
+            return Some(contribution.map_or(margin_bounds, |bounds| bounds.union(margin_bounds)));
         }
         contribution
     }
+}
+
+fn has_area(rect: LayoutRect) -> bool {
+    rect.width > 0.0 && rect.height > 0.0
 }
 
 fn overflow_parent<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> Option<LayoutBoxId>
