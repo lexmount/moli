@@ -706,9 +706,8 @@ where
         }
     }
 
-    // Taffy 0.12 intentionally has no CSS `order` field. Blitz performs the
-    // same stable order-modified document-order sort before handing flex/grid
-    // children to Taffy. Keep the source/paint tree untouched.
+    // Apply CSS order to the numeric flex and grid children. A stable sort
+    // preserves document order for equal order values.
     for parent_index in 0..world.boxes.len() {
         let display = world.boxes[parent_index].style.display();
         if !display.is_flex_container() && !display.is_grid_container() {

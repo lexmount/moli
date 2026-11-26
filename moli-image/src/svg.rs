@@ -67,6 +67,23 @@ impl SvgFonts {
         }
     }
 
+    fn options(&self, default_size: usvg::Size) -> usvg::Options<'static> {
+        usvg::Options {
+            fontdb: self.database.clone(),
+            // usvg resolves a missing font family before calling the resolver.
+            font_family: self.default_family.clone(),
+            font_resolver: self.resolver(),
+            default_size,
+            // Keep resource fetching and decoding in Moli's image loader.
+            // Skip the converter's built-in data URL and filesystem loading.
+            image_href_resolver: usvg::ImageHrefResolver {
+                resolve_data: Box::new(|_, _, _| None),
+                resolve_string: Box::new(|_, _| None),
+            },
+            ..Default::default()
+        }
+    }
+
     /// Builds usvg's resolver so a `<text>` node survives to paint.
     ///
     /// usvg drops a text node entirely when its primary font can be neither
@@ -352,19 +369,10 @@ pub fn decode_inline_svg_scene(
         .enumerate()
         .map(|(index, node)| (node.id(), index))
         .collect::<HashMap<_, _>>();
-    let fonts = &SVG_FONTS;
     let options = usvg::Options {
-        fontdb: fonts.database.clone(),
-        font_family: fonts.default_family.clone(),
-        font_resolver: fonts.resolver(),
-        default_size,
         element_styles: Some(Arc::new(overrides)),
         collect_object_geometry: true,
-        image_href_resolver: usvg::ImageHrefResolver {
-            resolve_data: Box::new(|_, _, _| None),
-            resolve_string: Box::new(|_, _| None),
-        },
-        ..Default::default()
+        ..SVG_FONTS.options(default_size)
     };
     let mut tree = convert_svg_tree(&xml, &options, depth)?;
     let objects = tree
@@ -409,23 +417,7 @@ fn decode_svg_image_with_fonts(
     let (xml, depth) = parse_svg_xml(bytes)?;
     let default_size = usvg::Size::from_wh(metadata.concrete_width, metadata.concrete_height)
         .ok_or(SvgDecodeError::InvalidConcreteSize)?;
-    let options = usvg::Options {
-        fontdb: fonts.database.clone(),
-        // usvg resolves a missing `font-family` name before consulting
-        // `font_resolver`, so the default must name an installed family.
-        font_family: fonts.default_family.clone(),
-        font_resolver: fonts.resolver(),
-        default_size,
-        // The default usvg resolver accepts data URLs and local filesystem
-        // paths. Image resources must stay behind Moli's fetch and
-        // decode owner, so Phase 10 deliberately omits nested raster/SVG
-        // images instead of reading or decoding them inside this parser.
-        image_href_resolver: usvg::ImageHrefResolver {
-            resolve_data: Box::new(|_, _, _| None),
-            resolve_string: Box::new(|_, _| None),
-        },
-        ..Default::default()
-    };
+    let options = fonts.options(default_size);
     let tree = convert_svg_tree(&xml, &options, depth)?;
     Ok(SvgImage { tree, metadata })
 }
@@ -501,15 +493,19 @@ fn convert_svg_tree(
     options: &usvg::Options<'_>,
     depth: usize,
 ) -> Result<usvg::Tree, SvgDecodeError> {
+    const CALLER_STACK_DEPTH_LIMIT: usize = 128;
+    const MIN_WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
+    const WORKER_STACK_BYTES_PER_ELEMENT: usize = 8 * 1024;
+
     let convert = || usvg::Tree::from_xmltree(xml, options).map_err(SvgDecodeError::from);
     // usvg recurses through the expanded element tree during conversion.
     // Keep shallow images on the caller's stack and reserve room for deep images.
-    if depth <= 128 {
+    if depth <= CALLER_STACK_DEPTH_LIMIT {
         return convert();
     }
     // The text chunk collector's debug stack grows by over 6 KiB per nested
     // tspan. Size the worker from the validated depth to cover long text trees.
-    let stack_size = (depth * 8 * 1024).max(16 * 1024 * 1024);
+    let stack_size = (depth * WORKER_STACK_BYTES_PER_ELEMENT).max(MIN_WORKER_STACK_BYTES);
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("svg_scene".into())

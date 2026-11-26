@@ -655,6 +655,7 @@ where
                 }),
         );
     }
+    world.validate_invariants()?;
     let phase_started = Instant::now();
     let reused_inline_contexts = if retain_inline {
         crate::inline::prepare_inline_contexts_with_retained_inputs(world, services, true)
@@ -663,7 +664,6 @@ where
         0
     };
     let inline_preparation_elapsed = phase_started.elapsed();
-    world.validate_invariants()?;
     let phase_started = Instant::now();
     let (numeric_metrics, overflow_projection) = compute_world_layout_with_scrollbars(
         world,
