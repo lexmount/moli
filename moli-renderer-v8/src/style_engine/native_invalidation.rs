@@ -393,6 +393,18 @@ fn invalidate_structure(
                     *next_sibling,
                     subtrees,
                 );
+                if stylist.is_some()
+                    && flags.intersects(
+                        Flags::HAS_EDGE_CHILD_SELECTOR
+                            | Flags::HAS_SLOW_SELECTOR
+                            | Flags::HAS_SLOW_SELECTOR_NTH
+                            | Flags::HAS_SLOW_SELECTOR_NTH_OF,
+                    )
+                {
+                    // Existing children can gain or lose a position match in
+                    // a relative selector even when the new child has no match.
+                    invalidate_relative_boundaries(host, adapter, *parent, subtrees);
+                }
             }
             let Some(stylist) = stylist else {
                 return;
@@ -521,9 +533,8 @@ fn invalidate_child_positions(
     subtrees: &mut IndexSet<DomHandle>,
 ) {
     use ElementSelectorFlags as Flags;
-    let previous = adjacent_element(host, previous, |host, node| {
-        host.node(node).and_then(Node::prev_sibling)
-    });
+    let previous_sibling = |host: &DomHost, node| host.node(node).and_then(Node::prev_sibling);
+    let previous = adjacent_element(host, previous, previous_sibling);
     let next = adjacent_element(host, next, DomHost::next_sibling);
     if flags.intersects(Flags::HAS_SLOW_SELECTOR | Flags::MAY_HAVE_TREE_COUNTING_FUNCTION) {
         // nth-last-child and sibling-count() can reach earlier children.
@@ -547,11 +558,17 @@ fn invalidate_child_positions(
     }
 
     if flags.contains(Flags::HAS_EDGE_CHILD_SELECTOR) {
+        // A recorded sibling can be text that went away during the same
+        // batch. Include the live edge in case that link can no longer reach it.
         if previous.is_none() {
             subtrees.extend(next);
+            let first = host.node(parent).and_then(Node::first_child);
+            subtrees.extend(adjacent_element(host, first, DomHost::next_sibling));
         }
         if next.is_none() {
             subtrees.extend(previous);
+            let last = host.node(parent).and_then(Node::last_child);
+            subtrees.extend(adjacent_element(host, last, previous_sibling));
         }
     }
 }
