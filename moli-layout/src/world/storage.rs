@@ -181,10 +181,10 @@ impl<N> LayoutBoxes<N> {
         }
         self.storage_revision += 1;
         let order = BoxOrder::new(ids);
-        for id in &order.ids {
-            assert!(self.entries.contains_key(*id));
-        }
         self.entries.retain(|id, _| order.contains(id));
+        // Order construction rejects duplicate IDs. Every requested ID must
+        // therefore have been live if the resulting lengths match.
+        assert_eq!(self.entries.len(), order.len());
         self.order = Arc::new(order);
         true
     }

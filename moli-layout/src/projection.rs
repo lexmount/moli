@@ -779,7 +779,7 @@ where
             }
             let box_id = self.world.boxes.id_at(index);
             let id = LayoutOutputBoxId::from_index(index);
-            let geometry = overflow.geometry(box_id);
+            let (geometry, scrollable_overflow) = overflow.geometry_and_overflow(box_id);
             let resolved = geometry.resolved_transform;
             self.resolved_transforms[index] = resolved;
             if resolved.has_unsupported_3d {
@@ -792,7 +792,7 @@ where
                     PaintDiagnosticSeverity::Warning,
                 ));
             }
-            self.scrollable_overflow[index] = overflow.scrollable_overflow(box_id);
+            self.scrollable_overflow[index] = scrollable_overflow;
             let source = layout_box.source.or_else(|| {
                 (layout_box.anonymous_reason
                     == Some(LayoutAnonymousReason::InlineSplitContinuation))
@@ -850,8 +850,7 @@ where
     fn build_scroll_extents(&mut self, overflow_projection: &OverflowProjection) {
         for index in 0..self.world.boxes.len() {
             let id = self.world.boxes.id_at(index);
-            let geometry = overflow_projection.geometry(id);
-            let overflow = overflow_projection.scrollable_overflow(id);
+            let (geometry, overflow) = overflow_projection.geometry_and_overflow(id);
             let is_root = id == self.world.root;
             let scrollbar_thickness = self.scrollbar_control_thickness(id);
             let vertical_scrollbar_on_left = self.places_vertical_scrollbar_on_left(id);

@@ -1155,17 +1155,19 @@ where
 
     fn compact_cache_slots(&mut self) {
         let mut owners = vec![None; self.box_caches.len()];
-        for (index, layout_box) in self.boxes.iter().enumerate() {
+        for (id, layout_box) in self.boxes.keyed() {
             if let Some(slot) = layout_box.cache_slot {
-                owners[(slot.get() - 1) as usize] = Some(index);
+                owners[(slot.get() - 1) as usize] = Some(id);
             }
         }
         let mut next = 0;
         for (old, owner) in owners.into_iter().enumerate() {
             if let Some(owner) = owner {
-                self.box_caches.swap(old, next);
+                if old != next {
+                    self.box_caches.swap(old, next);
+                    self.boxes[owner].cache_slot = NonZeroU32::new((next + 1) as u32);
+                }
                 next += 1;
-                self.boxes[owner].cache_slot = NonZeroU32::new(next as u32);
             }
         }
         self.box_caches.truncate(next);

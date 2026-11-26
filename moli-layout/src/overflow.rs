@@ -85,16 +85,20 @@ impl OverflowProjection {
         self.geometries[self.order.index_of(id)]
     }
 
-    pub(crate) fn scrollable_overflow(&self, id: LayoutBoxId) -> LayoutRect {
-        self.scrollable_overflow[self.order.index_of(id)]
+    pub(crate) fn geometry_and_overflow(
+        &self,
+        id: LayoutBoxId,
+    ) -> (OverflowBoxGeometry, LayoutRect) {
+        let index = self.order.index_of(id);
+        (self.geometries[index], self.scrollable_overflow[index])
     }
 
     pub(crate) fn scroll_size<N>(&self, world: &LayoutWorld<N>, id: LayoutBoxId) -> LayoutSize
     where
         N: Copy + Debug + Eq + Hash,
     {
-        let scrollport = self.geometry(id).local_scrollport;
-        let overflow = self.scrollable_overflow(id);
+        let (geometry, overflow) = self.geometry_and_overflow(id);
+        let scrollport = geometry.local_scrollport;
         let reversed = world.boxes[id].style.reversed_scroll_axes();
         let width = if reversed.x {
             scrollport.right() - overflow.x
@@ -147,12 +151,12 @@ impl OverflowProjection {
         for touched in touched.iter().copied() {
             let mut current = Some(touched);
             while let Some(id) = current {
-                if self.affected[self.order.index_of(id)] {
+                let index = self.order.index_of(id);
+                if std::mem::replace(&mut self.affected[index], true) {
                     break;
                 }
-                self.affected[self.order.index_of(id)] = true;
                 affected.push(id);
-                current = self.parents[self.order.index_of(id)];
+                current = self.parents[index];
             }
         }
         if affected.is_empty() {
@@ -160,14 +164,14 @@ impl OverflowProjection {
         }
 
         for id in affected.iter().copied() {
+            let index = self.order.index_of(id);
             let geometry = project_box(world, viewport, id);
-            self.geometries[self.order.index_of(id)] = geometry;
-            self.scrollable_overflow[self.order.index_of(id)] = geometry.local_overflow;
-            self.remaining_affected_children[self.order.index_of(id)] = self.children
-                [self.order.index_of(id)]
-            .iter()
-            .filter(|child| self.affected[self.order.index_of(*child)])
-            .count();
+            self.geometries[index] = geometry;
+            self.scrollable_overflow[index] = geometry.local_overflow;
+            self.remaining_affected_children[index] = self.children[index]
+                .iter()
+                .filter(|child| self.affected[self.order.index_of(*child)])
+                .count();
         }
 
         let mut ready = affected
@@ -177,12 +181,15 @@ impl OverflowProjection {
             .collect::<VecDeque<_>>();
         let mut resolved = 0usize;
         while let Some(id) = ready.pop_front() {
-            self.resolve_one(world, id);
+            let index = self.order.index_of(id);
+            self.resolve_one(world, id, index);
             resolved = resolved.saturating_add(1);
-            if let Some(parent) = self.parents[self.order.index_of(id)]
-                && self.affected[self.order.index_of(parent)]
-            {
-                let remaining = &mut self.remaining_affected_children[self.order.index_of(parent)];
+            if let Some(parent) = self.parents[index] {
+                let parent_index = self.order.index_of(parent);
+                if !self.affected[parent_index] {
+                    continue;
+                }
+                let remaining = &mut self.remaining_affected_children[parent_index];
                 *remaining = remaining
                     .checked_sub(1)
                     .expect("overflow worklist child count underflowed");
@@ -197,8 +204,9 @@ impl OverflowProjection {
             "overflow dependencies must form an acyclic forest"
         );
         for id in affected.iter().copied() {
-            self.affected[self.order.index_of(id)] = false;
-            self.remaining_affected_children[self.order.index_of(id)] = 0;
+            let index = self.order.index_of(id);
+            self.affected[index] = false;
+            self.remaining_affected_children[index] = 0;
         }
         affected
     }
@@ -215,9 +223,10 @@ impl OverflowProjection {
             .collect::<VecDeque<_>>();
         let mut resolved = 0usize;
         while let Some(id) = ready.pop_front() {
-            self.resolve_one(world, id);
+            let index = self.order.index_of(id);
+            self.resolve_one(world, id, index);
             resolved = resolved.saturating_add(1);
-            if let Some(parent) = self.parents[self.order.index_of(id)] {
+            if let Some(parent) = self.parents[index] {
                 let remaining = &mut remaining_children[self.order.index_of(parent)];
                 *remaining = remaining
                     .checked_sub(1)
@@ -234,30 +243,31 @@ impl OverflowProjection {
         );
     }
 
-    fn resolve_one<N>(&mut self, world: &LayoutWorld<N>, id: LayoutBoxId)
+    fn resolve_one<N>(&mut self, world: &LayoutWorld<N>, id: LayoutBoxId, index: usize)
     where
         N: Copy + Debug + Eq + Hash,
     {
-        let mut overflow = self.geometries[self.order.index_of(id)].local_overflow;
-        for child in self.children[self.order.index_of(id)].iter().copied() {
-            overflow = overflow.union(self.child_contribution(world, id, child));
+        let mut overflow = self.geometries[index].local_overflow;
+        for child in self.children[index].iter().copied() {
+            overflow = overflow.union(self.child_contribution(world, id, index, child));
         }
-        self.scrollable_overflow[self.order.index_of(id)] = overflow;
+        self.scrollable_overflow[index] = overflow;
     }
 
     fn child_contribution<N>(
         &self,
         world: &LayoutWorld<N>,
         parent: LayoutBoxId,
+        parent_index: usize,
         child: LayoutBoxId,
     ) -> LayoutRect
     where
         N: Copy + Debug + Eq + Hash,
     {
-        let geometry = self.geometries[self.order.index_of(child)];
-        let mut visual_overflow = self.scrollable_overflow[self.order.index_of(child)];
+        let (geometry, mut visual_overflow) = self.geometry_and_overflow(child);
+        let child_box = &world.boxes[child];
         if clips_overflow(world, child) {
-            let modes = world.boxes[child].style.overflow_modes();
+            let modes = child_box.style.overflow_modes();
             // Clip/visible does not establish a scroll container. Clip just
             // that physical axis and keep overflow on the other axis. Native
             // controls and scrolling mechanisms still clip both axes.
@@ -272,20 +282,17 @@ impl OverflowProjection {
                 visual_overflow.height = geometry.border_box.height;
             }
         }
-        let location = world.boxes[child].final_layout.location;
+        let location = child_box.final_layout.location;
         let layout_translation = LayoutTransform2D::translation(location.x, location.y);
         let local_to_parent = layout_translation.concatenate(geometry.resolved_transform.transform);
         let parent_box = &world.boxes[parent];
-        let relative = if world.boxes[child].style.position() == crate::LayoutPosition::Relative {
+        let relative = if child_box.style.position() == crate::LayoutPosition::Relative {
+            let parent_content = self.geometries[parent_index].content_box;
             crate::inline::relative_atomic_inset_offset(
-                &world.boxes[child].style.taffy,
+                &child_box.style.taffy,
                 taffy::Size {
-                    width: self.geometries[self.order.index_of(parent)]
-                        .content_box
-                        .width,
-                    height: self.geometries[self.order.index_of(parent)]
-                        .content_box
-                        .height,
+                    width: parent_content.width,
+                    height: parent_content.height,
                 },
                 parent_box.style.direction(),
             )
@@ -298,7 +305,8 @@ impl OverflowProjection {
             parent_box.style.display(),
             LayoutDisplay::Grid | LayoutDisplay::InlineGrid
         );
-        let margin_to_parent = if parent_is_grid && !world.boxes[child].style.is_out_of_flow() {
+        let in_flow = !child_box.style.is_out_of_flow();
+        let margin_to_parent = if parent_is_grid && in_flow {
             // A grid's untransformed floor is its grid area, not the original
             // border box of an item overflowing its track. Keep the item's
             // margins in the same transformed physical space as its border.
@@ -314,10 +322,7 @@ impl OverflowProjection {
                     .map_rect(geometry.margin_box)
                     .bounding_rect(),
             );
-        if establishes_scroll_container(world, parent)
-            && !world.boxes[child].style.is_out_of_flow()
-            && !parent_is_grid
-        {
+        if in_flow && !parent_is_grid && establishes_scroll_container(world, parent) {
             // End padding extends the direct in-flow margin box, not its
             // escaping descendants or transformed visual bounds. A grid
             // item's overflow does not grow its containing grid area.

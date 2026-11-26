@@ -476,15 +476,8 @@ where
         after: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut children = Vec::new();
-        if style.display().is_list_item()
-            && let Some(marker) = self.styles.marker_style(source_node)?
-        {
-            children.extend(self.build_generated_pseudo(
-                world,
-                source_node,
-                LayoutPseudo::Marker,
-                marker.into_style(),
-            )?);
+        if style.display().is_list_item() {
+            children.extend(self.build_list_marker(world, source_node)?);
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?);
         for child in self.checked_flat_children(source_node)? {
@@ -492,6 +485,22 @@ where
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::After, after)?);
         Ok(children)
+    }
+
+    fn build_list_marker(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        source_node: S::NodeId,
+    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let Some(marker) = self.styles.marker_style(source_node)? else {
+            return Ok(Vec::new());
+        };
+        self.build_generated_pseudo(
+            world,
+            source_node,
+            LayoutPseudo::Marker,
+            marker.into_style(),
+        )
     }
 
     fn build_pseudo(

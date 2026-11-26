@@ -127,3 +127,102 @@ fn retained_resize_revalidates_media_units_topology_and_scrollbar_constraints() 
         }
     }
 }
+
+#[test]
+fn resize_keeps_descendants_when_containers_change_formatting_and_generated_content() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;font:16px/1.25 sans-serif}",
+        "main{display:grid;grid-template-columns:1fr 2fr;gap:8px}",
+        "main::before{content:'wide';display:block;background:green}",
+        "article::after{content:'';display:block;clear:both;height:8px;background:red}",
+        "p{margin:0}span{background:yellow}",
+        "@media(max-width:600px){main{display:block}main::before{content:none}",
+        "article::after{content:'narrow';display:contents}}",
+        "@media(max-width:300px){main{display:flex}article::after{content:none}}</style>",
+        "<main><span id=item>inline item</span><article id=content>",
+        "<p id=first>first line and its continuation</p><p>more words in the article</p>",
+        "<p>third line of the same article</p><p>fourth line of the article</p>",
+        "</article></main>",
+    ));
+    for (index, width) in [900, 480, 240, 460, 900].into_iter().enumerate() {
+        vm.set_viewport_surface(Some(surface(width, 400, 1.0)))
+            .unwrap();
+        let viewport = LayoutViewport::new(width, 400, 1.0);
+        let current = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+        let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+        if index > 0 {
+            assert!(metrics.reused_inline_contexts >= 4, "{width}: {metrics:?}");
+        }
+        let host = vm.context_host_weak_for_test().upgrade().unwrap();
+        let host = host.borrow();
+        let document = host.document_handle();
+        let fresh = host
+            .build_layout_pass_for_document(
+                document,
+                LayoutPassRequest::with_paint(viewport, LayoutFlushReason::Screenshot),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(&current), fresh.paint_snapshot(), "width={width}");
+        for name in ["item", "content", "first"] {
+            let node = vm.document_runtime.get_element_by_id(name).unwrap();
+            let rects = host
+                .with_latest_layout_tree_for_document(document, |tree| {
+                    tree.client_rects_for_source(node)
+                })
+                .unwrap();
+            assert_eq!(
+                rects,
+                fresh.client_rects_for_source(node),
+                "{width}: {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn retained_list_items_refresh_markers_for_new_styles_and_numbering() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;font:16px/1.25 sans-serif}",
+        "li{list-style-position:inside}p{margin:0}li::marker{color:green}",
+        "@media(max-width:600px){li::marker{color:blue}#first::marker{content:'one. '}}</style>",
+        "<ol id=items start=4><li id=first><p>first item content</p></li>",
+        "<li id=second><p>second item content</p></li>",
+        "<li id=third><p>third item content</p></li></ol>",
+    ));
+    for (index, (width, edit)) in [
+        (900, ""),
+        (480, ""),
+        (480, "items.reversed=true; items.start=12; second.value=6"),
+        (480, "items.prepend(third)"),
+        (
+            900,
+            "items.removeAttribute('start'); second.removeAttribute('value')",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if !edit.is_empty() {
+            vm.eval(edit).unwrap();
+        }
+        vm.set_viewport_surface(Some(surface(width, 400, 1.0)))
+            .unwrap();
+        let viewport = LayoutViewport::new(width, 400, 1.0);
+        let current = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+        if index == 1 {
+            let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+            assert!(metrics.reused_inline_contexts >= 3, "{metrics:?}");
+        }
+        let host = vm.context_host_weak_for_test().upgrade().unwrap();
+        let host = host.borrow();
+        let fresh = host
+            .build_layout_pass_for_document(
+                host.document_handle(),
+                LayoutPassRequest::with_paint(viewport, LayoutFlushReason::Screenshot),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(&current), fresh.paint_snapshot(), "case {index}");
+    }
+}

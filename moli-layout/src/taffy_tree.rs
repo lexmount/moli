@@ -133,11 +133,11 @@ impl PreparedWorldLayout {
 
         let mut invalidated = Vec::new();
         while let Some(id) = self.feedback_invalidation_worklist.pop() {
-            if self.feedback_invalidation_marks[world.boxes.index_of(id)] {
+            let index = world.boxes.index_of(id);
+            if std::mem::replace(&mut self.feedback_invalidation_marks[index], true) {
                 continue;
             }
-            self.feedback_invalidation_marks[world.boxes.index_of(id)] = true;
-            invalidated.push(id);
+            invalidated.push(index);
             world.clear_layout_caches(id);
             if let Some(parent) = world.boxes[id].layout_parent {
                 self.feedback_invalidation_worklist.push(parent);
@@ -149,8 +149,8 @@ impl PreparedWorldLayout {
                 layout.cache.clear();
             }
         }
-        for id in invalidated.iter().copied() {
-            self.feedback_invalidation_marks[world.boxes.index_of(id)] = false;
+        for &index in &invalidated {
+            self.feedback_invalidation_marks[index] = false;
         }
         invalidated.len()
     }
@@ -221,16 +221,14 @@ where
     }
     update_viewport_layout_styles(world, viewport);
     prepare_tables(world, &tree.table_roots);
-    let mut prepared = PreparedWorldLayout {
+    PreparedWorldLayout {
         tree,
         reused_tree,
-        numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
+        numeric_unrounded_layouts: Vec::new(),
         numeric_storage_revision: world.boxes.storage_revision(),
         feedback_invalidation_marks: vec![false; world.boxes.len()],
         feedback_invalidation_worklist: Vec::new(),
-    };
-    prepared.capture_numeric_geometry(world);
-    prepared
+    }
 }
 
 fn update_viewport_layout_styles<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
@@ -285,7 +283,9 @@ pub(crate) fn compute_prepared_world_layout<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    prepared.restore_numeric_geometry(world);
+    if !prepared.numeric_unrounded_layouts.is_empty() {
+        prepared.restore_numeric_geometry(world);
+    }
     world.begin_numeric_layout_tracking();
     update_viewport_layout_styles(world, viewport);
 
@@ -313,7 +313,12 @@ where
             },
         );
     }
-    prepared.capture_numeric_geometry(world);
+    // Only a corrective scrollbar pass reads this snapshot. The first pass
+    // starts with the geometry already on the boxes, and a hidden scrollbar
+    // cannot trigger another computation.
+    if !world.environment.scrollbars_hidden {
+        prepared.capture_numeric_geometry(world);
+    }
     physicalize_vertical_block_flow(world);
     finish_positioned_static_layout(world, viewport, &prepared.tree.positioned_static_sources);
     finish_inline_positioned_layout(world, viewport);
@@ -327,9 +332,10 @@ where
     // otherwise Taffy would allocate them a normal-flow row. Round each
     // detached numeric root explicitly so paint consumes the geometry written
     // by `finish_outside_list_markers` rather than its zeroed final layout.
-    let outside_markers = (0..world.boxes.len())
-        .map(|index| world.boxes.id_at(index))
-        .filter(|id| world.boxes[id].outside_list_marker)
+    let outside_markers = world
+        .boxes
+        .keyed()
+        .filter_map(|(id, layout_box)| layout_box.outside_list_marker.then_some(id))
         .collect::<Vec<_>>();
     for marker in outside_markers {
         round_layout_to_css_subpixels(world, marker.to_taffy());
