@@ -5141,6 +5141,8 @@ pub enum RendererPageCommand {
     #[cfg(feature = "molio")]
     ReadViewportSelection(RendererDocumentLifecycleIdentity),
     #[cfg(feature = "molio")]
+    CutViewportSelection(RendererDocumentLifecycleIdentity),
+    #[cfg(feature = "molio")]
     ApplyViewportEdit(super::RendererViewportEdit),
     #[cfg(feature = "molio")]
     DropViewportFiles {

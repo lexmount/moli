@@ -465,6 +465,20 @@ impl PageVm {
         self.vm_mut().viewport_selected_text()
     }
 
+    pub(super) fn cut_viewport_selection(
+        &mut self,
+        document: RendererDocumentLifecycleIdentity,
+    ) -> anyhow::Result<Option<String>> {
+        if document != self.document_lifecycle.identity()
+            || !self.document_settings.document_activity.focused
+        {
+            return Ok(None);
+        }
+        let text = self.vm_mut().cut_viewport_selection()?;
+        self.wake_viewport_frames();
+        Ok(text)
+    }
+
     pub(super) fn drop_viewport_files(
         &mut self,
         document: RendererDocumentLifecycleIdentity,

@@ -96,6 +96,7 @@ impl RendererPageCommand {
             | Self::TraverseViewportHistory(..)
             | Self::ReadViewportEditor
             | Self::ReadViewportSelection(..)
+            | Self::CutViewportSelection(..)
             | Self::ApplyViewportEdit(..)
             | Self::DropViewportFiles { .. }
             | Self::WakeViewportFrames => OwnerOnly,

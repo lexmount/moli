@@ -89,6 +89,11 @@ pub enum TabCommand {
         document: RendererDocumentLifecycleIdentity,
         reply: oneshot::Sender<Option<String>>,
     },
+    Cut {
+        document: RendererDocumentLifecycleIdentity,
+        key: KeyInput,
+        reply: oneshot::Sender<Option<String>>,
+    },
     DropFiles {
         document: RendererDocumentLifecycleIdentity,
         position: (f64, f64),
@@ -595,6 +600,26 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                             Ok(text) => { let _ = reply.send(text); Ok(()) }
                             Err(error) => Err(error),
                         }
+                    }
+                    TabCommand::Cut { document, key, reply } if activity.focused => {
+                        let result = match page.dispatch_key_event_with_outcome_async(
+                            key.event, &key.key, &key.code, "", key.modifiers, key.repeat, false,
+                        ).await {
+                            Ok(outcome) => {
+                                if let Some(activation) = outcome.pending_download {
+                                    downloads.start(activation);
+                                }
+                                if outcome.handled {
+                                    page.cut_viewport_selection(document).await.map(|text| {
+                                        let _ = reply.send(text);
+                                    })
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            Err(error) => Err(error),
+                        };
+                        if result.is_ok() { refresh_editor(&mut page, &tab.state).await } else { result }
                     }
                     TabCommand::DropFiles { document, position, paths, modifiers } if activity.visible => {
                         drop_files(&mut page, document, position, paths, modifiers).await

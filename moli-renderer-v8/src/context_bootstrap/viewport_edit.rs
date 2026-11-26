@@ -5,9 +5,13 @@ use std::{
 };
 
 use moli_layout::{LayoutQuery, LayoutQueryAnswer, LayoutRect};
-use moli_webapi::events::subclasses::construct_native_composition_event;
+use moli_webapi::events::subclasses::{
+    construct_native_clipboard_event, construct_native_composition_event,
+};
 
 use super::{
+    DragDataStoreMode, create_drag_data_transfer_view, create_native_drag_data_store,
+    finish_drag_data_transfer_view, native_data_transfer_get_data, native_data_transfer_has_type,
     range::new_range_for_document, range_algorithms::range_selection_string_contents, selection::*,
     selection_value_for_window,
 };
@@ -173,6 +177,52 @@ fn document_selection_text(scope: &mut v8::PinScope<'_, '_>) -> Option<String> {
     let selection = selection_value_for_window(scope, window)?;
     let range = selection_range(scope, selection)?;
     range_selection_string_contents(scope, range).filter(|text| !text.is_empty())
+}
+
+pub(crate) fn cut_viewport_selection(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: *mut PageScriptHost,
+) -> Option<String> {
+    let target = active_target(unsafe { &*host })?;
+    let realm = node_owner_document_relevant_context(scope, host, target)?;
+    let scope = &mut v8::ContextScope::new(scope, realm);
+    let editor = read_editor(scope, unsafe { &*host }, target)?;
+    if editor.password || editor.selection.is_empty() {
+        return None;
+    }
+    let store = create_native_drag_data_store(scope)?;
+    let transfer =
+        create_drag_data_transfer_view(scope, &store, DragDataStoreMode::ReadWrite, "none")?;
+    let event = construct_native_clipboard_event(scope, "cut", transfer)?;
+    let allowed = dispatch_public_event(scope, host, target, event).allows_default();
+    let replacement = (!allowed && native_data_transfer_has_type(scope, transfer, "text/plain"))
+        .then(|| native_data_transfer_get_data(scope, transfer, "text/plain"));
+    finish_drag_data_transfer_view(scope, transfer);
+    if !allowed {
+        return replacement;
+    }
+
+    let runtime = unsafe { &*host };
+    if active_target(runtime) != Some(target) {
+        return None;
+    }
+    let editor = read_editor(scope, runtime, target)?;
+    if editor.password || editor.selection.is_empty() {
+        return None;
+    }
+    let text = text_at(&editor.text, &editor.selection);
+    // The default cut copies the selection even if beforeinput vetoes the
+    // deletion. Selection, focus, and value are revalidated before editing.
+    replace_range(
+        scope,
+        host,
+        &editor,
+        editor.revision(runtime),
+        &editor.selection,
+        "",
+        TextEditInputType::DeleteByCut,
+    );
+    Some(text)
 }
 
 fn read_editor(
