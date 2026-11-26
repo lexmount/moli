@@ -19,6 +19,7 @@ pub(crate) enum PageDomManipulationTestFamily {
     HashChange,
     ElementToggle,
     FileEntryFileCallback,
+    MainDocumentLifecycle,
     ImageLoadEvent,
     PopupLoadEvent,
     ConnectedStyleEvent,
@@ -32,6 +33,9 @@ impl PageDomManipulationTestFamily {
         matches!(
             (self, owner),
             (
+                Self::MainDocumentLifecycle,
+                RendererPageDomManipulationOwner::MainDocumentLifecycle(_)
+            ) | (
                 Self::BroadcastChannel,
                 RendererPageDomManipulationOwner::BroadcastChannel(_)
             ) | (

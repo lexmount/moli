@@ -193,7 +193,7 @@ async fn iframe_javascript_url_string_completion_replaces_child_document() {
         "javascript URL should execute on DocumentScriptReady",
     )
     .await;
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -523,7 +523,7 @@ async fn child_pageshow_replacement_stops_old_frame_finish_and_protocol_output()
             "old Window lifecycle listeners must retain current callback relevant realms"
         );
     }
-    for context in ["old interactive", "old DOMContentLoaded", "old complete"] {
+    for context in ["old DOMContentLoaded", "old complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -574,11 +574,7 @@ async fn child_pageshow_replacement_stops_old_frame_finish_and_protocol_output()
         "replacement pageshow handlers should install",
     )
     .await;
-    for context in [
-        "replacement interactive",
-        "replacement DOMContentLoaded",
-        "replacement complete",
-    ] {
+    for context in ["replacement DOMContentLoaded", "replacement complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -753,13 +749,12 @@ async fn child_static_media_delays_complete_and_iframe_load_until_loadeddata() {
         "child media parser script should run before lifecycle",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "child media document should enter interactive and accept its media token",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         &loader,
@@ -876,13 +871,12 @@ async fn child_media_network_failure_releases_lifecycle_before_later_host_load()
         "child media parser script should install listeners",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "child failed media document should become interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     let request = request_rx.await.expect("child media request should arrive");
     assert!(
         request
@@ -1002,13 +996,12 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
         "child image parser script should install listeners",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "child image document should become interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     let request = request_rx.await.expect("child image request should arrive");
     assert!(
         request
@@ -1180,13 +1173,12 @@ async fn child_dynamic_media_accepted_during_dcl_delays_later_load_turns() {
         "dynamic media parser script should install its DCL producer",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "dynamic media document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         &loader,
@@ -1278,13 +1270,12 @@ async fn child_static_text_track_starts_at_interactive_without_own_load_token() 
         "child track parser script should install its listener",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "interactive should start the static child track",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
             PageDomManipulationTestFamily::TextTrackDefaultMode,
@@ -1406,12 +1397,12 @@ async fn child_document_replacement_retires_media_sequence_and_delay() {
         "first media document parser script should run",
     )
     .await;
-    expect_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "first media document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -1456,7 +1447,6 @@ async fn child_document_replacement_retires_media_sequence_and_delay() {
     )
     .await;
     for (source, transition) in [
-        (ChildFrameSemanticTurnKind::DocumentLifecycle, "interactive"),
         (
             ChildFrameSemanticTurnKind::DocumentLifecycle,
             "DOMContentLoaded",
@@ -1527,13 +1517,12 @@ async fn moving_pending_child_media_restarts_under_the_new_document_owner() {
         "moving media parser script should run",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "moving media document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         &loader,
@@ -1643,10 +1632,11 @@ async fn child_image_event_delay_blocks_complete_and_host_load_until_terminal() 
   frame.id = "image-frame";
   frame.onload = () => __childImageDelayEvents.push("frame-load");
   frame.srcdoc = `
-    <img id="hero" src="image.png">
+    <img id="hero">
     <script>
       document.addEventListener("DOMContentLoaded", () => {
         parent.__childImageDelayEvents.push("dcl");
+        document.getElementById("hero").src = "image.png";
       });
       document.getElementById("hero").addEventListener("load", event => {
         parent.__childImageDelayEvents.push(
@@ -1672,12 +1662,12 @@ async fn child_image_event_delay_blocks_complete_and_host_load_until_terminal() 
         "child image parser script should run before lifecycle",
     )
     .await;
-    expect_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "child image document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -1747,13 +1737,14 @@ async fn child_document_replacement_cancels_stale_image_event_and_delay() {
     );
   };
   frame.srcdoc = `
-    <img id="old-image" src="old.png">
+    <img id="old-image">
     <script>
       document.getElementById("old-image").addEventListener("load", () => {
         parent.__childImageReplacementEvents.push("stale-image-load");
       });
       document.addEventListener("DOMContentLoaded", () => {
         parent.__childImageReplacementEvents.push("first-dcl");
+        document.getElementById("old-image").src = "old.png";
       });
     <\/script>`;
   (document.body || document.documentElement || document).appendChild(frame);
@@ -1774,12 +1765,12 @@ async fn child_document_replacement_cancels_stale_image_event_and_delay() {
         "first image document parser script should run",
     )
     .await;
-    expect_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "first image document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -1823,8 +1814,20 @@ async fn child_document_replacement_cancels_stale_image_event_and_delay() {
         "replacement parser script should run",
     )
     .await;
+    assert!(
+        vm.apply_next_image_load_event_body_for_test()
+            .expect("stale image DOM task"),
+        "the earlier image task must retire at the shared DOM FIFO head"
+    );
+    assert_eq!(
+        vm.eval("__childImageReplacementEvents.join('|')")
+            .expect("retired image trace"),
+        "first-dcl",
+        "the stale image task must not dispatch into the replacement"
+    );
+
+    let _ = drain_image_load_event_bodies_for_test(&mut vm);
     for (source, transition) in [
-        (ChildFrameSemanticTurnKind::DocumentLifecycle, "interactive"),
         (
             ChildFrameSemanticTurnKind::DocumentLifecycle,
             "DOMContentLoaded",
@@ -1840,7 +1843,6 @@ async fn child_document_replacement_cancels_stale_image_event_and_delay() {
         .await;
     }
 
-    let _ = drain_image_load_event_bodies_for_test(&mut vm);
     assert_eq!(
         vm.run_next_child_frame_semantic_turn_for_test().await,
         None,
@@ -1866,10 +1868,11 @@ async fn moving_pending_child_image_rebinds_event_without_consuming_new_request(
   frame.id = "moving-image-frame";
   frame.onload = () => __movedChildImageEvents.push("frame-load");
   frame.srcdoc = `
-    <img id="moving-image" src="moving.png">
+    <img id="moving-image">
     <script>
       document.addEventListener("DOMContentLoaded", () => {
         parent.__movedChildImageEvents.push("child-dcl");
+        document.getElementById("moving-image").src = "moving.png";
       });
     <\/script>`;
   (document.body || document.documentElement || document).appendChild(frame);
@@ -1889,12 +1892,12 @@ async fn moving_pending_child_image_rebinds_event_without_consuming_new_request(
         "moving image parser script should run",
     )
     .await;
-    expect_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "moving image document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -1922,12 +1925,42 @@ async fn moving_pending_child_image_rebinds_event_without_consuming_new_request(
 "#,
     )
     .expect("pending child image should move to the parent document");
+    assert!(
+        vm.apply_next_image_load_event_body_for_test()
+            .expect("old image DOM task"),
+        "the old image task must retire before the later complete task at the shared FIFO head"
+    );
+    assert_eq!(
+        vm.eval("__movedChildImageEvents.join('|')")
+            .expect("old image trace"),
+        "child-dcl",
+        "retiring the old image task must leave the rebound request pending"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "moving the image should release complete on a later lifecycle turn",
     )
     .await;
+    assert!(
+        !vm.has_ready_child_frame_semantic_turn_for_test(ChildFrameSemanticTurnKind::HostLoad),
+        "the rebound image event must keep its earlier position in the shared DOM FIFO"
+    );
+    assert!(
+        vm.apply_next_image_load_event_body_for_test()
+            .expect("rebound image DOM task"),
+        "the new image request must deliver before the later HostLoad task"
+    );
+    assert_eq!(
+        vm.eval("__movedChildImageEvents.join('|')")
+            .expect("rebound image trace"),
+        "child-dcl|moved-image-load",
+        "the rebound image request must deliver once without running the later child load"
+    );
+    assert!(
+        vm.has_ready_child_frame_semantic_turn_for_test(ChildFrameSemanticTurnKind::HostLoad),
+        "the child load must now be at the DOM FIFO head"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::HostLoad,
@@ -1935,20 +1968,14 @@ async fn moving_pending_child_image_rebinds_event_without_consuming_new_request(
     )
     .await;
     assert_eq!(
-        vm.eval("globalThis.__movedChildImageEvents.join('|')")
-            .expect("moved image child lifecycle should evaluate"),
-        "child-dcl|frame-load",
-        "moving the image must release the old child delay through a later lifecycle turn"
-    );
-
-    assert!(
-        drain_image_load_event_bodies_for_test(&mut vm) > 0,
-        "old and rebound image tasks should drain"
+        drain_image_load_event_bodies_for_test(&mut vm),
+        0,
+        "the old and rebound image tasks must both have been consumed exactly once"
     );
     assert_eq!(
         vm.eval("globalThis.__movedChildImageEvents.join('|')")
             .expect("moved image event result should evaluate"),
-        "child-dcl|frame-load|moved-image-load",
+        "child-dcl|moved-image-load|frame-load",
         "the stale child task must not consume or duplicate the rebound image request"
     );
 }
@@ -2179,12 +2206,12 @@ async fn child_document_close_without_defer_queues_replacement_domcontentloaded(
         "child parser script should install the original DCL handler",
     )
     .await;
-    expect_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "original child document should become interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,

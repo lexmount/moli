@@ -1,15 +1,8 @@
-//! Task-end boundary for an exact child `Document` lifecycle action.
+//! Task-end boundary for an exact child Document lifecycle action.
 //!
-//! Interactive, `DOMContentLoaded`, and complete transitions are ordinary
-//! selected child-frame tasks. Their bodies synchronously dispatch the
-//! corresponding document event when a wrapper still exists, but deliberately
-//! leave Promise reactions pending. This module maps that execution-produced
-//! fact to the sole Page task-completion authority.
-//!
-//! This does not govern the parser-owned direct-successor boundary where the
-//! final deferred script completes parsing and synchronously dispatches DCL in
-//! the same task. That separately typed parser completion path must remain
-//! contiguous and must not be turned into another scheduler task here.
+//! DCL and complete use the shared DOM source. Interactive readiness belongs
+//! to parser stop; an unmaterialized realm may need a child owner continuation.
+//! The selected dispatcher completes the event's checkpoint and follow-up.
 
 use crate::page_task_queue::{
     PageChildDocumentLifecycleTargetEffect, PageChildDocumentLifecycleTurnAction,
