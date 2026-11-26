@@ -280,17 +280,18 @@ where
                 let transform = capture.viewport_to_surface.concatenate(viewport_transform);
                 let areas = BoxAreas::for_box(projection, id);
                 let filters = project_filters(style);
+                let has_filter_group = filters.has_identity_effect || !filters.effects.is_empty();
                 // Filter source paint may sample outside a CSS clip. Keep the
                 // rectangle around the filtered output and omit it from the
                 // per-fragment clip chain until this context closes.
-                let filter_output_clips = if filters.effects.is_empty() {
-                    0
-                } else {
+                let filter_output_clips = if has_filter_group {
                     active_clips.push_filter_output_clips(
                         projection,
                         projection.geometry(id.index()).clip_chain,
                         &mut snapshot,
                     )
+                } else {
+                    0
                 };
                 let clip_path_layer = match project_clip_path(style, areas) {
                     Ok(Some(shape)) => {
@@ -387,8 +388,11 @@ where
                     });
                 let effect_clip = expanded_filter_clip(effect_source_clip, &filters.effects);
                 let mut effect_layers = 0usize;
-                let needs_effect_layer =
-                    style.opacity() < 1.0 || style.blend_mode() != crate::PaintBlendMode::Normal;
+                // An identity-only filter list still isolates its descendants
+                // from the backdrop, including their mix-blend-mode effects.
+                let needs_effect_layer = style.opacity() < 1.0
+                    || style.blend_mode() != crate::PaintBlendMode::Normal
+                    || (filters.has_identity_effect && filters.effects.is_empty());
                 if needs_effect_layer {
                     snapshot.push_fragment(PaintFragment::PushLayer {
                         opacity: style.opacity(),

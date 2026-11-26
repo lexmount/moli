@@ -138,6 +138,67 @@ document.body.innerHTML = `<table id=precedence><colgroup><col><col></colgroup><
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn identity_color_filters_preserve_containing_block_and_blend_isolation() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/identity-filters.html")?,
+        );
+        page.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body { margin:0; background:red }
+#identity { margin:24px 40px; width:32px; height:32px;
+            filter:contrast(100%) saturate(100%) brightness(1) opacity(1)
+                   grayscale(0) invert(0) sepia(0) hue-rotate(0deg) }
+#child { position:fixed; left:4px; top:12px; width:12px; height:12px;
+         mix-blend-mode:multiply; background:lime }
+#mixed { position:absolute; left:80px; top:24px; width:16px; height:16px;
+         filter:contrast(1) brightness(0) saturate(1); background:lime }
+</style>`;
+document.body.innerHTML = '<div id=identity><div id=child></div></div><div id=mixed></div>';
+"#,
+        )?;
+
+        let snapshot = page
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(120, 80, 1.0))?
+            .expect("identity filter paint");
+        let filters: Vec<_> = snapshot
+            .fragments
+            .iter()
+            .filter_map(|fragment| match fragment {
+                moli_layout::PaintFragment::PushLayer { filter, .. } => *filter,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(filters, [moli_layout::PaintFilter::Brightness(0.0)]);
+        assert_eq!(
+            page.vm_mut().eval(
+                r#"JSON.stringify([
+            child.getBoundingClientRect().x, child.getBoundingClientRect().y,
+            getComputedStyle(identity).filter.startsWith('contrast(1) saturate(1)')
+        ])"#
+            )?,
+            "[44,36,true]"
+        );
+
+        let image = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x, y| {
+            let index = (y * image.width as usize + x) * 4;
+            &image.rgba[index..index + 4]
+        };
+        assert_eq!(pixel(48, 40), [0, 255, 0, 255]);
+        assert_eq!(pixel(84, 28), [0, 0, 0, 255]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("identity filter fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_paint_executes_clip_filter_and_gradient_mask_layers() {
     run_page_vm_async_test(async move {
         let loader =
