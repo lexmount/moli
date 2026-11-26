@@ -2,6 +2,52 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_absolute_static_position_counts_decorated_inline_edges() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for (doctype, start_margin_y) in [
+            ("<!doctype html>", 32.0),
+            (
+                r#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">"#,
+                0.0,
+            ),
+            ("", 0.0),
+        ] {
+            let html = format!(
+                r#"{doctype}
+<style>
+body {{ margin:0 }}
+.host {{ position:relative; width:100px; font-size:0; line-height:0 }}
+.abs {{ position:absolute; display:block; width:10px; height:10px }}
+.atom {{ display:inline-block; overflow:hidden; width:32px; height:32px }}
+</style>
+<div class=host><span style="padding-left:10px;margin-left:-10px"><i class=abs></i></span><span class=atom></span></div>
+<div class=host dir=rtl><span style="padding-right:10px;margin-right:-10px"><i class=abs></i></span><span class=atom></span></div>
+<div class=host><span style="margin-left:10px"><i class=abs></i></span><span class=atom></span></div>
+<div class=host><span style="margin-right:10px"></span><i class=abs></i><span class=atom></span></div>"#,
+            );
+            let dom_host = DomHost::from_dom(HtmlParser::SCRIPTING_ENABLED.parse(
+                Url::parse("https://example.com/inline-static-position.html")?,
+                html,
+            ));
+            let mut page = test_page_vm_with_loader_and_dom_host(&loader, dom_host);
+            page.vm_mut().sync_live_document_style_sources();
+            page.vm_mut()
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 240, 1.0))?
+                .expect("static positioning fixture must publish layout");
+            let y_offsets: Vec<f64> = serde_json::from_str(&page.vm_mut().eval(
+                r#"JSON.stringify(Array.from(document.querySelectorAll('.host'), host =>
+  host.querySelector('.abs').getBoundingClientRect().top - host.getBoundingClientRect().top))"#,
+            )?)?;
+            assert_eq!(y_offsets, [32.0, 32.0, start_margin_y, 32.0], "{doctype:?}");
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("block static positions must follow Chromium around inline edges");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn positioned_layout_matches_chromium_auto_margin_and_relative_inset_rules() {
     run_page_vm_async_test(async move {
         let loader =

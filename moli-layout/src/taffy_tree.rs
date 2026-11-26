@@ -21,8 +21,8 @@ use crate::{
         InlineContentWidthsMemo, InlineEdgeContribution, InlineFormattingContext, InlineFragments,
         InlineLinePlacement, InlineMeasurementInputs, InlineNumericInputs, InlineObjectRole,
         break_inline_lines, build_inline_fragments, build_inline_line_placements,
-        first_in_flow_item_index, measure_inline_lines, position_inline_edges,
-        relative_atomic_inset_offset, reset_inline_layout_for_probe,
+        measure_inline_lines, position_inline_edges, relative_atomic_inset_offset,
+        reset_inline_layout_for_probe,
     },
     positioned::{
         FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
@@ -3231,7 +3231,6 @@ where
         }
         let rtl = layout.is_rtl();
         for (line_index, line) in layout.lines().enumerate() {
-            let mut line_content_boundary = None;
             let line_placement = measurement
                 .line_placements
                 .as_ref()
@@ -3256,16 +3255,14 @@ where
                         && style.taffy.inset.bottom.is_auto()
                         && let Some(placement) = line_placement
                     {
-                        let first_in_flow = *line_content_boundary.get_or_insert_with(|| {
-                            first_in_flow_item_index(context, layout, &line)
-                        });
-                        let has_preceding_content = first_in_flow.is_some_and(|index| {
-                            if rtl {
-                                index > item_index
-                            } else {
-                                index < item_index
-                            }
-                        });
+                        let has_preceding_content =
+                            placement.first_in_flow_item_index.is_some_and(|index| {
+                                if rtl {
+                                    index > item_index
+                                } else {
+                                    index < item_index
+                                }
+                            });
                         // A hypothetical block starts at the line's block-start,
                         // or after the line when in-flow content precedes it.
                         placement.rect.y
