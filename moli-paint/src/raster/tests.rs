@@ -1169,7 +1169,8 @@ fn html_text_shadow_uses_fill_ink_in_both_paint_orders() {
 #[cfg(feature = "molio")]
 #[test]
 fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
-    let mut first = snapshot(96, 120, 2.0);
+    let mut first = snapshot(96, 120, 1.25);
+    first.surface.device_scale = 2.0;
     first.push_fragment(PaintFragment::solid_rect(
         PaintRect::new(0.0, 0.0, 96.0, 120.0),
         PaintColor::new(0.1, 0.3, 0.5, 1.0),
@@ -1179,7 +1180,7 @@ fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
     ));
     first.push_fragment(PaintFragment::Image(PaintImage {
         image,
-        destination: PaintRect::new(3.0, 30.0, 80.0, 30.0),
+        destination: PaintRect::new(3.0, 30.5, 80.0, 30.0),
         sampling: PaintImageSampling::Linear,
         transform: PaintTransform2D::IDENTITY,
     }));
@@ -1191,8 +1192,14 @@ fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
     second.images[image.index()].image =
         Arc::new(moli_image::RgbaImage::try_new(1, 1, vec![0, 255, 0, 180]).unwrap());
     let layout = raster_buffer_layout(96.0, 120.0, 2.0).unwrap();
+    let mut different_dpr = first.clone();
+    different_dpr.viewport.device_pixel_ratio = 2.0;
+    assert_eq!(
+        raster_damage_rows(&first, &different_dpr, layout),
+        0..layout.height
+    );
     let rows = raster_damage_rows(&first, &second, layout);
-    assert_eq!(rows, 58..122);
+    assert_eq!(rows, 58..124);
     let mut actual = vec![0; layout.byte_len];
     raster_snapshot_into(&first, &mut actual, RasterPixelFormat::Bgra8).unwrap();
     let mut expected = vec![0; layout.byte_len];

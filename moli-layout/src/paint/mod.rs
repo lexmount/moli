@@ -34,9 +34,9 @@ use text::{
 
 use crate::{
     LayoutBoxId, LayoutClipChainId, LayoutClipKind, LayoutElementCategory, LayoutError,
-    LayoutFormControlKind, LayoutInputControlKind, LayoutOutputBoxId, LayoutRect, LayoutReplacedKind,
-    LayoutWorld, PaintColor, PaintDiagnostic, PaintDiagnosticSeverity, PaintEdgeSizes, PaintFragment,
-    PaintPixelGrid, PaintShape, PaintSnapshot,
+    LayoutFormControlKind, LayoutInputControlKind, LayoutOutputBoxId, LayoutRect,
+    LayoutReplacedKind, LayoutWorld, PaintColor, PaintDiagnostic, PaintDiagnosticSeverity,
+    PaintEdgeSizes, PaintFragment, PaintPixelGrid, PaintShape, PaintSnapshot,
     capture::ResolvedPaintCapture,
     projection::{PaintProjection, PaintSpace},
     stacking::PaintOrderEvent,
@@ -136,8 +136,8 @@ impl ActivePaintClipChain {
 impl PaintSpace {
     /// Snap to the device pixel grid before applying property transforms.
     /// The result is still in CSS pixels and includes the paint offset.
-    fn pixel_snapped_rect(self, rect: LayoutRect, device_scale: f32) -> Option<LayoutRect> {
-        PaintPixelGrid::new(device_scale).snap_rect(self.pre_transform_rect(rect))
+    fn pixel_snapped_rect(self, rect: LayoutRect, grid: PaintPixelGrid) -> Option<LayoutRect> {
+        grid.snap_rect(self.pre_transform_rect(rect))
     }
 
     fn local_rect(self, rect: LayoutRect) -> LayoutRect {
@@ -148,13 +148,15 @@ impl PaintSpace {
         }
     }
 
-    fn pixel_snapped_box_shape(self, shape: PaintShape, device_scale: f32) -> Option<PaintShape> {
+    fn pixel_snapped_box_shape(
+        self,
+        shape: PaintShape,
+        grid: PaintPixelGrid,
+    ) -> Option<PaintShape> {
         match shape {
-            PaintShape::Rect(rect) => self
-                .pixel_snapped_rect(rect, device_scale)
-                .map(PaintShape::Rect),
+            PaintShape::Rect(rect) => self.pixel_snapped_rect(rect, grid).map(PaintShape::Rect),
             PaintShape::RoundedRect { rect, radii } => self
-                .pixel_snapped_rect(rect, device_scale)
+                .pixel_snapped_rect(rect, grid)
                 .map(|rect| PaintShape::RoundedRect { rect, radii }),
             // BoxAreas only constructs rectilinear or rounded box geometry.
             // Arbitrary paths retain their own authored coordinate contract.
@@ -300,6 +302,7 @@ where
                 current_cull,
                 projection.metadata.boxes[id.index()].content_clip,
                 &active_clips.filter_output_clips,
+                snapshot.pixel_grid(),
             );
             if cull_plan.event_misses(event_index, clipped) {
                 metrics.culled_event_count = metrics.culled_event_count.saturating_add(1);
@@ -726,6 +729,7 @@ fn clipped_replaced_cull_region<N: Copy + Debug + Eq + Hash>(
     mut region: PaintCullRegion,
     mut clip: Option<LayoutClipChainId>,
     filter_output_clips: &[LayoutOutputBoxId],
+    grid: PaintPixelGrid,
 ) -> PaintCullRegion {
     // A pixel-moving filter takes its source beyond the capture bounds.
     if region == PaintCullRegion::Infinite {
@@ -741,7 +745,7 @@ fn clipped_replaced_cull_region<N: Copy + Debug + Eq + Hash>(
                 // Match the coordinates used by push_clip_node, including
                 // snapping the overflow edge before the CSS transform.
                 let snapped = matches!(node.kind, LayoutClipKind::Overflow(_))
-                    .then(|| crate::pixel_snap_paint_rect(space.pre_transform_rect(node.rect)))
+                    .then(|| space.pixel_snapped_rect(node.rect, grid))
                     .flatten();
                 let (rect, transform) = snapped.map_or_else(
                     || (node.rect, space.local_transform()),
@@ -818,9 +822,8 @@ fn push_clip_node<N>(
     // Overflow edges share the box's snapped paint geometry. Fractional clips
     // otherwise blend an edge differently when atomic paint ordering keeps a
     // background and its text in one clip layer instead of reopening it.
-    let snapped = overflow_owner.and_then(|_| {
-        paint_space.pixel_snapped_box_shape(shape.clone(), snapshot.viewport.device_pixel_ratio)
-    });
+    let snapped = overflow_owner
+        .and_then(|_| paint_space.pixel_snapped_box_shape(shape.clone(), snapshot.pixel_grid()));
     let (shape, transform) = match snapped {
         Some(shape) => (shape, paint_space.property_transform()),
         None => (shape, paint_space.local_transform()),

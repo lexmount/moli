@@ -120,9 +120,7 @@ pub(super) fn project_background_color<N>(
     } else {
         clip
     });
-    let Some(shape) =
-        paint_space.pixel_snapped_box_shape(clip, snapshot.viewport.device_pixel_ratio)
-    else {
+    let Some(shape) = paint_space.pixel_snapped_box_shape(clip, snapshot.pixel_grid()) else {
         return;
     };
     let transform = paint_space.property_transform();
@@ -153,7 +151,7 @@ pub(super) fn project_background_layers<N>(
 {
     let tile_transform = paint_space.local_transform();
     let clip_transform = paint_space.property_transform();
-    let device_scale = snapshot.viewport.device_pixel_ratio;
+    let grid = snapshot.pixel_grid();
     let Some(computed) = layout_box.style.stylo_computed_values() else {
         return;
     };
@@ -178,16 +176,13 @@ pub(super) fn project_background_layers<N>(
                 } else {
                     layer.clip
                 });
-                let Some(clip_shape) =
-                    paint_space.pixel_snapped_box_shape(clip_shape, device_scale)
-                else {
+                let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape, grid) else {
                     continue;
                 };
                 // Generated images have no intrinsic size. Compute the tile
                 // geometry on the same pixel grid as the clip. Keep tiles
                 // local so brush coordinates stay relative to the box.
-                let Some(origin) =
-                    paint_space.pixel_snapped_rect(areas.rect(layer.origin), device_scale)
+                let Some(origin) = paint_space.pixel_snapped_rect(areas.rect(layer.origin), grid)
                 else {
                     continue;
                 };
@@ -445,8 +440,7 @@ pub(super) fn project_url_image_layer<N>(
         return;
     };
     let background_clip = if kind == CssImageLayerKind::Background {
-        let Some(shape) =
-            paint_space.pixel_snapped_box_shape(clip_shape, snapshot.viewport.device_pixel_ratio)
+        let Some(shape) = paint_space.pixel_snapped_box_shape(clip_shape, snapshot.pixel_grid())
         else {
             return;
         };
