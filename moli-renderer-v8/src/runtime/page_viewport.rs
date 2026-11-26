@@ -668,7 +668,7 @@ impl PageVm {
         let reason = LayoutFlushReason::RenderingOpportunity;
         let capture = PaintCaptureRequest::viewport();
         let snapshot = match vm
-            .paint_current_screen_layout(&paint_session, viewport, capture, reason)
+            .paint_current_screen_layout(Some(&paint_session), viewport, capture, reason)
             .and_then(|snapshot| match snapshot {
                 Some(_) => Ok(snapshot),
                 None => vm.paint_layout_snapshot_with_capture(

@@ -201,15 +201,16 @@ impl ScriptVm {
     #[cfg(feature = "devtools")]
     pub(crate) fn paint_current_screen_layout(
         &mut self,
-        session: &crate::runtime::RendererScreencastPaintSession,
+        session: Option<&crate::runtime::RendererScreencastPaintSession>,
         viewport: moli_layout::PaintViewport,
         capture: moli_layout::PaintCaptureRequest,
         reason: moli_layout::LayoutFlushReason,
     ) -> Result<Option<moli_layout::PaintSnapshot>> {
-        let painted = self
-            ._context_host
-            .borrow()
-            .paint_current_screen_layout(session, viewport, capture, reason)?;
+        let (document, painted) = {
+            let host = self._context_host.borrow();
+            let painted = host.paint_current_screen_layout(session, viewport, capture, reason)?;
+            (host.document_handle(), painted)
+        };
         if painted.is_some() && !self.is_debugger_paused() {
             let images = self
                 ._context_host
@@ -217,6 +218,9 @@ impl ScriptVm {
                 .take_realtime_css_image_preparation();
             if let Some(images) = images {
                 self.prepare_css_images_for_paint(&images, capture.include_backgrounds);
+            }
+            if reason == moli_layout::LayoutFlushReason::Screenshot {
+                self.queue_post_layout_observable_work(document);
             }
         }
         Ok(painted)
@@ -412,18 +416,22 @@ impl ScriptVm {
             return result;
         }
         self.prepare_css_images_for_paint(&css_images, request.includes_backgrounds());
-        if publishes_layout
-            && matches!(&result, Ok(Some(_)))
-            && let Err(error) = self.with_current_main_world_scope(|scope, runtime_ptr| {
-                crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
-                crate::native_bridge::element::queue_revealed_lazy_image_loads(
-                    scope,
-                    runtime_ptr,
-                    document,
-                );
-                Ok(())
-            })
-        {
+        if publishes_layout && matches!(&result, Ok(Some(_))) {
+            self.queue_post_layout_observable_work(document);
+        }
+        result
+    }
+
+    fn queue_post_layout_observable_work(&mut self, document: DomHandle) {
+        if let Err(error) = self.with_current_main_world_scope(|scope, runtime_ptr| {
+            crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+            crate::native_bridge::element::queue_revealed_lazy_image_loads(
+                scope,
+                runtime_ptr,
+                document,
+            );
+            Ok(())
+        }) {
             // Observers require an existing realm, and image resource admission
             // initializes its realm before layout. Painting a native document
             // alone must not create one. Keep a failed admission non-fatal to
@@ -431,7 +439,6 @@ impl ScriptVm {
             // sampled geometry.
             tracing::warn!(?error, "failed to queue post-layout observable work");
         }
-        result
     }
 
     #[cfg(test)]

@@ -163,7 +163,7 @@ async fn realtime_canvas_pixels_update_without_replacing_geometry() {
             let session = crate::runtime::RendererScreencastPaintSession::default();
             let paint = |vm: &mut StandaloneScriptVmHarness| {
                 vm.paint_current_screen_layout(
-                    &session,
+                    Some(&session),
                     viewport,
                     moli_layout::PaintCaptureRequest::viewport(),
                     moli_layout::LayoutFlushReason::Screenshot,
@@ -345,7 +345,7 @@ async fn realtime_repaints_native_color_damage_without_rebuilding_geometry() {
             let session = crate::runtime::RendererScreencastPaintSession::default();
             let paint = |vm: &mut StandaloneScriptVmHarness| {
                 vm.paint_current_screen_layout(
-                    &session,
+                    Some(&session),
                     viewport,
                     moli_layout::PaintCaptureRequest::viewport(),
                     moli_layout::LayoutFlushReason::Screenshot,
@@ -414,7 +414,7 @@ async fn realtime_projects_transform_damage_until_auto_gutter_changes() {
             let session = crate::runtime::RendererScreencastPaintSession::default();
             let paint = |vm: &mut StandaloneScriptVmHarness| {
                 vm.paint_current_screen_layout(
-                    &session,
+                    Some(&session),
                     viewport,
                     moli_layout::PaintCaptureRequest::viewport(),
                     moli_layout::LayoutFlushReason::Screenshot,
@@ -1369,7 +1369,7 @@ async fn realtime_scroll_reuses_layout_for_paint_only_hover_damage() {
             let session = crate::runtime::RendererScreencastPaintSession::default();
             let paint = |vm: &mut StandaloneScriptVmHarness| {
                 vm.paint_current_screen_layout(
-                    &session,
+                    Some(&session),
                     viewport,
                     moli_layout::PaintCaptureRequest::viewport(),
                     moli_layout::LayoutFlushReason::RenderingOpportunity,
