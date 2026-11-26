@@ -17,9 +17,9 @@ use crate::{
     style_engine::{
         AdoptedStyleSheetInstallation, CssCustomPropertyRegistration,
         CssCustomPropertyRegistrationError, FullStyleWorldSnapshot,
-        OwnedStyleSourceDocumentContext, PreparedStyleWorldUpdate, StyleAttributeImpact,
-        StyleMutationEffect, StyleObservationSnapshot, StyleViewport, StylesheetResourceSnapshot,
-        StyloStyleEnvironment, StyloStylesheetSource,
+        OwnedStyleSourceDocumentContext, PreparedStyleWorldUpdate, StyleMutationEffect,
+        StyleObservationSnapshot, StyleViewport, StylesheetResourceSnapshot, StyloStyleEnvironment,
+        StyloStylesheetSource,
     },
     {
         RendererWebStorageHandles,
@@ -2591,15 +2591,18 @@ impl PageScriptHost {
         {
             self.note_realtime_tracked_input_change();
         }
-        if style_mutation_effects_affect_layout_metric(effects) {
+        if effects
+            .iter()
+            .any(|effect| effect.affects_layout_metric(self.dom_host()))
+        {
             self.clear_layout_rect_cache();
         }
         let changed_iframe_attributes = effects.iter().filter_map(|effect| {
-            let StyleMutationEffect::Attribute { element, name, .. } = effect else {
+            let StyleMutationEffect::Attribute { element, .. } = effect else {
                 return None;
             };
-            (StyleAttributeImpact::for_attribute_name(name).affects_layout_metric()
-                && self.dom_host().is_html_element_named(*element, "iframe"))
+            (self.dom_host().is_html_element_named(*element, "iframe")
+                && effect.affects_layout_metric(self.dom_host()))
             .then_some(*element)
         });
         self.invalidate_published_frame_viewports(changed_iframe_attributes);
@@ -2944,17 +2947,4 @@ impl PageScriptHost {
         self.page_network_policy
             .should_intercept_subresource(resource_type)
     }
-}
-
-fn style_mutation_effects_affect_layout_metric(effects: &[StyleMutationEffect]) -> bool {
-    effects.iter().any(|effect| match effect {
-        StyleMutationEffect::Attribute { name, .. } => {
-            StyleAttributeImpact::for_attribute_name(name).affects_layout_metric()
-        }
-        StyleMutationEffect::ConnectedSubtrees { .. }
-        | StyleMutationEffect::DisconnectedSubtrees { .. }
-        | StyleMutationEffect::SlotAssignment { .. }
-        | StyleMutationEffect::CharacterData { .. }
-        | StyleMutationEffect::ChildList { .. } => true,
-    })
 }

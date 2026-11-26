@@ -653,7 +653,7 @@ fn linked_owner_binding_changes_only_on_explicit_install() {
 
     let effects = host.set_attribute_effects(link, "href", "new.css");
     engine.apply_stylesheet_owner_changes_with_host(&host, effects.stylesheet_owners().changes());
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(&host, &style_effects, &media);
 
@@ -705,7 +705,7 @@ fn linked_owner_binding_survives_media_update_without_reinstall() {
 
     let effects = host.set_attribute_effects(link, "media", "screen");
     engine.apply_stylesheet_owner_changes_with_host(&host, effects.stylesheet_owners().changes());
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(&host, &style_effects, &media);
 
@@ -988,47 +988,50 @@ fn disabling_linked_stylesheet_owner_removes_source_binding() {
 
     let effects = host.set_attribute_effects(link, "disabled", "");
     engine.apply_stylesheet_owner_changes_with_host(&host, effects.stylesheet_owners().changes());
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(&host, &style_effects, &media);
     assert_eq!(linked_source_text(&engine, &host, link), None);
 }
 
 #[test]
-fn style_attribute_impact_classifies_dom_and_stylesheet_inputs() {
-    assert!(StyleAttributeImpact::for_attribute_name("style").affects_layout_metric());
-    assert!(StyleAttributeImpact::for_attribute_name("style").changes_computed_style());
-    assert!(!StyleAttributeImpact::for_attribute_name("style").changes_stylesheet_linkage());
+fn layout_metric_invalidation_uses_applicable_presentation_hints() {
+    const SVG: &str = "http://www.w3.org/2000/svg";
+    let mut host = test_host();
+    let div = host.create_element("div");
+    let table = host.create_element("table");
+    let textarea = host.create_element("textarea");
+    let link = host.create_element("link");
+    let group = host.create_element_ns(Some(SVG), "g").unwrap();
+    let gradient = host.create_element_ns(Some(SVG), "linearGradient").unwrap();
+    let pattern = host.create_element_ns(Some(SVG), "pattern").unwrap();
 
-    assert!(StyleAttributeImpact::for_attribute_name("width").affects_layout_metric());
-    assert!(!StyleAttributeImpact::for_attribute_name("width").changes_computed_style());
-    assert!(!StyleAttributeImpact::for_attribute_name("width").changes_stylesheet_linkage());
-
-    for attribute in ["fill", "stroke", "stroke-width", "paint-order"] {
-        assert!(
-            StyleAttributeImpact::for_attribute_name(attribute).affects_layout_metric(),
-            "SVG presentation attribute {attribute} must invalidate computed paint"
-        );
+    for (element, name, expected) in [
+        (div, "style", true),
+        (div, "fill", false),
+        (div, "cellpadding", false),
+        (table, "cellpadding", true),
+        (textarea, "cols", true),
+        (textarea, "rows", true),
+        (link, "href", false),
+        (group, "fill", true),
+        (group, "r", false),
+        (gradient, "gradientTransform", true),
+        (gradient, "gradienttransform", false),
+        (pattern, "patternTransform", true),
+        (pattern, "patterntransform", false),
+    ] {
+        let native = host.set_attribute_effects(element, name, "1");
+        let effects = StyleMutationEffect::from_dom_mutation_effects(&native);
+        let [effect] = effects.as_slice() else {
+            panic!("expected one style mutation for {name}");
+        };
+        assert_eq!(effect.affects_layout_metric(&host), expected, "{name}");
     }
-
-    assert!(StyleAttributeImpact::for_attribute_name("cellpadding").affects_layout_metric());
-    assert!(StyleAttributeImpact::for_attribute_name("cellpadding").changes_computed_style());
-    assert!(!StyleAttributeImpact::for_attribute_name("cellpadding").changes_stylesheet_linkage());
-
-    assert!(!StyleAttributeImpact::for_attribute_name("href").affects_layout_metric());
-    assert!(StyleAttributeImpact::for_attribute_name("href").changes_stylesheet_linkage());
-
-    assert!(StyleAttributeImpact::for_attribute_name("type").affects_layout_metric());
-    assert!(StyleAttributeImpact::for_attribute_name("type").changes_stylesheet_linkage());
-
-    assert_eq!(
-        StyleAttributeImpact::for_attribute_name("data-state"),
-        StyleAttributeImpact::None
-    );
 }
 
 #[test]
-fn attribute_mutation_without_source_dependency_skips_style_invalidation() {
+fn inapplicable_presentation_attributes_skip_restyle_without_selector_dependencies() {
     let mut host = test_host();
     let document = host.document_handle();
     let style = host.create_element("style");
@@ -1059,29 +1062,38 @@ fn attribute_mutation_without_source_dependency_skips_style_invalidation() {
         1
     );
 
-    assert!(host.set_attribute(target, "data-state", "active"));
-    let effects = [StyleMutationEffect::Attribute {
-        element: target,
-        namespace: None,
-        name: "data-state".to_owned(),
-        old_value: None,
-        new_value: Some("active".to_owned()),
-    }];
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    engine.invalidate_for_mutations(&host, &effects, &media);
-
     let generation = engine.style_invalidation_generation_for_document_for_test(document);
-    assert_eq!(
-        engine.pending_style_invalidation_work_item_count_for_document_for_test(document),
-        0,
-        "unobserved attributes should not queue snapshots",
-    );
-    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
-    assert_eq!(
-        engine.style_invalidation_generation_for_document_for_test(document),
-        generation,
-        "attribute changes with no retained source dependency should not fall back to document invalidation"
-    );
+    for name in [
+        "data-state",
+        "x",
+        "r",
+        "transform",
+        "color",
+        "width",
+        "cellpadding",
+        "face",
+        "text",
+        "nowrap",
+        "cols",
+        "rows",
+        "size",
+    ] {
+        let effects = host.set_attribute_effects(target, name, "1");
+        let effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
+        engine.invalidate_for_mutations(&host, &effects, &media);
+        assert_eq!(
+            engine.pending_style_invalidation_work_item_count_for_document_for_test(document),
+            0,
+            "{name} should not queue style invalidation on a div",
+        );
+        engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+        assert_eq!(
+            engine.style_invalidation_generation_for_document_for_test(document),
+            generation,
+            "{name} should leave cached styles valid",
+        );
+    }
 }
 
 #[test]
@@ -1144,29 +1156,31 @@ fn attribute_mutation_with_source_dependency_still_invalidates_style() {
 }
 
 #[test]
-fn direct_namespaced_attribute_style_effect_preserves_case_on_html_elements() {
+fn namespace_aware_mutation_preserves_the_dom_attribute_name() {
     let mut host = test_host();
     let element = host.create_element("div");
-
-    let effect = StyleMutationEffect::attribute_for_element_ns(
-        &host,
-        element,
-        Some("urn:test"),
-        "DATA-State",
-        None,
-        Some("marker".into()),
-    );
-
-    assert!(matches!(
-        effect,
-        StyleMutationEffect::Attribute {
-            element: target,
-            namespace: Some(namespace),
-            name,
-            old_value: None,
-            new_value: Some(value),
-        } if target == element && namespace.as_ref() == "urn:test" && name == "DATA-State" && value == "marker"
-    ));
+    for namespace in [Some("urn:test"), None] {
+        let native = host.set_attribute_ns_effects(
+            element,
+            namespace,
+            None,
+            "DATA-State",
+            "DATA-State",
+            "marker",
+        );
+        let effects = StyleMutationEffect::from_dom_mutation_effects(&native);
+        assert!(matches!(
+            effects.as_slice(),
+            [StyleMutationEffect::Attribute {
+                element: target,
+                namespace: actual_namespace,
+                name,
+                old_value: None,
+                new_value: Some(value),
+            }] if *target == element && actual_namespace.as_deref() == namespace
+                && name == "DATA-State" && value == "marker"
+        ));
+    }
 }
 #[test]
 fn typed_attribute_style_effect_captures_exact_new_value_without_observer_records() {
@@ -1175,7 +1189,7 @@ fn typed_attribute_style_effect_captures_exact_new_value_without_observer_record
     assert!(host.append_child(host.document_handle(), element));
     let effects = host.set_attribute_effects(element, "class", "marker target");
     assert!(effects.observer_records().records().is_empty());
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
 
     assert!(style_effects.iter().any(|effect| matches!(
         effect,
@@ -1197,7 +1211,7 @@ fn typed_attribute_style_effect_normalizes_html_attribute_name() {
     let element = host.create_element("div");
     assert!(host.append_child(host.document_handle(), element));
     let effects = host.set_attribute_effects(element, "CLASS", "marker");
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
 
     assert!(style_effects.iter().any(|effect| matches!(
         effect,
@@ -1226,7 +1240,7 @@ fn typed_attribute_style_effect_preserves_namespaced_attribute_name() {
         "test:DATA-State",
         "marker",
     );
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
 
     assert!(style_effects.iter().any(|effect| matches!(
         effect,

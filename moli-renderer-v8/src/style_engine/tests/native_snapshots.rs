@@ -72,7 +72,7 @@ fn native_snapshot_can_invalidate_a_sibling_of_an_unstyled_source() {
     let removal = host.remove_child_effects(parent, trigger);
     engine.invalidate_for_mutations(
         &host,
-        &StyleMutationEffect::from_dom_mutation_effects(&host, &removal),
+        &StyleMutationEffect::from_dom_mutation_effects(&removal),
         &crate::protocol_types::EmulatedMediaOverrides::default(),
     );
     assert_eq!(color(&engine, &host), "rgb(0, 0, 255)");
@@ -252,7 +252,7 @@ fn namespaced_attribute_mutation_updates_a_cached_sibling() {
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(
         &host,
-        &StyleMutationEffect::from_dom_mutation_effects(&host, &set),
+        &StyleMutationEffect::from_dom_mutation_effects(&set),
         &media,
     );
     assert!(
@@ -268,7 +268,7 @@ fn namespaced_attribute_mutation_updates_a_cached_sibling() {
     let remove = host.remove_attribute_ns_effects(trigger, Some("urn:test"), "data-mode");
     engine.invalidate_for_mutations(
         &host,
-        &StyleMutationEffect::from_dom_mutation_effects(&host, &remove),
+        &StyleMutationEffect::from_dom_mutation_effects(&remove),
         &media,
     );
     assert_eq!(color(&engine, &host), "rgb(0, 0, 255)");
@@ -319,7 +319,7 @@ fn mixed_native_snapshot_and_splice_preserve_unrelated_styles() {
     let append = host.append_child_effects(list, item);
     engine.invalidate_for_mutations(
         &host,
-        &StyleMutationEffect::from_dom_mutation_effects(&host, &append),
+        &StyleMutationEffect::from_dom_mutation_effects(&append),
         &crate::protocol_types::EmulatedMediaOverrides::default(),
     );
     assert_eq!(color(&engine, &host, target), "rgb(255, 0, 0)");
@@ -366,7 +366,7 @@ fn removal_with_a_pending_attribute_snapshot_refreshes_relative_anchor() {
     let removal = host.remove_child_effects(anchor, branch);
     engine.invalidate_for_mutations(
         &host,
-        &StyleMutationEffect::from_dom_mutation_effects(&host, &removal),
+        &StyleMutationEffect::from_dom_mutation_effects(&removal),
         &crate::protocol_types::EmulatedMediaOverrides::default(),
     );
 
@@ -415,7 +415,7 @@ fn coalesced_relative_removal_preserves_siblings_unless_a_selector_reaches_them(
         let removal = host.remove_child_effects(anchor, branch);
         engine.invalidate_for_mutations(
             &host,
-            &StyleMutationEffect::from_dom_mutation_effects(&host, &removal),
+            &StyleMutationEffect::from_dom_mutation_effects(&removal),
             &crate::protocol_types::EmulatedMediaOverrides::default(),
         );
 

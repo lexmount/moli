@@ -6,7 +6,7 @@ fn queue_native_fragment_effects(
     effects: &crate::dom::native::DomMutationEffects,
 ) {
     assert!(effects.did_change());
-    let effects = StyleMutationEffect::from_dom_mutation_effects(host, effects);
+    let effects = StyleMutationEffect::from_dom_mutation_effects(effects);
     assert!(!effects.is_empty());
     engine.invalidate_for_mutations(
         host,
