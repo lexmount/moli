@@ -6,7 +6,7 @@ use anyrender::{ImageRenderer, PaintScene};
 use anyrender_vello_cpu::VelloCpuImageRenderer;
 use moli_layout::{
     PaintImageSampling, PaintSnapshot, PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles,
-    pixel_snap_paint_axis, pixel_snap_paint_rect,
+    pixel_snap_paint_axis,
 };
 use peniko::kurbo::{Affine, Point, Rect, Shape};
 use peniko::{
@@ -189,7 +189,7 @@ fn paint_vector_tile(
 }
 
 pub(crate) fn grid_coverage(grid: PaintTileGrid) -> Option<Rect> {
-    let coverage = to_backend_rect(pixel_snap_paint_rect(grid.coverage)?)?;
+    let coverage = to_backend_rect(grid.coverage)?;
     if ![grid.x, grid.y].into_iter().all(valid_tile_axis) {
         return None;
     }

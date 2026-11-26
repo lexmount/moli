@@ -345,7 +345,7 @@ async fn websocket_cdp_capture_screenshot_tracks_paint_and_layout_mutations() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn websocket_cdp_layered_gradient_border_stays_even_when_device_scale_changes() {
+async fn websocket_cdp_box_edges_share_the_device_pixel_grid() {
     let html = r#"<!doctype html>
 <style>
 body { margin: 0; background: white }
@@ -357,8 +357,25 @@ body { margin: 0; background: white }
                 linear-gradient(160deg, #2955ff, #ab50ff) border-box;
 }
 .border-origin { top: 64.25px; background-origin: border-box }
+.solid { top: 116.25px; background: #2955ff padding-box }
+.image {
+    top: 168.25px;
+    background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mPQDP0PAAIoAX46fBFaAAAAAElFTkSuQmCC)
+        0.5px 1.25px / 7.25px 6.5px border-box padding-box;
+}
+.single-image {
+    top: 220.25px; background-repeat: no-repeat;
+    background-size: 100% 100%; background-position: 0 0;
+}
+.bordered { top: 272.25px; background: #2955ff; border-color: #dc2800 }
+.overflow { top: 324.25px; background: none; overflow: hidden }
+.overflow > div { position: absolute; inset: -4px; background: #2955ff }
 </style>
-<div class="frame"></div><div class="frame border-origin"></div>"#;
+<div class="frame"></div><div class="frame border-origin"></div>
+<div class="frame solid"></div><div class="frame image"></div>
+<div class="frame image single-image"></div>
+<div class="frame bordered"></div><div class="frame overflow"><div></div></div>
+<img hidden src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mPQDP0PAAIoAX46fBFaAAAAAElFTkSuQmCC">"#;
     let fixture_url = format!(
         "data:text/html;charset=utf-8,{}",
         url::form_urlencoded::byte_serialize(html.as_bytes())
@@ -366,7 +383,13 @@ body { margin: 0; background: white }
             .replace('+', "%20")
     );
     let (cdp_addr, protocol_server) =
-        spawn_test_protocol_server_with_layout_policy(LayoutPolicy::Realtime).await;
+        spawn_test_protocol_server_with_runtime_config(NavigationRuntimeConfig::new(
+            protocol_server_test_fetch_config(FetchConfig::default()),
+            OptionalResourceFetchMask::IMAGE,
+            true,
+            LayoutPolicy::Realtime,
+        ))
+        .await;
     let (mut browser, _) = connect_async(
         discover_browser_websocket_url(cdp_addr)
             .await
@@ -375,12 +398,28 @@ body { margin: 0; background: white }
     .await
     .expect("connect screenshot CDP websocket");
     let target = open_screenshot_target(&mut browser, &fixture_url).await;
+    let decoded = send_cdp_command(
+        &mut browser,
+        7,
+        "Runtime.evaluate",
+        Some(&target.session_id),
+        json!({
+            "expression": "document.querySelector('img').decode().then(() => true)",
+            "awaitPromise": true,
+            "returnByValue": true,
+        }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&decoded, 7)["result"]["result"]["value"],
+        true
+    );
 
     for (index, (scale, border_width)) in [(1.0_f32, 1), (1.25, 1), (2.0, 3), (1.0, 1)]
         .into_iter()
         .enumerate()
     {
-        let id = 7 + 2 * index as u64;
+        let id = 8 + 2 * index as u64;
         let metrics = send_cdp_command(
             &mut browser,
             id,
@@ -388,7 +427,7 @@ body { margin: 0; background: white }
             Some(&target.session_id),
             json!({
                 "width": 160,
-                "height": 120,
+                "height": 380,
                 "deviceScaleFactor": scale,
                 "mobile": false,
             }),
@@ -399,13 +438,23 @@ body { margin: 0; background: white }
         let (width, height, pixels) = decode_png(&png);
         assert_eq!(
             (width, height),
-            ((160.0 * scale) as u32, (120.0 * scale) as u32)
+            ((160.0 * scale) as u32, (380.0 * scale) as u32)
         );
 
         let left = (10.5 * scale).round() as i32;
         let right = (130.5 * scale).round() as i32;
         let center_x = (left + right) / 2;
-        for border_top in [12.25, 64.25] {
+        let white = [255; 4];
+        let blue = [41, 85, 255, 255];
+        for (border_top, border_color, inside_color) in [
+            (12.25, None, white),
+            (64.25, None, white),
+            (116.25, Some(white), blue),
+            (168.25, Some(white), blue),
+            (220.25, Some(white), blue),
+            (272.25, Some([220, 40, 0, 255]), blue),
+            (324.25, Some(white), blue),
+        ] {
             let top = (border_top * scale).round() as i32;
             let bottom = ((border_top + 42.0) * scale).round() as i32;
             let center_y = (top + bottom) / 2;
@@ -415,27 +464,29 @@ body { margin: 0; background: white }
                 (center_x, top, 0, 1),
                 (center_x, bottom - 1, 0, -1),
             ] {
-                let sample = |inset| {
-                    pixel(
+                for inset in -1..=border_width {
+                    let color = pixel(
                         &pixels,
                         width,
                         (x + dx * inset) as u32,
                         (y + dy * inset) as u32,
-                    )
-                };
-                assert_eq!(sample(-1), [255; 4], "outside ({x}, {y}), DPR {scale}");
-                for inset in 0..border_width {
-                    let color = sample(inset);
-                    assert!(
-                        color[1] < 100 && color[2] >= 254,
-                        "border ({x}, {y}) at inset {inset}, DPR {scale}: {color:?}"
                     );
+                    let expected = if inset < 0 {
+                        Some(white)
+                    } else if inset < border_width {
+                        border_color
+                    } else {
+                        Some(inside_color)
+                    };
+                    if let Some(expected) = expected {
+                        assert_eq!(color, expected, "({x}, {y}) at inset {inset}, DPR {scale}");
+                    } else {
+                        assert!(
+                            color[1] < 100 && color[2] >= 254,
+                            "gradient border ({x}, {y}) at inset {inset}, DPR {scale}: {color:?}"
+                        );
+                    }
                 }
-                assert_eq!(
-                    sample(border_width),
-                    [255; 4],
-                    "inside ({x}, {y}), DPR {scale}"
-                );
             }
         }
     }
