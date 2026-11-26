@@ -319,14 +319,17 @@ impl DomHost {
                 let source_attribute = self.node(handle).and_then(Node::as_element).is_some_and(
                     |element| match element.namespace() {
                         "http://www.w3.org/1999/xhtml" => name.eq_ignore_ascii_case("src"),
-                        "http://www.w3.org/2000/svg" => name.eq_ignore_ascii_case("href"),
+                        "http://www.w3.org/2000/svg" => {
+                            name.eq_ignore_ascii_case("href")
+                                && prior_value.as_deref().is_none_or(str::is_empty)
+                                && !value.is_empty()
+                        }
                         _ => false,
                     },
                 );
-                if source_attribute
-                    && prior_value.as_deref().is_none_or(str::is_empty)
-                    && !value.is_empty()
-                {
+                // The script preparation algorithm owns empty URL errors and
+                // the already-started guard for every HTML src assignment.
+                if source_attribute {
                     effects.mark_script_prepare_trigger(
                         handle,
                         ScriptPrepareTriggerKind::SourceAttributeAdded,

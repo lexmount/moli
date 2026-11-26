@@ -955,6 +955,27 @@ pub use host::is_builtin_reassociateable_form_associated_element;
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn connected_html_script_src_assignments_request_preparation() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let script = host.create_element("script");
+        assert!(host.append_child(body, script));
+        for src in ["", "/first.js", "/second.js"] {
+            let effects = host.set_attribute_effects(script, "src", src);
+            let triggers = effects.scripts().prepare_triggers();
+            assert_eq!(triggers.len(), 1, "src assignment {src:?}");
+            assert_eq!(
+                triggers[0].kind(),
+                ScriptPrepareTriggerKind::SourceAttributeAdded
+            );
+            assert_eq!(triggers[0].handle(), script);
+        }
+    }
+
     use std::mem::size_of;
 
     use super::*;
