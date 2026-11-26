@@ -206,7 +206,7 @@ impl MoliStyleEngine {
         };
         let world = self.world_for_document(document);
         if state.contains(StyloElementState::HOVER) && host.is_connected(element) {
-            world.document_state.note_screen_hover_change();
+            world.document_state.note_screen_style_change();
         }
         if state.intersects(StyloElementState::LTR | StyloElementState::RTL)
             && html_auto_directionality_root(host, element) == Some(element)

@@ -132,6 +132,14 @@ fn realtime_autofocus_and_animation_scan_share_the_ordered_frame() {
             page.vm_mut().eval("events.join('|')").unwrap(),
             "dcl|dcl-microtask|focus|focus-microtask|resize|scroll|scroll-microtask|scrollend|media|animation|raf"
         );
+        let next_sample = page
+            .next_rendering_opportunity_deadline_for_test()
+            .expect("the running CSS animation still needs style samples");
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        host.borrow().set_realtime_opportunity_clock_for_test(
+            next_sample + std::time::Duration::from_secs(2),
+        );
+        run_opportunity(&mut page, &loader).await.unwrap();
         assert!(
             page.next_rendering_opportunity_deadline_for_test()
                 .is_none()

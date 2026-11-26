@@ -209,7 +209,7 @@ impl StyleDocumentState {
         }
     }
 
-    pub(super) fn note_screen_hover_change(&self) {
+    pub(super) fn note_screen_style_change(&self) {
         let mut change = self.screen_style_invalidation.borrow_mut();
         if matches!(*change, ScreenStyleInvalidation::Clean)
             && self.screen_style_coverage.borrow().is_some()

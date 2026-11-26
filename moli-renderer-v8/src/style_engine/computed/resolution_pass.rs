@@ -1,7 +1,7 @@
 use moli_selector::{StyloDomHostBinding, StyloElement};
 use style::{
     Atom,
-    animation::DocumentAnimationSet,
+    animation::AnimationSetKey,
     computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
@@ -113,6 +113,7 @@ pub(in crate::style_engine) fn with_resolution_context_and_snapshots<'dom, R>(
     let empty_painters = EmptyRegisteredSpeculativePainters;
     let _layout_thread_state = StyloLayoutThreadStateGuard::enter();
     world.document_state.with_retained_style_system(|retained| {
+        let animation_time = world.animation_time.get();
         let shared = SharedStyleContext {
             stylist: &retained.stylist,
             visited_styles_enabled: false,
@@ -123,10 +124,14 @@ pub(in crate::style_engine) fn with_resolution_context_and_snapshots<'dom, R>(
                 ..StyleSystemOptions::default()
             },
             guards: StylesheetGuards::same(&guard),
-            current_time_for_animations: 0.0,
-            traversal_flags: TraversalFlags::SkipAnimationUpdates,
+            current_time_for_animations: animation_time.unwrap_or_default(),
+            traversal_flags: if animation_time.is_some() {
+                TraversalFlags::empty()
+            } else {
+                TraversalFlags::SkipAnimationUpdates
+            },
             snapshot_map,
-            animations: DocumentAnimationSet::default(),
+            animations: world.animations.clone(),
             registered_speculative_painters: &empty_painters,
         };
         resolve(ResolutionContext {
@@ -437,6 +442,20 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                 data.hint = hint;
                 let previous = data.styles.clone();
                 let pending_damage = std::mem::take(&mut data.damage);
+                if world.animation_time.get().is_some()
+                    && let Some(animations) =
+                        world
+                            .animations
+                            .sets
+                            .write()
+                            .get_mut(&AnimationSetKey::new_for_non_pseudo(
+                                element.as_node().opaque(),
+                            ))
+                {
+                    // Reinstall the animation cascade after restyles that can
+                    // replace the base rule, including canceling an animation.
+                    animations.dirty = true;
+                }
                 let child_hint = self.context.with_stylo(|context| {
                     context.thread_local.current_dom_depth = depth;
                     let mut child_hint =

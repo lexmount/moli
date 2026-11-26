@@ -21,6 +21,68 @@ pub(super) async fn run_opportunity(
     Ok(())
 }
 
+#[test]
+fn realtime_css_animations_sample_delayed_layout_and_keep_forward_fill() {
+    use std::time::Duration;
+
+    run_page_vm_large_stack_async_test("realtime-css-animations", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/animation").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        page.vm_mut()
+            .eval(
+                r#"
+                document.body.innerHTML = `<style>
+                body { margin: 0 }
+                #notice { height: 0; overflow: hidden; animation: expand .4s 1s linear forwards }
+                #footer { position: fixed; bottom: -72px; height: 72px;
+                          animation: slide .4s 1s linear forwards }
+                @keyframes expand { from { height: 0; margin-bottom: 0 }
+                                    to { height: 40px; margin-bottom: 16px } }
+                @keyframes slide { from { bottom: -72px } to { bottom: 0 } }
+                </style><div id=notice>Notice</div><div id=main></div><div id=footer>Footer</div>`;
+                window.geometry = () => JSON.stringify([
+                    notice.offsetHeight, main.offsetTop, getComputedStyle(footer).bottom
+                ]);
+                "#,
+            )
+            .unwrap();
+        let initial = page.next_rendering_opportunity_deadline_for_test().unwrap();
+        let clock = |now| host.borrow().set_realtime_opportunity_clock_for_test(now);
+        clock(initial);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("geometry()").unwrap(),
+            r#"[0,0,"-72px"]"#
+        );
+
+        let start = page.next_rendering_opportunity_deadline_for_test().unwrap();
+        assert_eq!(start, initial + Duration::from_secs(1));
+        clock(start + Duration::from_millis(200));
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("geometry()").unwrap(),
+            r#"[20,28,"-36px"]"#
+        );
+
+        clock(start + Duration::from_millis(450));
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("geometry()").unwrap(),
+            r#"[40,56,"0px"]"#
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
 #[cfg(feature = "molio")]
 #[test]
 fn realtime_viewport_requests_display_ticks_until_it_is_idle() {
