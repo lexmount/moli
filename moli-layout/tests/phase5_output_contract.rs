@@ -2769,7 +2769,8 @@ fn inline_output_preserves_line_text_and_utf16_source_fragments() {
         fragment.kind,
         LayoutFragmentKind::Line {
             owner: _,
-            line_index: 0
+            line_index: 0,
+            ..
         }
     )));
     let text_fragments = output

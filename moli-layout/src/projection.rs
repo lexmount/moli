@@ -1149,12 +1149,63 @@ where
                 layout.border.left + layout.padding.left + vertical_leading_gutter,
                 layout.border.top + layout.padding.top + horizontal_leading_gutter,
             );
+            let form_content =
+                layout_box.anonymous_reason == Some(LayoutAnonymousReason::FormControlContent);
+            let password_offsets = form_content
+                .then_some(layout_box.parent)
+                .flatten()
+                .and_then(|id| {
+                    let control = &self.world.boxes[id.index()];
+                    let semantics = control.element_semantics()?;
+                    let crate::LayoutElementCategory::FormControl(
+                        crate::LayoutFormControlKind::Input(
+                            crate::LayoutInputControlKind::Password,
+                        ),
+                    ) = semantics.category
+                    else {
+                        return None;
+                    };
+                    let value = &semantics.metadata.form_control.as_ref()?.value;
+                    Some(crate::form::password_value_offsets(
+                        value,
+                        control.style.text_transform(),
+                    ))
+                });
+            let value_offset = |offset| {
+                password_offsets
+                    .as_ref()
+                    .and_then(|offsets| offsets.get(offset).or_else(|| offsets.last()).copied())
+                    .unwrap_or(offset)
+            };
             for line in &context.fragments.lines {
+                let text_control_start = if form_content {
+                    let output_start = context
+                        .laid_out
+                        .as_ref()
+                        .and_then(|layout| layout.get(line.line_index))
+                        .map_or(0, |line| line.text_range().start);
+                    let index = context
+                        .source_map
+                        .partition_point(|entry| entry.output_range.end <= output_start);
+                    let source_start = context.source_map.get(index).map_or_else(
+                        || {
+                            context
+                                .source_map
+                                .last()
+                                .map_or(0, |entry| entry.source_utf16_range.end)
+                        },
+                        |entry| entry.source_utf16_range.start,
+                    );
+                    u32::try_from(value_offset(source_start)).ok()
+                } else {
+                    None
+                };
                 let fragment = self.push_fragment(LayoutFragment {
                     id: LayoutFragmentId::from_index(0),
                     kind: LayoutFragmentKind::Line {
                         owner: output_box,
                         line_index: line.line_index,
+                        text_control_start,
                     },
                     rect: offset_rect(line.rect, content_origin),
                     box_model: None,
@@ -1191,7 +1242,8 @@ where
                     kind: LayoutFragmentKind::Text {
                         box_id: LayoutOutputBoxId::from_index(target),
                         line_index: text.line_index,
-                        source_utf16_range: text.source_utf16_range.clone(),
+                        source_utf16_range: value_offset(text.source_utf16_range.start)
+                            ..value_offset(text.source_utf16_range.end),
                         rtl: text.rtl,
                     },
                     rect: offset_rect(text.rect, content_origin),

@@ -304,6 +304,32 @@ fn mask_password(
     (text, selection)
 }
 
+/// Maps boundaries in the displayed bullet string back to the value.
+pub(crate) fn password_value_offsets(value: &str, text_transform: TextTransform) -> Vec<usize> {
+    let (display, _) = transform_password(value, text_transform, None);
+    let mut characters = value.chars();
+    let mut transform = TextTransformState::default();
+    let mut source_end = 0;
+    let mut transformed_end = 0;
+    let mut grapheme_end = 0;
+    let mut offsets = vec![0];
+    for grapheme in display.graphemes(true) {
+        grapheme_end += grapheme.encode_utf16().count();
+        while transformed_end < grapheme_end {
+            let Some(character) = characters.next() else {
+                break;
+            };
+            source_end += character.len_utf16();
+            transformed_end += transform
+                .transform(character, text_transform)
+                .map(char::len_utf16)
+                .sum::<usize>();
+        }
+        offsets.push(source_end);
+    }
+    offsets
+}
+
 fn transform_password(
     value: &str,
     text_transform: TextTransform,
