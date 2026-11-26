@@ -108,7 +108,9 @@ pub(super) fn project_css_mask<N>(
         match layer.image {
             GenericImage::None => {}
             GenericImage::Gradient(gradient) => {
-                let Some(tiles) = background_tiles(areas, &layer) else {
+                let Some(tiles) =
+                    background_tiles(areas.rect(layer.origin), areas.rect(layer.clip), &layer)
+                else {
                     push_diagnostic_once(
                         snapshot,
                         "mask-repeat-budget-exceeded",

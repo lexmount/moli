@@ -21,14 +21,14 @@ use style::{
 
 use super::{
     PaintSpace,
-    geometry::{BoxAreas, BoxModelBox, canonical_shape},
+    geometry::{BoxAreas, BoxModelBox},
     push_diagnostic_once,
 };
 use crate::{
     LayoutBox, LayoutImageResource, LayoutRect, LayoutSize, LayoutTransform2D, PaintBlendMode,
-    PaintBrush, PaintColor, PaintCompositeMode, PaintCornerRadii, PaintFragment, PaintImage,
-    PaintImageSampling, PaintShape, PaintSnapshot, PaintSvgImage, PaintTileAxis, PaintTileGrid,
-    PaintTileSource, PaintTiles, gradient::project_gradient,
+    PaintBrush, PaintColor, PaintCompositeMode, PaintFragment, PaintImage, PaintImageSampling,
+    PaintShape, PaintSnapshot, PaintSvgImage, PaintTileAxis, PaintTileGrid, PaintTileSource,
+    PaintTiles, gradient::project_gradient,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,9 +114,12 @@ pub(super) fn project_background_color<N>(
         .map(BoxModelBox::from)
         .unwrap_or(BoxModelBox::Border);
     if clip == BoxModelBox::Text {
-        let Some(shape) = begin_background_text_clip_layer(areas, paint_space, snapshot) else {
+        let Some(shape) =
+            paint_space.pixel_snapped_box_shape(areas.shape(BoxModelBox::Border), 1.0)
+        else {
             return;
         };
+        begin_background_text_clip_layer(&shape, paint_space.property_transform(), snapshot);
         snapshot.push_fragment(PaintFragment::Fill {
             fill_rule: crate::PaintFillRule::NonZero,
             shape: shape.clone(),
@@ -132,7 +135,7 @@ pub(super) fn project_background_color<N>(
         return;
     }
     diagnose_background_clip_fallback(layout_box, clip, snapshot);
-    let Some(shape) = paint_space.pixel_snapped_box_shape(areas.shape(clip)) else {
+    let Some(shape) = paint_space.pixel_snapped_box_shape(areas.shape(clip), 1.0) else {
         return;
     };
     if shape.bounds().width <= 0.0 || shape.bounds().height <= 0.0 {
@@ -156,7 +159,9 @@ pub(super) fn project_background_layers<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let transform = paint_space.local_transform();
+    let tile_transform = paint_space.local_transform();
+    let clip_transform = paint_space.property_transform();
+    let device_scale = snapshot.viewport.device_pixel_ratio;
     let Some(computed) = layout_box.style.stylo_computed_values() else {
         return;
     };
@@ -176,22 +181,30 @@ pub(super) fn project_background_layers<N>(
                 if !clips_to_text {
                     diagnose_background_clip_fallback(layout_box, layer.clip, snapshot);
                 }
-                let origin_rect = areas.rect(layer.origin);
                 let clip_shape = areas.shape(if clips_to_text {
                     BoxModelBox::Border
                 } else {
                     layer.clip
                 });
-                let clip_rect = clip_shape.bounds();
-                if origin_rect.width <= 0.0
-                    || origin_rect.height <= 0.0
-                    || clip_rect.width <= 0.0
-                    || clip_rect.height <= 0.0
-                {
+                let Some(clip_shape) =
+                    paint_space.pixel_snapped_box_shape(clip_shape, device_scale)
+                else {
                     continue;
-                }
+                };
+                // Generated images have no intrinsic size. Compute the tile
+                // geometry on the same pixel grid as the clip. Keep tiles
+                // local so brush coordinates stay relative to the box.
+                let Some(origin) =
+                    paint_space.pixel_snapped_rect(areas.rect(layer.origin), device_scale)
+                else {
+                    continue;
+                };
 
-                let Some(tiles) = background_tiles(areas, &layer) else {
+                let Some(tiles) = background_tiles(
+                    paint_space.local_rect(origin),
+                    paint_space.local_rect(clip_shape.bounds()),
+                    &layer,
+                ) else {
                     push_diagnostic_once(
                         snapshot,
                         "background-repeat-budget-exceeded",
@@ -205,52 +218,13 @@ pub(super) fn project_background_layers<N>(
                 if tiles.is_empty() {
                     continue;
                 }
-                if !clips_to_text
-                    && let [tile] = tiles.as_slice()
-                    && *tile == origin_rect
-                    && tile.x <= clip_rect.x
-                    && tile.y <= clip_rect.y
-                    && tile.right() >= clip_rect.right()
-                    && tile.bottom() >= clip_rect.bottom()
-                {
-                    // Size the single generated tile and its destination on
-                    // the same grid, including when padding-box clips a
-                    // border-box tile.
-                    let scale = snapshot.viewport.device_pixel_ratio;
-                    let Some(tile) = snapped_gradient_rect(*tile, paint_space, scale) else {
-                        continue;
-                    };
-                    let Some(rect) = snapped_gradient_rect(clip_rect, paint_space, scale) else {
-                        continue;
-                    };
-                    if let Some(brush) = project_gradient(gradient, tile, &current_color) {
-                        let radii = match clip_shape {
-                            PaintShape::RoundedRect { radii, .. } => radii,
-                            _ => PaintCornerRadii::ZERO,
-                        };
-                        snapshot.push_fragment(PaintFragment::Fill {
-                            fill_rule: crate::PaintFillRule::NonZero,
-                            shape: canonical_shape(rect, radii),
-                            brush,
-                            transform,
-                        });
-                    }
-                    continue;
-                }
                 let text_clip_shape = if clips_to_text {
-                    let Some(shape) =
-                        begin_background_text_clip_layer(areas, paint_space, snapshot)
-                    else {
-                        continue;
-                    };
-                    Some(shape)
+                    begin_background_text_clip_layer(&clip_shape, clip_transform, snapshot);
+                    Some(clip_shape)
                 } else {
-                    let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape) else {
-                        continue;
-                    };
                     snapshot.push_fragment(PaintFragment::PushClip {
                         shape: clip_shape,
-                        transform: paint_space.property_transform(),
+                        transform: clip_transform,
                     });
                     None
                 };
@@ -260,14 +234,14 @@ pub(super) fn project_background_layers<N>(
                             fill_rule: crate::PaintFillRule::NonZero,
                             shape: PaintShape::Rect(tile),
                             brush,
-                            transform,
+                            transform: tile_transform,
                         });
                     }
                 }
                 if let Some(shape) = text_clip_shape {
                     finish_background_text_clip_layer(
                         shape,
-                        paint_space.property_transform(),
+                        clip_transform,
                         snapshot,
                         text_clip_mask,
                     );
@@ -307,33 +281,6 @@ pub(super) fn project_background_layers<N>(
     }
 }
 
-fn snapped_gradient_rect(
-    rect: LayoutRect,
-    paint_space: PaintSpace,
-    device_scale: f32,
-) -> Option<LayoutRect> {
-    let scale = if device_scale.is_finite() && device_scale > 0.0 {
-        device_scale
-    } else {
-        1.0
-    };
-    // Blink's layout paint space already includes the screen scale. Moli
-    // keeps CSS pixels here, so snap in device pixels before the transform.
-    let rect = paint_space.pre_transform_rect(rect);
-    let snapped = crate::pixel_snap_paint_rect(LayoutRect::new(
-        rect.x * scale,
-        rect.y * scale,
-        rect.width * scale,
-        rect.height * scale,
-    ))?;
-    Some(LayoutRect::new(
-        snapped.x / scale - paint_space.paint_offset.x,
-        snapped.y / scale - paint_space.paint_offset.y,
-        snapped.width / scale,
-        snapped.height / scale,
-    ))
-}
-
 /// Begins the isolated background buffer used by Chromium's
 /// `PaintFillLayerTextFillBox` algorithm.
 ///
@@ -341,20 +288,18 @@ fn snapped_gradient_rect(
 /// the same epsilon isolation guard used by CSS masks so the following
 /// `DestIn` operation cannot consume the page backdrop.
 fn begin_background_text_clip_layer(
-    areas: BoxAreas,
-    paint_space: PaintSpace,
+    clip: &PaintShape,
+    transform: LayoutTransform2D,
     snapshot: &mut PaintSnapshot,
-) -> Option<PaintShape> {
-    let clip = paint_space.pixel_snapped_box_shape(areas.shape(BoxModelBox::Border))?;
+) {
     snapshot.push_fragment(PaintFragment::PushLayer {
         opacity: 1.0 - f32::EPSILON,
         blend_mode: PaintBlendMode::Normal,
         composite: PaintCompositeMode::SrcOver,
         clip: clip.clone(),
-        transform: paint_space.property_transform(),
+        transform,
         filter: None,
     });
-    Some(clip)
 }
 
 /// Applies opaque glyph ink to the isolated background with `DestIn` and
@@ -380,10 +325,12 @@ fn finish_background_text_clip_layer(
 }
 
 pub(super) fn background_tiles(
-    areas: BoxAreas,
+    origin: LayoutRect,
+    clip: LayoutRect,
     layer: &ImageLayerStyles<'_>,
 ) -> Option<Vec<LayoutRect>> {
-    let Some(grid) = background_tile_grid(areas, layer, BackgroundSizeComputeMode::Auto) else {
+    let Some(grid) = background_tile_grid(origin, clip, layer, BackgroundSizeComputeMode::Auto)
+    else {
         return Some(Vec::new());
     };
     let count = grid.x.count.saturating_mul(grid.y.count);
@@ -405,13 +352,13 @@ pub(super) fn background_tiles(
 }
 
 fn background_tile_grid(
-    areas: BoxAreas,
+    origin: LayoutRect,
+    clip: LayoutRect,
     layer: &ImageLayerStyles<'_>,
     mode: BackgroundSizeComputeMode,
 ) -> Option<PaintTileGrid> {
     use BackgroundRepeatKeyword::{NoRepeat, Repeat, Round, Space};
 
-    let origin = areas.rect(layer.origin);
     let (position, size) =
         compute_layer_position_and_size(layer, origin.width, origin.height, mode);
     let width = size.width;
@@ -422,7 +369,11 @@ fn background_tile_grid(
     }
     let BackgroundRepeat(repeat_x, repeat_y) = *layer.repeat;
 
-    let repeat_area = larger_clip_area(areas, layer.clip, layer.origin).unwrap_or(origin);
+    let repeat_area = if clip_extends_past_origin(layer.clip, layer.origin) {
+        clip
+    } else {
+        origin
+    };
     let axis =
         |repeat, tile_size: f32, position, (origin, extent), (clip, clip_extent): (f32, f32)| {
             let (start, count, step) = match repeat {
@@ -464,7 +415,7 @@ fn background_tile_grid(
             (origin.y, origin.height),
             (repeat_area.y, repeat_area.height),
         ),
-        coverage: areas.rect(layer.clip),
+        coverage: clip,
         snap_tiles: !(matches!(repeat_x, Repeat | Round) && matches!(repeat_y, Repeat | Round)),
     })
 }
@@ -506,7 +457,7 @@ pub(super) fn project_url_image_layer<N>(
         return;
     };
     let mode = BackgroundSizeComputeMode::Size(object_width, object_height);
-    let Some(mut grid) = background_tile_grid(areas, layer, mode) else {
+    let Some(mut grid) = background_tile_grid(origin, clip, layer, mode) else {
         return;
     };
     // Keep the existing snapping of SVG and mask tiles. The continuous raster
@@ -524,7 +475,7 @@ pub(super) fn project_url_image_layer<N>(
     });
 
     if push_clip {
-        let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape) else {
+        let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape, 1.0) else {
             return;
         };
         snapshot.push_fragment(PaintFragment::PushClip {
@@ -610,18 +561,20 @@ pub(super) fn css_image_concrete_object_size(
         .then_some((width, height))
 }
 
-fn larger_clip_area(areas: BoxAreas, clip: BoxModelBox, origin: BoxModelBox) -> Option<LayoutRect> {
-    match (clip, origin) {
-        (BoxModelBox::Border | BoxModelBox::BorderArea, BoxModelBox::Padding)
-        | (
+fn clip_extends_past_origin(clip: BoxModelBox, origin: BoxModelBox) -> bool {
+    matches!(
+        (clip, origin),
+        (
+            BoxModelBox::Border | BoxModelBox::BorderArea,
+            BoxModelBox::Padding
+        ) | (
             BoxModelBox::Border | BoxModelBox::BorderArea,
             BoxModelBox::Content | BoxModelBox::Text,
-        ) => Some(areas.border_rect),
-        (BoxModelBox::Padding, BoxModelBox::Content | BoxModelBox::Text) => {
-            Some(areas.padding_rect)
-        }
-        _ => None,
-    }
+        ) | (
+            BoxModelBox::Padding,
+            BoxModelBox::Content | BoxModelBox::Text
+        )
+    )
 }
 
 fn compute_layer_position_and_size(
