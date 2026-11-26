@@ -1495,7 +1495,8 @@ mod tests {
             &mut world,
             crate::PaintViewport::new(800, 600, 1.0),
             false,
-        );
+        )
+        .unwrap();
         let inputs = LayoutInput {
             known_dimensions: Size {
                 width: Some(200.0),
@@ -1659,7 +1660,8 @@ mod tests {
                 &mut world,
                 crate::PaintViewport::new(800, 600, 1.0),
                 false,
-            );
+            )
+            .unwrap();
             let inputs = LayoutInput {
                 run_mode: RunMode::ComputeSize,
                 known_dimensions: Size {

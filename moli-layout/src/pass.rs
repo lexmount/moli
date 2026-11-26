@@ -742,7 +742,7 @@ where
         frozen_scrollbars,
         prepared.reuse_numeric_layout,
         invalidated,
-    );
+    )?;
     let numeric_layout_elapsed = phase_started.elapsed();
     if moli_trace::cpu_profile_enabled() {
         tracing::info!(
@@ -947,7 +947,7 @@ fn compute_world_layout_with_scrollbars<N>(
     frozen_scrollbars: &AutoScrollbars<N>,
     reuse_numeric_layout: bool,
     mut invalidated: Vec<crate::LayoutBoxId>,
-) -> (NumericLayoutMetrics, Option<OverflowProjection>)
+) -> Result<(NumericLayoutMetrics, Option<OverflowProjection>), LayoutError>
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
@@ -1006,7 +1006,7 @@ where
 
     let mut metrics = NumericLayoutMetrics::default();
     let phase_started = Instant::now();
-    let mut prepared = prepare_world_layout(world, viewport, reuse_numeric_layout);
+    let mut prepared = prepare_world_layout(world, viewport, reuse_numeric_layout)?;
     if reuse_numeric_layout {
         world.track_retained_cache_reads();
         // Preserve local geometry for cache hits. Recompute the root under
@@ -1136,7 +1136,7 @@ where
         world.numeric_tree = Some(prepared.tree);
     }
     metrics.retained_layout_hits = world.finish_retained_cache_reads();
-    (metrics, overflow_projection)
+    Ok((metrics, overflow_projection))
 }
 
 fn css_viewport_dimension(value: f32) -> u32 {

@@ -217,11 +217,7 @@ where
         before: Option<ResolvedLayoutPseudoStyle>,
         after: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<(), LayoutError> {
-        if !self.active_sources.insert(source_node) {
-            return Err(LayoutError::SourceCycle {
-                source_label: self.source.label(source_node),
-            });
-        }
+        self.enter_source(source_node)?;
         let result = (|| {
             let children =
                 self.build_element_child_stream(world, source_node, style, before, after)?;
@@ -230,6 +226,16 @@ where
         })();
         self.active_sources.remove(&source_node);
         result
+    }
+
+    fn enter_source(&mut self, source_node: S::NodeId) -> Result<(), LayoutError> {
+        crate::error::check_layout_depth(self.active_sources.len() + 1)?;
+        if !self.active_sources.insert(source_node) {
+            return Err(LayoutError::SourceCycle {
+                source_label: self.source.label(source_node),
+            });
+        }
+        Ok(())
     }
 
     fn build_source_node(
@@ -274,11 +280,7 @@ where
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        if !self.active_sources.insert(source_node) {
-            return Err(LayoutError::SourceCycle {
-                source_label: self.source.label(source_node),
-            });
-        }
+        self.enter_source(source_node)?;
 
         let result = (|| {
             let semantics =

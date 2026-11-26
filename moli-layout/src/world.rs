@@ -1056,14 +1056,21 @@ where
         self.source_mapping.entry(source).or_insert(id);
     }
 
-    pub(crate) fn preorder(&self) -> Vec<LayoutBoxId> {
+    pub(crate) fn preorder(&self) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut order = Vec::with_capacity(self.boxes.len());
-        let mut pending = vec![self.root];
-        while let Some(id) = pending.pop() {
+        let mut pending = vec![(self.root, 1)];
+        while let Some((id, depth)) = pending.pop() {
+            crate::error::check_layout_depth(depth)?;
             order.push(id);
-            pending.extend(self.boxes[id.index()].children.iter().rev().copied());
+            pending.extend(
+                self.boxes[id.index()]
+                    .children
+                    .iter()
+                    .rev()
+                    .map(|&child| (child, depth + 1)),
+            );
         }
-        order
+        Ok(order)
     }
 
     /// Keeps the existing box allocation and restores dense source order.
@@ -1318,8 +1325,9 @@ where
     /// Validates graph ownership invariants without relying on allocator IDs.
     pub fn validate_invariants(&self) -> Result<(), LayoutError> {
         let mut reachable = vec![false; self.boxes.len()];
-        let mut stack = vec![self.root];
-        while let Some(id) = stack.pop() {
+        let mut stack = vec![(self.root, 1)];
+        while let Some((id, depth)) = stack.pop() {
+            crate::error::check_layout_depth(depth)?;
             let Some(layout_box) = self.box_by_id(id) else {
                 return Err(LayoutError::InvalidBoxReference { index: id.index() });
             };
@@ -1339,7 +1347,7 @@ where
                         index: child.index(),
                     });
                 }
-                stack.push(child);
+                stack.push((child, depth + 1));
             }
         }
         if let Some(index) = reachable.iter().position(|reachable| !reachable) {

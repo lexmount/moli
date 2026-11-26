@@ -158,6 +158,58 @@ fn build(source: &Source, styles: &mut Styles) -> LayoutPassResult<usize> {
 }
 
 #[test]
+fn layout_at_the_depth_limit_fits_a_bounded_stack() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let depth = 96;
+            let source = Source(
+                (0..depth)
+                    .map(|id| Node::element("nested", (id + 1..depth).take(1).collect()))
+                    .collect(),
+            );
+            for (display, numeric_display) in [
+                (LayoutDisplay::Block, taffy::Display::Block),
+                (LayoutDisplay::Flex, taffy::Display::Flex),
+                (LayoutDisplay::Grid, taffy::Display::Grid),
+            ] {
+                let mut styles = Styles(
+                    (0..depth)
+                        .map(|id| {
+                            (
+                                id,
+                                resolved(
+                                    display,
+                                    Style {
+                                        display: numeric_display,
+                                        size: Size {
+                                            width: length(32.0),
+                                            height: length(16.0),
+                                        },
+                                        ..Style::default()
+                                    },
+                                ),
+                            )
+                        })
+                        .collect(),
+                );
+                let output = build_with_request(
+                    &source,
+                    &mut styles,
+                    LayoutPassRequest::with_paint(
+                        LayoutViewport::new(320, 240, 1.0),
+                        LayoutFlushReason::Test,
+                    ),
+                );
+                assert_eq!(output.metrics.box_count, depth, "{display:?}");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn owned_links_are_collected_only_for_printing_and_do_not_change_paint() {
     let (raster, print) = {
         let source = Source(vec![

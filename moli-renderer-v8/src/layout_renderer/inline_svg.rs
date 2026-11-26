@@ -117,10 +117,14 @@ pub(super) fn layout_content(
         .flatten()?;
     let source = prepare_source(source)?;
     let mut elements = Vec::new();
-    let mut pending = vec![(root, None)];
+    let mut pending = vec![(root, None, 0)];
     let mut referenced_ids = HashSet::new();
-    while let Some((node, parent)) = pending.pop() {
+    while let Some((node, parent, mut depth)) = pending.pop() {
         let parent = if let Some(element) = host.node(node).and_then(|node| node.as_element()) {
+            depth += 1;
+            if depth > moli_image::MAX_SVG_ELEMENT_DEPTH {
+                return None;
+            }
             if element.is_svg_element("use") {
                 let href = element.attribute("href").or_else(|| {
                     element
@@ -145,7 +149,7 @@ pub(super) fn layout_content(
         pending.extend(
             host.dom()
                 .html_serialization_child_ids_reversed(node)
-                .map(|node| (node, parent)),
+                .map(|node| (node, parent, depth)),
         );
     }
     let mut profiles = HashMap::<String, moli_image::SvgElementStyle>::new();

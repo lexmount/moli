@@ -14,6 +14,9 @@ pub enum LayoutError {
     /// A layout demand attempted to enter while another synchronous pass was active.
     #[error("a synchronous layout pass cannot re-enter itself")]
     ReentrantLayoutPass,
+    /// A source or box tree would exceed the recursion budget of a layout pass.
+    #[error("layout nesting exceeds the supported depth of {limit}")]
+    DepthLimitExceeded { limit: usize },
     /// A container-query size table repeated with no new scrollbar axis to freeze.
     #[error("container query sizes repeated in a cycle of {period} feedback iterations")]
     ContainerQueryFeedbackCycle { period: usize },
@@ -68,6 +71,16 @@ pub enum LayoutError {
     /// The numeric parent relation violated the pass-local tree contract.
     #[error("numeric layout parent relation contains a cycle at box index {index}")]
     NumericTreeCycle { index: usize },
+}
+
+pub(crate) fn check_layout_depth(depth: usize) -> Result<(), LayoutError> {
+    // Leave room for the native frames around recursive layout and paint
+    // calls, including debug builds on bounded renderer stacks.
+    const LIMIT: usize = 96;
+    if depth > LIMIT {
+        return Err(LayoutError::DepthLimitExceeded { limit: LIMIT });
+    }
+    Ok(())
 }
 
 impl LayoutError {

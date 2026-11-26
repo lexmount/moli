@@ -16,7 +16,7 @@ use taffy::{
 
 use crate::{
     LAYOUT_SUBPIXELS_PER_CSS_PIXEL, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
-    LayoutWorld, PaintRect, PaintViewport,
+    LayoutError, LayoutWorld, PaintRect, PaintViewport,
     inline::{
         InlineContentWidthsMemo, InlineEdgeContribution, InlineFormattingContext, InlineFragments,
         InlineLinePlacement, InlineMeasurementInputs, InlineNumericInputs, InlineObjectRole,
@@ -156,7 +156,7 @@ pub(crate) fn prepare_world_layout<N>(
     world: &mut LayoutWorld<N>,
     viewport: PaintViewport,
     reuse_numeric_layout: bool,
-) -> PreparedWorldLayout
+) -> Result<PreparedWorldLayout, LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -192,12 +192,15 @@ where
 
     world.viewport_layout.cache.clear();
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
-    let tree = retained_tree.unwrap_or_else(|| {
+    let tree = if let Some(tree) = retained_tree {
+        tree
+    } else {
         world.table_structures.clear();
         world.viewport_layout.children.clear();
         world.fixed_viewport_layout = None;
         let (positioned_static_sources, table_roots) =
             prepare_layout_tree(world, separate_fixed_viewport);
+        validate_numeric_depth(world)?;
         NumericTree {
             box_count: world.boxes.len(),
             separate_fixed_viewport,
@@ -206,7 +209,7 @@ where
             overflow: None,
             overflow_dirty: std::collections::HashSet::new(),
         }
-    });
+    };
     if let Some(layout) = &mut world.fixed_viewport_layout {
         layout.cache.clear();
         layout.unrounded_layout = Layout::with_order(0);
@@ -221,7 +224,28 @@ where
         feedback_invalidation_worklist: Vec::new(),
     };
     prepared.capture_numeric_geometry(world);
-    prepared
+    Ok(prepared)
+}
+
+fn validate_numeric_depth<N: Copy + Debug + Eq + Hash>(
+    world: &LayoutWorld<N>,
+) -> Result<(), LayoutError> {
+    // Numeric parents can differ from construction parents. Check the links
+    // Taffy will recurse through once, when they are first prepared.
+    let mut stack: Vec<_> = std::iter::once(&world.viewport_layout)
+        .chain(world.fixed_viewport_layout.as_deref())
+        .flat_map(|viewport| viewport.children.iter().map(|&child| (child, 1)))
+        .collect();
+    while let Some((id, depth)) = stack.pop() {
+        crate::error::check_layout_depth(depth)?;
+        stack.extend(
+            world.boxes[id.index()]
+                .layout_children
+                .iter()
+                .map(|&child| (child, depth + 1)),
+        );
+    }
+    Ok(())
 }
 
 fn update_viewport_layout_styles<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
