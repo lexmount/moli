@@ -47,7 +47,7 @@ pub(super) fn invoke_custom_element_constructor(
     invocation
 }
 
-pub(super) fn can_perform_custom_element_microtask_checkpoint(
+pub(crate) fn can_perform_custom_element_microtask_checkpoint(
     scope: &v8::PinScope<'_, '_>,
 ) -> bool {
     !scope.is_execution_terminating()

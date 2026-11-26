@@ -9,6 +9,7 @@ mod dom_tracking;
 mod inserted_resource_lifecycle;
 mod layout_and_tables;
 mod parser_blocking_scripts;
+mod parser_classic_aborts;
 mod parser_custom_elements;
 mod parser_flow;
 mod parser_script_handoffs;
