@@ -131,7 +131,11 @@ impl ImageResourceStore {
         Self {
             slots: HashMap::new(),
             css: CssImageResourceStore::new(ready_by_request.clone(), visual_generation.clone()),
-            scanned: ScannedImagePreloadStore::new(ready_by_request.clone(), decode.clone()),
+            scanned: ScannedImagePreloadStore::new(
+                ready_by_request.clone(),
+                decode.clone(),
+                visual_generation.clone(),
+            ),
             ready_by_request,
             decode,
             visual_generation,

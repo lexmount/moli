@@ -18,6 +18,7 @@ use super::{
 use crate::{
     document_runtime::DomHandle,
     frame_owner_model::FrameDocumentTaskOwner,
+    native_bridge::context_host::visual_resource_generation::VisualResourceGeneration,
     network::RendererResourceTaskRunner,
     types::{ImageRequestKey, SharedNavigationResponseResult},
 };
@@ -56,6 +57,7 @@ struct ScannedImagePreloadLoadInner {
     store: Weak<Mutex<ScannedImagePreloadStoreInner>>,
     ready_by_request: ReadyImageResourceIndex,
     decode: ImageDecodeCoordinator,
+    visual_generation: VisualResourceGeneration,
     cancel_handle: FetchCancelHandle,
     claimed: AtomicBool,
     state: Mutex<ScannedImagePreloadLoadState>,
@@ -70,7 +72,7 @@ struct ScannedImagePreloadLoadState {
 pub(crate) struct ScannedImagePreloadOutcome {
     network_result: SharedNavigationResponseResult,
     encoded: Option<moli_parkable_image::ParkableImage>,
-    _resource: Option<Arc<ReadyImageResource>>,
+    resource: Option<Arc<ReadyImageResource>>,
     _retained_body_permit: Option<ScannedImagePreloadBodyPermit>,
 }
 
@@ -104,6 +106,7 @@ pub(super) struct ScannedImagePreloadStore {
     inner: Arc<Mutex<ScannedImagePreloadStoreInner>>,
     ready_by_request: ReadyImageResourceIndex,
     decode: ImageDecodeCoordinator,
+    visual_generation: VisualResourceGeneration,
 }
 
 #[derive(Default)]
@@ -130,11 +133,13 @@ impl ScannedImagePreloadStore {
     pub(super) fn new(
         ready_by_request: ReadyImageResourceIndex,
         decode: ImageDecodeCoordinator,
+        visual_generation: VisualResourceGeneration,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ScannedImagePreloadStoreInner::default())),
             ready_by_request,
             decode,
+            visual_generation,
         }
     }
 
@@ -177,6 +182,7 @@ impl ScannedImagePreloadStore {
                 store: Arc::downgrade(&self.inner),
                 ready_by_request: self.ready_by_request.clone(),
                 decode: self.decode.clone(),
+                visual_generation: self.visual_generation.clone(),
                 cancel_handle: FetchCancelHandle::new(),
                 claimed: AtomicBool::new(false),
                 state: Mutex::new(ScannedImagePreloadLoadState::default()),
@@ -308,7 +314,7 @@ impl SharedScannedImagePreloadLoad {
             self.finish(ScannedImagePreloadOutcome {
                 network_result,
                 encoded,
-                _resource: None,
+                resource: None,
                 _retained_body_permit: retained_body_permit,
             });
             return;
@@ -346,13 +352,10 @@ impl SharedScannedImagePreloadLoad {
                             svg,
                             _decoded_bytes_permit: Some(ready.decoded_bytes_permit),
                         });
-                        load.inner
-                            .ready_by_request
-                            .insert(load.inner.identity.request_key.clone(), &resource);
                         load.finish(ScannedImagePreloadOutcome {
                             network_result,
                             encoded: Some(encoded),
-                            _resource: Some(resource),
+                            resource: Some(resource),
                             _retained_body_permit: retained_body_permit,
                         });
                     }
@@ -367,7 +370,7 @@ impl SharedScannedImagePreloadLoad {
                         load.finish(ScannedImagePreloadOutcome {
                             network_result,
                             encoded: Some(encoded),
-                            _resource: None,
+                            resource: None,
                             _retained_body_permit: retained_body_permit,
                         });
                     }
@@ -382,7 +385,7 @@ impl SharedScannedImagePreloadLoad {
             self.finish(ScannedImagePreloadOutcome {
                 network_result,
                 encoded: Some(encoded),
-                _resource: None,
+                resource: None,
                 _retained_body_permit: retained_body_permit,
             });
         }
@@ -405,18 +408,21 @@ impl SharedScannedImagePreloadLoad {
     }
 
     fn finish(&self, outcome: ScannedImagePreloadOutcome) {
-        let stored = {
-            let mut state = self.inner.state.lock();
-            if state.outcome.is_some() {
-                false
-            } else {
-                state.outcome = Some(Arc::new(outcome));
-                true
-            }
-        };
-        if stored {
-            self.inner.notify.notify_waiters();
+        let mut state = self.inner.state.lock();
+        if state.outcome.is_some() {
+            return;
         }
+        let outcome = state.outcome.insert(Arc::new(outcome));
+        if let Some(resource) = &outcome.resource {
+            self.inner
+                .ready_by_request
+                .insert(self.inner.identity.request_key.clone(), resource);
+            // The shared decoded image can affect CSS paint before an
+            // element claims this preload.
+            self.inner.visual_generation.bump();
+        }
+        drop(state);
+        self.inner.notify.notify_waiters();
     }
 
     fn reserve_retained_body(&self, bytes: usize) -> Option<Option<ScannedImagePreloadBodyPermit>> {
@@ -489,7 +495,12 @@ mod tests {
     #[test]
     fn exact_document_preload_is_claimed_once_and_keeps_its_terminal_result() {
         let ready = ReadyImageResourceIndex::default();
-        let store = ScannedImagePreloadStore::new(ready, ImageDecodeCoordinator::default());
+        let visual_generation = VisualResourceGeneration::default();
+        let store = ScannedImagePreloadStore::new(
+            ready,
+            ImageDecodeCoordinator::default(),
+            visual_generation.clone(),
+        );
         let document = DomHandle::new(10);
         let element = DomHandle::new(11);
         let key = request_key("https://example.test/hero.png");
@@ -531,12 +542,17 @@ mod tests {
             outcome.network_result().as_ref(),
             Err(error) if error == "network failed"
         ));
+        assert_eq!(visual_generation.current(), 0);
     }
 
     #[test]
     fn replacing_or_retiring_a_document_preload_cancels_its_physical_request() {
         let ready = ReadyImageResourceIndex::default();
-        let store = ScannedImagePreloadStore::new(ready, ImageDecodeCoordinator::default());
+        let store = ScannedImagePreloadStore::new(
+            ready,
+            ImageDecodeCoordinator::default(),
+            VisualResourceGeneration::default(),
+        );
         let document = DomHandle::new(20);
         let key = request_key("https://example.test/replace.png");
         let ScannedImagePreloadAdmission::Fetch(stale) =
@@ -556,7 +572,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn decoded_preload_is_ready_when_the_exact_element_claims_it() {
-        let mut resources = ImageResourceStore::default();
+        let visual_generation = VisualResourceGeneration::default();
+        let mut resources = ImageResourceStore::new(visual_generation.clone());
         let document = DomHandle::new(30);
         let element = DomHandle::new(31);
         let url = url::Url::parse("https://example.test/ready.png").expect("image URL");
@@ -588,6 +605,7 @@ mod tests {
             .await
             .expect("preload decode should finish before the deadline");
         assert!(outcome.network_result().as_ref().is_ok());
+        assert_eq!(visual_generation.current(), 1);
 
         let identity = ImageResourceRequestIdentity {
             element,
@@ -621,7 +639,11 @@ mod tests {
     #[test]
     fn claimed_oversize_response_still_completes_without_a_body_permit() {
         let ready = ReadyImageResourceIndex::default();
-        let store = ScannedImagePreloadStore::new(ready, ImageDecodeCoordinator::default());
+        let store = ScannedImagePreloadStore::new(
+            ready,
+            ImageDecodeCoordinator::default(),
+            VisualResourceGeneration::default(),
+        );
         let document = DomHandle::new(40);
         let element = DomHandle::new(41);
         let url = url::Url::parse("https://example.test/oversize.png").expect("image URL");
