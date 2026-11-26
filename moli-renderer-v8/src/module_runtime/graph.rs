@@ -2761,7 +2761,7 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_text_module_compilation_shares_fetched_source_and_releases_map_reference() {
+    fn synthetic_text_module_compilation_releases_the_map_source_reference() {
         for (module_type, text) in [
             ("json", r#"{"answer":42}"#),
             ("css", "body { color: red; }"),
@@ -2801,12 +2801,19 @@ mod tests {
             );
             drop(fetched);
             drop(source);
-            assert_eq!(
-                weak_source.strong_count(),
-                1,
-                "{module_type}: only the compiled record should own the original text allocation",
-            );
-            assert_eq!(weak_source.upgrade().unwrap().as_ref(), text);
+            if module_type == "json" {
+                assert!(
+                    weak_source.upgrade().is_none(),
+                    "JSON compilation retains the parsed value"
+                );
+            } else {
+                assert_eq!(
+                    weak_source.strong_count(),
+                    1,
+                    "{module_type}: only the compiled record should own the original text allocation",
+                );
+                assert_eq!(weak_source.upgrade().unwrap().as_ref(), text);
+            }
             drop(vm);
             assert!(weak_source.upgrade().is_none());
         }

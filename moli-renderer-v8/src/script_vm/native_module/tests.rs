@@ -1710,3 +1710,26 @@ fn native_module_errors_classify_caught_v8_type_errors() {
         Some(ScriptErrorConstructorKind::TypeError)
     );
 }
+
+#[test]
+fn json_module_parse_errors_are_retained_before_evaluation() {
+    let mut vm = new_test_vm("https://json-errors.test/page.html");
+    vm.eval("JSON.parse = () => { throw new Error('author JSON.parse'); };")
+        .unwrap();
+    let request = Url::parse("https://json-errors.test/redirect.json").unwrap();
+    let response = Url::parse("https://json-errors.test/final/bad.json").unwrap();
+    let error = vm
+        .compile_native_module_record(
+            ModuleMapKey::json_with_attributes(request, ModuleAttributesKey::empty()),
+            &ModuleSource::text("{".to_owned()),
+            &response,
+            &ModuleFetchMetadata::default(),
+        )
+        .expect_err("malformed JSON must fail before instantiation or evaluation");
+    assert_eq!(
+        error.error_constructor(),
+        Some(ScriptErrorConstructorKind::SyntaxError)
+    );
+    assert!(error.message().contains(response.as_str()));
+    assert!(!error.message().contains("author JSON.parse"));
+}
