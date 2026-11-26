@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
+    collections::HashSet,
     ops::{ControlFlow, Deref, DerefMut},
     rc::Rc,
 };
@@ -12,6 +13,11 @@ use xml5ever::{
     interface::{ElementFlags as XmlElementFlags, QuirksMode as XmlQuirksMode},
     tendril::{StrTendril as XmlStrTendril, TendrilSink as XmlTendrilSink},
     tree_builder::{NodeOrText as XmlNodeOrText, TreeSink as XmlTreeSinkBase, XmlTreeSink},
+};
+
+use xmlparser::{
+    ExternalId as XmlExternalId, Reference as XmlReference, Stream as XmlTokenStream,
+    Token as XmlTokenizerToken, Tokenizer as XmlTokenizer,
 };
 
 use super::{html_chunks, xml_tree_viewer::transform_document_to_xml_tree_view};
@@ -141,14 +147,98 @@ impl PartialEq for XmlParseHandle {
 
 impl Eq for XmlParseHandle {}
 
+fn uses_xhtml_entity_dtd(external_id: Option<XmlExternalId<'_>>) -> bool {
+    let Some(XmlExternalId::Public(public_id, _)) = external_id else {
+        return false;
+    };
+    // The HTML standard maps these public identifiers to its set of named entities.
+    [
+        "-//W3C//DTD XHTML 1.0 Transitional//EN",
+        "-//W3C//DTD XHTML 1.1//EN",
+        "-//W3C//DTD XHTML 1.0 Strict//EN",
+        "-//W3C//DTD XHTML 1.0 Frameset//EN",
+        "-//W3C//DTD XHTML Basic 1.0//EN",
+        "-//W3C//DTD XHTML 1.1 plus MathML 2.0//EN",
+        "-//W3C//DTD XHTML 1.1 plus MathML 2.0 plus SVG 1.1//EN",
+        "-//W3C//DTD MathML 2.0//EN",
+        "-//WAPFORUM//DTD XHTML Mobile 1.0//EN",
+        "-//WAPFORUM//DTD XHTML Mobile 1.1//EN",
+        "-//WAPFORUM//DTD XHTML Mobile 1.2//EN",
+    ]
+    .into_iter()
+    .any(|known_id| {
+        public_id
+            .as_str()
+            .split_ascii_whitespace()
+            .eq(known_id.split(' '))
+    })
+}
+
+fn validate_xml_references(
+    mut input: &str,
+    allow_xhtml_entities: bool,
+    declared_entities: &HashSet<&str>,
+) -> Result<(), String> {
+    while let Some(ampersand) = input.find('&') {
+        input = &input[ampersand..];
+        let mut stream = XmlTokenStream::from(input);
+        let reference = stream
+            .consume_reference()
+            .map_err(|_| "Invalid XML character reference".to_owned())?;
+        if let XmlReference::Entity(name) = reference
+            && !declared_entities.contains(name)
+            && (!allow_xhtml_entities
+                || markup5ever::data::NAMED_ENTITIES
+                    .get(&input[1..stream.pos()])
+                    .is_none_or(|&(codepoint, _)| codepoint == 0))
+        {
+            return Err(format!("Undeclared XML entity &{name};"));
+        }
+        input = &input[stream.pos()..];
+    }
+    Ok(())
+}
+
 impl<'a> XmlDocumentSink<'a> {
-    /// Keep partial trees for errors inside the document element, but stop
-    /// before tree construction when the prologue itself is malformed.
+    /// Stop before tree construction for invalid references or a malformed
+    /// prologue. Keep partial trees for other tokenizer errors in the body.
     fn note_lexical_errors(&self, source: &str) -> ControlFlow<()> {
         let mut saw_document_element = false;
-        for token in xmlparser::Tokenizer::from(source) {
+        let mut standalone = false;
+        let mut allow_xhtml_entities = false;
+        let mut declared_entities = HashSet::new();
+        for token in XmlTokenizer::from(source) {
             match token {
-                Ok(xmlparser::Token::ElementStart { .. }) => saw_document_element = true,
+                Ok(XmlTokenizerToken::ElementStart { .. }) => saw_document_element = true,
+                Ok(XmlTokenizerToken::Declaration {
+                    standalone: Some(true),
+                    ..
+                }) => {
+                    standalone = true;
+                }
+                Ok(
+                    XmlTokenizerToken::DtdStart { external_id, .. }
+                    | XmlTokenizerToken::EmptyDtd { external_id, .. },
+                ) => {
+                    allow_xhtml_entities = !standalone && uses_xhtml_entity_dtd(external_id);
+                }
+                Ok(XmlTokenizerToken::EntityDeclaration { name, .. }) => {
+                    declared_entities.insert(name.as_str());
+                }
+                Ok(
+                    XmlTokenizerToken::Text { text }
+                    | XmlTokenizerToken::Attribute { value: text, .. },
+                ) => {
+                    // xml5ever accepts the HTML entity table without a declaration.
+                    if let Err(detail) = validate_xml_references(
+                        text.as_str(),
+                        allow_xhtml_entities,
+                        &declared_entities,
+                    ) {
+                        self.parse_error(Cow::Owned(detail));
+                        return ControlFlow::Break(());
+                    }
+                }
                 Err(error) => {
                     self.parse_error(Cow::Owned(error.to_string()));
                     return if saw_document_element {
@@ -772,6 +862,49 @@ mod tests {
                 );
                 assert!(!dom.parse_errors().is_empty(), "{source}");
             }
+        }
+    }
+
+    #[test]
+    fn xml_named_references_require_a_declaration() {
+        let url = Url::parse("https://xml.test/entities.xml").unwrap();
+        let xhtml_doctype = "<!DOCTYPE root PUBLIC '-//W3C//DTD XHTML 1.0 Strict//EN' 'x'>";
+
+        for source in [
+            "<root>&times;</root>".to_owned(),
+            "<root value='&times;'/>".to_owned(),
+            "<root>missing &amp</root>".to_owned(),
+            "<!DOCTYPE root SYSTEM 'x'><root>&times;</root>".to_owned(),
+            format!("{xhtml_doctype}<root>&missing;</root>"),
+            format!("<?xml version='1.0' standalone='yes'?>{xhtml_doctype}<root>&times;</root>"),
+        ] {
+            let dom = XmlParser.parse(url.clone(), source.clone());
+            assert!(!dom.parse_errors().is_empty(), "{source}");
+        }
+
+        // The lexical check accepts declarations without depending on the
+        // tree builder's internal DTD support.
+        assert!(
+            super::validate_xml_references(
+                "&times;",
+                false,
+                &std::collections::HashSet::from(["times"])
+            )
+            .is_ok()
+        );
+        for source in [
+            "<root value='&apos;&gt;'>&amp;&lt;&quot;&#215;</root>".to_owned(),
+            "<root><![CDATA[&times;]]><!--&times;--><?literal &times;?></root>".to_owned(),
+            format!("{xhtml_doctype}<root value='&times;'>&times;</root>"),
+            "<!DOCTYPE root PUBLIC ' -//W3C//DTD XHTML\n 1.0 Strict//EN ' 'x'><root>&times;</root>"
+                .to_owned(),
+        ] {
+            let dom = XmlParser.parse(url.clone(), source.clone());
+            assert!(
+                dom.parse_errors().is_empty(),
+                "{source}: {:?}",
+                dom.parse_errors()
+            );
         }
     }
 
