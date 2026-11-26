@@ -6,6 +6,36 @@ const DYNAMIC_INLINE_ERRORS: &str = include_str!(concat!(
 ));
 
 #[test]
+fn current_script_remains_visible_after_adopted_node_root_lookup() {
+    let mut vm = new_parsed_test_vm(
+        "https://adopted-node.test/page.html",
+        "<!doctype html><body></body>",
+    );
+    let result = vm
+        .eval(
+            r#"
+            globalThis.detachedDocument = document.implementation.createHTMLDocument();
+            const node = detachedDocument.createElement('span');
+            document.body.appendChild(node);
+            const rootIsDocument = node.getRootNode() === document;
+
+            globalThis.probeScript = document.createElement('script');
+            probeScript.textContent = `
+              globalThis.scriptState = [
+                document.currentScript === probeScript,
+                detachedDocument.currentScript === null,
+              ];
+            `;
+            document.head.appendChild(probeScript);
+
+            JSON.stringify([rootIsDocument, ...scriptState, document.currentScript === null])
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, "[true,true,true,true]");
+}
+
+#[test]
 fn current_script_stays_with_its_execution_document_after_adoption() {
     let mut vm = new_parsed_test_vm(
         "https://inline-adoption.test/page.html",

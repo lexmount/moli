@@ -1321,23 +1321,10 @@ fn document_current_script_getter_function<'s>(
         rv.set_null();
         return;
     };
-    if detached_native_handle_for_runtime(scope, runtime_ptr, receiver).is_some() {
-        rv.set_null();
-        return;
-    }
-    let runtime = unsafe { &mut *runtime_ptr };
-    if !node_is_document(runtime, handle) {
-        rv.set_null();
-        return;
-    }
-    let current_script = current_script_handle_for_document(runtime, handle);
-    set_wrapped_handle_or_null_for_receiver(
-        scope,
-        &mut rv,
-        runtime_ptr,
-        args.this(),
-        current_script,
-    );
+    // Tree lookups on adopted nodes can attach detached-wrapper metadata to
+    // a live Document. The native Document handle identifies the script owner.
+    let current_script = current_script_handle_for_document(unsafe { &*runtime_ptr }, handle);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, receiver, current_script);
 }
 
 fn current_script_handle_for_document(
