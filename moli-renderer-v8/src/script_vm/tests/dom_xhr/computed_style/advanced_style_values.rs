@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn computed_style_blockifies_legacy_webkit_box_items_until_clamped() {
+    let mut vm = new_parsed_test_vm(
+        "https://webkit-box-blockification.test/",
+        r#"<!doctype html>
+          <div id="box" style="display: -webkit-box; -webkit-box-orient: vertical">
+            <span id="direct">Direct</span>
+            <div style="display: contents"><span id="nested">Nested</span></div>
+          </div>
+          <div style="display: -webkit-inline-box">
+            <span id="inline-item">Inline item</span>
+            <span id="inline-table" style="display: inline-table"></span>
+          </div>"#,
+    );
+
+    let displays = vm
+        .eval(
+            r#"
+(() => {
+  const box = document.getElementById('box');
+  const display = id => getComputedStyle(document.getElementById(id)).display;
+  const readBoxItems = () => [display('direct'), display('nested')].join(',');
+  const values = [readBoxItems(), display('inline-item'), display('inline-table')];
+  box.style.setProperty('-webkit-line-clamp', '2');
+  values.push(readBoxItems());
+  box.style.removeProperty('-webkit-line-clamp');
+  values.push(readBoxItems());
+  return values.join('|');
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        displays,
+        "block,block|block|table|inline,inline|block,block"
+    );
+}
+
+#[test]
 fn computed_style_serializes_text_decoration_longhands() {
     let mut vm = new_parsed_test_vm(
         "https://css-text-decoration-computed.test/",
