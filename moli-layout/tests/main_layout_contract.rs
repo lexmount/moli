@@ -870,7 +870,7 @@ fn grid_container_justify_items_center_shrink_wraps_an_auto_sized_item() {
 
 #[test]
 fn centered_grid_item_with_percent_height_and_auto_block_margin_keeps_intrinsic_inline_size() {
-    let source = FixtureSource {
+    let mut source = FixtureSource {
         nodes: vec![
             FixtureNode::div("grid", vec![1]),
             FixtureNode::div("item", vec![2]),
@@ -946,15 +946,23 @@ fn centered_grid_item_with_percent_height_and_auto_block_margin_keeps_intrinsic_
         ),
     );
 
-    let snapshot = render(&source, &mut styles, PaintViewport::new(1280, 720, 1.0));
-    assert_rect(
-        solid_rect(&snapshot, GREEN),
-        PaintRect::new(504.0, 68.0, 272.0, 92.0),
+    let check_centered_logo = |source: &FixtureSource, styles: &mut FixtureStyles| {
+        let snapshot = render(source, styles, PaintViewport::new(1280, 720, 1.0));
+        let expected = PaintRect::new(504.0, 68.0, 272.0, 92.0);
+        assert_rect(solid_rect(&snapshot, GREEN), expected);
+        assert_rect(solid_rect(&snapshot, RED), expected);
+    };
+    check_centered_logo(&source, &mut styles);
+
+    // A preceding block wraps the image in an anonymous inline formatting
+    // context during the grid item's intrinsic width measurement.
+    source.nodes.push(FixtureNode::div("spacer", Vec::new()));
+    source.nodes[1].children.insert(0, 3);
+    styles.0.insert(
+        3,
+        fixed_box(LayoutDisplay::Block, 0.0, 0.0, PaintColor::TRANSPARENT),
     );
-    assert_rect(
-        solid_rect(&snapshot, RED),
-        PaintRect::new(504.0, 68.0, 272.0, 92.0),
-    );
+    check_centered_logo(&source, &mut styles);
 }
 
 #[test]
