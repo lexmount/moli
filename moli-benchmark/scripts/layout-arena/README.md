@@ -146,3 +146,67 @@ Input capture may produce a different eligible snapshot subset as sites change.
 `render_memory_plots.py` accepts an exported report directory; run it separately
 after measurements with Matplotlib and NumPy available. Do not compile or run
 other benchmark processes during timed trials.
+
+## CPU activity and actual layout changes
+
+[Controlled relayout results](results-layout-changes-d7e0a70f.md) extend the
+structural pulse with viewport changes, container width changes, visible text
+updates, subtree display toggles, and detach/reinsert of the same content node.
+The ten admitted real-page snapshots, three pinned binaries, and source base are
+unchanged. Original application scripts remain inert; responsive CSS is exercised,
+while live application resize handlers and mobile-device emulation are outside
+this comparison. DPR is 1 and `mobile` remains false.
+
+Every process warms each scenario once, then runs 32 measured steps (8 for the
+large Wiki article). Each step forces layout. Its sampled geometry, element count,
+viewport and text length are compared exactly with the other variants and rounds;
+all scenarios must restore the original DOM and geometry. Asset misses, handler
+failures, mismatched inputs or geometry, and memory-guard kills are failures.
+Three fresh processes per variant/page rotate the variant order. Phase order is
+fixed, so memory in later phases includes earlier work. Full geometry inspection
+is outside the timed step but still allocates in the engine; process CPU includes
+any background/GC work occurring within the timed windows. These are instrumented
+renderer workloads rather than a claim of an intrinsic container speed.
+
+The new harness records the POSIX process CPU clock through `clock_getcpuclockid`
+and `clock_gettime_ns`, including all threads, and retains `/proc` ticks for
+compatibility. This avoids the earlier 10 ms tick granularity on small updates.
+CPU activity is CPU time divided by elapsed time for the same measured windows;
+100% means one core, not the whole host. CPU time per step is the useful fixed-work
+comparison: equally busy processes can complete the work at different speeds.
+RSS/PSS and kernel RSS high-water are also retained; no GC or allocator trim is
+forced.
+
+```sh
+ARENA_SCRIPT=moli-benchmark/scripts/layout-arena
+ARENA_DATA=/absolute/path/to/captured-inputs
+ARENA_BINS=/absolute/path/to/saved/binaries
+ARENA_LAYOUT=moli-benchmark/results/layout-changes-new
+uv run --project moli-benchmark python "$ARENA_SCRIPT/layout_compare.py" \
+  --plan "$ARENA_DATA/snapshot-plan-v2.json" --binaries "$ARENA_BINS" \
+  --output "$ARENA_LAYOUT/admission" --variants baseline \
+  --repetitions 1 --steps 4 --large-steps 4
+uv run --project moli-benchmark python "$ARENA_SCRIPT/layout_compare.py" \
+  --plan "$ARENA_DATA/snapshot-plan-v2.json" --binaries "$ARENA_BINS" \
+  --output "$ARENA_LAYOUT/formal" --repetitions 3 --steps 32 --large-steps 8
+uv run --project moli-benchmark python "$ARENA_SCRIPT/summarize_layout_changes.py" \
+  "$ARENA_LAYOUT/formal" --output "$ARENA_LAYOUT/report"
+```
+
+Run `render_layout_changes.py` on the report directory separately, after all
+measurements, with Matplotlib and NumPy available. The numeric exporter contains
+all formal runs, input/binary/control hashes, medians and min/max ranges. Its
+public output contains numbers and hashes, not captured response bodies or text.
+Keep admission failures and failed formal trials on disk and in the report.
+
+[Live-page CPU activity](results-live-cpu-d7e0a70f.md) is a separate export of the
+previously published unmodified live observations. It adds no new live trials.
+It divides CPU time by the measured initial window (8 seconds, 20 for Finance and
+hh.ru), including network and timer waits; it cannot establish a fixed-work speedup
+when responses or progress differ. The exporter retains the original HTTP,
+network and incomplete-page exclusions:
+
+```sh
+uv run --project moli-benchmark python "$ARENA_SCRIPT/summarize_live_cpu.py" \
+  "$ARENA_SCRIPT/measurements.csv" --output "$ARENA_LAYOUT/live-cpu"
+```

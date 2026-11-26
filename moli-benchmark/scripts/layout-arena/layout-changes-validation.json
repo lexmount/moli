@@ -1,0 +1,17 @@
+{
+  "fresh_processes": 90,
+  "pages": 10,
+  "scenarios_per_process": 5,
+  "timed_steps": 13320,
+  "all_per_step_signatures_match": true,
+  "all_final_observations_restored": true,
+  "missing_assets": 0,
+  "handler_errors": 0,
+  "guard_or_sampling_failures": 0,
+  "binary_hashes_match": true,
+  "control_hashes_match": true,
+  "input_hashes_match": true,
+  "response_bodies_verified": 315,
+  "response_body_bytes_verified": 24392829,
+  "audited_at_unix": 1795707201.3546236
+}
