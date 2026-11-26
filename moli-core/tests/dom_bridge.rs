@@ -1152,8 +1152,8 @@ async fn supports_selector_corner_cases_for_attributes_and_syntax_errors() -> Re
     );
 
     assert_eq!(
-        diagnostic_global(&page, "selectorCornerInvalidMissingBracket"),
-        Some(&JsValueSnapshot::String("SyntaxError:12".to_owned()))
+        diagnostic_global(&page, "selectorCornerRecoveredMissingBracket"),
+        Some(&JsValueSnapshot::String("case-target".to_owned()))
     );
     assert_eq!(
         diagnostic_global(&page, "selectorCornerInvalidMissingValue"),
@@ -1172,8 +1172,8 @@ async fn supports_selector_corner_cases_for_attributes_and_syntax_errors() -> Re
         Some(&JsValueSnapshot::Number(0.0))
     );
     assert_eq!(
-        diagnostic_global(&page, "selectorCornerInvalidMatchesAttribute"),
-        Some(&JsValueSnapshot::String("SyntaxError:12".to_owned()))
+        diagnostic_global(&page, "selectorCornerMatchesRecoveredAttribute"),
+        Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
         diagnostic_global(&page, "selectorCornerMatchesDuplicateIdNoMatch"),

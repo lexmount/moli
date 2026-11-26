@@ -55,8 +55,8 @@
       window.selectorCornerPrefixDashEmptyLength =
         document.querySelectorAll('[lang|=""]').length;
 
-      window.selectorCornerInvalidMissingBracket =
-        captureSyntaxError(() => document.querySelector("[data-test"));
+      window.selectorCornerRecoveredMissingBracket =
+        document.querySelector("[data-test").id;
       window.selectorCornerInvalidMissingValue =
         captureSyntaxError(() => document.querySelector("[data-test=]"));
       window.selectorCornerInvalidUnsupportedOperator =
@@ -65,8 +65,8 @@
         document.querySelector("div#case-target#other") === null;
       window.selectorCornerDuplicateIdAllLength =
         document.querySelectorAll("div#case-target#other").length;
-      window.selectorCornerInvalidMatchesAttribute =
-        captureSyntaxError(() => target.matches("[data-test"));
+      window.selectorCornerMatchesRecoveredAttribute =
+        target.matches("[data-test");
       window.selectorCornerMatchesDuplicateIdNoMatch =
         target.matches("div#case-target#other");
       window.selectorCornerMatchesDuplicateSameId =
