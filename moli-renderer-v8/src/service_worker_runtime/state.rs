@@ -30,7 +30,8 @@ use crate::{
 
 use super::{
     clients::{
-        ServiceWorkerClientFrameType, ServiceWorkerClientType, ServiceWorkerClientVisibilityState,
+        ServiceWorkerClientFrameType, ServiceWorkerClientQuery, ServiceWorkerClientType,
+        ServiceWorkerClientVisibilityState,
     },
     diagnostics::ServiceWorkerMainScriptUpdateCheckDiagnostics,
     errors::ServiceWorkerRegistrationError,
@@ -200,6 +201,8 @@ pub(super) struct ServiceWorkerRuntimeState {
     pub(super) pending_fetch_jobs: HashMap<ServiceWorkerEventId, ServiceWorkerFetchJob>,
     pub(super) lifecycle_watchers: Vec<ServiceWorkerLifecycleWatcher>,
     pub(super) live_clients: HashMap<ServiceWorkerClientId, ServiceWorkerClient>,
+    pub(super) pending_client_gets:
+        HashMap<ServiceWorkerClientId, Vec<PendingServiceWorkerClientGet>>,
     pub(super) notification_records: Vec<ServiceWorkerNotificationRecord>,
     pub(super) sync_registrations:
         HashMap<(ServiceWorkerRegistrationId, String), ServiceWorkerSyncRegistrationRecord>,
@@ -230,6 +233,11 @@ pub(super) struct ServiceWorkerRuntimeState {
     pub(super) stored_registration_cache_revision: Option<u64>,
     pub(super) stored_registration_cache:
         HashMap<ServiceWorkerRegistrationKey, ServiceWorkerStoredRegistration>,
+}
+
+pub(super) struct PendingServiceWorkerClientGet {
+    pub(super) query: ServiceWorkerClientQuery,
+    pub(super) owner: ServiceWorkerRunOwner,
 }
 
 /// Renderer-owned protocol identity residence for one stable ServiceWorker
@@ -306,6 +314,7 @@ impl ServiceWorkerRuntimeState {
             pending_fetch_jobs: HashMap::new(),
             lifecycle_watchers: Vec::new(),
             live_clients: HashMap::new(),
+            pending_client_gets: HashMap::new(),
             notification_records: Vec::new(),
             sync_registrations: HashMap::new(),
             periodic_sync_registrations: HashMap::new(),
@@ -454,6 +463,7 @@ impl ServiceWorkerRuntimeState {
         run: RendererServiceWorkerRunIdentity,
         reason: impl Into<String>,
     ) -> bool {
+        self.discard_pending_client_gets(version_id, Some(&run));
         if !self.service_worker_target_infos.contains_key(&version_id) {
             return false;
         }
@@ -476,6 +486,7 @@ impl ServiceWorkerRuntimeState {
     }
 
     pub(super) fn record_target_destroyed(&mut self, version_id: ServiceWorkerVersionId) -> bool {
+        self.discard_pending_client_gets(version_id, None);
         self.devtools_attached_versions.remove(&version_id);
         if self
             .service_worker_target_infos
@@ -497,6 +508,32 @@ impl ServiceWorkerRuntimeState {
             },
         );
         true
+    }
+
+    fn discard_pending_client_gets(
+        &mut self,
+        version_id: ServiceWorkerVersionId,
+        run: Option<&RendererServiceWorkerRunIdentity>,
+    ) {
+        let belongs_to_run = |owner: &ServiceWorkerRunOwner| {
+            owner.version_id() == version_id && run.is_none_or(|run| owner.run_identity() == run)
+        };
+        self.pending_client_gets.retain(|_, gets| {
+            gets.retain(|get| !belongs_to_run(&get.owner));
+            !gets.is_empty()
+        });
+    }
+
+    pub(super) fn mark_client_execution_ready(
+        &mut self,
+        client_id: ServiceWorkerClientId,
+    ) -> Vec<PendingServiceWorkerClientGet> {
+        if let Some(client) = self.live_clients.get_mut(&client_id) {
+            client.execution_ready = true;
+        }
+        self.pending_client_gets
+            .remove(&client_id)
+            .unwrap_or_default()
     }
 
     pub(super) fn record_target_version_updated(
