@@ -73,7 +73,7 @@ pub fn pixel_snap_paint_axis(location: f32, size: f32) -> (f32, f32) {
 ///
 /// Border inner edges use this variant, matching Blink's
 /// `SnapSizeToPixelAllowingZero` behavior.
-pub fn pixel_snap_paint_axis_allowing_zero(location: f32, size: f32) -> (f32, f32) {
+fn pixel_snap_paint_axis_allowing_zero(location: f32, size: f32) -> (f32, f32) {
     pixel_snap_paint_axis_impl(location, size, true)
 }
 
@@ -95,7 +95,7 @@ pub(crate) fn round_layout_pixel(value: f64) -> f64 {
 }
 
 /// Pixel-snap a positive finite rectangle in pre-transform paint space.
-pub fn pixel_snap_paint_rect(rect: PaintRect) -> Option<PaintRect> {
+pub(crate) fn pixel_snap_paint_rect(rect: PaintRect) -> Option<PaintRect> {
     if !rect.x.is_finite()
         || !rect.y.is_finite()
         || !rect.width.is_finite()
@@ -1081,6 +1081,12 @@ impl PaintSnapshot {
             svg_images: Vec::new(),
             diagnostics: Vec::new(),
         }
+    }
+
+    /// Returns the live viewport grid for geometry before property transforms.
+    /// Capture scaling is applied after paint has aligned to this grid.
+    pub fn pixel_grid(&self) -> PaintPixelGrid {
+        PaintPixelGrid::new(self.viewport.device_pixel_ratio)
     }
 
     /// Appends a paint fragment.

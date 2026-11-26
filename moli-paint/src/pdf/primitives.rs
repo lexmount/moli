@@ -11,7 +11,7 @@ use krilla::{
 };
 use moli_layout::{
     PaintBlendMode, PaintCaptureSurface, PaintColor, PaintCompositeMode, PaintFragment,
-    PaintGlyphRun, PaintSnapshot, PaintTransform2D,
+    PaintGlyphRun, PaintImage, PaintSnapshot, PaintSvgImage, PaintTransform2D,
 };
 use peniko::kurbo::{Affine, PathEl, Rect, Shape};
 
@@ -511,8 +511,21 @@ fn fragment_bounds(
         PaintFragment::PushLayer {
             clip, transform, ..
         } => (super::rect(clip.bounds()), *transform),
-        PaintFragment::SvgImage(image) => (super::rect(image.destination), image.transform),
-        PaintFragment::Image(image) => (super::rect(image.destination), image.transform),
+        PaintFragment::Image(PaintImage {
+            destination,
+            transform,
+            ..
+        })
+        | PaintFragment::SvgImage(PaintSvgImage {
+            destination,
+            transform,
+            ..
+        }) => {
+            let Some(rect) = snapshot.pixel_grid().snap_rect(*destination) else {
+                return Ok(None);
+            };
+            (super::rect(rect), *transform)
+        }
         PaintFragment::Tiles(tiles) => {
             let Some(bounds) = crate::scene::tiles::grid_coverage(tiles.grid) else {
                 return Ok(None);

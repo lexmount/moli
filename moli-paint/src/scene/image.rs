@@ -11,9 +11,7 @@
 
 use crate::geometry::device_transform;
 use anyrender::PaintScene;
-use moli_layout::{
-    PaintImage, PaintImageSampling, PaintRect, PaintSnapshot, PaintSvgImage, pixel_snap_paint_rect,
-};
+use moli_layout::{PaintImage, PaintImageSampling, PaintSnapshot, PaintSvgImage};
 use peniko::kurbo::Affine;
 use peniko::{
     Blob, Extend, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality, ImageSampler,
@@ -28,7 +26,7 @@ pub(super) fn paint_image(
     let Some(resource) = snapshot.image(image.image) else {
         return;
     };
-    let Some(destination) = pixel_snapped_image_destination(image.destination) else {
+    let Some(destination) = snapshot.pixel_grid().snap_rect(image.destination) else {
         return;
     };
     if resource.image.width == 0 || resource.image.height == 0 {
@@ -82,7 +80,7 @@ pub(super) fn paint_svg_image(
     let Some(resource) = snapshot.svg_image(image.image) else {
         return;
     };
-    let Some(destination) = pixel_snapped_image_destination(image.destination) else {
+    let Some(destination) = snapshot.pixel_grid().snap_rect(image.destination) else {
         return;
     };
     let tree_size = resource.image.tree().size();
@@ -112,14 +110,4 @@ pub(super) fn draw_svg(
     // supported vector content and silently omit unsupported masks, filters,
     // patterns, or embedded raster nodes until their backends are wired.
     anyrender_svg::render_svg_tree_with(scene, image.tree(), transform, &mut |_scene, _node| {});
-}
-
-fn pixel_snapped_image_destination(destination: PaintRect) -> Option<PaintRect> {
-    // Image geometry remains fractional for layout and CSSOM. Snapshot
-    // projection has already applied ordinary paint offsets while preserving
-    // CSS/scroll property transforms; drawing only snaps the image quad
-    // in that pre-transform paint space. Adjacent fractional images therefore
-    // share one pixel boundary, matching Blink's
-    // ToPixelSnappedRect/SnapSizeToPixel contract.
-    pixel_snap_paint_rect(destination)
 }

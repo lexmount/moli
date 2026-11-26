@@ -23,8 +23,6 @@ use anyrender::ImageRenderer;
 use anyrender::PaintScene;
 use anyrender_vello_cpu::VelloCpuImageRenderer;
 use filters::{apply_software_color_filter, is_software_color_filter};
-#[cfg(feature = "molio")]
-use moli_layout::pixel_snap_paint_rect;
 use moli_layout::{PaintCaptureSurface, PaintColor, PaintFragment, PaintSnapshot};
 use peniko::kurbo::{Affine, Rect};
 use peniko::{
@@ -111,7 +109,8 @@ pub fn raster_damage_rows(
     layout: RasterBufferLayout,
 ) -> Range<u32> {
     let full = 0..layout.height;
-    if previous.surface != current.surface
+    if previous.viewport != current.viewport
+        || previous.surface != current.surface
         || previous.raster_crop.is_some()
         || current.raster_crop.is_some()
         || previous.canvas_color != current.canvas_color
@@ -131,6 +130,7 @@ pub fn raster_damage_rows(
         return 0..0;
     }
     let scale = f64::from(current.surface.device_scale);
+    let grid = current.pixel_grid();
     let mut top = layout.height;
     let mut bottom = 0;
     for fragment in &current.fragments {
@@ -140,7 +140,7 @@ pub fn raster_damage_rows(
             } => return full,
             PaintFragment::Image(image) => (
                 image.image,
-                pixel_snap_paint_rect(image.destination).and_then(to_backend_rect),
+                grid.snap_rect(image.destination).and_then(to_backend_rect),
                 image.transform,
             ),
             PaintFragment::Tiles(tiles) => match tiles.source {

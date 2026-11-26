@@ -31,11 +31,9 @@ pub(super) fn paint_border(
     styles: PaintBorderStyles,
     radii: PaintCornerRadii,
     transform: Affine,
-    device_scale: f32,
+    grid: PaintPixelGrid,
 ) {
-    let Some((rect, widths)) =
-        pixel_snapped_border_geometry(rect, widths, PaintPixelGrid::new(device_scale))
-    else {
+    let Some((rect, widths)) = pixel_snapped_border_geometry(rect, widths, grid) else {
         return;
     };
     let radii = normalize_radii(radii, rect.width(), rect.height());

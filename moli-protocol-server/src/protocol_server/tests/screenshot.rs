@@ -370,12 +370,23 @@ body { margin: 0; background: white }
 .bordered { top: 272.25px; background: #2955ff; border-color: #dc2800 }
 .overflow { top: 324.25px; background: none; overflow: hidden }
 .overflow > div { position: absolute; inset: -4px; background: #2955ff }
+.full-image {
+    top: 376.25px; border: 0; border-radius: 0;
+    background-color: #dc2800; background-clip: border-box;
+}
+.full-svg {
+    top: 428.25px;
+    background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMyOTU1ZmYiLz48L3N2Zz4=);
+}
 </style>
 <div class="frame"></div><div class="frame border-origin"></div>
 <div class="frame solid"></div><div class="frame image"></div>
 <div class="frame image single-image"></div>
 <div class="frame bordered"></div><div class="frame overflow"><div></div></div>
-<img hidden src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mPQDP0PAAIoAX46fBFaAAAAAElFTkSuQmCC">"#;
+<div class="frame image single-image full-image"></div>
+<div class="frame image single-image full-image full-svg"></div>
+<img hidden src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mPQDP0PAAIoAX46fBFaAAAAAElFTkSuQmCC">
+<img hidden src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMyOTU1ZmYiLz48L3N2Zz4=">"#;
     let fixture_url = format!(
         "data:text/html;charset=utf-8,{}",
         url::form_urlencoded::byte_serialize(html.as_bytes())
@@ -404,7 +415,7 @@ body { margin: 0; background: white }
         "Runtime.evaluate",
         Some(&target.session_id),
         json!({
-            "expression": "document.querySelector('img').decode().then(() => true)",
+            "expression": "Promise.all(Array.from(document.images, image => image.decode())).then(() => true)",
             "awaitPromise": true,
             "returnByValue": true,
         }),
@@ -427,7 +438,7 @@ body { margin: 0; background: white }
             Some(&target.session_id),
             json!({
                 "width": 160,
-                "height": 380,
+                "height": 480,
                 "deviceScaleFactor": scale,
                 "mobile": false,
             }),
@@ -438,7 +449,7 @@ body { margin: 0; background: white }
         let (width, height, pixels) = decode_png(&png);
         assert_eq!(
             (width, height),
-            ((160.0 * scale) as u32, (380.0 * scale) as u32)
+            ((160.0 * scale) as u32, (480.0 * scale) as u32)
         );
 
         let left = (10.5 * scale).round() as i32;
@@ -446,14 +457,16 @@ body { margin: 0; background: white }
         let center_x = (left + right) / 2;
         let white = [255; 4];
         let blue = [41, 85, 255, 255];
-        for (border_top, border_color, inside_color) in [
-            (12.25, None, white),
-            (64.25, None, white),
-            (116.25, Some(white), blue),
-            (168.25, Some(white), blue),
-            (220.25, Some(white), blue),
-            (272.25, Some([220, 40, 0, 255]), blue),
-            (324.25, Some(white), blue),
+        for (border_top, border_width, border_color, inside_color) in [
+            (12.25, border_width, None, white),
+            (64.25, border_width, None, white),
+            (116.25, border_width, Some(white), blue),
+            (168.25, border_width, Some(white), blue),
+            (220.25, border_width, Some(white), blue),
+            (272.25, border_width, Some([220, 40, 0, 255]), blue),
+            (324.25, border_width, Some(white), blue),
+            (376.25, 0, Some(white), blue),
+            (428.25, 0, Some(white), blue),
         ] {
             let top = (border_top * scale).round() as i32;
             let bottom = ((border_top + 42.0) * scale).round() as i32;
