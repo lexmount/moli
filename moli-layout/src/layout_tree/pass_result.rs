@@ -170,9 +170,10 @@ where
         self.tree.retention_metrics()
     }
 
-    /// Records quads parsed by paint while the pass is still being assembled.
-    pub fn record_painted_svg_geometry(&mut self, scenes: Vec<(N, Vec<(N, crate::LayoutQuad)>)>) {
-        self.tree.record_painted_svg_geometry(scenes);
+    /// Records SVG quads before publication. The retention budget is checked
+    /// after all frame members are built.
+    pub fn record_svg_geometry(&mut self, scenes: Vec<(N, Vec<(N, crate::LayoutQuad)>)>) {
+        self.tree.record_svg_geometry(scenes);
     }
 
     pub fn validate_retention_budget(&self) -> Result<(), LayoutError> {

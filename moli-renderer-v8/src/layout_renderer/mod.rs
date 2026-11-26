@@ -276,7 +276,7 @@ fn build_native_layout_pass_recursive(
                     paint: Some(&svg_image),
                 },
             )?;
-            pass.record_painted_svg_geometry(paint_geometry.into_inner());
+            pass.record_svg_geometry(paint_geometry.into_inner());
             Ok(pass)
         };
         if services.has_stylesheet_web_fonts() {
