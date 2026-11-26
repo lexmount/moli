@@ -1322,15 +1322,19 @@ async fn realtime_scroll_reuses_layout_for_paint_only_hover_damage() {
                 .unwrap()
                 .unwrap()
             };
+            let update_hover_under_pointer = |vm: &StandaloneScriptVmHarness| {
+                let hit = vm.mouse_input_surface_hit(16., 16., "mousemove").unwrap();
+                assert!(host.borrow_mut().set_hovered_element_for_input(hit.target));
+            };
             paint(&mut vm);
             let publications = vm.layout_pass_observability_for_test().1;
 
-            assert!(vm.refresh_viewport_pointer((16., 16.)).unwrap().1);
+            update_hover_under_pointer(&vm);
             paint(&mut vm);
             assert_eq!(vm.layout_pass_observability_for_test().1, publications);
 
             vm.eval("scrollTo(0, 40)").unwrap();
-            assert!(vm.refresh_viewport_pointer((16., 16.)).unwrap().1);
+            update_hover_under_pointer(&vm);
             let snapshot = paint(&mut vm);
             assert_eq!(vm.layout_pass_observability_for_test().1, publications);
             assert_eq!(
@@ -1343,7 +1347,7 @@ async fn realtime_scroll_reuses_layout_for_paint_only_hover_damage() {
             assert_eq!(&image.rgba[offset..offset + 4], [0, 255, 0, 255]);
 
             vm.eval("scrollTo(0, 80)").unwrap();
-            assert!(vm.refresh_viewport_pointer((16., 16.)).unwrap().1);
+            update_hover_under_pointer(&vm);
             paint(&mut vm);
             assert_eq!(vm.eval("String(resize.offsetWidth)").unwrap(), "160");
             assert_eq!(vm.layout_pass_observability_for_test().1, publications + 1);
