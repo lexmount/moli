@@ -15,6 +15,9 @@ mod subclasses;
 pub(crate) use moli_webapi::events::subclasses::submit::{
     mark_agent_submit_event, take_submit_event_response,
 };
+pub(in crate::context_bootstrap) use moli_webapi::events::ui::{
+    composition_event_init_callback, ui_event_init_callback,
+};
 use moli_webapi::events::value;
 pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;

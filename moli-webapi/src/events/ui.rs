@@ -1,4 +1,6 @@
+use super::state::{event_backing, reinitialize_event_object};
 use crate::interfaces as web_api_interfaces;
+use moli_v8_util::v8_string_from_utf16_units;
 use moli_webapi_declare::WebApiObject;
 use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
@@ -85,4 +87,94 @@ pub(crate) fn is_window_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
     (super::runtime(scope).is_window_receiver)(scope, receiver)
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct CompositionEventData<'s> {
+    data: v8::Local<'s, v8::String>,
+}
+
+fn initialize_composition_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    data: &[u16],
+) {
+    // Both CompositionEventInit.data and initCompositionEvent's dataArg are
+    // DOMString inputs. Retain their UTF-16 code units without a Rust String.
+    let data = v8_string_from_utf16_units(scope, data).expect("CompositionEvent data");
+    CompositionEventData::new(data)
+        .initialize(scope, event)
+        .expect("CompositionEvent data should initialize");
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "UIEvent.initUIEvent")]
+struct InitUiEventArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    event_type: webidl::DomString16,
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(nullable, interface = web_api_interfaces::Window, brand_check = is_window_receiver)]
+    view: Option<v8::Local<'s, v8::Object>>,
+    #[webidl(default = 0)]
+    detail: i32,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CompositionEvent.initCompositionEvent")]
+struct InitCompositionEventArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    event_type: webidl::DomString16,
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(nullable, interface = web_api_interfaces::Window, brand_check = is_window_receiver)]
+    view: Option<v8::Local<'s, v8::Object>>,
+    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
+    data: webidl::DomString16,
+}
+
+pub fn ui_event_init_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<InitUiEventArgs>(scope, &args) else {
+        return;
+    };
+    let event = event_backing(scope, args.this());
+    if reinitialize_event_object(
+        scope,
+        event,
+        &parsed.event_type.0,
+        parsed.bubbles,
+        parsed.cancelable,
+    ) {
+        initialize_legacy_ui_event(scope, event, parsed.view, parsed.detail);
+    }
+}
+
+pub fn composition_event_init_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<InitCompositionEventArgs>(scope, &args) else {
+        return;
+    };
+    let event = event_backing(scope, args.this());
+    if reinitialize_event_object(
+        scope,
+        event,
+        &parsed.event_type.0,
+        parsed.bubbles,
+        parsed.cancelable,
+    ) {
+        initialize_legacy_ui_event(scope, event, parsed.view, 0);
+        initialize_composition_data(scope, event, &parsed.data.0);
+    }
 }

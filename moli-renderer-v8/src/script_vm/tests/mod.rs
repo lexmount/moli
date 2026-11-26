@@ -2391,6 +2391,8 @@ mod idb_cursor_native_receivers;
 mod text_encoder_utf16_progress;
 mod time_ranges;
 mod touch_event_webidl;
+#[path = "browser_api/ui_event_init.rs"]
+mod ui_event_init;
 mod url_components;
 mod video_codecs_shell;
 
