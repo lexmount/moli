@@ -98,6 +98,93 @@ async fn scroll_gesture_continues_after_only_first_wheel_is_canceled() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn scroll_gesture_interrupted_by_ignored_input_restarts_at_new_target() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut ctx = fixture(
+                r#"
+                b.firstElementChild.id = 'overlay';
+                window.firstScroll = new Promise(resolve => a.addEventListener('scroll', () => {
+                    b.style.display = 'block';
+                    resolve(true);
+                }, {once: true}));
+                document.addEventListener('wheel', event => {
+                    events.push([event.target.id, event.cancelable]);
+                    total += event.deltaY;
+                }, {passive: false});
+            "#,
+            )
+            .await;
+            let raw = json!({
+                "id":35001, "method":"Input.synthesizeScrollGesture",
+                "params":{"x":20,"y":20,"yDistance":-1200,"speed":300,"gestureSourceType":"mouse"}
+            })
+            .to_string();
+            let CdpCommandTaskStep::Pending(pending) =
+                ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+            else {
+                panic!("gesture must wait for its wheel events");
+            };
+            let running = tokio::task::spawn_local(pending.wait());
+            ctx.process_async(json!({
+                "id":35002, "method":"Runtime.evaluate",
+                "params":{"expression":"firstScroll","awaitPromise":true,"returnByValue":true}
+            }))
+            .await;
+            let first = ctx
+                .wait_for_scheduler_message("first default scroll", |message| {
+                    message["id"] == 35002
+                })
+                .await;
+            assert_eq!(first["result"]["result"]["value"], true, "{first}");
+
+            ctx.process_async(json!({
+                "id":35003, "method":"Input.setIgnoreInputEvents", "params":{"ignore":true}
+            }))
+            .await;
+            ctx.expect_result(35003, json!({}), None);
+            let completed = ctx.drive_owned_wait(running).await.unwrap();
+            let step = ctx.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(
+                    completed,
+                    &mut CommandDispatchContext::default(),
+                )
+            });
+            let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
+            assert!(
+                messages.contains(&json!({"id":35001,"result":{}})),
+                "{messages:?}"
+            );
+            let interrupted = snapshot(&mut ctx).await;
+            assert!(interrupted["a"].as_f64().unwrap() > 0., "{interrupted}");
+            assert!(
+                interrupted["total"].as_f64().unwrap() < 1200.,
+                "{interrupted}"
+            );
+            assert_eq!(interrupted["b"], 0, "{interrupted}");
+            let resume_index = interrupted["events"].as_array().unwrap().len();
+
+            ctx.process_async(json!({
+                "id":35004, "method":"Input.setIgnoreInputEvents", "params":{"ignore":false}
+            }))
+            .await;
+            ctx.expect_result(35004, json!({}), None);
+            // Stay within the old transaction's position slop and keep its direction.
+            gesture(&mut ctx, json!({"x":25,"yDistance":-24,"speed":2000})).await;
+            let resumed = snapshot(&mut ctx).await;
+            assert_eq!(
+                resumed["events"][resume_index],
+                json!(["overlay", true]),
+                "{resumed}"
+            );
+            assert_eq!(resumed["a"], interrupted["a"], "{resumed}");
+            assert_eq!(resumed["b"], 24, "{resumed}");
+            assert_eq!(resumed["page"], 0, "{resumed}");
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn scroll_gesture_keeps_target_and_scroller_when_overlay_appears() {
     let mut ctx=fixture("document.addEventListener('wheel',e=>{events.push([e.target.id,e.cancelable]);total+=e.deltaY;b.style.display='block';},{passive:false});").await;
     gesture(&mut ctx, json!({})).await;

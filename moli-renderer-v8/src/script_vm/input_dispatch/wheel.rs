@@ -39,7 +39,7 @@ impl ScriptVm {
         options: WheelDispatchOptions,
     ) -> Result<RendererInputDispatchOutcome> {
         if matches!(input.phase, WheelPhase::Ended | WheelPhase::Cancelled) {
-            if input.source == WheelSource::Platform {
+            if input.source != WheelSource::Direct {
                 self.wheel_input.borrow_mut().end_platform_sequence();
             } else {
                 self.wheel_input.borrow_mut().end_transaction();
@@ -53,7 +53,7 @@ impl ScriptVm {
         let (x, y) = input.position;
         let hit = match input.source {
             WheelSource::Direct => self.mouse_input_surface_hit(x, y, "wheel")?,
-            WheelSource::Platform => {
+            WheelSource::Platform | WheelSource::Synthetic(_) => {
                 let Some(target) =
                     self.prepare_wheel_event_target(&mut prepared.event_target, x, y)?
                 else {

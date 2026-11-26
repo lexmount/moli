@@ -110,13 +110,28 @@ impl PageVm {
                 } else {
                     WheelPhase::Unspecified
                 },
-                source: WheelSource::Platform,
+                source: WheelSource::Synthetic(gesture.round_id()),
             },
             WheelDispatchOptions {
                 intercept_drags,
                 ..Default::default()
             },
         )
+    }
+
+    pub(crate) fn cancel_synthetic_wheel(
+        &self,
+        gesture: &crate::runtime::RendererSyntheticWheelGesture,
+    ) -> RendererInputDispatchOutcome {
+        if let Some(document) = self.vm().wheel_document_owner()
+            && gesture.accepts_document(document, false)
+        {
+            self.vm()
+                .wheel_input
+                .borrow_mut()
+                .cancel_synthetic_round(document, gesture.round_id());
+        }
+        RendererInputDispatchOutcome::default()
     }
 
     pub(crate) fn dispatch_touch_event_at_points(

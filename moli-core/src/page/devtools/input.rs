@@ -118,6 +118,10 @@ pub trait PageInputExt {
         intercept_drags: bool,
         gesture: crate::page::RendererSyntheticWheelGesture,
     ) -> Result<PendingPageCommand>;
+    fn start_cancel_synthetic_wheel(
+        &self,
+        gesture: crate::page::RendererSyntheticWheelGesture,
+    ) -> Result<PendingPageCommand>;
     async fn dispatch_touch_event_at_point_with_outcome_async(
         &mut self,
         x: f64,
@@ -354,6 +358,15 @@ impl PageInputExt for Page {
                 intercept_drags,
                 gesture,
             },
+        ))
+    }
+
+    fn start_cancel_synthetic_wheel(
+        &self,
+        gesture: crate::page::RendererSyntheticWheelGesture,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::CancelSyntheticWheel(gesture),
         ))
     }
 

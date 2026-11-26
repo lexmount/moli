@@ -99,7 +99,7 @@ impl ProtocolWorkflowState<'_> {
         self,
         wheel: crate::domains::input::SyntheticWheel,
     ) -> Result<
-        Option<crate::domains::input::PendingInputCommandDispatch>,
+        Option<(crate::domains::input::PendingInputCommandDispatch, bool)>,
         crate::automation::DevToolsError,
     > {
         wheel.prepare(self.connection)

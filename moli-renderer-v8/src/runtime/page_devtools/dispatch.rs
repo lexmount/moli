@@ -86,6 +86,13 @@ impl PageVm {
                 .dispatch_synthetic_wheel(x, y, delta_x, delta_y, end, intercept_drags, gesture)
                 .map(RendererDevToolsPageReply::InputDispatchOutcome)
                 .map(RendererPageReply::DevTools),
+            RendererDevToolsPageCommand::CancelSyntheticWheel(gesture) => {
+                Ok(RendererPageReply::DevTools(
+                    RendererDevToolsPageReply::InputDispatchOutcome(
+                        self.cancel_synthetic_wheel(&gesture),
+                    ),
+                ))
+            }
             RendererDevToolsPageCommand::DispatchTouchEvent {
                 points,
                 event_name,

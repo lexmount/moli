@@ -18,6 +18,8 @@ pub enum WheelSource {
     Direct,
     /// Platform wheels may supply a phase or need Aura-style inference.
     Platform,
+    /// Synthetic wheels use platform phase inference and identify their producer round.
+    Synthetic(u64),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -40,6 +42,7 @@ pub enum WheelDispatchOutcome {
 
 #[derive(Debug)]
 struct InferredPhase {
+    source: WheelSource,
     deadline: Instant,
     position: (f64, f64),
     delta: (f64, f64),
@@ -115,6 +118,18 @@ where
         self.end_transaction();
     }
 
+    /// Release an interrupted producer's sequence if it still owns the current phase.
+    pub fn cancel_synthetic_round(&mut self, document: D, round: u64) {
+        if self.document == Some(document)
+            && self
+                .inferred
+                .as_ref()
+                .is_some_and(|phase| phase.source == WheelSource::Synthetic(round))
+        {
+            self.end_platform_sequence();
+        }
+    }
+
     /// Retire the current document and its platform sequence.
     pub fn retire_document(&mut self) {
         self.end_platform_sequence();
@@ -128,13 +143,15 @@ where
             self.document = Some(document);
         }
         self.expire(input.timestamp);
-        let phase = match (input.source, input.phase) {
-            (WheelSource::Platform, WheelPhase::Unspecified) => self.infer_phase(input),
-            (_, phase) => phase,
+        let platform = input.source != WheelSource::Direct;
+        let phase = if platform && input.phase == WheelPhase::Unspecified {
+            self.infer_phase(input)
+        } else {
+            input.phase
         };
         if phase == WheelPhase::Began {
             self.nonblocking = false;
-            if input.source == WheelSource::Platform {
+            if platform {
                 if input.phase == WheelPhase::Unspecified {
                     self.end_transaction();
                 } else {
@@ -145,6 +162,11 @@ where
                 // belongs to the active scroll until the paired End arrives.
                 self.event_target = None;
             }
+        }
+        // A later platform update can take over the shared sequence. Direct
+        // CDP wheels leave the platform producer and its timer in place.
+        if platform && let Some(inferred) = &mut self.inferred {
+            inferred.source = input.source;
         }
         self.event_serial = self.event_serial.wrapping_add(1);
         PreparedWheel {
@@ -218,6 +240,7 @@ where
             WheelPhase::Changed
         } else {
             self.inferred = Some(InferredPhase {
+                source: input.source,
                 deadline: input.timestamp + TRANSACTION_TIMEOUT,
                 position: input.position,
                 delta: input.delta,
