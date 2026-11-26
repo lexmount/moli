@@ -1,6 +1,6 @@
 //! The retained layout tree and its memory-retention boundary.
 
-use std::{fmt::Debug, hash::Hash, ops::Deref};
+use std::{collections::HashMap, fmt::Debug, hash::Hash, ops::Deref};
 
 use crate::{LayoutDisplay, LayoutError, LayoutListMarkerPosition};
 
@@ -157,7 +157,7 @@ where
     /// principal box but can still nominate rendered descendants for scroll.
     pub scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     pub object_geometry: Vec<LayoutObjectGeometry<N>>,
-    pub(crate) svg_viewports: Vec<crate::pass::InlineSvgViewport<N>>,
+    pub(crate) svg_viewports: HashMap<N, crate::pass::InlineSvgViewport>,
     viewport_coordinate_space: FrozenCoordinateSpace,
     pub clip_chain: Vec<LayoutClipNode>,
     embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
@@ -172,8 +172,7 @@ where
     /// for the first time in this publication.
     pub fn pending_svg_viewport(&self, source: N) -> Option<LayoutSize> {
         self.svg_viewports
-            .iter()
-            .find(|svg| svg.source == source)
+            .get(&source)
             .filter(|svg| !svg.prepared)
             .map(|svg| svg.size)
     }
@@ -216,8 +215,8 @@ where
         for (source, objects) in scenes {
             let Some(svg) = member
                 .svg_viewports
-                .iter_mut()
-                .find(|svg| svg.source == source && !svg.prepared)
+                .get_mut(&source)
+                .filter(|svg| !svg.prepared)
             else {
                 continue;
             };
@@ -243,7 +242,7 @@ where
     pub fn clear_inline_svg_geometry(&mut self) {
         if !self.svg_viewports.is_empty() {
             self.object_geometry.clear();
-            for svg in &mut self.svg_viewports {
+            for svg in self.svg_viewports.values_mut() {
                 svg.prepared = false;
             }
         }
@@ -323,7 +322,7 @@ where
             .saturating_add(allocation::<LayoutObjectGeometry<N>>(
                 self.object_geometry.capacity(),
             ))
-            .saturating_add(allocation::<crate::pass::InlineSvgViewport<N>>(
+            .saturating_add(allocation::<(N, crate::pass::InlineSvgViewport)>(
                 self.svg_viewports.capacity(),
             ))
             .saturating_add(allocation::<(N, LayoutOutputBoxId)>(
@@ -519,7 +518,7 @@ where
             fragments,
             scroll_proxy_links,
             object_geometry,
-            svg_viewports: Vec::new(),
+            svg_viewports: HashMap::new(),
             viewport_coordinate_space,
             clip_chain,
             embedded_frames,
