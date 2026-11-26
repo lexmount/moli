@@ -427,7 +427,10 @@ mod tests {
         }
         let _navigation_reply = handle.enqueue(RendererOwnerCommand::RunProtocolPageCommand {
             token,
-            command: RendererPageCommand::NavigateViewport(None),
+            command: RendererPageCommand::NavigateViewport {
+                target: None,
+                cancellation: moli_fetch::FetchCancelHandle::new(),
+            },
         })?;
         handle.enqueue_viewport_wheel(token, wheel)?;
         let reversed = RendererViewportWheelInput {
@@ -458,7 +461,7 @@ mod tests {
         assert!(matches!(
             rx.try_recv()?, RenderRuntimeEnvelope::Command { command, .. }
                 if matches!(*command, RendererOwnerCommand::RunProtocolPageCommand {
-                    command: RendererPageCommand::NavigateViewport(None), ..
+                    command: RendererPageCommand::NavigateViewport { target: None, .. }, ..
                 })
         ));
         for expected in [

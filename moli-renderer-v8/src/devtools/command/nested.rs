@@ -93,8 +93,8 @@ impl RendererPageCommand {
             | Self::CancelViewportPointer { .. }
             | Self::DispatchViewportWheel(..)
             | Self::SetViewportPointerPosition { .. }
-            | Self::NavigateViewport(..)
-            | Self::TraverseViewportHistory(..)
+            | Self::NavigateViewport { .. }
+            | Self::TraverseViewportHistory { .. }
             | Self::ReadViewportEditor
             | Self::ReadViewportSelection(..)
             | Self::ApplyViewportEdit(..)

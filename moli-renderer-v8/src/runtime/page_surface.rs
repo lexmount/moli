@@ -5134,9 +5134,15 @@ pub enum RendererPageCommand {
         position: Option<(f64, f64)>,
     },
     #[cfg(feature = "molio")]
-    NavigateViewport(Option<String>),
+    NavigateViewport {
+        target: Option<String>,
+        cancellation: moli_fetch::FetchCancelHandle,
+    },
     #[cfg(feature = "molio")]
-    TraverseViewportHistory(i64),
+    TraverseViewportHistory {
+        delta: i64,
+        cancellation: moli_fetch::FetchCancelHandle,
+    },
     #[cfg(feature = "molio")]
     ReadViewportEditor,
     #[cfg(feature = "molio")]

@@ -996,8 +996,8 @@ fn live_page_command_should_follow_pending_navigation(command: &RendererPageComm
             ..
         } => true,
         #[cfg(feature = "molio")]
-        RendererPageCommand::NavigateViewport(..)
-        | RendererPageCommand::TraverseViewportHistory(..) => true,
+        RendererPageCommand::NavigateViewport { .. }
+        | RendererPageCommand::TraverseViewportHistory { .. } => true,
         _ => false,
     }
 }

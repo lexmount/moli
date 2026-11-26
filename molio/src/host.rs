@@ -16,13 +16,15 @@ use moli_core::{
     RendererViewportEditor, RendererViewportNavigation, RendererViewportPointerInput,
     RendererViewportWheelInput,
     page::{
-        BufferedViewportFrames, CompletedPageCommand, Page, PageInputExt, RendererAuxiliaryWindow,
-        RendererDraggedFile, RendererPageWindowIdentity, RendererPopupActivationParts,
-        ViewportBuffers, ViewportOutput, ViewportUpdate,
+        BufferedViewportFrames, CompletedPageCommand, Page, PageInputExt,
+        PendingViewportNavigation, RendererAuxiliaryWindow, RendererDraggedFile,
+        RendererPageWindowIdentity, RendererPopupActivationParts, ViewportBuffers, ViewportOutput,
+        ViewportUpdate,
     },
     protocol_types::{DocumentActivity, ViewportSurface},
     runtime::{Browser, BrowserConfig},
 };
+use moli_fetch::FetchCancelHandle;
 use tokio::{
     sync::{mpsc, oneshot, watch},
     task::{JoinHandle, LocalSet},
@@ -321,11 +323,21 @@ async fn next_viewport_update(
     }
 }
 
-type PendingNavigation = JoinHandle<Result<CompletedPageCommand>>;
+struct PendingNavigation {
+    completion: JoinHandle<Result<CompletedPageCommand>>,
+    cancellation: FetchCancelHandle,
+}
+
+impl Drop for PendingNavigation {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        self.completion.abort();
+    }
+}
 
 async fn navigation_finished(task: &mut Option<PendingNavigation>) -> Result<CompletedPageCommand> {
     match task {
-        Some(task) => task.await?,
+        Some(task) => (&mut task.completion).await?,
         None => pending().await,
     }
 }
@@ -363,6 +375,7 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
         }
     };
     let mut surface = None;
+    let mut pending_viewport_pointer = None;
     let mut capture = None;
     let mut navigation = None;
     let mut favicon_task: Option<JoinHandle<Option<Arc<gpui::RenderImage>>>> = None;
@@ -380,6 +393,14 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
     navigation_updates.mark_changed();
 
     loop {
+        if navigation.is_none()
+            && let Some(pointer) = pending_viewport_pointer.take()
+            && activity.visible
+            && let Err(error) =
+                refresh_capture(&mut page, &mut capture, surface, pointer, &tab.viewport).await
+        {
+            eprintln!("Browser viewport update failed: {error:#}");
+        }
         tokio::select! {
             Ok(()) = navigation_updates.changed() => {
                 let Some(next) = navigation_updates.borrow_and_update().clone() else { continue };
@@ -473,21 +494,20 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                     }
                 }
                 let result = match command {
-                    TabCommand::Navigate(target) => {
-                        if let Some(previous) = navigation.take() {
-                            previous.abort();
-                        }
-                        start_navigation(&page, &tab.state, target)
-                            .map(|task| navigation = Some(task))
-                    }
-                    TabCommand::History(delta) => {
-                        tab.state.send_modify(|state| state.error = None);
-                        page.traverse_viewport_history(delta).await.map(drop)
-                    }
+                    TabCommand::Navigate(target) => start_navigation(
+                        &mut navigation,
+                        &tab.state,
+                        target.clone(),
+                        || page.start_viewport_navigation(target),
+                    ),
+                    TabCommand::History(delta) => start_navigation(
+                        &mut navigation,
+                        &tab.state,
+                        None,
+                        || page.start_viewport_history_traversal(delta),
+                    ),
                     TabCommand::Stop => {
-                        if let Some(navigation) = navigation.take() {
-                            navigation.abort();
-                        }
+                        drop(navigation.take());
                         tab.state.send_modify(|state| {
                             state.loading = false;
                             state.pending_url = None;
@@ -496,11 +516,8 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                     }
                     TabCommand::Viewport { surface: viewport, revision, pointer_position } => {
                         surface = Some((viewport, revision));
-                        if activity.visible {
-                            refresh_capture(&mut page, &mut capture, surface, pointer_position, &tab.viewport).await
-                        } else {
-                            Ok(())
-                        }
+                        pending_viewport_pointer = Some(pointer_position);
+                        Ok(())
                     }
                     TabCommand::Activity(next) => {
                         let visibility_changed = activity.visible != next.visible;
@@ -607,26 +624,30 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
             }
         }
     }
-    if let Some(task) = navigation {
-        task.abort();
-    }
     if let Some(task) = favicon_task {
         task.abort();
     }
 }
 
 fn start_navigation(
-    page: &Page,
+    navigation: &mut Option<PendingNavigation>,
     state: &watch::Sender<TabState>,
-    target: Option<String>,
-) -> Result<PendingNavigation> {
-    let pending = page.start_viewport_navigation(target.clone())?;
+    pending_url: Option<String>,
+    begin: impl FnOnce() -> Result<PendingViewportNavigation>,
+) -> Result<()> {
+    drop(navigation.take());
+    let pending = begin();
     state.send_modify(|state| {
-        state.loading = true;
-        state.error = None;
-        state.pending_url = target;
+        state.loading = pending.is_ok();
+        state.error = pending.as_ref().err().map(|error| format!("{error:#}"));
+        state.pending_url = if state.loading { pending_url } else { None };
     });
-    Ok(tokio::task::spawn_local(pending.wait()))
+    let pending = pending?;
+    *navigation = Some(PendingNavigation {
+        cancellation: pending.cancellation(),
+        completion: tokio::task::spawn_local(pending.wait()),
+    });
+    Ok(())
 }
 
 async fn drop_files(
@@ -1220,6 +1241,132 @@ mod tests {
             show_tab(&mut red, "Red", 3, [0, 0, 255, 255]).await?,
             red_document
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn slow_history_traversal_keeps_stop_and_navigation_responsive() -> Result<()> {
+        let (host, _events) = BrowserHost::start(None)?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let (started, mut stalled) = mpsc::channel(2);
+        let server = tokio::spawn(async move {
+            let body = b"<title>First entry</title>";
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let (socket, _) = listener.accept().await?;
+            let mut socket = BufReader::new(socket);
+            assert_eq!(read_http_request(&mut socket).await?.0, "/entry");
+            socket.get_mut().write_all(head.as_bytes()).await?;
+            socket.get_mut().write_all(body).await?;
+            drop(socket);
+
+            let mut traversals = 0;
+            while traversals < 2 {
+                let (socket, _) = listener.accept().await?;
+                let mut socket = BufReader::new(socket);
+                let (path, _) = read_http_request(&mut socket).await?;
+                if path == "/favicon.ico" {
+                    socket
+                        .get_mut()
+                        .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                        .await?;
+                    continue;
+                }
+                assert_eq!(path, "/entry");
+                started.send(()).await?;
+                assert_eq!(socket.read(&mut [0]).await?, 0, "cancelled transport");
+                traversals += 1;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+        let mut tab = host.open_tab()?;
+        tab.commands
+            .send(TabCommand::Activity(DocumentActivity::new(true, true)))?;
+        for (url, title) in [
+            (format!("http://{address}/entry"), "First entry"),
+            (
+                "data:text/html,<title>Second entry</title>".into(),
+                "Second entry",
+            ),
+        ] {
+            tab.commands.send(TabCommand::Navigate(Some(url)))?;
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                tab.state.wait_for(|state| {
+                    !state.loading
+                        && state
+                            .navigation
+                            .as_ref()
+                            .is_some_and(|nav| nav.title == title)
+                }),
+            )
+            .await
+            .with_context(|| format!("load {title}"))??;
+        }
+
+        tab.commands.send(TabCommand::History(-1))?;
+        tokio::time::timeout(Duration::from_secs(5), stalled.recv())
+            .await
+            .context("history request reaches the server")?
+            .context("server closed before accepting the history request")?;
+        assert!(tab.state.borrow().loading);
+        let mut frames = tab.viewport.subscribe();
+        tab.commands.send(TabCommand::Viewport {
+            surface: ViewportSurface {
+                inner_width: 40,
+                inner_height: 30,
+                ..ViewportSurface::default()
+            },
+            revision: 1,
+            pointer_position: None,
+        })?;
+        tab.commands.send(TabCommand::Stop)?;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tab.state.wait_for(|state| !state.loading),
+        )
+        .await
+        .context("Stop clears the history loading state")??;
+        assert_eq!(
+            tab.state.borrow().navigation.as_ref().unwrap().title,
+            "Second entry"
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while tab.viewport.read(|frame| frame.viewport_revision) != Some(1) {
+                frames.changed().await?;
+            }
+            Ok::<_, watch::error::RecvError>(())
+        })
+        .await
+        .context("viewport update reaches the current document after Stop")??;
+
+        tab.commands.send(TabCommand::History(-1))?;
+        tokio::time::timeout(Duration::from_secs(5), stalled.recv())
+            .await
+            .context("second history request reaches the server")?
+            .context("server closed before accepting the second history request")?;
+        assert!(tab.state.borrow().loading);
+        tab.commands.send(TabCommand::Navigate(Some(
+            "data:text/html,<title>Replacement</title>".into(),
+        )))?;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tab.state.wait_for(|state| {
+                !state.loading
+                    && state
+                        .navigation
+                        .as_ref()
+                        .is_some_and(|nav| nav.title == "Replacement")
+            }),
+        )
+        .await
+        .context("replacement navigation commits with the history response stalled")??;
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .context("cancelled history loads release their stalled connections")???;
         Ok(())
     }
 

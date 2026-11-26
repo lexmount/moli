@@ -46,6 +46,8 @@ pub(crate) struct PendingLocationNavigation {
     /// Exact producer-to-owner handoff identity for this value of the Page's
     /// unique pending top-level navigation slot.
     pub(crate) handoff: RendererTopLevelNavigationHandoff,
+    #[cfg(feature = "molio")]
+    pub(crate) viewport_cancellation: Option<moli_fetch::FetchCancelHandle>,
     /// Exact Document that requested this navigation, retained as causal
     /// metadata across a possible `document.open()` replacement. Standalone
     /// ScriptVm fixtures may not install a Page lifecycle journal; PageVm
@@ -192,6 +194,8 @@ impl PageScriptHost {
         self.pending_top_level_navigation = Some(PendingTopLevelNavigation::Location(Box::new(
             PendingLocationNavigation {
                 handoff,
+                #[cfg(feature = "molio")]
+                viewport_cancellation: None,
                 source_document: self
                     .root_document_lifecycle
                     .as_ref()
@@ -226,6 +230,8 @@ impl PageScriptHost {
         self.pending_top_level_navigation = Some(PendingTopLevelNavigation::Location(Box::new(
             PendingLocationNavigation {
                 handoff,
+                #[cfg(feature = "molio")]
+                viewport_cancellation: None,
                 source_document: self
                     .root_document_lifecycle
                     .as_ref()
@@ -320,6 +326,20 @@ impl PageScriptHost {
             return None;
         };
         Some(pending.handoff)
+    }
+
+    #[cfg(feature = "molio")]
+    pub(crate) fn set_viewport_navigation_cancellation(
+        &mut self,
+        previous: Option<RendererTopLevelNavigationHandoff>,
+        cancellation: moli_fetch::FetchCancelHandle,
+    ) {
+        if let Some(PendingTopLevelNavigation::Location(pending)) =
+            self.pending_top_level_navigation.as_mut()
+            && Some(pending.handoff) != previous
+        {
+            pending.viewport_cancellation = Some(cancellation);
+        }
     }
 
     pub(crate) fn take_pending_location_navigation(&mut self) -> Option<PendingLocationNavigation> {

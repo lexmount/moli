@@ -94,6 +94,7 @@ pub(super) async fn load_followed_location_navigation(
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: BrowserNavigationRequestKind,
     initiator: Option<&RendererNavigationInitiator>,
+    transfer: FetchCancelHandle,
 ) -> Result<LoadedFollowedLocationNavigation> {
     debug!(%url, "starting pre-commit location navigation fetch");
     if let Some(response) = about_blank_navigation_response(&url)
@@ -149,7 +150,7 @@ pub(super) async fn load_followed_location_navigation(
     .map_err(|error| anyhow!("failed to build location navigation request: {error}"))?;
     let referrer_request = initiator.map(|source| (source, request.clone()));
     let mut response = loader
-        .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+        .fetch_raw_stream_with_cancel(request, transfer)
         .await?;
     if matches!(response.status, 204 | 205) {
         while response.next_chunk().await.is_some() {}
@@ -958,7 +959,10 @@ impl PageVm {
                 .map(|outcome| PageVmDocumentCommitPreparation::Uncommitted(Box::new(outcome)));
         }
 
-        let loaded = match load_followed_location_navigation(
+        let transfer = FetchCancelHandle::new();
+        #[cfg(feature = "molio")]
+        let cancel_transfer = transfer.clone();
+        let load = load_followed_location_navigation(
             &self.request_client,
             initiator_url.clone(),
             url,
@@ -967,9 +971,26 @@ impl PageVm {
             request_headers,
             browser_navigation_kind,
             pending.navigation_initiator.as_ref(),
-        )
-        .await
-        {
+            transfer,
+        );
+        #[cfg(feature = "molio")]
+        let loaded = if let Some(cancellation) = pending.viewport_cancellation {
+            // The provisional request owns cancellation only until the response
+            // is handed to the committed Document or the download manager.
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    cancel_transfer.cancel();
+                    Err(anyhow!("viewport navigation cancelled"))
+                }
+                result = load => result,
+            }
+        } else {
+            load.await
+        };
+        #[cfg(not(feature = "molio"))]
+        let loaded = load.await;
+        let loaded = match loaded {
             Ok(loaded) => loaded,
             Err(error) => {
                 if let Some(id) = web_mcp_invocation {
@@ -1670,7 +1691,7 @@ mod tests {
         update_history_entry_after_redirect,
     };
     use crate::network::ResourceRequestClient;
-    use moli_fetch::{BrowserNavigationRequestKind, outgoing_request_headers};
+    use moli_fetch::{BrowserNavigationRequestKind, FetchCancelHandle, outgoing_request_headers};
     use url::Url;
 
     #[test]
@@ -1824,6 +1845,7 @@ mod tests {
                 Vec::new(),
                 BrowserNavigationRequestKind::Navigate,
                 None,
+                FetchCancelHandle::new(),
             )
             .await;
             match result {
@@ -1843,6 +1865,7 @@ mod tests {
             Vec::new(),
             BrowserNavigationRequestKind::Navigate,
             None,
+            FetchCancelHandle::new(),
         )
         .await
         .unwrap();
