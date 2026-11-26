@@ -124,57 +124,6 @@ impl ScriptVm {
         Ok(())
     }
 
-    /// One-shot exports discover image URLs before the paint pass so their
-    /// caller can wait for decode without holding the renderer execution lane.
-    pub(crate) fn prepare_paint_resources(
-        &mut self,
-        viewport: moli_layout::LayoutViewport,
-        reason: moli_layout::LayoutFlushReason,
-        environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
-        include_backgrounds: bool,
-    ) -> anyhow::Result<Option<futures_util::future::BoxFuture<'static, ()>>> {
-        if self.is_debugger_paused() {
-            return Ok(None);
-        }
-        let screen_images = {
-            let host = self._context_host.borrow();
-            if !host.layout_policy().uses_real_layout()
-                || !DocumentRuntime::css_image_fetch_enabled(&host)
-            {
-                return Ok(None);
-            }
-            if reason == moli_layout::LayoutFlushReason::Screenshot {
-                host.current_screen_css_images()?
-            } else {
-                None
-            }
-        };
-        let references = match screen_images {
-            Some(images) => images,
-            None => self
-                .with_fresh_layout_pass_in_environment(
-                    moli_layout::LayoutPassRequest::new(viewport, reason),
-                    LayoutPublicationRequest::Transient,
-                    environment_override,
-                    |pass| Ok(pass.take_css_image_references()),
-                )?
-                .unwrap_or_default()
-                .into(),
-        };
-        if references.is_empty() {
-            return Ok(None);
-        }
-        self.with_default_context_scope(|scope, host_ptr| {
-            let targets = DocumentRuntime::prepare_css_images_in_current_scope(
-                scope,
-                host_ptr,
-                &references,
-                include_backgrounds,
-            );
-            Ok(unsafe { &*host_ptr }.wait_for_pending_css_images(&targets))
-        })
-    }
-
     #[cfg(test)]
     pub(crate) fn screenshot_layout_snapshot(
         &mut self,

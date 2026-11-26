@@ -233,13 +233,6 @@ impl super::PageScriptHost {
         self.image_resources.css.paint_snapshot()
     }
 
-    pub(crate) fn wait_for_pending_css_images(
-        &self,
-        images: &[(DomHandle, &str)],
-    ) -> Option<futures_util::future::BoxFuture<'static, ()>> {
-        self.image_resources.css.wait_for_pending_loads(images)
-    }
-
     #[cfg(test)]
     pub(crate) fn css_image_resource_observability_for_test(
         &self,

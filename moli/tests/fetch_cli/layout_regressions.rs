@@ -1,46 +1,89 @@
 use super::{clean_output, subprocess::run_command_with_process_timeout};
 use anyhow::{Context, Result, ensure};
+use axum::{Router, http::StatusCode, response::Html, routing::get};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 use std::{process::Command, time::Duration};
+use tokio::net::TcpListener;
 
-#[test]
-fn screenshot_cli_loads_border_image_before_first_capture() -> Result<()> {
-    let svg = STANDARD.encode(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="3"><rect width="3" height="3" fill="red"/></svg>"#,
-    );
-    let capture = |decoration: &str| -> Result<Vec<u8>> {
-        let html = format!(
-            r#"<!doctype html><body style="margin:0;background:white"><div style="width:60px;height:48px;border:6px solid lime;{decoration}"></div>"#,
-        );
-        let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_visual_exports_complete_with_pending_css_images() -> Result<()> {
+    const STYLE: &str = "<!doctype html><style>body{margin:0;background:white} \
+        .tile{display:block;width:12px;height:12px}</style>";
+    let app = Router::new()
+        .route(
+            "/",
+            get(|| async {
+                Html(format!(
+                    r#"{STYLE}<div class="tile" style="background:lime url('/pending.svg')"></div><img class="tile" src="/ready.svg" alt="">"#
+                ))
+            }),
+        )
+        .route(
+            "/control",
+            get(|| async {
+                Html(format!(
+                    r#"{STYLE}<div class="tile" style="background:lime"></div><div class="tile" style="background:red"></div>"#
+                ))
+            }),
+        )
+        .route(
+            "/ready.svg",
+            get(|| async {
+                (
+                    [("content-type", "image/svg+xml")],
+                    r#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><rect width="12" height="12" fill="red"/></svg>"#,
+                )
+            }),
+        )
+        // Hold the CSS image response open throughout the exports.
+        .route("/pending.svg", get(std::future::pending::<StatusCode>));
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = format!("http://{}", listener.local_addr()?);
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+    let export = |path: &str, dump: &str| -> Result<Vec<u8>> {
         let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
         command.args([
             "fetch",
+            "--http-no-proxy",
+            "*",
             "--layout",
-            "--resource",
+            "--image",
+            "--wait",
+            "load",
             "--timeout",
-            "5000",
+            "60000",
+            "--http-timeout",
+            "60000",
             "--dump",
-            "screenshot",
-            &url,
+            dump,
+            &format!("{base_url}{path}"),
         ]);
-        let output = run_command_with_process_timeout(command, Duration::from_secs(15))?;
+        let output = run_command_with_process_timeout(command, Duration::from_secs(15))
+            .with_context(|| format!("{dump} must finish while the CSS image is pending"))?;
         ensure!(
             output.status.success(),
-            "screenshot failed: {}",
+            "{dump} failed: {}",
             clean_output(&output.stderr),
         );
         Ok(output.stdout)
     };
-    let control = capture("border-color:red")?;
-    let border_image = capture(&format!(
-        "border-image:url('data:image/svg+xml;base64,{svg}') 1"
-    ))?;
-    assert!(
-        border_image == control,
-        "SVG border should match a solid red border"
+    for dump in ["screenshot", "screenshot_full"] {
+        let actual = export("/", dump)?;
+        let control = export("/control", dump)?;
+        assert!(
+            actual == control,
+            "{dump} should paint the loaded <img> and the pending CSS image's fallback color"
+        );
+    }
+    assert_eq!(
+        lopdf::Document::load_mem(&export("/", "pdf")?)?
+            .get_pages()
+            .len(),
+        1
     );
+    server.abort();
     Ok(())
 }
 

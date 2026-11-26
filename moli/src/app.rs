@@ -13,14 +13,13 @@ use std::{
 };
 
 use crate::{
-    cli::{Cli, Commands, DumpFormat, FetchArgs, normalize_args_for_compat},
+    cli::{Cli, Commands, FetchArgs, normalize_args_for_compat},
     config::AppConfig,
     cookie_cache, eval_output, fetch_dump, robots,
 };
 use anyhow::Result;
 use anyhow::{Context, anyhow};
 use clap::Parser;
-use moli_core::page::RendererScreenshotPurpose;
 use moli_core::runtime::{
     Browser, FetchReadinessTimeout, FetchedDocument, NavigationRuntimeConfig,
     RawDocumentFetchPolicy, storage_partition::StoragePartitionState,
@@ -272,18 +271,6 @@ async fn run_cli_with_transport<W: Write>(
                             }
                             eval_output::execute(&mut page, expression)
                                 .await?;
-                        }
-                        let paint_purpose = match config.fetch.dump_mode {
-                            Some(DumpFormat::Screenshot | DumpFormat::ScreenshotFull) => {
-                                Some(RendererScreenshotPurpose::Screenshot)
-                            }
-                            Some(DumpFormat::Pdf) => Some(RendererScreenshotPurpose::Print {
-                                print_background: true,
-                            }),
-                            _ => None,
-                        };
-                        if config.browser.image_fetch_enabled() && let Some(purpose) = paint_purpose {
-                            page.prepare_paint_resources_async(purpose, readiness.remaining()).await?;
                         }
                         fetch_dump::render_page_output_async(&mut page, &config.fetch).await
                     }
