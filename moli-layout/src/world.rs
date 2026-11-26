@@ -1078,6 +1078,7 @@ where
         {
             return;
         }
+        let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
         self.numeric_tree = None;
         let live_count = order.len();
         let mut remap = vec![None; previous_len];
@@ -1093,8 +1094,8 @@ where
             positions[old] = new;
             remap[old] = Some(LayoutBoxId::from_index(new));
         }
+        let unchanged = |id: LayoutBoxId| remap.get(id.index()) == Some(&Some(id));
         if let Some(numeric) = &mut self.inline_numeric_reuse {
-            let unchanged = |id: LayoutBoxId| remap.get(id.index()) == Some(&Some(id));
             numeric.retain_owners_for_box_count(live_count, |id| {
                 unchanged(id)
                     && self.boxes[id.index()]
@@ -1102,21 +1103,45 @@ where
                         .as_ref()
                         .is_some_and(|context| context.references_only(unchanged))
             });
-            for (index, layout_box) in self.boxes[..live_count].iter_mut().enumerate() {
-                if !unchanged(LayoutBoxId::from_index(index))
-                    || layout_box
-                        .inline_layout
-                        .as_ref()
-                        .is_some_and(|context| !context.references_only(unchanged))
-                {
-                    layout_box.inline_layout = None;
-                }
+        }
+        let mut remapped_inline_contexts = 0;
+        let mut retired_inline_contexts = 0;
+        for (index, layout_box) in self.boxes[..live_count].iter_mut().enumerate() {
+            let Some(context) = layout_box.inline_layout.as_mut() else {
+                continue;
+            };
+            if unchanged(LayoutBoxId::from_index(index)) && context.references_only(unchanged) {
+                continue;
+            }
+            if context.remap_construction_ids(&remap) {
+                remapped_inline_contexts += 1;
+            } else {
+                layout_box.inline_layout = None;
+                retired_inline_contexts += 1;
             }
         }
+        let unreachable_inline_contexts = profile_started.map(|_| {
+            self.boxes[live_count..]
+                .iter()
+                .filter(|layout_box| layout_box.inline_layout.is_some())
+                .count()
+        });
         self.boxes.truncate(live_count);
         self.remap_construction_links(&remap);
         self.numeric_layout_touched_marks.truncate(self.boxes.len());
         self.compact_cache_slots();
+        if let Some(started) = profile_started {
+            tracing::info!(
+                target: "moli_cpu_profile",
+                stage = "layout_box_compaction",
+                total_us = started.elapsed().as_micros(),
+                previous_len,
+                live_count,
+                remapped_inline_contexts,
+                retired_inline_contexts,
+                unreachable_inline_contexts,
+            );
+        }
     }
 
     fn compact_cache_slots(&mut self) {
