@@ -61,6 +61,13 @@ def native_metrics(folder, result):
         "retained_tree_passes": sum(p.get("retained_numeric_tree", 0) for p in passes),
         "box_retention_ms": sum(p["total_us"] for p in retention) / 1000,
         "retention_calls": len(retention),
+        "max_boxes_before_compaction": max(
+            (p.get("previous_len", 0) for p in retention), default=0
+        ),
+        "max_box_capacity": max(
+            (p.get("embedded_index_field_bytes", 0) // 4 for p in cache_traces),
+            default=0,
+        ),
         "inline_layout_hits": statistics.median(
             p.get("retained_inline_layout_hits", 0) for p in cache_traces
         )
