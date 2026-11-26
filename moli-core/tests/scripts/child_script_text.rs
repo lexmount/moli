@@ -97,3 +97,6 @@ async fn xml_child_parser_executes_mixed_text_and_cdata_script_source() -> Resul
     );
     Ok(())
 }
+
+#[path = "parser_cleanup.rs"]
+mod parser_cleanup;
