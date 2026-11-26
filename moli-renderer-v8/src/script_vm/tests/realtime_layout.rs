@@ -1289,6 +1289,68 @@ fn realtime_plain_scroll_matches_a_fresh_layout_without_rebuilding() {
     );
 }
 
+#[cfg(feature = "devtools")]
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_scroll_reuses_layout_for_paint_only_hover_damage() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut vm = realtime_vm(
+                r##"<!doctype html><style>
+                    html,body { margin:0 }
+                    body { height:4000px }
+                    a { display:block; width:100px; height:40px; background:red }
+                    #repaint:hover { background:lime }
+                    #resize:hover { width:160px }
+                </style>
+                <a id=first href=#first></a>
+                <a id=repaint href=#repaint></a>
+                <a id=resize href=#resize></a>"##,
+            );
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let viewport = {
+                let host = host.borrow();
+                host.layout_viewport_for_document(host.document_handle())
+            };
+            let session = crate::runtime::RendererScreencastPaintSession::default();
+            let paint = |vm: &mut StandaloneScriptVmHarness| {
+                vm.paint_current_screen_layout(
+                    &session,
+                    viewport,
+                    moli_layout::PaintCaptureRequest::viewport(),
+                    moli_layout::LayoutFlushReason::RenderingOpportunity,
+                )
+                .unwrap()
+                .unwrap()
+            };
+            paint(&mut vm);
+            let publications = vm.layout_pass_observability_for_test().1;
+
+            assert!(vm.refresh_viewport_pointer((16., 16.)).unwrap().1);
+            paint(&mut vm);
+            assert_eq!(vm.layout_pass_observability_for_test().1, publications);
+
+            vm.eval("scrollTo(0, 40)").unwrap();
+            assert!(vm.refresh_viewport_pointer((16., 16.)).unwrap().1);
+            let snapshot = paint(&mut vm);
+            assert_eq!(vm.layout_pass_observability_for_test().1, publications);
+            assert_eq!(
+                vm.eval("String(repaint.getBoundingClientRect().top)")
+                    .unwrap(),
+                "0"
+            );
+            let image = moli_paint::raster_snapshot(&snapshot).unwrap();
+            let offset = (16 * image.width as usize + 16) * 4;
+            assert_eq!(&image.rgba[offset..offset + 4], [0, 255, 0, 255]);
+
+            vm.eval("scrollTo(0, 80)").unwrap();
+            assert!(vm.refresh_viewport_pointer((16., 16.)).unwrap().1);
+            paint(&mut vm);
+            assert_eq!(vm.eval("String(resize.offsetWidth)").unwrap(), "160");
+            assert_eq!(vm.layout_pass_observability_for_test().1, publications + 1);
+        })
+        .await;
+}
+
 #[test]
 fn realtime_zoomed_rtl_scroll_matches_a_fresh_layout_without_rebuilding() {
     let mut vm = realtime_vm(

@@ -2131,6 +2131,15 @@ impl PageScriptHost {
         {
             self.note_realtime_layout_input_change();
         }
+        self.invalidate_style_for_element_state_change(element, state, old_state);
+    }
+
+    fn invalidate_style_for_element_state_change(
+        &mut self,
+        element: DomHandle,
+        state: StyloElementState,
+        old_state: Option<StyloElementState>,
+    ) {
         let dom_host = self.dom_host() as *const _;
         self.style_engine.invalidate_element_state_change(
             unsafe { &*dom_host },
@@ -2161,16 +2170,16 @@ impl PageScriptHost {
             return false;
         }
         for (handle, old_state) in old_states {
-            self.note_element_state_style_activity_with_old_state(
+            self.invalidate_style_for_element_state_change(
                 handle,
                 StyloElementState::HOVER,
                 old_state,
             );
         }
-        // Hover changes the source style, not the published rendered world.
-        // Geometry reads and pointer phases keep consuming the retained
-        // snapshot until a fresh visual publication replaces it.
-        self.invalidate_layout_after_interaction_state_change();
+        // Keep the published layout available while Stylo classifies the
+        // hover damage. Repaint-only changes can reuse its numeric geometry.
+        self.invalidate_layout_projection();
+        self.request_realtime_rendering_opportunity();
         true
     }
 
