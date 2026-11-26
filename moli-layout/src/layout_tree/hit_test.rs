@@ -94,10 +94,12 @@ pub struct LayoutCaretPosition<N> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayoutTextControlCaret {
-    /// The nearest UTF-16 boundary for inserting text.
+    /// The UTF-16 offset of the hit edge of the source fragment.
     pub offset: usize,
-    /// The UTF-16 start of the hit character cluster, for selecting its word.
-    pub cluster_start: usize,
+    /// The UTF-16 start of the hit source fragment, for selecting its word.
+    pub source_start: usize,
+    /// Whether the hit is on the fragment's logical start half.
+    pub at_source_start: bool,
 }
 
 impl<N> FrozenLayoutTree<N>
@@ -328,7 +330,7 @@ where
         })
     }
 
-    /// Finds a UTF-16 value boundary using the control's own lines, including
+    /// Finds the hit edge of the nearest text fragment in the editor, even
     /// when a selection gesture has left the control's border box.
     pub fn text_control_caret(
         &self,
@@ -367,7 +369,7 @@ where
                     b.bottom(),
                 ))
             })?;
-        let nearest_cluster = self
+        let nearest_fragment = self
             .boxes
             .iter()
             .filter(|layout_box| layout_box.parent == Some(owner))
@@ -384,12 +386,13 @@ where
                 )
             });
         Some(
-            nearest_cluster
+            nearest_fragment
                 .and_then(|fragment| text_fragment_caret(fragment, local_point.x))
                 .map_or(
                     LayoutTextControlCaret {
                         offset: line_start as usize,
-                        cluster_start: line_start as usize,
+                        source_start: line_start as usize,
+                        at_source_start: true,
                     },
                     |(caret, _)| caret,
                 ),
@@ -609,7 +612,8 @@ fn text_fragment_caret(fragment: &LayoutFragment, x: f32) -> Option<(LayoutTextC
         return None;
     };
     let on_left_half = x <= fragment.rect.x + fragment.rect.width * 0.5;
-    let offset = if on_left_half != *rtl {
+    let at_source_start = on_left_half != *rtl;
+    let offset = if at_source_start {
         source_utf16_range.start
     } else {
         source_utf16_range.end
@@ -622,7 +626,8 @@ fn text_fragment_caret(fragment: &LayoutFragment, x: f32) -> Option<(LayoutTextC
     Some((
         LayoutTextControlCaret {
             offset,
-            cluster_start: source_utf16_range.start,
+            source_start: source_utf16_range.start,
+            at_source_start,
         },
         caret_x,
     ))

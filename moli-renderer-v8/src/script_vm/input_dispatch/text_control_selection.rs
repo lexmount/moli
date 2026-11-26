@@ -43,7 +43,7 @@ impl SelectionGranularity {
             return (caret.offset as u32, caret.offset as u32);
         }
         let value = text_control_value(host, control);
-        let offset = caret.cluster_start as u32;
+        let offset = caret.source_start as u32;
         match self {
             Self::Word => text_segment_at(value.split_word_bounds(), offset),
             Self::Paragraph => text_segment_at(value.split_inclusive('\n'), offset),
@@ -216,10 +216,12 @@ fn caret_hit(
     if !host.layout_policy().uses_real_layout() {
         return Ok(None);
     }
-    if text_control_value(host, control).is_empty() {
+    let value = text_control_value(host, control);
+    if value.is_empty() {
         return Ok(Some(LayoutTextControlCaret {
             offset: 0,
-            cluster_start: 0,
+            source_start: 0,
+            at_source_start: true,
         }));
     }
     host.ensure_observable_layout()?;
@@ -231,7 +233,34 @@ fn caret_hit(
         .with_latest_layout_tree_for_document(document.handle, |tree| {
             tree.text_control_caret(control, point)
         })
-        .flatten())
+        .flatten()
+        .map(|caret| snap_caret_to_grapheme(&value, caret)))
+}
+
+fn snap_caret_to_grapheme(
+    value: &str,
+    mut caret: LayoutTextControlCaret,
+) -> LayoutTextControlCaret {
+    if value.is_ascii() {
+        return caret;
+    }
+    // Several source fragments can share the same shaped cluster rectangle.
+    // Resolve an interior offset to the grapheme edge on the hit side.
+    let mut start = 0;
+    for grapheme in value.graphemes(true) {
+        let end = start + grapheme.encode_utf16().count();
+        if start < caret.source_start && caret.source_start < end {
+            caret.source_start = start;
+        }
+        if start < caret.offset && caret.offset < end {
+            caret.offset = if caret.at_source_start { start } else { end };
+        }
+        if caret.offset <= end && caret.source_start <= end {
+            break;
+        }
+        start = end;
+    }
+    caret
 }
 
 fn set_mouse_selection(
@@ -326,6 +355,13 @@ pub(super) fn move_text_control_selection(
             KeyboardMovementUnit::Value if forward => value.encode_utf16().count() as u32,
             KeyboardMovementUnit::Value => 0,
         }
+    };
+    let crosses_anchor = (focus < anchor && next > anchor) || (focus > anchor && next < anchor);
+    // Reversing a word extension on macOS first returns to the original caret.
+    let next = if mac && shift && unit == KeyboardMovementUnit::Word && crosses_anchor {
+        anchor
+    } else {
+        next
     };
     let anchor = if shift { anchor } else { next };
     let direction = match next.cmp(&anchor) {
