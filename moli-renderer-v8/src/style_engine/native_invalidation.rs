@@ -88,6 +88,19 @@ impl PendingNativeInvalidation {
                     if style_changes {
                         self.subtrees.insert(*element);
                     }
+                    if namespace.is_none() {
+                        // Reassigning a part name changes which outer rules
+                        // enter the cascade, even without an attribute selector.
+                        match name.as_str() {
+                            "part" if host.containing_shadow_root(*element).is_some() => {
+                                self.subtrees.insert(*element);
+                            }
+                            "exportparts" => {
+                                self.subtrees.extend(host.shadow_root_handle(*element));
+                            }
+                            _ => {}
+                        }
+                    }
                     if style_changes
                         || matches!(name.as_str(), "class" | "id" | "href")
                         || host.has_shadow_roots()
