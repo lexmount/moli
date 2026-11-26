@@ -66,20 +66,9 @@ fn ensure_geometry_layout(
 ) -> Result<(), LayoutError> {
     runtime.ensure_observable_layout()?;
     if runtime.layout_policy().is_realtime() {
-        runtime
-            .prepare_svg_query_geometry(document, queries.iter().filter_map(svg_query_source))?;
+        runtime.prepare_svg_query_geometry(document, queries)?;
     }
     Ok(())
-}
-
-fn svg_query_source(query: &LayoutQuery<DomHandle>) -> Option<DomHandle> {
-    match *query {
-        LayoutQuery::ClientRects { source }
-        | LayoutQuery::ContentQuads { source }
-        | LayoutQuery::ScrollIntoViewGeometry { source } => Some(source),
-        LayoutQuery::IntersectionGeometry { target, .. } => Some(target),
-        _ => None,
-    }
 }
 
 /// Style and observer sampling never initializes layout as a side effect.

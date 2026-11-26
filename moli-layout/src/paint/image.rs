@@ -47,7 +47,7 @@ pub(super) fn project_replaced_image<N>(
     ) {
         return;
     }
-    let Some(resource) = projection.replaced_image(layout_box) else {
+    let Some(resource) = projection.replaced_image(id) else {
         if kind == LayoutReplacedKind::Image {
             project_unavailable_image(projection, id, paint_space, snapshot);
         }

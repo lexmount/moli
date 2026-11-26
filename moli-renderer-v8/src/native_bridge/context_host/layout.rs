@@ -466,7 +466,13 @@ impl PageScriptHost {
         document: DomHandle,
         request: LayoutPassRequest,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
-        self.build_layout_pass_for_document_in_environment(document, request, None, false)
+        use crate::layout_renderer::LayoutInputRetention;
+        let inputs = if self.layout_policy == moli_page_types::LayoutPolicy::OnDemand {
+            LayoutInputRetention::Frozen
+        } else {
+            LayoutInputRetention::Transient
+        };
+        self.build_layout_pass_for_document_in_environment(document, request, None, inputs)
             .map(|pass| pass.map(|(layout, _)| layout))
     }
 
@@ -480,7 +486,7 @@ impl PageScriptHost {
         document: DomHandle,
         request: LayoutPassRequest,
         environment_override: Option<StyloStyleEnvironment>,
-        collect_screen_style_coverage: bool,
+        inputs: crate::layout_renderer::LayoutInputRetention,
     ) -> Result<Option<(LayoutPassResult<DomHandle>, LayoutPassFeedback<'_>)>, LayoutError> {
         let Some(root) = self
             .dom_host()
@@ -490,7 +496,7 @@ impl PageScriptHost {
             return Ok(None);
         };
         let _active = ActiveLayoutPass::enter(&self.layout_pass_active)?;
-        let realtime_screen = collect_screen_style_coverage
+        let realtime_screen = inputs == crate::layout_renderer::LayoutInputRetention::Realtime
             && self.layout_policy.is_realtime()
             && document == self.document_handle()
             && environment_override.is_none();
@@ -521,7 +527,7 @@ impl PageScriptHost {
                         embedded_document_services,
                         request,
                         environment_override,
-                        collect_screen_style_coverage,
+                        inputs,
                         retained,
                     )
                 },
@@ -752,6 +758,9 @@ impl PageScriptHost {
         document: DomHandle,
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
+        if !self.layout_policy.is_realtime() {
+            self.prepare_svg_query_geometry(document, &queries.queries)?;
+        }
         self.with_published_layout_for_document(document, |tree, metrics| {
             tree.answer_queries_with(queries, metrics, |query| {
                 self.specialize_layout_query(tree, query)
@@ -764,6 +773,9 @@ impl PageScriptHost {
         document: DomHandle,
         query: &LayoutQuery<DomHandle>,
     ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
+        if !self.layout_policy.is_realtime() {
+            self.prepare_svg_query_geometry(document, std::slice::from_ref(query))?;
+        }
         self.with_published_layout_for_document(document, |tree, _| {
             self.answer_layout_query(tree, query)
         })
@@ -819,52 +831,59 @@ impl PageScriptHost {
     pub(crate) fn prepare_svg_query_geometry(
         &self,
         document: DomHandle,
-        sources: impl Iterator<Item = DomHandle>,
+        queries: &[LayoutQuery<DomHandle>],
     ) -> Result<(), LayoutError> {
-        let mut sources = sources.peekable();
+        let mut sources = queries
+            .iter()
+            .filter_map(|query| match *query {
+                LayoutQuery::ClientRects { source }
+                | LayoutQuery::ContentQuads { source }
+                | LayoutQuery::ScrollIntoViewGeometry { source } => Some(source),
+                LayoutQuery::IntersectionGeometry { target, .. } => Some(target),
+                _ => None,
+            })
+            .peekable();
         if sources.peek().is_none() {
             return Ok(());
         }
-        let Some((root, viewport, pending)) = self
-            .with_latest_layout_tree_for_document(document, |tree| {
-                if !tree.has_svg_viewports() {
-                    return None;
-                }
-                let dom = self.dom_host().dom();
+
+        let prepared = if self.layout_policy.is_realtime() {
+            let Some((root, viewport, pending)) = self
+                .with_latest_layout_tree_for_document(document, |tree| {
+                    let pending = crate::layout_renderer::pending_svg_geometry(self, tree, sources);
+                    (!pending.is_empty()).then_some((tree.source_root(), tree.viewport, pending))
+                })
+                .flatten()
+            else {
+                return Ok(());
+            };
+            // Live style sampling runs outside the layout-state borrow.
+            Some((
+                root,
+                crate::layout_renderer::prepare_svg_geometry(self, document, viewport, pending),
+            ))
+        } else {
+            self.with_latest_layout_tree_for_document(document, |tree| {
                 let mut seen = std::collections::HashSet::new();
-                let pending = sources
-                    .filter_map(|source| {
-                        // The scene associates quads with elements. Nested SVGs
-                        // share the nearest ancestor with a measured viewport.
-                        dom.element(source)?;
-                        let mut node = source;
-                        while let Some(parent) = dom.parent_node(node) {
-                            if dom
-                                .element(parent)
-                                .is_some_and(|element| element.is_svg_element("svg"))
-                                && let Some(size) = tree.pending_svg_viewport(parent)
-                            {
-                                return Some((parent, size));
-                            }
-                            node = parent;
-                        }
-                        None
+                let geometry = sources
+                    .filter_map(|source| tree.pending_frozen_svg_input(source))
+                    .filter(|(root, _, _)| seen.insert(*root))
+                    .map(|(root, size, input)| {
+                        (
+                            root,
+                            crate::layout_renderer::decode_frozen_svg_geometry(root, input, size),
+                        )
                     })
-                    .filter(|(source, _)| seen.insert(*source))
-                    .collect::<Vec<_>>();
-                Some((tree.source_root(), tree.viewport, pending))
+                    .collect();
+                (tree.source_root(), geometry)
             })
-            .flatten()
-        else {
+        };
+        let Some((root, geometry)) = prepared else {
             return Ok(());
         };
-        if pending.is_empty() {
+        if geometry.is_empty() {
             return Ok(());
         }
-        // Style observation and decode run outside the layout-state borrow.
-        // This native operation runs no page callbacks.
-        let geometry =
-            crate::layout_renderer::prepare_svg_geometry(self, document, viewport, pending);
         self.document_layout_state
             .borrow_mut()
             .latest_tree_mut()

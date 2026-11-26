@@ -61,20 +61,13 @@ impl<'a> NativeLayoutSourceView<'a> {
         !self.text_selections.is_empty()
     }
 
-    pub(super) fn svg_content(
+    pub(super) fn svg_input(
         &self,
         node: DomHandle,
         style: &moli_layout::ResolvedLayoutStyle,
         viewport: moli_layout::LayoutSize,
-    ) -> Option<moli_layout::LayoutSvgContent<DomHandle>> {
-        super::inline_svg::layout_content(
-            self.runtime,
-            node,
-            style,
-            viewport,
-            &self.styles,
-            self.paint_resources,
-        )
+    ) -> Option<moli_layout::InlineSvgInput<DomHandle>> {
+        super::inline_svg::collect_input(self.runtime, node, style, viewport, &self.styles)
     }
 }
 

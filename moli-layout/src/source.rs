@@ -673,12 +673,59 @@ pub trait LayoutSource {
     }
 }
 
-/// Geometry and paint sampled from the same inline SVG input.
-pub struct LayoutSvgContent<N> {
-    pub image: Option<LayoutImageResource>,
-    /// Quads in unzoomed CSS pixels relative to the SVG content origin.
-    pub objects: Vec<(N, crate::LayoutQuad)>,
+/// The original XML, element identities, and sampled styles of one SVG.
+pub struct InlineSvgInput<N> {
+    pub xml: String,
+    pub elements: Vec<N>,
+    pub styles: Vec<Option<moli_image::SvgElementStyle>>,
+    pub style_bytes: usize,
 }
+
+impl<N> InlineSvgInput<N> {
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        self.xml
+            .capacity()
+            .saturating_add(
+                self.elements
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<N>()),
+            )
+            .saturating_add(
+                self.styles
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Option<moli_image::SvgElementStyle>>()),
+            )
+            .saturating_add(self.style_bytes)
+    }
+}
+
+pub type InlineSvgInputLookup<'a, N> =
+    dyn Fn(N, &ResolvedLayoutStyle, crate::LayoutSize) -> Option<InlineSvgInput<N>> + 'a;
+
+pub struct InlineSvgConsumers<'a, N> {
+    pub freeze: Option<&'a InlineSvgInputLookup<'a, N>>,
+    pub paint: Option<&'a InlineSvgImageLookup<'a, N>>,
+}
+
+impl<N> Default for InlineSvgConsumers<'_, N> {
+    fn default() -> Self {
+        Self {
+            freeze: None,
+            paint: None,
+        }
+    }
+}
+
+/// Paint supplies inline SVG images only when it reaches their drawable boxes.
+pub type InlineSvgImageLookup<'a, N> = dyn Fn(
+        N,
+        crate::LayoutViewport,
+        N,
+        &ResolvedLayoutStyle,
+        crate::LayoutSize,
+        Option<&InlineSvgInput<N>>,
+    ) -> Option<LayoutImageResource>
+    + 'a;
 
 /// One element's primary style and the pseudo styles eagerly cascaded with it.
 ///

@@ -49,8 +49,20 @@ impl PreparedLayoutPublication {
         !matches!(self.0, LayoutPublication::Transient)
     }
 
-    pub(crate) fn publishes_current_screen(&self) -> bool {
-        matches!(self.0, LayoutPublication::CurrentScreen { .. })
+    pub(crate) fn input_retention(
+        &self,
+        policy: moli_page_types::LayoutPolicy,
+    ) -> crate::layout_renderer::LayoutInputRetention {
+        use crate::layout_renderer::LayoutInputRetention;
+        match self.0 {
+            LayoutPublication::CurrentScreen { .. } => LayoutInputRetention::Realtime,
+            LayoutPublication::LegacyLatest(_)
+                if policy == moli_page_types::LayoutPolicy::OnDemand =>
+            {
+                LayoutInputRetention::Frozen
+            }
+            _ => LayoutInputRetention::Transient,
+        }
     }
 
     pub(crate) fn layout_request(&self, request: LayoutPassRequest) -> LayoutPassRequest {
@@ -328,22 +340,74 @@ impl PageScriptHost {
             .screen_paint_consumers
             .attach(session, &self.document_layout_state);
         self.ensure_current_screen_layout(reason)?;
-        let layout = self.document_layout_state.borrow();
-        let Some((tree, retained)) = layout.retained_screen_paint(document) else {
-            return Ok(None);
+        let paint_geometry =
+            RefCell::new(HashMap::<DomHandle, crate::layout_renderer::SvgGeometry>::new());
+        let snapshot = {
+            let layout = self.document_layout_state.borrow();
+            let Some((tree, retained)) = layout.retained_screen_paint(document) else {
+                return Ok(None);
+            };
+            let images = self.css_image_paint_snapshot();
+            let css_image = |root, url: &str| {
+                self.layout_document_for_source(root)
+                    .map_or_else(moli_layout::LayoutCssImageState::default, |document| {
+                        images.image(document, url)
+                    })
+            };
+            let replaced_image =
+                |source, kind| crate::layout_renderer::native_replaced_image(self, source, kind);
+            let inline_svg =
+                |root,
+                 viewport,
+                 node,
+                 style: &moli_layout::ResolvedLayoutStyle,
+                 size,
+                 _input: Option<&moli_layout::InlineSvgInput<DomHandle>>| {
+                    let collect_geometry = tree
+                        .tree_for_root(root)
+                        .is_some_and(|member| member.pending_svg_viewport(node).is_some());
+                    let decoded = crate::layout_renderer::prepare_svg_paint(
+                        self,
+                        root,
+                        viewport,
+                        node,
+                        style,
+                        size,
+                        collect_geometry,
+                    );
+                    let (image, objects) = decoded.map_or_else(
+                        || (None, Vec::new()),
+                        |(image, objects)| (Some(image), objects),
+                    );
+                    if collect_geometry {
+                        paint_geometry
+                            .borrow_mut()
+                            .entry(root)
+                            .or_default()
+                            .push((node, objects));
+                    }
+                    image
+                };
+            retained.paint(
+                tree,
+                capture,
+                None,
+                &css_image,
+                &replaced_image,
+                &inline_svg,
+            )?
         };
-        let images = self.css_image_paint_snapshot();
-        let css_image = |root, url: &str| {
-            self.layout_document_for_source(root)
-                .map_or_else(moli_layout::LayoutCssImageState::default, |document| {
-                    images.image(document, url)
-                })
-        };
-        let replaced_image =
-            |source, kind| crate::layout_renderer::native_replaced_image(self, source, kind);
-        retained
-            .paint(tree, capture, &css_image, &replaced_image)
-            .map(Some)
+        let geometry = paint_geometry.into_inner();
+        if !geometry.is_empty() {
+            let mut layout = self.document_layout_state.borrow_mut();
+            let tree = layout
+                .latest_tree_mut()
+                .ok_or(LayoutError::NoLayoutSnapshot)?;
+            for (root, scenes) in geometry {
+                tree.append_svg_geometry(root, scenes)?;
+            }
+        }
+        Ok(Some(snapshot))
     }
 
     #[cfg(test)]
@@ -489,9 +553,9 @@ impl PageScriptHost {
                     != ScrollProjectionRefresh::Unavailable)
         {
             if resolve_style_changes {
-                if let Some(tree) = self.document_layout_state.borrow_mut().latest_tree_mut() {
-                    tree.clear_inline_svg_geometry();
-                }
+                self.document_layout_state
+                    .borrow_mut()
+                    .clear_inline_svg_content();
                 for document in &inputs.documents {
                     self.style_engine
                         .consume_screen_style_work(document.document);
@@ -516,8 +580,12 @@ impl PageScriptHost {
             .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
             .with_scroll_projection(true)
             .with_screen_paint(retain_paint);
-        let Some((pass, feedback)) =
-            self.build_layout_pass_for_document_in_environment(document, request, None, true)?
+        let Some((pass, feedback)) = self.build_layout_pass_for_document_in_environment(
+            document,
+            request,
+            None,
+            crate::layout_renderer::LayoutInputRetention::Realtime,
+        )?
         else {
             if self.dom_host().dom_version() != source_dom_version
                 || self.screen_layout_inputs(state)? != inputs

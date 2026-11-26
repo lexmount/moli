@@ -384,7 +384,7 @@ impl ScriptVm {
                     document,
                     request,
                     environment_override,
-                    publication.publishes_current_screen(),
+                    publication.input_retention(context_host.layout_policy()),
                 )
                 .and_then(|pass| {
                     let Some((mut pass, feedback)) = pass else {
@@ -607,7 +607,7 @@ impl ScriptVm {
             &mut embedded_document_services,
             request,
             None,
-            false,
+            crate::layout_renderer::LayoutInputRetention::Transient,
             None,
         )
         .map(|(pass, _)| pass)

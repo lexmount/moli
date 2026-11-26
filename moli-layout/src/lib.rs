@@ -73,9 +73,9 @@ pub use normalize_source::{
     NormalizedLayoutSourceNode, NormalizedLayoutSourceTree, normalize_layout_source,
 };
 pub use pass::{
-    AutoScrollbars, EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutFrameCoverage,
-    LayoutPassRequest, LayoutSourceChange, MeasuredLayoutPass, PreparedLayoutPass,
-    RetainedLayoutWorld, ScreenshotLayoutRequest, build_layout_pass,
+    AutoScrollbars, EmbeddedFramePaintRequest, EmbeddedFrameRenderer, EmbeddedFrameSnapshot,
+    LayoutFrameCoverage, LayoutPassRequest, LayoutSourceChange, MeasuredLayoutPass,
+    PreparedLayoutPass, RetainedLayoutWorld, ScreenshotLayoutRequest, build_layout_pass,
     build_layout_pass_with_embedded_frames, build_screenshot_snapshot, finish_measured_layout_pass,
     finish_prepared_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
     prepare_layout_pass_reusing,
@@ -101,12 +101,13 @@ pub use snapshot::{
     pixel_snap_paint_rect,
 };
 pub use source::{
-    ChildBoxPolicy, LayoutCssImageState, LayoutElementCategory, LayoutElementMetadata,
-    LayoutElementSemantics, LayoutFormControlData, LayoutFormControlKind, LayoutHyperlink,
-    LayoutImageResource, LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace,
-    LayoutPseudo, LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver,
-    LayoutSvgContent, LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
-    ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, html_display_contents_is_none,
+    ChildBoxPolicy, InlineSvgConsumers, InlineSvgImageLookup, InlineSvgInput, InlineSvgInputLookup,
+    LayoutCssImageState, LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics,
+    LayoutFormControlData, LayoutFormControlKind, LayoutHyperlink, LayoutImageResource,
+    LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo,
+    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
+    LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles,
+    ResolvedLayoutPseudoStyle, html_display_contents_is_none,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,

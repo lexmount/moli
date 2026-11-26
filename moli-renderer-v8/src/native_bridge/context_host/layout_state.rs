@@ -245,6 +245,15 @@ impl DocumentLayoutState {
         );
     }
 
+    pub(super) fn clear_inline_svg_content(&mut self) {
+        if let Some(tree) = self.latest_tree_mut() {
+            tree.clear_inline_svg_geometry();
+        }
+        if let Some(retained) = &mut self.retained_layout {
+            retained.clear_inline_svg_images();
+        }
+    }
+
     pub(super) fn take_retained_layout(&mut self) -> Option<Box<RetainedLayoutWorld<DomHandle>>> {
         self.retained_layout.take()
     }
