@@ -78,3 +78,36 @@ fn document_svg_root_uses_registered_document_proxy_identity() {
 
 #[path = "svg_animated_number.rs"]
 mod svg_animated_number;
+
+#[test]
+fn svg_viewport_element_uses_native_ancestors_and_receiver_brand() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-viewports.test/",
+        "<!doctype html><body><iframe></iframe>",
+    );
+    assert_eq!(
+        vm.eval(r#"(() => {
+            const svgNS = 'http://www.w3.org/2000/svg';
+            const outer = document.createElementNS(svgNS, 'svg');
+            const symbol = outer.appendChild(document.createElementNS(svgNS, 'symbol'));
+            const symbolLeaf = symbol.appendChild(document.createElementNS(svgNS, 'rect'));
+            const foreign = outer.appendChild(document.createElementNS(svgNS, 'foreignObject'));
+            const inner = foreign.appendChild(document.createElementNS(svgNS, 'svg'));
+            const innerLeaf = inner.appendChild(document.createElementNS(svgNS, 'circle'));
+            document.body.appendChild(outer);
+
+            const child = document.querySelector('iframe').contentWindow;
+            for (const realm of [window, child]) {
+                const get = Object.getOwnPropertyDescriptor(realm.SVGElement.prototype, 'viewportElement').get;
+                if (get.call(outer) !== null || get.call(symbolLeaf) !== symbol ||
+                    get.call(inner) !== null || get.call(innerLeaf) !== inner) return false;
+                let traps = 0, error;
+                const proxy = new Proxy(innerLeaf, {get() { traps++; }, getPrototypeOf() { traps++; }});
+                try { get.call(proxy); } catch (caught) { error = caught; }
+                if (!(error instanceof realm.TypeError) || traps !== 0) return false;
+            }
+            return true;
+        })()"#).unwrap(),
+        "true",
+    );
+}

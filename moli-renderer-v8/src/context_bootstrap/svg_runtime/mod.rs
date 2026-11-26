@@ -49,6 +49,7 @@ mod callbacks;
 mod filters;
 mod path_data;
 mod rect;
+mod tree;
 
 const SVG_GRAPHICS_TRANSFORM_SLOT: &str = "__moliSvgGraphicsTransform";
 const SVG_GRAPHICS_REQUIRED_EXTENSIONS_SLOT: &str = "__moliSvgGraphicsRequiredExtensions";
