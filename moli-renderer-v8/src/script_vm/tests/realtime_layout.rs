@@ -1042,6 +1042,48 @@ fn realtime_layout_does_not_keep_geometry_from_a_replaced_document() {
 }
 
 #[test]
+fn realtime_reuses_the_frame_layout_across_parent_changes() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><div id=outside style='width:100px'></div>",
+        "<iframe id=child style='width:200px;height:100px;border:0'></iframe>",
+    ));
+    assert_eq!(
+        vm.eval(concat!(
+            "child.contentDocument.body.style.margin='0';",
+            "child.contentDocument.body.innerHTML='<div id=inside style=width:50%>Text</div>';",
+            "String(child.contentDocument.getElementById('inside').offsetWidth)",
+        ))
+        .unwrap(),
+        "100",
+    );
+    assert_eq!(
+        vm.eval("outside.style.width='110px'; String(outside.offsetWidth)")
+            .unwrap(),
+        "110",
+    );
+    let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+    assert!(metrics.retained_embedded_box_count > 0, "{metrics:?}");
+    assert_eq!(
+        vm.eval(concat!(
+            "child.style.width='260px';",
+            "String(child.contentDocument.getElementById('inside').offsetWidth)",
+        ))
+        .unwrap(),
+        "130",
+    );
+    assert_eq!(
+        vm.eval(concat!(
+            "child.contentDocument.open();",
+            "child.contentDocument.write('<div id=inside style=width:48px>Replacement</div>');",
+            "child.contentDocument.close();",
+            "String(child.contentDocument.getElementById('inside').offsetWidth)",
+        ))
+        .unwrap(),
+        "48",
+    );
+}
+
+#[test]
 fn realtime_layout_is_current_inside_parser_and_custom_element_reactions() {
     let mut vm = realtime_vm("<!doctype html><body></body>");
     // The same fixture runs in Chromium and through the release CDP entry.

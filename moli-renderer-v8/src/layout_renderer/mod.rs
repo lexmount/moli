@@ -130,6 +130,9 @@ fn build_native_layout_pass_recursive(
     let mut styles_ready = None;
     let collect_screen_styles = screen_style_coverage.is_some();
     let mut document_coverage = collect_screen_styles.then(ScreenStyleCoverage::default);
+    let mut retained_frames = retained
+        .as_deref_mut()
+        .map_or_else(HashMap::new, RetainedLayoutWorld::take_embedded_layouts);
     let result = (|| {
         let mut prepare = || {
             style_resolver::with_layout_styles(
@@ -171,6 +174,8 @@ fn build_native_layout_pass_recursive(
             frame_coverage: request.frame_coverage(),
             retain_scroll_projection: request.retains_scroll_projection(),
             retain_screen_paint: request.retains_screen_paint(),
+            retain_layout_world: request.retains_layout_world(),
+            retained_frames: &mut retained_frames,
             document_stack,
             embedded_document_services,
             original_container_sizes,
@@ -277,6 +282,14 @@ struct NativeEmbeddedFrameRenderer<'a> {
     frame_coverage: moli_layout::LayoutFrameCoverage,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
+    retain_layout_world: bool,
+    retained_frames: &'a mut HashMap<
+        DomHandle,
+        (
+            moli_layout::LayoutBoxId,
+            Box<RetainedLayoutWorld<DomHandle>>,
+        ),
+    >,
     document_stack: &'a mut Vec<DomHandle>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
     original_container_sizes: &'a mut HashMap<DomHandle, QueryContainerSizes>,
@@ -333,6 +346,15 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         .with_screen_paint(
             self.retain_screen_paint && viewport.css_width > 0 && viewport.css_height > 0,
         );
+        let request = if self.retain_layout_world {
+            request.with_retained_layout_world()
+        } else {
+            request
+        };
+        let retained = self
+            .retained_frames
+            .remove(&frame)
+            .map(|(_, layout)| layout);
         let result = build_native_layout_pass_recursive(
             self.runtime,
             root,
@@ -344,7 +366,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             self.document_stack,
             self.original_container_sizes,
             self.screen_style_coverage,
-            None,
+            retained,
         );
         self.embedded_document_services.insert(document, services);
         let output = result?;

@@ -79,7 +79,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
 
     pub(super) fn from_publication(
         world: &'a LayoutWorld<N>,
-        paint: &'a RetainedPaintData<N>,
+        paint: &'a RetainedPaintData,
         tree: &'a FrozenLayoutTree<N>,
         scroll: &'a ScrollProjection<N>,
         coordinate_spaces: &'a [ProjectedCoordinateSpace],
