@@ -35,6 +35,32 @@ fn shadow_adoption_retires_adopted_styles_in_both_documents() {
 }
 
 #[test]
+fn nested_relative_selector_in_a_shadow_tree_invalidates_the_host() {
+    let mut vm = new_parsed_test_vm(
+        "https://shadow-host-relative.test/",
+        "<!doctype html><div id=host></div>",
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+              const host = document.getElementById('host');
+              const root = host.attachShadow({mode: 'open'});
+              root.innerHTML = '<style>:host:has(:is(.active .marked)) { color: purple; }</style>' +
+                               '<div><span class="marked"></span></div>';
+              const ancestor = root.querySelector('div');
+              const read = () => getComputedStyle(host).color;
+              const before = read();
+              ancestor.className = 'active';
+              const active = read();
+              ancestor.className = '';
+              return [before, active, read()].join('|');
+            })()"#,
+        )
+        .expect("the relative selector must retain its shadow host scope");
+    assert_eq!(result, "rgb(0, 0, 0)|rgb(128, 0, 128)|rgb(0, 0, 0)");
+}
+
+#[test]
 fn template_adoption_clears_retained_shadow_adopted_style_sheet_lists() {
     let mut vm = new_parsed_test_vm(
         "https://template-shadow-sheets.test/",

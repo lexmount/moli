@@ -31,6 +31,72 @@ fn deferred_removals_restore_last_child_and_relative_selector_matches() {
 }
 
 #[test]
+fn relative_selector_reaches_an_ancestor_sibling_after_inserting_a_branch() {
+    let mut vm = new_parsed_test_vm(
+        "https://relative-sibling-subtree.test/",
+        r#"<!doctype html><style>
+          #anchor:has(~ #following .active) + #subject { color: red; }
+        </style><div id="anchor"></div><div id="subject"></div>
+        <div id="following"><div><span></span></div></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+              const following = document.getElementById('following');
+              const subject = document.getElementById('subject');
+              const read = () => getComputedStyle(subject).color;
+              const colors = [read()];
+              const branch = document.createElement('div');
+              const leaf = branch.appendChild(document.createElement('span'));
+              leaf.className = 'active';
+              following.appendChild(branch);
+              colors.push(read());
+              leaf.className = '';
+              colors.push(read());
+              leaf.className = 'active';
+              colors.push(read());
+              return colors.join('|');
+            })()"#,
+        )
+        .expect(
+            "a relative selector should be invalidated across the ancestor's preceding siblings",
+        );
+    assert_eq!(
+        result,
+        "rgb(0, 0, 0)|rgb(255, 0, 0)|rgb(0, 0, 0)|rgb(255, 0, 0)"
+    );
+}
+
+#[test]
+fn relative_selector_reaches_an_ancestor_sibling_past_a_separate_anchor() {
+    let mut vm = new_parsed_test_vm(
+        "https://relative-sibling-subtree.test/",
+        r#"<!doctype html><style>
+          body { color: black; }
+          #anchor:has(~ #following .active) + #subject { color: red; }
+          #mask:has(.anything) { outline: 1px solid; }
+        </style>
+        <div id="anchor"></div><div id="subject"></div>
+        <div id="following">
+          <div></div><div id="mask"></div><div><span id="leaf" class="active"></span></div>
+        </div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+              getComputedStyle(document.getElementById('mask')).color;
+              const subject = document.getElementById('subject');
+              const read = () => getComputedStyle(subject).color;
+              const before = read();
+              document.getElementById('leaf').className = '';
+              return [before, read()].join('|');
+            })()"#,
+        )
+        .expect("the lower sibling scan should leave higher ancestors reachable");
+    assert_eq!(result, "rgb(255, 0, 0)|rgb(0, 0, 0)");
+}
+
+#[test]
 fn removed_source_with_moved_old_neighbor_invalidates_remaining_target() {
     let mut vm = new_rendered_test_vm(
         "https://moved-old-neighbor.test/",
