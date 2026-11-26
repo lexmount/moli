@@ -2008,3 +2008,31 @@ fn child_frame_target_selector_invalidation_uses_child_document_world() {
         "child target invalidation should keep style work in the child document world"
     );
 }
+
+#[test]
+fn input_box_sizing_depends_on_control_type() {
+    let mut vm = new_parsed_test_vm(
+        "https://input-box-sizing.test/",
+        r#"<!doctype html>
+        <style>input { width: 120px; height: 36px; border: 2px solid; padding: 0 6px; }</style>
+        <input id="default">
+        <input id="password" type="password">
+        <input id="search" type="search">
+        <input id="submit" type="submit">"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+Array.from(document.querySelectorAll('input'), input =>
+  [getComputedStyle(input).boxSizing, input.offsetWidth, input.offsetHeight].join(',')
+).join('|')
+"#,
+        )
+        .expect("default box sizing should match the input type");
+
+    assert_eq!(
+        result,
+        "content-box,136,40|content-box,136,40|border-box,120,36|border-box,120,36"
+    );
+}

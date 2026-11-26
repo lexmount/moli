@@ -338,7 +338,6 @@ textarea {
 
 input {
   appearance: auto;
-  box-sizing: border-box;
   cursor: text;
   padding: 1px 0;
   border: 2px inset light-dark(#767676, #858585);
