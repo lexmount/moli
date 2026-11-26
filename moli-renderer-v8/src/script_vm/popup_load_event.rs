@@ -27,12 +27,8 @@ impl ScriptVm {
     ) -> Result<()> {
         let task = authorization.into_task();
         let target = task.owner().target();
-        self._context_host
-            .borrow_mut()
-            .take_current_lightweight_popup_load_event_task(target);
         self.with_default_context_scope(|scope, host_ptr| {
-            unsafe { &mut *host_ptr }
-                .dispatch_lightweight_popup_load_event(scope, target.popup_id());
+            unsafe { &mut *host_ptr }.dispatch_current_lightweight_popup_load_step(scope, target);
             Ok(())
         })
     }

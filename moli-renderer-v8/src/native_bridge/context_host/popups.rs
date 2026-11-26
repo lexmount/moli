@@ -346,6 +346,14 @@ pub(super) struct LightweightPopupDocumentState {
     pub(super) document_domain_override: Option<String>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PopupParserReadiness {
+    Unparsed,
+    Parsing,
+    AwaitingDomContentLoaded,
+    AwaitingWindowLoad,
+}
+
 struct LightweightPopupDocumentRecord {
     owner: LightweightPopupDocumentOwner,
     local_window_id: LightweightPopupLocalWindowId,
@@ -361,6 +369,7 @@ struct LightweightPopupDocumentRecord {
     pending_load_event: Option<LightweightPopupNavigationTaskToken>,
     queued_load_event: Option<LightweightPopupNavigationTaskToken>,
     load_event_dispatched: bool,
+    parser_readiness: PopupParserReadiness,
 }
 
 struct LightweightPopupDocumentCommit {
@@ -954,6 +963,7 @@ impl PageScriptHost {
                         pending_load_event: None,
                         queued_load_event: None,
                         load_event_dispatched: false,
+                        parser_readiness: PopupParserReadiness::Unparsed,
                     },
                     session_storage_store,
                 })),
@@ -2065,6 +2075,7 @@ impl PageScriptHost {
                     pending_load_event: None,
                     queued_load_event: None,
                     load_event_dispatched: false,
+                    parser_readiness: PopupParserReadiness::Unparsed,
                 },
             );
             record.location_url = commit.location_url;
@@ -3112,6 +3123,15 @@ impl PageScriptHost {
         }
         let _ =
             self.set_lightweight_popup_document_wrapper(popup_id, v8::Global::new(scope, document));
+        if let Some(handle) = document_handle {
+            self.set_dom_document_ready_state_for_handle(
+                handle,
+                crate::dom::native::DocumentReadyState::Loading,
+            );
+            if let Some(record) = self.lightweight_popup_document_record_mut(popup_id) {
+                record.parser_readiness = PopupParserReadiness::Parsing;
+            }
+        }
         let script_advance = self.execute_lightweight_popup_document_scripts(
             scope,
             source.task,
@@ -4051,6 +4071,9 @@ impl PageScriptHost {
             return;
         }
         document.pending_load_event = Some(task);
+        if document.parser_readiness == PopupParserReadiness::Parsing {
+            document.parser_readiness = PopupParserReadiness::AwaitingDomContentLoaded;
+        }
         self.publish_lightweight_popup_load_event_if_ready(task.popup_id());
     }
 
@@ -4060,7 +4083,8 @@ impl PageScriptHost {
             .filter(|document| {
                 !document.load_event_dispatched
                     && document.queued_load_event.is_none()
-                    && document.incomplete_child_frame_loads.is_empty()
+                    && (document.parser_readiness == PopupParserReadiness::AwaitingDomContentLoaded
+                        || document.incomplete_child_frame_loads.is_empty())
                     && !self
                         .pending_lightweight_popup_classic_script_loads
                         .values()
@@ -4138,14 +4162,105 @@ impl PageScriptHost {
             .flatten()
             .filter(|document| {
                 !document.load_event_dispatched
-                    && document.incomplete_child_frame_loads.is_empty()
+                    && (document.parser_readiness == PopupParserReadiness::AwaitingDomContentLoaded
+                        || document.incomplete_child_frame_loads.is_empty())
                     && document.pending_load_event == Some(expected)
                     && document.queued_load_event == Some(expected)
             })
             .map(|_| expected)
     }
 
-    pub(crate) fn take_current_lightweight_popup_load_event_task(
+    pub(crate) fn dispatch_current_lightweight_popup_load_step(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        task: LightweightPopupNavigationTaskToken,
+    ) {
+        let popup_id = task.popup_id();
+        let readiness = self
+            .lightweight_popup_document_record(popup_id)
+            .expect("authorized popup load task requires its Document")
+            .parser_readiness;
+        if readiness == PopupParserReadiness::AwaitingDomContentLoaded {
+            let document = self
+                .lightweight_popup_document_record_mut(popup_id)
+                .expect("authorized popup parser task requires its Document");
+            document.queued_load_event = None;
+            document.parser_readiness = PopupParserReadiness::AwaitingWindowLoad;
+            self.change_lightweight_popup_document_readiness(
+                scope,
+                popup_id,
+                crate::dom::native::DocumentReadyState::Interactive,
+            );
+            if self.lightweight_popup_committed_navigation_task_is_current(task) {
+                self.dispatch_lightweight_popup_document_event(scope, popup_id, "DOMContentLoaded");
+                if self.lightweight_popup_committed_navigation_task_is_current(task) {
+                    self.publish_lightweight_popup_load_event_if_ready(popup_id);
+                }
+            }
+            return;
+        }
+        self.take_current_lightweight_popup_load_event_task(task);
+        if readiness == PopupParserReadiness::AwaitingWindowLoad {
+            self.change_lightweight_popup_document_readiness(
+                scope,
+                popup_id,
+                crate::dom::native::DocumentReadyState::Complete,
+            );
+        }
+        if self.lightweight_popup_committed_navigation_task_is_current(task) {
+            self.dispatch_lightweight_popup_load_event(scope, popup_id);
+        }
+    }
+
+    fn change_lightweight_popup_document_readiness(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+        state: crate::dom::native::DocumentReadyState,
+    ) {
+        if let Some(handle) = self.lightweight_popup_document_handle(popup_id)
+            && self.set_dom_document_ready_state_for_handle(handle, state)
+        {
+            self.dispatch_lightweight_popup_document_event(scope, popup_id, "readystatechange");
+        }
+    }
+
+    fn dispatch_lightweight_popup_document_event(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+        event_type: &str,
+    ) {
+        let Some(handle) = self.lightweight_popup_document_handle(popup_id) else {
+            return;
+        };
+        let Some(document) = self
+            .lightweight_popup_document_record(popup_id)
+            .and_then(|document| document.wrapper.as_ref())
+            .map(|wrapper| v8::Local::new(scope, wrapper))
+        else {
+            return;
+        };
+        let (bubbles, cancelable) = crate::host::host_event_defaults(event_type);
+        let Ok(event) = crate::host::create_host_event(
+            scope,
+            event_type,
+            document.into(),
+            document.into(),
+            bubbles,
+            cancelable,
+        ) else {
+            return;
+        };
+        crate::native_bridge::element::dispatch_public_event(
+            scope,
+            self as *mut PageScriptHost,
+            handle,
+            event,
+        );
+    }
+
+    fn take_current_lightweight_popup_load_event_task(
         &mut self,
         expected: LightweightPopupNavigationTaskToken,
     ) {
