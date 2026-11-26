@@ -6,6 +6,35 @@ mod split30_slot_derived_options;
 use super::*;
 
 #[test]
+fn shadow_adoption_retires_adopted_styles_in_both_documents() {
+    let mut vm = new_parsed_test_vm(
+        "https://shadow-adoption.test/",
+        "<!doctype html><body></body>",
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+              const host = document.body.appendChild(document.createElement('div'));
+              const root = host.attachShadow({mode: 'open'});
+              const child = root.appendChild(document.createElement('span'));
+              const sheet = new CSSStyleSheet();
+              sheet.replaceSync('span { color: red; }');
+              root.adoptedStyleSheets = [sheet];
+              const result = [getComputedStyle(child).color];
+              document.adoptNode(host);
+              const frame = document.body.appendChild(document.createElement('iframe'));
+              frame.contentDocument.body.appendChild(frame.contentDocument.adoptNode(host));
+              result.push(root.adoptedStyleSheets.length, getComputedStyle(child).color);
+              document.body.appendChild(host);
+              result.push(root.adoptedStyleSheets.length, getComputedStyle(child).color);
+              return result.join('|');
+            })()"#,
+        )
+        .expect("adopted shadow root styles should resolve in each document");
+    assert_eq!(result, "rgb(255, 0, 0)|0|rgb(0, 0, 0)|0|rgb(0, 0, 0)");
+}
+
+#[test]
 fn template_adoption_clears_retained_shadow_adopted_style_sheet_lists() {
     let mut vm = new_parsed_test_vm(
         "https://template-shadow-sheets.test/",
