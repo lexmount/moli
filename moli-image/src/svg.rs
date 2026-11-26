@@ -507,10 +507,13 @@ fn convert_svg_tree(
     if depth <= 128 {
         return convert();
     }
+    // The text chunk collector's debug stack grows by over 6 KiB per nested
+    // tspan. Size the worker from the validated depth to cover long text trees.
+    let stack_size = (depth * 8 * 1024).max(16 * 1024 * 1024);
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("svg_scene".into())
-            .stack_size(16 * 1024 * 1024)
+            .stack_size(stack_size)
             .spawn_scoped(scope, convert)
             .map_err(|error| SvgDecodeError::ConversionWorker(error.to_string()))?
             .join()
@@ -659,6 +662,42 @@ mod tests {
             decode_inline_svg_scene(over_limit.as_bytes(), &[], (10.0, 10.0)),
             Err(SvgDecodeError::ElementNestingDepthExceeded { limit: 5_000 })
         ));
+    }
+
+    #[test]
+    fn svg_text_reaches_the_xml_depth_limit() {
+        let svg = |spans| {
+            format!(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><text y='24' font-family='Moli Ahem'>{}M{}</text></svg>",
+                "<tspan>".repeat(spans),
+                "</tspan>".repeat(spans),
+            )
+        };
+        let at_limit = svg(4_998);
+        let bytes = at_limit.as_bytes();
+        let fonts = fonts_with_only_ahem();
+        let image = decode_svg_image_with_fonts(bytes, probe_svg_image(bytes).unwrap(), &fonts)
+            .expect("text at the SVG XML depth limit must convert");
+        let mut texts = Vec::new();
+        text_nodes(image.tree().root(), &mut texts);
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].chunks()[0].text(), "M");
+        assert!(!texts[0].flattened().children().is_empty());
+
+        let styles = vec![None; MAX_SVG_ELEMENT_DEPTH];
+        decode_inline_svg_scene(bytes, &styles, (32.0, 32.0))
+            .expect("inline text at the SVG XML depth limit must convert");
+
+        let over_limit = svg(4_999);
+        for result in [
+            decode_svg_image(over_limit.as_bytes()).map(|_| ()),
+            decode_inline_svg_scene(over_limit.as_bytes(), &[], (32.0, 32.0)).map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(SvgDecodeError::ElementNestingDepthExceeded { limit: 5_000 })
+            ));
+        }
     }
 
     #[test]
