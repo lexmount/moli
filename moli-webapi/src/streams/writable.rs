@@ -1,3 +1,7 @@
+use super::constructors::{
+    TEXT_DECODER_STREAM_ENCODING_SLOT, TEXT_DECODER_STREAM_FATAL_SLOT,
+    TEXT_DECODER_STREAM_IGNORE_BOM_SLOT, TEXT_ENCODER_STREAM_ENCODING_SLOT,
+};
 use super::*;
 use crate::interfaces as web_api_interfaces;
 use crate::streams::adapter::{stream_slot_object, writable_stream_abort_promise};
@@ -149,21 +153,44 @@ struct TransformStreamPrototypeAttributesDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::TextEncoderStream, enumerable)]
 struct TextEncoderStreamPrototypeAttributesDeclaration {
-    #[webapi(accessor_property, getter = transform_stream_readable_getter_callback)]
+    #[webapi(accessor_property, getter = text_stream_attribute_getter, data = v8str(scope, TEXT_ENCODER_STREAM_ENCODING_SLOT))]
+    encoding: (),
+
+    #[webapi(accessor_property, getter = text_stream_attribute_getter, data = v8str(scope, TRANSFORM_STREAM_READABLE_SLOT))]
     readable: (),
 
-    #[webapi(accessor_property, getter = transform_stream_writable_getter_callback)]
+    #[webapi(accessor_property, getter = text_stream_attribute_getter, data = v8str(scope, TRANSFORM_STREAM_WRITABLE_SLOT))]
     writable: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::TextDecoderStream, enumerable)]
 struct TextDecoderStreamPrototypeAttributesDeclaration {
-    #[webapi(accessor_property, getter = transform_stream_readable_getter_callback)]
+    #[webapi(accessor_property, getter = text_stream_attribute_getter, data = v8str(scope, TEXT_DECODER_STREAM_ENCODING_SLOT))]
+    encoding: (),
+
+    #[webapi(accessor_property, getter = text_stream_attribute_getter, data = v8str(scope, TEXT_DECODER_STREAM_FATAL_SLOT))]
+    fatal: (),
+
+    #[webapi(accessor_property = "ignoreBOM", getter = text_stream_attribute_getter, data = v8str(scope, TEXT_DECODER_STREAM_IGNORE_BOM_SLOT))]
+    ignore_bom: (),
+
+    #[webapi(accessor_property, getter = text_stream_attribute_getter, data = v8str(scope, TRANSFORM_STREAM_READABLE_SLOT))]
     readable: (),
 
-    #[webapi(accessor_property, getter = transform_stream_writable_getter_callback)]
+    #[webapi(accessor_property, getter = text_stream_attribute_getter, data = v8str(scope, TRANSFORM_STREAM_WRITABLE_SLOT))]
     writable: (),
+}
+
+fn text_stream_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let target = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated text stream receiver");
+    let slot = args.data().to_rust_string_lossy(scope);
+    rv.set(get_private_value(scope, target, &slot).expect("initialized text stream attribute"));
 }
 
 pub(super) fn install_transform_stream_template_bindings<'s>(
