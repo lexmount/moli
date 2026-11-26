@@ -1,0 +1,142 @@
+[
+  {
+    "site": "finance",
+    "url": "https://finance.baidu.com/index/ab-000001",
+    "network_mode": "direct"
+  },
+  {
+    "site": "baidu",
+    "url": "https://www.baidu.com/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "rust",
+    "url": "https://www.rust-lang.org/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "google",
+    "url": "https://www.google.com/?hl=en",
+    "network_mode": "proxy"
+  },
+  {
+    "site": "bing",
+    "url": "https://www.bing.com/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "wikipedia",
+    "url": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+    "network_mode": "proxy"
+  },
+  {
+    "site": "github",
+    "url": "https://github.com/lexmount/moli",
+    "network_mode": "direct"
+  },
+  {
+    "site": "mdn",
+    "url": "https://developer.mozilla.org/en-US/docs/Web/CSS",
+    "network_mode": "direct"
+  },
+  {
+    "site": "pypi",
+    "url": "https://pypi.org/project/requests/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "hn",
+    "url": "https://news.ycombinator.com/",
+    "network_mode": "proxy"
+  },
+  {
+    "site": "bbc",
+    "url": "https://www.bbc.com/news",
+    "network_mode": "proxy"
+  },
+  {
+    "site": "cnn",
+    "url": "https://www.cnn.com/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "sina",
+    "url": "https://news.sina.com.cn/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "163",
+    "url": "https://news.163.com/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "qq",
+    "url": "https://news.qq.com/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "sohu",
+    "url": "https://www.sohu.com/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "douban",
+    "url": "https://www.douban.com/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "zhihu",
+    "url": "https://www.zhihu.com/explore",
+    "network_mode": "direct"
+  },
+  {
+    "site": "v2ex",
+    "url": "https://www.v2ex.com/",
+    "network_mode": "proxy"
+  },
+  {
+    "site": "bilibili",
+    "url": "https://www.bilibili.com/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "jd",
+    "url": "https://www.jd.com/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "taobao",
+    "url": "https://www.taobao.com/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "hh",
+    "url": "https://hh.ru/",
+    "network_mode": "direct"
+  },
+  {
+    "site": "python_docs",
+    "url": "https://docs.python.org/3/tutorial/",
+    "network_mode": "proxy"
+  },
+  {
+    "site": "rust_book",
+    "url": "https://doc.rust-lang.org/book/",
+    "network_mode": "proxy"
+  },
+  {
+    "site": "vue",
+    "url": "https://vuejs.org/guide/introduction.html",
+    "network_mode": "proxy"
+  },
+  {
+    "site": "react",
+    "url": "https://react.dev/learn",
+    "network_mode": "proxy"
+  },
+  {
+    "site": "typescript",
+    "url": "https://www.typescriptlang.org/docs/handbook/intro.html",
+    "network_mode": "proxy"
+  }
+]

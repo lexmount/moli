@@ -68,3 +68,81 @@ in a PR. Captured script bodies can exceed the Inspector body budget; capture
 warnings are preserved and such archives cannot be used for full script replay.
 Snapshot runs do not execute or request those scripts, and still require every
 requested resource to be present. Failed and excluded runs remain on disk.
+
+## Expanded memory and common-page matrix
+
+[Expanded measurements](results-extended-d7e0a70f.md) include matched snapshots and
+separately observed live pages. The benchmark still uses pinned Vec/SlotMap/
+DenseSlotMap executables built from the same baseline. Rust source is unchanged.
+
+The live catalogue contains 28 search, finance, news, community, shopping, video,
+recruitment and documentation pages. Scripts execute normally: `--observe-only`
+does not inject the timer freezer and does not enable Fetch interception. The
+initial window is 8 seconds (20 for Finance and hh.ru), followed by 2 seconds of
+ongoing page activity; memory is observed again 2 seconds after the target-close
+reply. Request content and loading progress can vary. Always inspect load counts,
+DOM counts and ranges before interpreting live memory differences.
+
+The controlled snapshot cohort admits only inputs whose original root element
+count and first 1,000 visible rectangles survive capture/replay. Three independent
+runs per variant rotate order; each performs three batches of 48 structural edits
+(12 per batch for roots above 5,000 elements). The initial full matrix is retained.
+Observed CPU regressions receive two further balanced rounds, not replacement
+samples. No forced GC, allocator trim, empty child-document substitution, or
+geometry tolerance is used to make a page pass.
+
+Process memory sampling runs every 100 ms and records phase names, RSS, PSS,
+anonymous PSS, private clean/dirty memory, CPU ticks and kernel RSS high-water.
+Kernel-reported RSS high-water captures peaks between samples; PSS and
+window-specific peaks are sampled. All trials have the same 4 GiB RSS guard. A guard kill or failed
+navigation is a failed/censored record, never a fast successful page. Blank,
+initialization, workload, idle and page-closure points make code/cache/allocator
+residency visible, while three update batches provide only a bounded growth check.
+
+Keep input archives, cookies and event logs in the ignored results directory. The
+public reports contain numeric measurements and hashes only. Some sites require
+the environment's proxy; `network_mode` records the route without exposing its
+configuration. Shadow DOM, live child documents, missing captured bodies and
+CSS/DOM fidelity failures are explicit exclusions from matched snapshots; their
+unmodified live-page observations can still be recorded.
+
+From the repository root:
+
+```sh
+ARENA_SCRIPT=moli-benchmark/scripts/layout-arena
+ARENA_DATA=moli-benchmark/results/layout-memory-new
+ARENA_BINS=/absolute/path/to/saved/binaries
+uv run --project moli-benchmark python "$ARENA_SCRIPT/capture_memory_pages.py" \
+  --binary "$ARENA_BINS/baseline-moli" \
+  --catalogue "$ARENA_SCRIPT/common-pages.json" --output "$ARENA_DATA"
+uv run --project moli-benchmark python "$ARENA_SCRIPT/extended_compare.py" \
+  --mode snapshot --plan "$ARENA_DATA/snapshot-plan-v2.json" \
+  --binaries "$ARENA_BINS" --output "$ARENA_DATA/snapshot-rounds" --repetitions 3
+uv run --project moli-benchmark python "$ARENA_SCRIPT/extended_compare.py" \
+  --mode live --plan "$ARENA_DATA/live-plan-v2.json" \
+  --binaries "$ARENA_BINS" --output "$ARENA_DATA/live-round1" --repetitions 1
+uv run --project moli-benchmark python "$ARENA_SCRIPT/choose_followups.py" "$ARENA_DATA"
+uv run --project moli-benchmark python "$ARENA_SCRIPT/extended_compare.py" \
+  --mode live --plan "$ARENA_DATA/live-followup-plan.json" \
+  --binaries "$ARENA_BINS" --output "$ARENA_DATA/live-followups" \
+  --repetitions 2 --repeat-offset 1
+uv run --project moli-benchmark python "$ARENA_SCRIPT/select_cpu_followups.py" "$ARENA_DATA"
+uv run --project moli-benchmark python "$ARENA_SCRIPT/extended_compare.py" \
+  --mode snapshot --plan "$ARENA_DATA/cpu-confirmation-plan.json" \
+  --binaries "$ARENA_BINS" --output "$ARENA_DATA/snapshot-confirmation" \
+  --repetitions 2 --repeat-offset 3
+uv run --project moli-benchmark python "$ARENA_SCRIPT/summarize_memory.py" \
+  "$ARENA_DATA" --output "$ARENA_DATA/numeric-report"
+```
+
+`--binaries` expects `baseline-moli`, `slotmap-moli` and `dense-moli`. Keep every
+initial and confirmation trial. `choose_followups.py` follows the recorded rule:
+mandatory Finance/Wikipedia/hh.ru, the five highest baseline initial-window peak
+RSS cases, and up to three largest absolute idle-PSS deviations above 5%. Other
+live cases remain n=1 exploratory observations. Failed trials remain explicit
+rows; the exporter additionally rejects root HTTP errors using Network events.
+Input capture may produce a different eligible snapshot subset as sites change.
+
+`render_memory_plots.py` accepts an exported report directory; run it separately
+after measurements with Matplotlib and NumPy available. Do not compile or run
+other benchmark processes during timed trials.
