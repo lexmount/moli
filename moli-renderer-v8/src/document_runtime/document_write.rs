@@ -392,6 +392,8 @@ impl DocumentRuntime {
         self.detached_document_write_streams.remove(&document);
         self.remove_all_children_for_document_replacement(scope, host_ptr, document);
         self.dom_host_mut()
+            .set_html_quirks_mode_for_parser_document(document, QuirksMode::NoQuirks);
+        self.dom_host_mut()
             .set_document_ready_state_for_handle(document, DocumentReadyState::Loading);
         let stream =
             HtmlParser::with_scripting_enabled(false).start_live_document_root(url, document);

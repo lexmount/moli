@@ -75,6 +75,77 @@ fn detached_document_write_open_resets_the_stream_and_scripts_remain_inert() {
 }
 
 #[test]
+fn detached_document_write_preserves_window_event_handlers() {
+    let mut vm = new_storage_html_test_vm("https://detached-document-window-handlers.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const loadHandler = () => {};
+  const errorHandler = () => {};
+  window.onload = loadHandler;
+  window.onerror = errorHandler;
+
+  return JSON.stringify(['body', 'frameset'].map(tag => {
+    const source = document.implementation.createHTMLDocument();
+    source.write(`<!doctype html><${tag} onload="void 0" onerror="void 0">`);
+    source.close();
+    const element = source.querySelector(tag);
+    return [
+      element?.getAttribute('onload'),
+      element?.getAttribute('onerror'),
+      window.onload === loadHandler,
+      window.onerror === errorHandler,
+    ];
+  }));
+})()
+"#,
+        )
+        .expect("detached writes should keep Window handlers on the active document");
+    assert_eq!(
+        result,
+        r#"[["void 0","void 0",true,true],["void 0","void 0",true,true]]"#
+    );
+}
+
+#[test]
+fn detached_document_write_open_resets_quirks_before_a_complete_doctype() {
+    let mut vm = new_storage_html_test_vm("https://detached-document-write-quirks.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const source = document.implementation.createHTMLDocument();
+  source.write('<p>Old');
+  source.close();
+  const beforeOpen = source.compatMode;
+
+  source.open();
+  const afterOpen = source.compatMode;
+  source.write('<!doctype html');
+  const duringDoctype = source.compatMode;
+  source.write('><p class="Example">New</p>');
+  source.close();
+  return JSON.stringify([
+    beforeOpen,
+    afterOpen,
+    duringDoctype,
+    source.compatMode,
+    source.doctype?.name,
+    source.querySelector('.example') === null,
+    source.querySelector('.Example')?.textContent,
+  ]);
+})()
+"#,
+        )
+        .expect("opening a detached document should reset quirks mode immediately");
+    assert_eq!(
+        result,
+        r#"["BackCompat","CSS1Compat","CSS1Compat","CSS1Compat","html",true,"New"]"#
+    );
+}
+
+#[test]
 fn detached_document_tag_collection_exposes_named_item() {
     let mut vm = new_storage_test_vm("https://detached-document-named-item.test/");
 
