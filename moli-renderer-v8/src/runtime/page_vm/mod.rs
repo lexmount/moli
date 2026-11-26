@@ -1254,6 +1254,22 @@ struct PageVmRendererDocumentIsolateBootstrap {
 }
 
 impl PageVmRuntimeHooks {
+    pub(in crate::runtime) fn apply_auxiliary_sandbox(&self, env: &mut PageVmEnvConfig) {
+        let window = self
+            .renderer_page_script_environment
+            .as_ref()
+            .and_then(|environment| environment.window_identity().auxiliary_window());
+        if let Some(window) = window {
+            // Auxiliary sandbox flags belong to the browsing context, so a
+            // network response cannot replace them with its own CSP policy.
+            // Apply them before parsing and before origin/storage bootstrap.
+            env.document_policy_container.sandbox = env
+                .document_policy_container
+                .sandbox
+                .with_response_content_security_policy(window.frame_sandbox());
+        }
+    }
+
     pub(in crate::runtime) fn with_web_mcp_navigation(
         mut self,
         id: Option<moli_page_types::RendererWebMcpNavigation>,
@@ -4379,7 +4395,9 @@ impl PageVm {
                 env.document_policy_container = environment.policy_container.clone();
                 env
             });
-        let env = inherited_env.as_ref().unwrap_or(env);
+        let mut document_env = inherited_env.as_ref().unwrap_or(env).clone();
+        runtime_hooks.apply_auxiliary_sandbox(&mut document_env);
+        let env = &document_env;
         let backend_node_registry = new_shared_renderer_backend_node_registry();
         let initial_document_loader_bootstrap =
             crate::network::context::DocumentResourceLoaderBootstrap::new(
