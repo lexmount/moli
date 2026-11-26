@@ -1,3 +1,4 @@
+use super::super::super::styles::ComputedStyleRead;
 use super::super::provider::{read_element_metrics, read_scroll_into_view_geometry};
 use super::*;
 use crate::native_bridge::WindowDocumentTaskTarget;
@@ -59,7 +60,8 @@ fn consume_wheel_axis(
 ///
 /// Each axis starts at the innermost scroll container under the pointer. Any
 /// delta left at that container's boundary continues along the layout ancestor
-/// chain, matching the scroll chaining users expect from a trackpad or wheel.
+/// chain. Axes the document cannot consume can continue through embedding
+/// frames without redispatching the event.
 pub(crate) fn perform_wheel_scroll_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -67,11 +69,43 @@ pub(crate) fn perform_wheel_scroll_default_action(
     delta_x: f64,
     delta_y: f64,
 ) -> Result<bool, moli_layout::LayoutError> {
-    if (!delta_x.is_finite() || delta_x == 0.0) && (!delta_y.is_finite() || delta_y == 0.0) {
-        return Ok(false);
+    let mut remaining_x = finite_wheel_delta(delta_x);
+    let mut remaining_y = finite_wheel_delta(delta_y);
+    let mut current = Some(handle);
+    let mut changed = false;
+    while let Some(handle) = current {
+        if remaining_x == 0.0 && remaining_y == 0.0 {
+            break;
+        }
+        let runtime = unsafe { &*runtime_ptr };
+        let Some(document) = runtime.dom_host().owner_document_handle(handle) else {
+            break;
+        };
+        let chain = wheel_scroll_chain(runtime, handle)?;
+        let requested_x = remaining_x;
+        let requested_y = remaining_y;
+        changed |= perform_wheel_scroll_chain_default_action(
+            scope,
+            runtime_ptr,
+            &chain,
+            &mut remaining_x,
+            &mut remaining_y,
+        )?;
+        // Keep axes consumed by this document in its scroll chain for this action.
+        if remaining_x != requested_x {
+            remaining_x = 0.0;
+        }
+        if remaining_y != requested_y {
+            remaining_y = 0.0;
+        }
+        current =
+            unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(document);
     }
-    let chain = wheel_scroll_chain(unsafe { &*runtime_ptr }, handle)?;
-    perform_wheel_scroll_chain_default_action(scope, runtime_ptr, &chain, delta_x, delta_y)
+    Ok(changed)
+}
+
+fn finite_wheel_delta(delta: f64) -> f64 {
+    if delta.is_finite() { delta } else { 0.0 }
 }
 
 fn wheel_scroll_chain(
@@ -111,16 +145,14 @@ fn perform_wheel_scroll_chain_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     chain: &[moli_layout::LayoutScrollContainerMetrics<DomHandle>],
-    delta_x: f64,
-    delta_y: f64,
+    remaining_x: &mut f64,
+    remaining_y: &mut f64,
 ) -> Result<bool, moli_layout::LayoutError> {
-    let mut remaining_x = if delta_x.is_finite() { delta_x } else { 0.0 };
-    let mut remaining_y = if delta_y.is_finite() { delta_y } else { 0.0 };
     let mut changed = false;
     for container in chain {
         let source = container.source;
         let metrics = &container.metrics;
-        if remaining_x == 0.0 && remaining_y == 0.0 {
+        if *remaining_x == 0.0 && *remaining_y == 0.0 {
             break;
         }
         let runtime = unsafe { &*runtime_ptr };
@@ -132,18 +164,37 @@ fn perform_wheel_scroll_chain_default_action(
             current_x,
             f64::from(metrics.minimum_scroll_offset.x),
             f64::from(metrics.maximum_scroll_offset.x),
-            remaining_x,
+            *remaining_x,
             metrics.allows_user_scroll_x,
         );
         let (target_y, next_remaining_y) = consume_wheel_axis(
             current_y,
             f64::from(metrics.minimum_scroll_offset.y),
             f64::from(metrics.maximum_scroll_offset.y),
-            remaining_y,
+            *remaining_y,
             metrics.allows_user_scroll_y,
         );
-        remaining_x = next_remaining_x;
-        remaining_y = next_remaining_y;
+        *remaining_x = next_remaining_x;
+        *remaining_y = next_remaining_y;
+        if *remaining_x != 0.0 || *remaining_y != 0.0 {
+            let style = ComputedStyleRead::new(runtime, source);
+            if *remaining_x != 0.0
+                && matches!(
+                    style.property("overscroll-behavior-x").trim(),
+                    "contain" | "none"
+                )
+            {
+                *remaining_x = 0.0;
+            }
+            if *remaining_y != 0.0
+                && matches!(
+                    style.property("overscroll-behavior-y").trim(),
+                    "contain" | "none"
+                )
+            {
+                *remaining_y = 0.0;
+            }
+        }
         if target_x == current_x && target_y == current_y {
             continue;
         }
@@ -287,8 +338,8 @@ pub(crate) fn perform_latched_wheel_scroll_default_action(
         scope,
         runtime_ptr,
         &[moli_layout::LayoutScrollContainerMetrics { source, metrics }],
-        delta_x,
-        delta_y,
+        &mut finite_wheel_delta(delta_x),
+        &mut finite_wheel_delta(delta_y),
     )
 }
 
