@@ -787,11 +787,10 @@ impl DomHost {
         if *hovered == next {
             return false;
         }
-        let previous = std::mem::replace(&mut *hovered, next);
-        self.record_mutation(
-            MutationScope::QueryState,
-            previous.into_iter().chain(hovered.iter().copied()),
-        );
+        *hovered = next;
+        // Hover is a selector input. The renderer invalidates the affected
+        // styles and determines whether their damage requires layout.
+        self.record_mutation(MutationScope::QueryState, []);
         true
     }
 

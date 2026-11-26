@@ -237,10 +237,13 @@ impl MoliStyleEngine {
         self.document_worlds
             .active_world(document)
             .is_some_and(|world| {
-                !matches!(
-                    *world.document_state.screen_style_invalidation.borrow(),
-                    ScreenStyleInvalidation::Clean
-                )
+                // Queued native snapshots still need to be drained before
+                // they can contribute affected targets to screen restyles.
+                !world.pending_invalidations.borrow().is_empty()
+                    || !matches!(
+                        *world.document_state.screen_style_invalidation.borrow(),
+                        ScreenStyleInvalidation::Clean
+                    )
             })
     }
 
