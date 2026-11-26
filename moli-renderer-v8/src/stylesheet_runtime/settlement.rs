@@ -20,21 +20,19 @@ impl DocumentRuntime {
             })
     }
 
-    /// Admit the computed images selected by this render. Return the selected
-    /// Document/URL pairs so exports can wait for exactly these requests.
-    pub(crate) fn prepare_css_images_in_current_scope<'a>(
+    /// Start requests for the computed images selected by this render.
+    pub(crate) fn prepare_css_images_in_current_scope(
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
-        references: &'a [moli_layout::LayoutCssImageReference<DomHandle>],
+        references: &[moli_layout::LayoutCssImageReference<DomHandle>],
         include_backgrounds: bool,
-    ) -> Vec<(DomHandle, &'a str)> {
-        let (targets, requests) = {
+    ) {
+        let requests = {
             let host = unsafe { &mut *host_ptr };
             if !Self::css_image_fetch_enabled(host) {
-                return Vec::new();
+                return;
             }
             let mut seen = std::collections::HashSet::new();
-            let mut targets = Vec::new();
             let mut requests = Vec::new();
             for reference in references {
                 if !include_backgrounds
@@ -49,7 +47,6 @@ impl DocumentRuntime {
                 if !seen.insert((document, url)) {
                     continue;
                 }
-                targets.push((document, url));
                 if host.stylesheet_css_image_is_current(document, url) {
                     continue;
                 }
@@ -60,10 +57,9 @@ impl DocumentRuntime {
                     requests.push((binding, StylesheetLoadBlockingResource::image(url)));
                 }
             }
-            (targets, requests)
+            requests
         };
         Self::start_stylesheet_subresource_fetches_in_current_scope(scope, host_ptr, requests);
-        targets
     }
 
     pub(crate) fn current_stylesheet_resources(

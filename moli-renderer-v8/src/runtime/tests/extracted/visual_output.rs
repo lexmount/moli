@@ -283,24 +283,25 @@ async fn capture_screenshot_paints_sliced_border_images_after_resource_load() {
         .expect("border image request signal should remain open");
     let pending = capture_screenshot_with_request(&page, request.clone()).await;
     assert_eq!(decoded_png_pixel(&pending.bytes, 30, 10), [255; 4]);
-    let (reply, _) = page
-        .run_async_command(RendererPageCommand::PreparePaintResources(
-            crate::runtime::RendererScreenshotPurpose::Screenshot,
-        ))
-        .await
-        .expect("screenshot resources should prepare");
-    let RendererPageReply::PreparedPaintResources(Some(resources)) = reply else {
-        panic!("expected screenshot resource readiness");
-    };
     release_response.send(()).expect("release the border image");
     server
         .await
         .expect("border image fixture server should finish");
-    tokio::time::timeout(Duration::from_secs(2), resources)
-        .await
-        .expect("border images should finish loading");
-
-    let painted = capture_screenshot_with_request(&page, request.clone()).await;
+    let painted = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let screenshot = capture_screenshot_with_request(&page, request.clone()).await;
+            if decoded_png_pixel(&screenshot.bytes, 1, 1) == [255, 0, 0, 255]
+                && decoded_png_pixel(&screenshot.bytes, 1, 157) == [255, 0, 0, 255]
+                && decoded_png_pixel(&screenshot.bytes, 11, 219) == [255, 0, 0, 255]
+                && decoded_png_pixel(&screenshot.bytes, 72, 10) == [0, 255, 0, 255]
+            {
+                break screenshot;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("ordinary captures should paint the decoded border images");
     for (x, y, color) in [
         (1, 1, [255, 0, 0, 255]),     // outset corner
         (5, 1, [255, 255, 255, 255]), // space before the first tile

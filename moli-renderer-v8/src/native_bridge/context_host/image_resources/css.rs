@@ -1,6 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
 
-use futures_util::future::BoxFuture;
 use moli_layout::{LayoutCssImageState, LayoutImageResource};
 use parking_lot::Mutex;
 
@@ -63,7 +62,6 @@ struct CssImageResourceStoreInner {
 struct CssImageResourceSlot {
     identity: CssImageResourceRequestIdentity,
     state: CssImageResourceState,
-    completion: Option<tokio::sync::watch::Sender<()>>,
 }
 
 enum CssImageResourceState {
@@ -148,7 +146,6 @@ impl CssImageResourceStore {
             CssImageResourceSlot {
                 identity: identity.clone(),
                 state,
-                completion: None,
             },
         );
         inner.paint_snapshot = None;
@@ -226,7 +223,6 @@ impl CssImageResourceStore {
         self.ready_by_request
             .insert(identity.request_key.clone(), &resource);
         slot.state = CssImageResourceState::Ready(resource);
-        drop(slot.completion.take());
         inner.paint_snapshot = None;
         self.visual_generation.bump();
         #[cfg(test)]
@@ -246,53 +242,11 @@ impl CssImageResourceStore {
             return false;
         }
         slot.state = CssImageResourceState::Failed;
-        drop(slot.completion.take());
         inner.paint_snapshot = None;
         self.visual_generation.bump();
         #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
-    }
-
-    pub(super) fn wait_for_pending_loads(
-        &self,
-        images: &[(DomHandle, &str)],
-    ) -> Option<BoxFuture<'static, ()>> {
-        let mut inner = self.inner.lock();
-        let pending = images
-            .iter()
-            .filter_map(|&(document_handle, url)| {
-                let key = CssImageResourceKey {
-                    document_handle,
-                    request_key: ImageRequestKey::with_density(
-                        url.to_owned(),
-                        ImageRequestCorsMode::NoCors,
-                        1.0,
-                    ),
-                };
-                let slot = inner.slots.get_mut(&key)?;
-                matches!(
-                    slot.state,
-                    CssImageResourceState::Pending | CssImageResourceState::DecodeQueued(_)
-                )
-                .then(|| {
-                    slot.completion
-                        .get_or_insert_with(|| tokio::sync::watch::Sender::new(()))
-                        .subscribe()
-                })
-            })
-            .collect::<Vec<_>>();
-        if pending.is_empty() {
-            return None;
-        }
-        // Dropping the sender settles this exact request, including when its
-        // Document is retired or the slot is replaced.
-        Some(Box::pin(async move {
-            futures_util::future::join_all(pending.into_iter().map(|mut completion| async move {
-                let _ = completion.changed().await;
-            }))
-            .await;
-        }))
     }
 
     pub(super) fn paint_snapshot(&self) -> CssImagePaintSnapshot {
@@ -444,38 +398,6 @@ mod tests {
             store.paint_snapshot().image(document, url),
             LayoutCssImageState::Ready(_)
         ));
-    }
-
-    #[tokio::test]
-    async fn export_waits_only_for_selected_document_images() {
-        use futures_util::FutureExt;
-
-        let store = CssImageResourceStore::new(
-            ReadyImageResourceIndex::default(),
-            VisualResourceGeneration::default(),
-        );
-        let document = DomHandle::new(10);
-        let unrelated_document = DomHandle::new(20);
-        let url = "https://example.test/async.png";
-        let CssImageResourceAdmission::Fetch(selected) =
-            store.admit(document, owner(1), url.to_owned())
-        else {
-            panic!("the selected image must start loading");
-        };
-        assert!(matches!(
-            store.admit(unrelated_document, owner(2), url.to_owned()),
-            CssImageResourceAdmission::Fetch(_)
-        ));
-        let mut waiter = store.wait_for_pending_loads(&[(document, url)]).unwrap();
-        assert!(waiter.as_mut().now_or_never().is_none());
-        assert!(store.fail(&selected));
-        assert_eq!(waiter.now_or_never(), Some(()));
-        assert!(store.wait_for_pending_loads(&[(document, url)]).is_none());
-        assert!(
-            store
-                .wait_for_pending_loads(&[(unrelated_document, url)])
-                .is_some()
-        );
     }
 
     #[test]

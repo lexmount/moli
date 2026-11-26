@@ -262,16 +262,6 @@ impl PageScriptHost {
         })
     }
 
-    pub(crate) fn current_screen_css_images(
-        &self,
-    ) -> Result<Option<Rc<[LayoutCssImageReference<DomHandle>]>>, LayoutError> {
-        let Some(state) = &self.realtime_layout_state else {
-            return Ok(None);
-        };
-        self.ensure_current_screen_layout(LayoutFlushReason::Screenshot)?;
-        Ok(Some(state.css_images.borrow().clone()))
-    }
-
     pub(crate) fn begin_screen_style_layout(&self, document: DomHandle) {
         self.style_engine.begin_screen_layout(document);
     }
