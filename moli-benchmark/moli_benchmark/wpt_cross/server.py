@@ -3136,6 +3136,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 emit_body=emit_body,
                 extra_headers=response_headers,
                 status_code=pipe_status_code or 200,
+                cache_control=None,
             )
 
         def _consume_request_body(self) -> bool:
