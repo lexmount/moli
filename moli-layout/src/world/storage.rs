@@ -63,6 +63,7 @@ impl BoxOrder {
 pub(crate) struct LayoutBoxes<N> {
     entries: BoxMap<N>,
     order: Arc<BoxOrder>,
+    storage_revision: u64,
 }
 
 impl<N> Default for LayoutBoxes<N> {
@@ -70,6 +71,7 @@ impl<N> Default for LayoutBoxes<N> {
         Self {
             entries: BoxMap::with_key(),
             order: Arc::default(),
+            storage_revision: 0,
         }
     }
 }
@@ -77,6 +79,7 @@ impl<N> Default for LayoutBoxes<N> {
 impl<N> LayoutBoxes<N> {
     pub(crate) fn insert(&mut self, value: LayoutBox<N>) -> LayoutBoxId {
         let id = self.entries.insert(value);
+        self.storage_revision += 1;
         let order = Arc::make_mut(&mut self.order);
         let index = u32::try_from(order.ids.len()).expect("layout order exceeds u32");
         order.ids.push(id);
@@ -93,6 +96,7 @@ impl<N> LayoutBoxes<N> {
         let order = Arc::make_mut(&mut self.order);
         let id = order.ids.pop()?;
         order.positions.remove(id);
+        self.storage_revision += 1;
         self.entries.remove(id)
     }
 
@@ -154,14 +158,28 @@ impl<N> LayoutBoxes<N> {
         self.entries.values_mut()
     }
 
+    pub(crate) fn keyed(&self) -> impl Iterator<Item = (LayoutBoxId, &LayoutBox<N>)> {
+        self.entries.iter()
+    }
+
     pub(crate) fn keyed_mut(&mut self) -> impl Iterator<Item = (LayoutBoxId, &mut LayoutBox<N>)> {
         self.entries.iter_mut()
+    }
+
+    pub(crate) fn storage_revision(&self) -> u64 {
+        self.storage_revision
+    }
+
+    /// Unordered scans never round-trip through logical IDs.
+    pub(crate) fn values(&self) -> impl Iterator<Item = &LayoutBox<N>> {
+        self.entries.values()
     }
 
     pub(crate) fn retain_in_order(&mut self, ids: Vec<LayoutBoxId>) -> bool {
         if ids == self.order.ids {
             return false;
         }
+        self.storage_revision += 1;
         let order = BoxOrder::new(ids);
         for id in &order.ids {
             assert!(self.entries.contains_key(*id));

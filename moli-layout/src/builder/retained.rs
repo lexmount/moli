@@ -106,7 +106,7 @@ impl<N: Copy + std::fmt::Debug + Eq + std::hash::Hash> DirtyBoxPaths<N> {
         }
         // Controls, markers, replaced content, and special formatting
         // streams still sample pass-local inputs or regenerate their boxes.
-        for layout_box in &world.boxes {
+        for layout_box in world.boxes.values() {
             if let Some(node) = layout_box.source
                 && (!can_refresh_box(layout_box) || layout_box.text_selection.is_some())
             {
@@ -126,7 +126,7 @@ impl<N: Copy + std::fmt::Debug + Eq + std::hash::Hash> DirtyBoxPaths<N> {
             .chain(
                 world
                     .boxes
-                    .iter()
+                    .values()
                     .filter(|layout_box| layout_box.kind == LayoutBoxKind::InlineContinuation)
                     .filter_map(|layout_box| layout_box.owner),
             )
@@ -167,7 +167,6 @@ where
         || source.disables_viewport_user_scrolling()
             != world.viewport_scroll_policy.disables_user_scrolling()
         || table_semantics_changed(source, root_source, root_box)
-        || !styles.can_reuse_element_style(root_source, &root_box.style)
     {
         return Ok(None);
     }
@@ -177,6 +176,15 @@ where
     builder.root_is_html = root_box
         .element_semantics()
         .is_some_and(|element| element.is_html_element("html"));
+    let root_restyled = !builder
+        .styles
+        .can_reuse_element_style(root_source, &root_box.style);
+    if root_restyled
+        && (!can_refresh_box(root_box)
+            || !builder.restyle_existing_container(world, root, root_source)?)
+    {
+        return Ok(None);
+    }
     builder.seen_sources.insert(root_source, root_source);
 
     let original_count = world.boxes.len();
@@ -184,7 +192,7 @@ where
     let dirty = changes.and_then(|changes| DirtyBoxPaths::collect(source, world, changes));
     let had_floats = world
         .boxes
-        .iter()
+        .values()
         .any(|layout_box| layout_box.style.is_floated());
     let mut retained = RetainedBoxes {
         sources: std::mem::take(&mut world.source_mapping),
@@ -195,20 +203,23 @@ where
             .collect(),
         split_inline_sources: world
             .boxes
-            .iter()
+            .values()
             .filter(|layout_box| layout_box.kind == LayoutBoxKind::InlineContinuation)
             .filter_map(|layout_box| layout_box.owner)
             .collect(),
         rebuilt_in_place: HashSet::new(),
         pruned_sources: false,
     };
+    if root_restyled {
+        retained.rebuilt_in_place.insert(root);
+    }
     world.source_mapping.reserve(retained.sources.len());
     world.display_contents_mapping.clear();
     builder.refresh_box(
         world,
         root,
         root_source,
-        false,
+        root_restyled,
         dirty.as_ref(),
         &mut retained,
         &mut Vec::new(),

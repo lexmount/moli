@@ -305,7 +305,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
             || self
                 .world
                 .boxes
-                .iter()
+                .values()
                 .any(|layout_box| layout_box.style.display().is_grid_container())
         {
             return None;
@@ -1036,7 +1036,7 @@ where
         let fragment_count = self
             .world
             .boxes
-            .iter()
+            .values()
             .map(|layout_box| {
                 usize::from(!layout_box.inline_flattened)
                     + layout_box.inline_layout.as_ref().map_or(0, |context| {

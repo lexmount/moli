@@ -3,6 +3,7 @@ use moli_page_types::LayoutPolicy;
 
 mod arena_identity;
 mod inline_compaction;
+mod viewport_reuse;
 
 fn realtime_vm(markup: &str) -> StandaloneScriptVmHarness {
     let mut vm = new_parsed_test_vm("https://realtime-layout.test/", markup);

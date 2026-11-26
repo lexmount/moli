@@ -769,6 +769,22 @@ where
         }
     }
 
+    pub(crate) fn clear_all_layout_caches(&mut self) {
+        self.retained_cache_reads = None;
+        for cache in &mut self.box_caches {
+            cache.clear();
+        }
+        for layout_box in self.boxes.iter_mut() {
+            if let Some(cache) = &mut layout_box.table_measure_cache {
+                cache.clear();
+            }
+        }
+        if let Some(tree) = &mut self.numeric_tree {
+            tree.overflow = None;
+            tree.overflow_dirty.clear();
+        }
+    }
+
     pub(crate) fn track_retained_cache_reads(&mut self) {
         self.retained_cache_reads = Some(Box::new(RetainedCacheReads {
             pending_slots: vec![true; self.box_caches.len()],

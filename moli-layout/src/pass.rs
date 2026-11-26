@@ -468,7 +468,7 @@ where
                 scrollbars.0.insert((ScrollbarOwner::Viewport, axis));
             }
         }
-        for layout_box in &world.boxes {
+        for layout_box in world.boxes.values() {
             for axis in SCROLLBAR_AXES {
                 if layout_box.style.auto_scrollbar_revealed(axis)
                     && let Some(owner) = ScrollbarOwner::for_box(layout_box)
@@ -530,15 +530,30 @@ where
     let reusable = retained.filter(|retained| {
         request.retains_layout_world()
             && retained.can_reuse_layout()
-            && retained.viewport == request.viewport
             && retained.world.environment == request.environment
     });
     let reused = if let Some(retained) = reusable {
+        let viewport_changed = retained.viewport != request.viewport;
         // Paint metadata indexes the previous publication. Retire it before
         // updating the world, even when the update later requires a cold pass.
         let mut world = retained.into_layout_world();
+        // DOM damage does not describe media-query or viewport-unit changes.
+        // Revalidate every style while preserving boxes whose inputs still match.
+        let changes = if viewport_changed { None } else { changes };
+        if viewport_changed {
+            // Shaped IFC inputs can survive; measured sizes and line placement
+            // must be checked against the new viewport constraints.
+            world.inline_numeric_reuse = None;
+        }
         crate::builder::update_layout_world(source, styles, &mut world, changes)?.map(
-            |(count, pruned, reuse_numeric_layout)| (world, count, pruned, reuse_numeric_layout),
+            |(count, pruned, reuse_numeric_layout)| {
+                (
+                    world,
+                    count,
+                    pruned,
+                    reuse_numeric_layout && !viewport_changed,
+                )
+            },
         )
     } else {
         None
@@ -637,18 +652,9 @@ where
     if prepared.reuse_numeric_layout {
         // Revisit cached Taffy branches that cover IFC fragments. Their
         // inline results are restored or rebuilt under the current inputs.
-        invalidated.extend(
-            world
-                .boxes
-                .iter()
-                .enumerate()
-                .filter_map(|(index, layout_box)| {
-                    layout_box
-                        .inline_context_owner
-                        .is_some()
-                        .then_some(world.boxes.id_at(index))
-                }),
-        );
+        invalidated.extend(world.boxes.keyed().filter_map(|(id, layout_box)| {
+            layout_box.inline_context_owner.is_some().then_some(id)
+        }));
     }
     let phase_started = Instant::now();
     let reused_inline_contexts = if retain_inline {

@@ -61,6 +61,7 @@ pub(crate) struct PreparedWorldLayout {
     pub(crate) reused_tree: bool,
     // Post-layout adapters change box geometry before the next feedback pass.
     numeric_unrounded_layouts: Vec<Layout>,
+    numeric_storage_revision: u64,
     feedback_invalidation_marks: Vec<bool>,
     feedback_invalidation_worklist: Vec<LayoutBoxId>,
 }
@@ -75,8 +76,17 @@ impl PreparedWorldLayout {
             world.boxes.len(),
             "numeric feedback must not allocate layout boxes"
         );
-        for (index, layout) in self.numeric_unrounded_layouts.iter().copied().enumerate() {
-            world.boxes[index].unrounded_layout = layout;
+        assert_eq!(
+            self.numeric_storage_revision,
+            world.boxes.storage_revision(),
+            "numeric feedback must preserve the working storage order"
+        );
+        for (layout_box, layout) in world
+            .boxes
+            .iter_mut()
+            .zip(self.numeric_unrounded_layouts.iter().copied())
+        {
+            layout_box.unrounded_layout = layout;
         }
     }
 
@@ -84,11 +94,12 @@ impl PreparedWorldLayout {
     where
         N: Copy + Debug + Eq + Hash,
     {
+        self.numeric_storage_revision = world.boxes.storage_revision();
         self.numeric_unrounded_layouts.clear();
         self.numeric_unrounded_layouts.extend(
             world
                 .boxes
-                .iter()
+                .values()
                 .map(|layout_box| layout_box.unrounded_layout),
         );
     }
@@ -169,12 +180,13 @@ where
 
     world.resolved_grid_tracks.clear();
     world.native_grid_details.clear();
-    for index in 0..world.boxes.len() {
+    if !reuse_numeric_layout {
+        world.clear_all_layout_caches();
+    }
+    for layout_box in world.boxes.iter_mut() {
         if !reuse_numeric_layout {
-            world.clear_layout_caches(world.boxes.id_at(index));
-            world.boxes[index].unrounded_layout = Layout::with_order(0);
+            layout_box.unrounded_layout = Layout::with_order(0);
         }
-        let layout_box = &mut world.boxes[index];
         if !preserve_final_layout {
             layout_box.final_layout = Layout::with_order(0);
         }
@@ -213,6 +225,7 @@ where
         tree,
         reused_tree,
         numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
+        numeric_storage_revision: world.boxes.storage_revision(),
         feedback_invalidation_marks: vec![false; world.boxes.len()],
         feedback_invalidation_worklist: Vec::new(),
     };

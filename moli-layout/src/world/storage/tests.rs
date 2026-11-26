@@ -116,3 +116,30 @@ fn retiring_a_construction_wrapper_cleans_links_without_renaming_children() {
     world.record_structural_children(root, &[child]).unwrap();
     world.validate_invariants().unwrap();
 }
+
+#[test]
+fn physical_geometry_snapshot_detects_same_length_slot_replacement() {
+    let mut boxes = LayoutBoxes::default();
+    let first = boxes.insert(block(1));
+    let removed = boxes.insert(block(2));
+    let last = boxes.insert(block(3));
+    boxes.retain_in_order(vec![last, first]);
+    let current = boxes.insert(block(4));
+    boxes.retain_in_order(vec![current, first, last]);
+    let read_order = boxes.values().map(|b| b.source()).collect::<Vec<_>>();
+    let write_order = boxes.iter_mut().map(|b| b.source()).collect::<Vec<_>>();
+    assert_eq!(
+        read_order, write_order,
+        "a physical snapshot must restore in physical order"
+    );
+    assert!(boxes.get(removed).is_none());
+    let revision = boxes.storage_revision();
+    boxes.pop();
+    boxes.insert(block(5));
+    assert_eq!(boxes.len(), 3);
+    assert_ne!(
+        boxes.storage_revision(),
+        revision,
+        "same length does not imply the same storage identities"
+    );
+}
