@@ -251,19 +251,10 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         &mut self,
         handle: DomHandle,
     ) -> Option<StyloComputedStyleSnapshot> {
-        self.element_styles_with_damage(handle)
-            .map(|(styles, _)| styles)
-    }
-
-    pub(crate) fn element_styles_with_damage(
-        &mut self,
-        handle: DomHandle,
-    ) -> Option<(StyloComputedStyleSnapshot, ServoRestyleDamage)> {
         let element = self.prepare(handle)?;
         let data = element.borrow_data()?;
-        Some((
-            StyloComputedStyleSnapshot::from_element_styles(&data.styles),
-            data.damage,
+        Some(StyloComputedStyleSnapshot::from_element_styles(
+            &data.styles,
         ))
     }
 

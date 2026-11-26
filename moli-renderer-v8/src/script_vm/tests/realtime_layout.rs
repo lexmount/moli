@@ -8,6 +8,44 @@ fn realtime_vm(markup: &str) -> StandaloneScriptVmHarness {
 }
 
 #[test]
+fn realtime_reuses_boxes_after_observed_style_changes_revert() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>html.temporary,#branch.temporary{display:flex}</style>",
+        "<div id=branch><div style='height:20px'></div></div><article>Stable</article>",
+    ));
+    let width = vm
+        .eval("String(document.documentElement.offsetWidth)")
+        .unwrap();
+    let (_, mut previous_builds, _, metrics) = vm.layout_pass_observability_for_test();
+    let box_count = metrics.unwrap().box_count;
+    for target in ["document.documentElement", "branch"] {
+        assert_eq!(
+            vm.eval(&format!(
+                "(() => {{
+                    const element = {target};
+                    element.classList.add('temporary');
+                    const intermediate = getComputedStyle(element).display;
+                    element.classList.remove('temporary');
+                    const current = getComputedStyle(element).display;
+                    return String([intermediate, current, document.documentElement.offsetWidth]);
+                }})()"
+            ))
+            .unwrap(),
+            format!("flex,block,{width}"),
+        );
+        let (_, builds, _, metrics) = vm.layout_pass_observability_for_test();
+        if builds != previous_builds {
+            let metrics = metrics.unwrap();
+            assert_eq!(
+                metrics.retained_box_count, box_count,
+                "{target}: {metrics:?}"
+            );
+        }
+        previous_builds = builds;
+    }
+}
+
+#[test]
 fn realtime_layout_writes_and_reads_in_one_call_share_only_current_inputs() {
     let mut vm = realtime_vm(
         "<!doctype html><div id=target style='width:100px;height:10px;padding:0;border:0'></div>",
