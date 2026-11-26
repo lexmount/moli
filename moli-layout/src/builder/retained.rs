@@ -213,7 +213,7 @@ where
         &mut retained,
         &mut Vec::new(),
     )?;
-    let order = world.preorder();
+    let order = world.preorder()?;
     let mut pruned_source_count = 0;
     if retained.pruned_sources {
         // Recreate the live source index during the existing dense box pass.
@@ -261,6 +261,25 @@ where
     R: LayoutStyleResolver<S::NodeId>,
 {
     fn refresh_box(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        id: LayoutBoxId,
+        node: S::NodeId,
+        restyled: bool,
+        dirty: Option<&DirtyBoxPaths<S::NodeId>>,
+        retained: &mut RetainedBoxes<S::NodeId>,
+        parent_children: &mut Vec<LayoutBoxId>,
+    ) -> Result<bool, LayoutError> {
+        // A cold rebuild below this retained box spends the same source
+        // depth budget as the retained ancestors above it.
+        self.enter_source(node)?;
+        let result =
+            self.refresh_entered_box(world, id, node, restyled, dirty, retained, parent_children);
+        self.active_sources.remove(&node);
+        result
+    }
+
+    fn refresh_entered_box(
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         id: LayoutBoxId,
