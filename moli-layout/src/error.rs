@@ -76,7 +76,7 @@ pub enum LayoutError {
 pub(crate) fn check_layout_depth(depth: usize) -> Result<(), LayoutError> {
     // Leave room for the native frames around recursive layout and paint
     // calls, including debug builds on bounded renderer stacks.
-    const LIMIT: usize = 96;
+    const LIMIT: usize = 512;
     if depth > LIMIT {
         return Err(LayoutError::DepthLimitExceeded { limit: LIMIT });
     }

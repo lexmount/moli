@@ -160,9 +160,9 @@ fn build(source: &Source, styles: &mut Styles) -> LayoutPassResult<usize> {
 #[test]
 fn layout_at_the_depth_limit_fits_a_bounded_stack() {
     std::thread::Builder::new()
-        .stack_size(2 * 1024 * 1024)
+        .stack_size(16 * 1024 * 1024)
         .spawn(|| {
-            let depth = 96;
+            let depth = 512;
             let source = Source(
                 (0..depth)
                     .map(|id| Node::element("nested", (id + 1..depth).take(1).collect()))

@@ -9,35 +9,42 @@ fn realtime_vm(markup: &str) -> StandaloneScriptVmHarness {
 
 #[test]
 fn realtime_layout_recovers_after_rejecting_excessive_depth() {
-    for publish_first in [false, true] {
-        let mut vm = realtime_vm("<!doctype html><div id=target style='width:31px'></div>");
-        if publish_first {
-            vm.publish_layout_for_test().unwrap();
-        }
-        let before = vm.layout_pass_observability_for_test().1;
-        vm.eval(
-            "let node=target;for(let i=0;i<512;i++){\
-             const child=document.createElement('div');\
-             node.append(child);node=child}\
-             node.textContent='Deep';",
-        )
+    std::thread::Builder::new()
+        .stack_size(crate::render_runtime::RENDER_RUNTIME_STACK_SIZE_BYTES)
+        .spawn(|| {
+            for publish_first in [false, true] {
+                let mut vm = realtime_vm("<!doctype html><div id=target style='width:31px'></div>");
+                if publish_first {
+                    vm.publish_layout_for_test().unwrap();
+                }
+                let before = vm.layout_pass_observability_for_test().1;
+                vm.eval(
+                    "let node=target;for(let i=0;i<512;i++){\
+                     const child=document.createElement('div');\
+                     node.append(child);node=child}\
+                     node.textContent='Deep';",
+                )
+                .unwrap();
+                let host = vm.context_host_weak_for_test().upgrade().unwrap();
+                assert!(
+                    matches!(
+                        host.borrow().ensure_observable_layout(),
+                        Err(moli_layout::LayoutError::DepthLimitExceeded { limit: 512 })
+                    ),
+                    "publish_first={publish_first}"
+                );
+                assert_eq!(vm.layout_pass_observability_for_test().1, before);
+                assert_eq!(
+                    vm.eval("target.replaceChildren();String(target.offsetWidth)")
+                        .unwrap(),
+                    "31"
+                );
+                assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+            }
+        })
+        .unwrap()
+        .join()
         .unwrap();
-        let host = vm.context_host_weak_for_test().upgrade().unwrap();
-        assert!(
-            matches!(
-                host.borrow().ensure_observable_layout(),
-                Err(moli_layout::LayoutError::DepthLimitExceeded { .. })
-            ),
-            "publish_first={publish_first}"
-        );
-        assert_eq!(vm.layout_pass_observability_for_test().1, before);
-        assert_eq!(
-            vm.eval("target.replaceChildren();String(target.offsetWidth)")
-                .unwrap(),
-            "31"
-        );
-        assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
-    }
 }
 
 #[test]

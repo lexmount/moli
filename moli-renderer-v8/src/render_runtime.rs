@@ -19,12 +19,9 @@ use super::runtime::{RendererOwnerCommand, RendererOwnerHandle, RendererOwnerRep
 use super::service_worker_runtime::ServiceWorkerRuntimeOwnerWake;
 use super::shared_worker_runtime::SharedWorkerRuntimeOwnerWake;
 
-// Rust's default stack for spawned Unix threads is 2 MiB, which is too tight
-// for our render runtime once a deep async continuation chain reaches V8.
-// Override that spawned-thread default so this thread stays aligned with the
-// larger pthread / Chromium renderer stack budget and preserves enough native
-// headroom for fresh V8 entry points.
-pub(crate) const RENDER_RUNTIME_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+// The renderer runs bounded recursive layout on top of async and V8 frames.
+// Reserve stack space for the maximum admitted layout depth.
+pub(crate) const RENDER_RUNTIME_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
 #[cfg(feature = "molio")]
 type PendingViewportWheel = Mutex<Option<RendererViewportWheelInput>>;
