@@ -249,15 +249,20 @@ impl ScriptVm {
         request: NativeModuleSingleFetchRequest,
         link_client: std::sync::Arc<crate::module_runtime::NativeModulepreloadLinkClient>,
     ) -> std::result::Result<Option<crate::module_runtime::ModulePreloadJobRun>, String> {
+        let document_owner = self.current_main_document_task_owner().ok_or_else(|| {
+            "main modulepreload fetch started without a current Document owner".to_owned()
+        })?;
+        let resource_scheduler = self.resource_scheduler();
         let outcome = self
             .document_runtime
-            .fetch_single_native_module_for_modulepreload_link(request, link_client)
+            .start_main_document_modulepreload_link_fetch(
+                document_owner,
+                &resource_scheduler,
+                request,
+                link_client,
+            )
             .map_err(|error| error.message().to_owned())?;
-        let (start, pending_event) = outcome.into_parts();
-        if let Some(pending_event) = pending_event {
-            self.enqueue_main_modulepreload_link_event(pending_event);
-        }
-        self.run_native_modulepreload_fetch_start_for_owner(start)
+        Ok(self.consume_main_document_modulepreload_fetch_outcome(outcome))
     }
     pub(super) fn enqueue_main_modulepreload_link_event(
         &mut self,
@@ -286,27 +291,6 @@ impl ScriptVm {
         let ready = pending_event.into_ready_event();
         self.document_runtime
             .enqueue_ready_native_modulepreload_link_event(ready);
-    }
-    pub(super) fn run_native_modulepreload_fetch_start_for_owner(
-        &mut self,
-        start: NativeModulepreloadFetchStart,
-    ) -> std::result::Result<Option<crate::module_runtime::ModulePreloadJobRun>, String> {
-        let Some(request) = start.started_request() else {
-            return Ok(None);
-        };
-        let document_owner = self.current_main_document_task_owner().ok_or_else(|| {
-            "main modulepreload fetch started without a current Document owner".to_owned()
-        })?;
-        let resource_scheduler = self.resource_scheduler();
-        let outcome = self
-            .document_runtime
-            .schedule_reserved_main_document_modulepreload_fetch(
-                document_owner,
-                &resource_scheduler,
-                request,
-            )
-            .map_err(|error| error.message().to_owned())?;
-        Ok(self.consume_main_document_modulepreload_fetch_outcome(outcome))
     }
     pub(crate) fn drain_ready_runtime_owned_module_owner_actions(
         &mut self,

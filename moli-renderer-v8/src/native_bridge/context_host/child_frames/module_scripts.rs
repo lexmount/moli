@@ -395,7 +395,7 @@ impl PageScriptHost {
             )
     }
 
-    pub(in crate::native_bridge::context_host) fn queue_child_modulepreload_link_error_for_current_document(
+    pub(crate) fn queue_child_modulepreload_link_error_for_current_document(
         &mut self,
         handle: DomHandle,
         link_handle: DomHandle,
@@ -442,7 +442,7 @@ impl PageScriptHost {
         )
     }
 
-    pub(in crate::native_bridge::context_host) fn queue_child_modulepreload_fetch_for_current_document(
+    pub(crate) fn queue_child_modulepreload_fetch_for_current_document(
         &mut self,
         handle: DomHandle,
         link_handle: DomHandle,
