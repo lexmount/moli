@@ -742,6 +742,12 @@ impl DomHost {
         false
     }
 
+    pub fn element_matches_focus_visible(&self, handle: DomHandle) -> bool {
+        // Retargeting exposes :focus on shadow hosts. The focus indicator
+        // belongs to the actual focused element.
+        self.active_element_handle() == Some(handle)
+    }
+
     pub fn element_matches_focus_within(&self, handle: DomHandle) -> bool {
         let Some(active) = self.active_element_handle() else {
             return false;

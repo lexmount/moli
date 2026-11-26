@@ -75,7 +75,10 @@ impl<'a> QueryElement<'a> {
             state |= ElementState::DEFAULT;
         }
         if self.host.element_matches_focus(self.handle) {
-            state |= ElementState::FOCUS | ElementState::FOCUSRING;
+            state |= ElementState::FOCUS;
+        }
+        if self.host.element_matches_focus_visible(self.handle) {
+            state |= ElementState::FOCUSRING;
         }
         if self.host.element_matches_focus_within(self.handle) {
             state |= ElementState::FOCUS_WITHIN;

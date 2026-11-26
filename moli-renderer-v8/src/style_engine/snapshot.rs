@@ -86,8 +86,9 @@ fn old_focus_snapshot_state(
         return state;
     };
     if stylo_focus_state_matches_handle(host, previous, handle) {
-        state.insert(StyloElementState::FOCUS | StyloElementState::FOCUSRING);
+        state.insert(StyloElementState::FOCUS);
     }
+    state.set(StyloElementState::FOCUSRING, previous == handle);
     if previous_focus_within.is_some_and(|handles| handles.contains(&handle))
         || stylo_focus_within_state_matches_handle(host, previous, handle)
     {
