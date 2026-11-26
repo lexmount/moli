@@ -209,6 +209,21 @@ impl StyleDocumentState {
         }
     }
 
+    pub(super) fn note_screen_hover_change(&self) {
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        if matches!(*change, ScreenStyleInvalidation::Clean)
+            && self.screen_style_coverage.borrow().is_some()
+        {
+            // Track the change before draining snapshots. A temporary
+            // layout can replace the styles used by the screen comparison.
+            *change = if self.screen_style_dependencies_are_current() {
+                Self::pending_screen_style_invalidation(self.style_paths.generation())
+            } else {
+                ScreenStyleInvalidation::Full
+            };
+        }
+    }
+
     pub(super) fn note_full_screen_style_invalidation(&self) {
         let mut change = self.screen_style_invalidation.borrow_mut();
         if !matches!(*change, ScreenStyleInvalidation::Clean) {
