@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn deferred_removals_restore_last_child_and_relative_selector_matches() {
+    let mut vm = new_parsed_test_vm(
+        "https://deferred-child-positions.test/",
+        r#"<!doctype html><style>
+          .marked:last-child { color: red; }
+          #parent:has(> .marked:last-child) + div { color: green; }
+        </style><div id="parent"><span class="marked"></span></div><div id="outside"></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+              const parent = document.getElementById('parent');
+              const last = parent.lastChild;
+              const outside = document.getElementById('outside');
+              const read = () => [getComputedStyle(last).color, getComputedStyle(outside).color];
+              const initial = read();
+              parent.insertAdjacentHTML('beforeend', '\n<span></span><span></span>');
+              const inserted = read();
+              while (parent.lastChild !== last) parent.lastChild.remove();
+              return JSON.stringify([initial, inserted, read()]);
+            })()"#,
+        )
+        .expect("deferred child-list invalidation should preserve edge matches");
+    assert_eq!(
+        result,
+        r#"[["rgb(255, 0, 0)","rgb(0, 128, 0)"],["rgb(0, 0, 0)","rgb(0, 0, 0)"],["rgb(255, 0, 0)","rgb(0, 128, 0)"]]"#,
+    );
+}
+
+#[test]
 fn removed_source_with_moved_old_neighbor_invalidates_remaining_target() {
     let mut vm = new_rendered_test_vm(
         "https://moved-old-neighbor.test/",
