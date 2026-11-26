@@ -407,7 +407,7 @@ SUPPORTED_CLEAR_SITE_DATA_WPTSERVE_HANDLER_PATTERNS: tuple[re.Pattern[str], ...]
         rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
     )
     for prefix in ("/clear-site-data/support/", "support/", "./support/", "", "./")
-    for name in ("controlled-endpoint.py", "echo-clear-site-data.py")
+    for name in ("controlled-endpoint.py", "echo-clear-site-data.py", "clear-site-data-cache.py")
 )
 SUPPORTED_FETCH_ABORT_WPTSERVE_HANDLER_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(
