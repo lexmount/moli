@@ -151,6 +151,7 @@ def extract(folder, result):
                 "js_heap_total_mib": group["heap_after"]["totalSize"] / (1024 * 1024),
                 "pss_mib": group["after"]["memory_kib"]["Pss"] / 1024,
                 "rss_before_mib": group["before"]["memory_kib"]["Rss"] / 1024,
+                "pss_before_mib": group["before"]["memory_kib"]["Pss"] / 1024,
                 "kernel_peak_rss_mib": group["after"]["peak_rss_kib"] / 1024,
                 "native": native,
                 "signatures": [s["signature"] for s in group["steps"]],
