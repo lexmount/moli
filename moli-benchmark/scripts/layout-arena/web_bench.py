@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import base64
 import collections
+import ctypes
 import hashlib
 import json
 import os
@@ -108,6 +109,23 @@ PULSE = r"""(() => {
 })()"""
 
 
+_CPU_CLOCK_LIBRARY = ctypes.CDLL(None)
+_CPU_CLOCK_LIBRARY.clock_getcpuclockid.argtypes = [
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+]
+_CPU_CLOCK_LIBRARY.clock_getcpuclockid.restype = ctypes.c_int
+
+
+def process_cpu_ns(pid):
+    """Read the POSIX process CPU clock, including time in all process threads."""
+    clock_id = ctypes.c_int()
+    error = _CPU_CLOCK_LIBRARY.clock_getcpuclockid(pid, ctypes.byref(clock_id))
+    if error:
+        raise OSError(error, os.strerror(error))
+    return time.clock_gettime_ns(clock_id.value)
+
+
 def proc_resources(pid):
     base = Path("/proc") / str(pid)
     stat = (base / "stat").read_text().rsplit(")", 1)[1].split()
@@ -122,6 +140,7 @@ def proc_resources(pid):
     }
     return {
         "cpu_ticks": int(stat[11]) + int(stat[12]),
+        "cpu_ns": process_cpu_ns(pid),
         "starttime": stat[19],
         "memory_kib": mem,
         "peak_rss_kib": int(re.search(r"^VmHWM:\s+(\d+)", status, re.MULTILINE)[1]),
@@ -737,32 +756,45 @@ async def one_run(args):
                 )
             await asyncio.sleep(0.1)
             observation = await client.evaluate(OBSERVE)
-            pulse_batches = []
-            for batch in range(batch_count):
-                sampler.phase = f"pulse_{batch + 1}"
-                batch_before = proc_resources(proc.pid)
-                batch_pulse = await client.evaluate(
-                    PULSE.replace("i<96", f"i<{update_count}")
-                )
-                batch_after = proc_resources(proc.pid)
-                pulse_batches.append(
-                    {"before": batch_before, "after": batch_after, "pulse": batch_pulse}
-                )
-            before_pulse = pulse_batches[0]["before"]
-            after_pulse = pulse_batches[-1]["after"]
-            pulse = {
-                "samples": [
-                    value
-                    for batch in pulse_batches
-                    for value in batch["pulse"]["samples"]
-                ],
-                "geometry": [
-                    value
-                    for batch in pulse_batches
-                    for value in batch["pulse"]["geometry"]
-                ],
-                "total": sum(batch["pulse"]["total"] for batch in pulse_batches),
-            }
+            scenario_runner = getattr(args, "scenario_runner", None)
+            layout_scenarios = None
+            if scenario_runner is not None:
+                before_pulse = proc_resources(proc.pid)
+                layout_scenarios = await scenario_runner(client, proc, sampler)
+                after_pulse = proc_resources(proc.pid)
+                pulse_batches = []
+                pulse = {"samples": [], "geometry": [], "total": 0}
+            else:
+                pulse_batches = []
+                for batch in range(batch_count):
+                    sampler.phase = f"pulse_{batch + 1}"
+                    batch_before = proc_resources(proc.pid)
+                    batch_pulse = await client.evaluate(
+                        PULSE.replace("i<96", f"i<{update_count}")
+                    )
+                    batch_after = proc_resources(proc.pid)
+                    pulse_batches.append(
+                        {
+                            "before": batch_before,
+                            "after": batch_after,
+                            "pulse": batch_pulse,
+                        }
+                    )
+                before_pulse = pulse_batches[0]["before"]
+                after_pulse = pulse_batches[-1]["after"]
+                pulse = {
+                    "samples": [
+                        value
+                        for batch in pulse_batches
+                        for value in batch["pulse"]["samples"]
+                    ],
+                    "geometry": [
+                        value
+                        for batch in pulse_batches
+                        for value in batch["pulse"]["geometry"]
+                    ],
+                    "total": sum(batch["pulse"]["total"] for batch in pulse_batches),
+                }
             sampler.phase = "post_pulse_observation"
             after_observation = await client.evaluate(OBSERVE)
 
@@ -793,6 +825,7 @@ async def one_run(args):
             after_idle=after_idle,
             after_close=after_close,
             pulse_batches=pulse_batches,
+            layout_scenarios=locals().get("layout_scenarios"),
             pulse_updates=update_count,
             network_mode=network_mode,
             idle_seconds=idle_seconds,
