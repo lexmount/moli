@@ -405,8 +405,7 @@ impl<N: Copy + std::fmt::Debug + Eq + Hash> MeasuredLayoutPass<N> {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct InlineSvgViewport<N> {
-    pub(crate) source: N,
+pub(crate) struct InlineSvgViewport {
     pub(crate) owner: crate::LayoutOutputBoxId,
     pub(crate) size: crate::LayoutSize,
     pub(crate) prepared: bool,
@@ -806,7 +805,7 @@ where
     } = measured;
     let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();
-    let mut svg_viewports = Vec::new();
+    let mut svg_viewports = HashMap::new();
     for (index, layout_box) in world.boxes.iter().enumerate() {
         let Some(kind) = layout_box
             .element_semantics()
@@ -820,8 +819,7 @@ where
         if kind == crate::LayoutReplacedKind::Svg && svg_objects.is_none() {
             let size = svg_viewport_size(layout_box);
             if size.width > 0.0 && size.height > 0.0 {
-                svg_viewports.push(InlineSvgViewport {
-                    source,
+                svg_viewports.entry(source).or_insert(InlineSvgViewport {
                     owner: crate::LayoutOutputBoxId::from_index(index),
                     size,
                     prepared: false,

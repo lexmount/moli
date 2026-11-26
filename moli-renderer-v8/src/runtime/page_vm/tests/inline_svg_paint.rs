@@ -130,6 +130,64 @@ async fn realtime_inline_svg_geometry_decodes_only_the_queried_scene_in_a_frame(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn realtime_inline_svg_range_geometry_follows_transform_and_scroll() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/svg-range-projection.html")?,
+        );
+        page_vm.set_scrollbars_hidden(true)?;
+        page_vm.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page_vm.vm_mut().eval(
+            r#"
+            document.head.innerHTML =
+                '<style>html,body{margin:0}body{height:2000px}svg{display:block}</style>';
+            const scene = '<svg width="120" height="60">' +
+                '<rect x="10" y="20" width="10" height="10"/>' +
+                '<rect x="30" y="20" width="10" height="10"/></svg>';
+            document.body.innerHTML =
+                '<div id="wrapper" style="transform:translate(0px,0px)">' +
+                scene.repeat(2) + '</div>';
+            const wrapper = document.getElementById('wrapper');
+            const range = document.createRange();
+            range.selectNodeContents(wrapper);
+            const readRects = () => JSON.stringify(Array.from(range.getClientRects())
+                .filter(r => r.width === 10 && r.height === 10)
+                .map(r => [r.x, r.y, r.width, r.height]));
+        "#,
+        )?;
+        let parsed = crate::layout_renderer::svg_parse_count();
+        const INITIAL: &str = "[[10,20,10,10],[30,20,10,10],[10,80,10,10],[30,80,10,10]]";
+        assert_eq!(page_vm.vm_mut().eval("readRects()")?, INITIAL);
+        let passes = page_vm.vm().layout_pass_observability_for_test().1;
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 2);
+        assert_eq!(page_vm.vm_mut().eval("readRects()")?, INITIAL);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 2);
+
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("wrapper.style.transform='translate(17px,23px)';readRects()")?,
+            "[[27,43,10,10],[47,43,10,10],[27,103,10,10],[47,103,10,10]]"
+        );
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 4);
+
+        assert_eq!(
+            page_vm.vm_mut().eval("scrollTo(0,30);readRects()")?,
+            "[[27,13,10,10],[47,13,10,10],[27,73,10,10],[47,73,10,10]]"
+        );
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 4);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("batched SVG geometry tracks transform and scroll in one layout publication");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inline_svg_negative_intrinsic_lengths_respect_css_viewport_sizes() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
