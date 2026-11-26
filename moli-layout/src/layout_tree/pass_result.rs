@@ -72,6 +72,7 @@ pub struct LayoutPassMetrics {
     /// Final numeric cache hits populated by the previous screen pass.
     pub retained_numeric_layout_hits: usize,
     pub retained_numeric_tree: bool,
+    pub reused_inline_contexts: usize,
     pub fragment_count: usize,
     /// Paint-order events considered for this capture before viewport culling.
     pub paint_event_count: usize,

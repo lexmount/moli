@@ -271,6 +271,8 @@ where
             parent_children.push(id);
             return Ok(false);
         }
+        let refreshed_text_style = (restyled && layout_box.inline_layout.is_some())
+            .then(|| ResolvedLayoutStyle::text_leaf_from(&layout_box.style));
         let mut children = Vec::with_capacity(layout_box.children.len());
         let mut changed = false;
         let mut reattach = restyled;
@@ -297,18 +299,24 @@ where
                         retained.pruned_sources = true;
                         continue;
                     }
-                    let current = match self.source.node_kind(child) {
+                    let source_kind = self.source.node_kind(child);
+                    let current = match source_kind {
                         LayoutSourceKind::Element => {
                             self.styles.can_reuse_element_style(child, &old.style)
                         }
                         LayoutSourceKind::Text => {
-                            !restyled
+                            (!restyled || refreshed_text_style.is_some())
                                 && old.kind == LayoutBoxKind::Text
                                 && self.source.text(child) == old.text.as_deref()
                         }
                         _ => false,
                     };
                     if current {
+                        if source_kind == LayoutSourceKind::Text
+                            && let Some(style) = &refreshed_text_style
+                        {
+                            world.boxes[previous.index()].style = style.clone();
+                        }
                         changed |= self.refresh_box(
                             world,
                             previous,
