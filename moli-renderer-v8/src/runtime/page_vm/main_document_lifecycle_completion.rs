@@ -57,6 +57,19 @@ async fn execute_main_document_lifecycle_body_on_owner_local_task(
     page_vm: &mut PageVm,
     body: MainDocumentLifecycleBody,
 ) -> Result<MainDocumentLifecycleTaskRun> {
+    if let MainDocumentLifecycleBody::DomContentLoaded { owner } = body {
+        let request_client = page_vm.request_client.clone();
+        while page_vm.vm().current_main_document_task_owner() == Some(owner)
+            && page_vm
+                .vm()
+                .document_runtime
+                .has_ready_timeout_queued_by_classic_defer_script()
+        {
+            page_vm
+                .run_timer_before_domcontentloaded(&request_client)
+                .await?;
+        }
+    }
     // Lifecycle callbacks must enter V8 from a fresh owner-local task, not a
     // deep phase-one poll stack. This is the same boundary used before A1.
     let local_executor = page_vm.local_executor.clone();
