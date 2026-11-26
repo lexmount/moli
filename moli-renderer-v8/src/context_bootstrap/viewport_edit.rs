@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     document_runtime::DomHandle,
-    dom::native::DomHost,
+    dom::native::{DomHost, Element, Node},
     native_bridge::{
         PageScriptHost, callback_value_dom_handle,
         element::{
@@ -149,6 +149,15 @@ fn active_target(host: &PageScriptHost) -> Option<DomHandle> {
     }
 }
 
+fn clipboard_event_target(host: &PageScriptHost) -> Option<DomHandle> {
+    host.active_element_handle()
+        .or_else(|| host.document_focus_fallback_handle())
+}
+
+fn is_password_control(element: &Element) -> bool {
+    element.is_html_input() && element.input_type() == moli_dom::forms::InputType::Password
+}
+
 pub(crate) fn selected_viewport_text(
     scope: &mut v8::PinScope<'_, '_>,
     host: *mut PageScriptHost,
@@ -159,9 +168,7 @@ pub(crate) fn selected_viewport_text(
         let host = unsafe { &*host };
         if is_text_control(host, target) {
             let element = host.dom_host().node(target)?.as_element()?;
-            if element.is_html_input()
-                && element.input_type() == moli_dom::forms::InputType::Password
-            {
+            if is_password_control(element) {
                 return None;
             }
             let range = element.selection_start() as usize..element.selection_end() as usize;
@@ -183,18 +190,24 @@ pub(crate) fn cut_viewport_selection(
     scope: &mut v8::PinScope<'_, '_>,
     host: *mut PageScriptHost,
 ) -> Option<String> {
-    let target = active_target(unsafe { &*host })?;
-    let realm = node_owner_document_relevant_context(scope, host, target)?;
-    let scope = &mut v8::ContextScope::new(scope, realm);
-    let editor = read_editor(scope, unsafe { &*host }, target)?;
-    if editor.password || editor.selection.is_empty() {
+    let runtime = unsafe { &*host };
+    let event_target = clipboard_event_target(runtime)?;
+    let document = runtime.dom_host().owner_document_handle(event_target)?;
+    if runtime
+        .dom_host()
+        .node(event_target)
+        .and_then(Node::as_element)
+        .is_some_and(is_password_control)
+    {
         return None;
     }
+    let realm = node_owner_document_relevant_context(scope, host, event_target)?;
+    let scope = &mut v8::ContextScope::new(scope, realm);
     let store = create_native_drag_data_store(scope)?;
     let transfer =
         create_drag_data_transfer_view(scope, &store, DragDataStoreMode::ReadWrite, "none")?;
     let event = construct_native_clipboard_event(scope, "cut", transfer)?;
-    let allowed = dispatch_public_event(scope, host, target, event).allows_default();
+    let allowed = dispatch_public_event(scope, host, event_target, event).allows_default();
     let replacement = (!allowed && native_data_transfer_has_type(scope, transfer, "text/plain"))
         .then(|| native_data_transfer_get_data(scope, transfer, "text/plain"));
     finish_drag_data_transfer_view(scope, transfer);
@@ -203,9 +216,12 @@ pub(crate) fn cut_viewport_selection(
     }
 
     let runtime = unsafe { &*host };
-    if active_target(runtime) != Some(target) {
+    if clipboard_event_target(runtime) != Some(event_target)
+        || runtime.dom_host().owner_document_handle(event_target) != Some(document)
+    {
         return None;
     }
+    let target = active_target(runtime)?;
     let editor = read_editor(scope, runtime, target)?;
     if editor.password || editor.selection.is_empty() {
         return None;
@@ -238,8 +254,7 @@ fn read_editor(
             text: text_control_value(host, target),
             selection: element.selection_start() as usize..element.selection_end() as usize,
             reversed: element.selection_direction() == "backward",
-            password: element.is_html_input()
-                && element.input_type() == moli_dom::forms::InputType::Password,
+            password: is_password_control(element),
             map: None,
         });
     }
