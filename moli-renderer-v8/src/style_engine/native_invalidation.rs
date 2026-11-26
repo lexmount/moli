@@ -84,7 +84,7 @@ impl PendingNativeInvalidation {
                         continue;
                     }
                     let style_changes =
-                        namespace.is_none() && attribute_can_change_presentational_style(name);
+                        namespace.is_none() && attribute_can_change_style_directly(name);
                     if style_changes {
                         self.subtrees.insert(*element);
                     }
@@ -327,9 +327,9 @@ fn mutation_root(effect: &StyleMutationEffect) -> Option<DomHandle> {
     }
 }
 
-fn attribute_can_change_presentational_style(name: &str) -> bool {
-    // Values read by the style adapter's HTML and SVG presentational hints,
-    // or by inherited HTML language/direction and inline style matching.
+fn attribute_can_change_style_directly(name: &str) -> bool {
+    // These attributes affect styles outside ordinary selector attribute
+    // dependencies, including forwarded shadow parts.
     matches!(
         name,
         "align"
@@ -340,12 +340,14 @@ fn attribute_can_change_presentational_style(name: &str) -> bool {
             | "color"
             | "cols"
             | "dir"
+            | "exportparts"
             | "face"
             | "frameborder"
             | "height"
             | "hidden"
             | "lang"
             | "nowrap"
+            | "part"
             | "rows"
             | "size"
             | "style"
