@@ -4204,6 +4204,42 @@ async fn html_image_disconnected_lazy_defers_while_auto_and_eager_load() {
 }
 
 #[tokio::test]
+async fn detached_picture_reselects_an_existing_eager_image() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm("https://detached-picture.test/page.html");
+    vm.eval(
+        r#"
+globalThis.detachedPictureImage = new Image();
+detachedPictureImage.src = 'resources/image.png?original';
+"#,
+    )
+    .unwrap();
+    assert!(drain_canvas_image_load_event_tasks(&mut vm, &loader).await > 0);
+    assert_eq!(
+        vm.eval("new URL(detachedPictureImage.currentSrc).search")
+            .unwrap(),
+        "?original"
+    );
+
+    vm.eval(
+        r#"
+globalThis.detachedPicture = document.createElement('picture');
+const preferred = document.createElement('source');
+preferred.srcset = 'resources/image.png?preferred';
+detachedPicture.append(preferred, detachedPictureImage);
+"#,
+    )
+    .unwrap();
+    assert!(drain_canvas_image_load_event_tasks(&mut vm, &loader).await > 0);
+    assert_eq!(
+        vm.eval("new URL(detachedPictureImage.currentSrc).search")
+            .unwrap(),
+        "?preferred"
+    );
+    assert_eq!(vm.eval("detachedPicture.isConnected").unwrap(), "false");
+}
+
+#[tokio::test]
 async fn html_image_below_viewport_lazy_waits_until_scroll_reveal() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm("https://image-lazy-scroll.test/page.html");

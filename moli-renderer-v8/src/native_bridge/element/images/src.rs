@@ -126,7 +126,9 @@ fn queue_image_load_event(
                 after_document_adoption: true
             }
     );
-    if image_load_is_suppressed_for_non_active_parent(runtime, handle) && !after_document_adoption {
+    if image_load_is_suppressed_for_non_active_parent(runtime, handle, request_initiator_type)
+        && !after_document_adoption
+    {
         return;
     }
     let selected_source = image_selected_source_url(runtime, handle);
@@ -428,11 +430,17 @@ fn image_selected_picture_source(
 fn image_load_is_suppressed_for_non_active_parent(
     runtime: &PageScriptHost,
     handle: DomHandle,
+    initiator_type: SubresourceRequestInitiatorType,
 ) -> bool {
-    runtime
-        .dom_host()
-        .node(handle)
-        .is_some_and(|node| !node.is_connected() && node.parent_node().is_some())
+    let dom = runtime.dom_host();
+    dom.node(handle).is_some_and(|node| {
+        !node.is_connected()
+            && node.parent_node().is_some_and(|parent| {
+                initiator_type == SubresourceRequestInitiatorType::Parser
+                    || !dom.is_html_element_named(handle, "img")
+                    || !dom.is_html_element_named(parent, "picture")
+            })
+    })
 }
 
 fn apply_lazy_image_update<'s>(
