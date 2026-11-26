@@ -353,17 +353,12 @@ body { margin: 0; background: white }
     position: absolute; left: 10.5px; top: 12.25px;
     box-sizing: border-box; width: 120px; height: 42px;
     border: 1.5px solid transparent; border-radius: 12px;
-}
-.ring {
     background: linear-gradient(white, white) padding-box,
                 linear-gradient(160deg, #2955ff, #ab50ff) border-box;
 }
-.foreground {
-    background: linear-gradient(white, white) border-box;
-    background-clip: padding-box;
-}
+.border-origin { top: 64.25px; background-origin: border-box }
 </style>
-<div class="frame ring"></div><div class="frame foreground"></div>"#;
+<div class="frame"></div><div class="frame border-origin"></div>"#;
     let fixture_url = format!(
         "data:text/html;charset=utf-8,{}",
         url::form_urlencoded::byte_serialize(html.as_bytes())
@@ -393,7 +388,7 @@ body { margin: 0; background: white }
             Some(&target.session_id),
             json!({
                 "width": 160,
-                "height": 80,
+                "height": 120,
                 "deviceScaleFactor": scale,
                 "mobile": false,
             }),
@@ -404,42 +399,44 @@ body { margin: 0; background: white }
         let (width, height, pixels) = decode_png(&png);
         assert_eq!(
             (width, height),
-            ((160.0 * scale) as u32, (80.0 * scale) as u32)
+            ((160.0 * scale) as u32, (120.0 * scale) as u32)
         );
 
         let left = (10.5 * scale).round() as i32;
-        let top = (12.25 * scale).round() as i32;
         let right = (130.5 * scale).round() as i32;
-        let bottom = (54.25 * scale).round() as i32;
         let center_x = (left + right) / 2;
-        let center_y = (top + bottom) / 2;
-        for (x, y, dx, dy) in [
-            (left, center_y, 1, 0),
-            (right - 1, center_y, -1, 0),
-            (center_x, top, 0, 1),
-            (center_x, bottom - 1, 0, -1),
-        ] {
-            let sample = |inset| {
-                pixel(
-                    &pixels,
-                    width,
-                    (x + dx * inset) as u32,
-                    (y + dy * inset) as u32,
-                )
-            };
-            assert_eq!(sample(-1), [255; 4], "outside ({x}, {y}), DPR {scale}");
-            for inset in 0..border_width {
-                let color = sample(inset);
-                assert!(
-                    color[1] < 100 && color[2] >= 254,
-                    "border ({x}, {y}) at inset {inset}, DPR {scale}: {color:?}"
+        for border_top in [12.25, 64.25] {
+            let top = (border_top * scale).round() as i32;
+            let bottom = ((border_top + 42.0) * scale).round() as i32;
+            let center_y = (top + bottom) / 2;
+            for (x, y, dx, dy) in [
+                (left, center_y, 1, 0),
+                (right - 1, center_y, -1, 0),
+                (center_x, top, 0, 1),
+                (center_x, bottom - 1, 0, -1),
+            ] {
+                let sample = |inset| {
+                    pixel(
+                        &pixels,
+                        width,
+                        (x + dx * inset) as u32,
+                        (y + dy * inset) as u32,
+                    )
+                };
+                assert_eq!(sample(-1), [255; 4], "outside ({x}, {y}), DPR {scale}");
+                for inset in 0..border_width {
+                    let color = sample(inset);
+                    assert!(
+                        color[1] < 100 && color[2] >= 254,
+                        "border ({x}, {y}) at inset {inset}, DPR {scale}: {color:?}"
+                    );
+                }
+                assert_eq!(
+                    sample(border_width),
+                    [255; 4],
+                    "inside ({x}, {y}), DPR {scale}"
                 );
             }
-            assert_eq!(
-                sample(border_width),
-                [255; 4],
-                "inside ({x}, {y}), DPR {scale}"
-            );
         }
     }
 
