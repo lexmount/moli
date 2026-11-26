@@ -700,8 +700,9 @@ impl StyloElementDataStore {
 
         let bucket = documents.entry(document).or_default();
         if let Some(data) = moved_data {
-            // Layout damage is tied to the publication in the previous world.
-            data.stylo.borrow_mut().damage = ServoRestyleDamage::empty();
+            // Matched rules and damage belong to the previous document's
+            // cascade and publication. Resolve the element in its new world.
+            *data.stylo.borrow_mut() = Default::default();
             data.path.set(None);
             bucket.data.insert(handle, data);
         }
