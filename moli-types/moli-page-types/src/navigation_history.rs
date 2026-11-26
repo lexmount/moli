@@ -69,6 +69,53 @@ pub struct NavigationHistoryEntrySeed {
     pub session_history: crate::SessionHistorySeed,
 }
 
+impl NavigationHistoryEntrySeed {
+    /// Retain a pending destination when its outgoing Document changes history.
+    pub fn rebase_pending_cross_document_navigation(
+        &mut self,
+        previous: &Self,
+        active: &Self,
+    ) -> bool {
+        let push = match self.session_history.commit {
+            crate::SessionHistoryCommit::Push => true,
+            crate::SessionHistoryCommit::Replace => false,
+            _ => return false,
+        };
+        let Some(activation) = self.activation.as_mut() else {
+            return false;
+        };
+        let Some(active_entry) = active
+            .entries
+            .iter()
+            .find(|entry| entry.history_index == active.current_index)
+        else {
+            return false;
+        };
+        let destination = &mut activation.entry;
+        if !push
+            && previous.entries.iter().any(|entry| {
+                entry.history_index == previous.current_index && entry.key == destination.key
+            })
+        {
+            destination.key = active_entry.key.clone();
+        }
+        destination.history_index = active_entry.history_index + u32::from(push);
+        destination.index = active_entry.index + u32::from(push);
+        if activation.from.is_some() {
+            activation.from = Some(active_entry.clone());
+        }
+        self.current_index = destination.history_index;
+        self.entries = active
+            .entries
+            .iter()
+            .filter(|entry| entry.history_index < destination.history_index)
+            .cloned()
+            .chain(std::iter::once(destination.clone()))
+            .collect();
+        true
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationActivationSeed {
     pub entry: NavigationHistorySerializedEntry,

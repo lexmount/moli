@@ -663,14 +663,15 @@ impl ChildBrowsingContextEntry {
             || self.pending_attribute_bootstrap_commit;
         let updates_outgoing_document = same_document_update
             && entry_seed.session_history.commit == moli_page_types::SessionHistoryCommit::Attach
+            && committed_current_document_id
+                != child_navigation_current_document_id(&self.navigation_entry_seed);
+        if updates_outgoing_document
             && self
                 .navigation_entry_seed
                 .session_history
                 .admitted_entry
                 .is_some()
-            && committed_current_document_id
-                != child_navigation_current_document_id(&self.navigation_entry_seed);
-        if updates_outgoing_document {
+        {
             // An accepted traversal owns the destination and activation. State
             // updates in the outgoing Document only refresh its retained entry;
             // they cannot replace the pending destination with the live cursor.
@@ -695,7 +696,17 @@ impl ChildBrowsingContextEntry {
                 }
             }
         } else {
-            self.navigation_entry_seed = entry_seed.clone();
+            let preserved_pending_destination = updates_outgoing_document
+                && self.has_pending_window_state()
+                && self
+                    .navigation_entry_seed
+                    .rebase_pending_cross_document_navigation(
+                        &self.committed_navigation_entry_seed,
+                        &entry_seed,
+                    );
+            if !preserved_pending_destination {
+                self.navigation_entry_seed = entry_seed.clone();
+            }
         }
         if same_document_update {
             self.committed_navigation_entry_seed = entry_seed;
