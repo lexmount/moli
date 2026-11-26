@@ -37,6 +37,45 @@ impl LinkAsDestination {
         )
     }
 
+    pub(crate) fn preload_type_matches(self, type_hint: Option<&str>) -> bool {
+        if !self.is_preload_destination() {
+            return false;
+        }
+        let type_hint = type_hint.unwrap_or_default();
+        // Fetch accepts arbitrary bytes. Only an actually empty hint bypasses
+        // MIME parsing for the other destinations; whitespace is not empty.
+        if self == Self::Fetch || type_hint.is_empty() {
+            return true;
+        }
+        let Some(essence) = moli_web_mime::mime_essence(type_hint) else {
+            return false;
+        };
+        match self {
+            Self::Script => moli_web_mime::is_javascript_mime_essence(&essence),
+            Self::Image => moli_image::supports_image_mime_essence(&essence),
+            // The font pipeline consumes SFNT (including collections), WOFF
+            // and WOFF2. Include their legacy font MIME types, but not EOT or
+            // arbitrary font/* subtypes merely because they are font MIME types.
+            Self::Font => matches!(
+                essence.as_str(),
+                "font/ttf"
+                    | "font/otf"
+                    | "font/sfnt"
+                    | "font/collection"
+                    | "font/woff"
+                    | "font/woff2"
+                    | "application/font-ttf"
+                    | "application/font-otf"
+                    | "application/font-sfnt"
+                    | "application/font-woff"
+                    | "application/vnd.ms-opentype"
+            ),
+            Self::Style => essence == "text/css",
+            Self::Track => essence == "text/vtt",
+            _ => false,
+        }
+    }
+
     pub(crate) fn reflected_value(self) -> &'static str {
         match self {
             Self::None => "",
