@@ -281,9 +281,9 @@ impl OverflowProjection {
             .map_rect(visual_overflow.union(geometry.border_box))
             .bounding_rect();
         let contribution = has_area(visual_bounds).then_some(visual_bounds);
-        // Positioned boxes contribute their transformed overflow. They have
-        // no normal-flow margin bounds for the parent to scroll to.
-        if child_box.style.is_out_of_flow() {
+        // Absolute and fixed boxes contribute their transformed overflow.
+        // Floats also contribute their untransformed margin bounds.
+        if child_box.style.is_absolute_positioned() || child_box.style.is_fixed_positioned() {
             return contribution;
         }
 
@@ -325,8 +325,8 @@ impl OverflowProjection {
                 .map_rect(margin_box)
                 .bounding_rect()
         };
-        // A scroller still includes its direct in-flow bounds. Empty bounds
-        // from other descendants do not propagate to ancestors.
+        // A scroller includes the layout bounds of its direct in-flow and
+        // floated children, even when those bounds have zero area.
         if scrolls_in_flow_bounds || has_area(margin_bounds) {
             return Some(contribution.map_or(margin_bounds, |bounds| bounds.union(margin_bounds)));
         }

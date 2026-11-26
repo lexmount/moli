@@ -159,6 +159,35 @@ async fn chromium_absolute_overflow_uses_transformed_bounds() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn chromium_float_overflow_keeps_untransformed_margin_bounds() {
+    run_page_vm_async_test(async move {
+        for (extra_style, scroll_width, right) in [
+            ("margin-right:50px", 350, 300),
+            ("transform:translateX(-100px)", 300, 200),
+        ] {
+            let mut page = page_with_size_fixture(&format!(
+                r#"<div id=scroller style="overflow:hidden;width:200px;height:100px">
+<div style="height:1px"></div>
+<div id=floated style="float:left;width:300px;height:20px;{extra_style}"></div>
+</div>"#,
+            ))?;
+            publish_size_layout(&mut page)?;
+            assert_eq!(
+                read_without_layout(
+                    &mut page,
+                    "[scroller.scrollWidth,floated.getBoundingClientRect().right]",
+                )?,
+                json!([scroll_width, right]),
+                "{extra_style}",
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("floats contribute their original margin bounds to the scroll range");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn chromium_reversed_flex_flow_keeps_physical_scroll_origins() {
     run_page_vm_async_test(async move {
         // Native-scrollbar geometry recorded by the live Chromium differential.
