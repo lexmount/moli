@@ -1061,6 +1061,7 @@ mod tests {
         owner: FrameDocumentTaskOwner,
     ) -> ChildBlockingStylesheetLoadCompletion {
         ChildBlockingStylesheetLoadCompletion {
+            render_blocking: false,
             csp_violations: Vec::new(),
             graph: Arc::new(
                 crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(true, Vec::new()),

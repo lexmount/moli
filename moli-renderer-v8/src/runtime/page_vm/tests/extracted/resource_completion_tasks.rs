@@ -207,6 +207,7 @@ async fn stale_child_stylesheet_graph_preserves_all_physical_output_without_docu
         queue.enqueue_local_for_test(RendererPageResourceCompletion::child_blocking_stylesheet(
             root_document,
             ChildBlockingStylesheetLoadCompletion {
+                render_blocking: false,
                 csp_violations: Vec::new(),
                 load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId(1),
                 child_handle,

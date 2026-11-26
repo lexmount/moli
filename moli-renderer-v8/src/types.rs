@@ -1383,6 +1383,7 @@ pub(super) struct ChildClassicScriptLoadCompletion {
 
 #[derive(Debug)]
 pub(super) struct ChildBlockingStylesheetLoadCompletion {
+    pub(super) render_blocking: bool,
     pub(super) child_handle: NativeNodeId,
     pub(super) owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     pub(super) signature: crate::DocumentBlockingStylesheetSignature,
