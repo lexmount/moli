@@ -40,3 +40,7 @@ pub use types::{
     StylesheetImportGraphFetchResult, StylesheetImportNetworkResult,
     StylesheetImportParsedResponse,
 };
+
+/// Captured publication route for one stylesheet request or import graph.
+pub type StylesheetCompletionPublisher =
+    std::sync::Arc<dyn Fn(StylesheetCompletion) + Send + Sync + 'static>;
