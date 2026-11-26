@@ -69,11 +69,11 @@ fn selection(page: &mut PageVm, control: &str) -> String {
 }
 
 fn character_point(page: &mut PageVm, control: &str, index: usize) -> (f64, f64) {
-    editor_point(page, control, EditorPoint::Character(index))
+    editor_point(page, control, EditorPoint::Character(index, 0.2))
 }
 
 enum EditorPoint {
-    Character(usize),
+    Character(usize, f32),
     AfterLine(usize),
 }
 
@@ -87,7 +87,7 @@ fn editor_point(page: &mut PageVm, control: &str, point: EditorPoint) -> (f64, f
                 .with_latest_layout_tree_for_document(host.document_handle(), |tree| {
                     let control_box = tree.source_output(control).unwrap().principal_box.unwrap();
                     let fragment = match point {
-                        EditorPoint::Character(index) => tree.fragments.iter().filter(|fragment| {
+                        EditorPoint::Character(index, _) => tree.fragments.iter().filter(|fragment| {
                             let moli_layout::LayoutFragmentKind::Text { box_id, .. } = fragment.kind else {
                                 return false;
                             };
@@ -104,7 +104,7 @@ fn editor_point(page: &mut PageVm, control: &str, point: EditorPoint) -> (f64, f
                         }),
                     }.unwrap();
                     let x = match point {
-                        EditorPoint::Character(_) => fragment.rect.x + fragment.rect.width * 0.2,
+                        EditorPoint::Character(_, fraction) => fragment.rect.x + fragment.rect.width * fraction,
                         EditorPoint::AfterLine(_) => fragment.rect.right() + 10.0,
                     };
                     let local = moli_layout::LayoutPoint::new(x, fragment.rect.y + fragment.rect.height * 0.5);
@@ -178,6 +178,32 @@ fn text_control_pointer_uses_editor_lines_and_password_value_offsets() {
 
         click(&mut page, bullet, 1, 0);
         assert_eq!(selection(&mut page, "secret"), "3:3:none");
+    });
+}
+
+#[test]
+fn text_control_pointer_caret_stays_outside_graphemes() {
+    run_page_vm_large_stack_async_test("text-control-pointer-graphemes", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = editor_page(&loader);
+        for (grapheme, offset) in [("e\u{0301}", 2), ("👩‍💻", 5)] {
+            let value = serde_json::to_string(&format!("{grapheme}X")).unwrap();
+            page.vm_mut().eval(&format!("field.value={value}")).unwrap();
+            let start = character_point(&mut page, "field", 0);
+            let end = editor_point(&mut page, "field", EditorPoint::Character(0, 0.8));
+            click(&mut page, start, 1, 0);
+            assert_eq!(selection(&mut page, "field"), "0:0:none");
+            click(&mut page, end, 1, 0);
+            assert_eq!(
+                selection(&mut page, "field"),
+                format!("{offset}:{offset}:none")
+            );
+            assert!(page.vm_mut().insert_text_into_active_control("!").unwrap());
+            assert_eq!(
+                page.vm_mut().eval("field.value").unwrap(),
+                format!("{grapheme}!X"),
+            );
+        }
     });
 }
 
@@ -276,5 +302,27 @@ fn text_control_keyboard_moves_by_grapheme_word_and_line() {
         assert_eq!(selection(&mut page, "area"), "7:7:none");
         key(&mut page, "End", Modifiers::SHIFT);
         assert_eq!(selected_value(&mut page, "area"), "longer words");
+    });
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn text_control_reversing_word_selection_returns_to_the_anchor() {
+    use moli_input::InputModifiers as Modifiers;
+    run_page_vm_large_stack_async_test("text-control-word-selection-anchor", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = editor_page(&loader);
+        page.vm_mut()
+            .eval("field.focus();field.value='alpha';field.setSelectionRange(2,2)")
+            .unwrap();
+        let modifiers = Modifiers::ALT | Modifiers::SHIFT;
+        key(&mut page, "ArrowLeft", modifiers);
+        assert_eq!(selection(&mut page, "field"), "0:2:backward");
+        key(&mut page, "ArrowRight", modifiers);
+        assert_eq!(selection(&mut page, "field"), "2:2:none");
+        key(&mut page, "ArrowRight", modifiers);
+        assert_eq!(selection(&mut page, "field"), "2:5:forward");
+        key(&mut page, "ArrowLeft", modifiers);
+        assert_eq!(selection(&mut page, "field"), "2:2:none");
     });
 }
