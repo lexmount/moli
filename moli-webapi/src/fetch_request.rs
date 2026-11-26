@@ -27,6 +27,21 @@ pub struct RequestRedirectModeWebIdl(pub RequestRedirectMode);
 #[webidl(name = "RequestPriority", parse_with = parse_request_priority_webidl)]
 pub struct RequestPriorityWebIdl(pub FetchPriorityHint);
 
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "RequestCache", parse_with = parse_request_cache_webidl)]
+pub struct RequestCacheWebIdl(pub &'static str);
+
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "ReferrerPolicy", parse_with = parse_referrer_policy_webidl)]
+pub struct ReferrerPolicyWebIdl(pub &'static str);
+
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "RequestDuplex")]
+pub enum RequestDuplexWebIdl {
+    #[webidl(token = "half")]
+    Half,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "RequestInit")]
 pub struct RequestInitMembers<'s> {
@@ -35,16 +50,21 @@ pub struct RequestInitMembers<'s> {
     pub body: Option<v8::Local<'s, v8::Value>>,
     #[webidl(with = request_init_signal_member)]
     pub signal: Option<Option<v8::Global<v8::Object>>>,
+    #[webidl(converter = "byte_string")]
     pub method: Option<String>,
-    pub cache: Option<String>,
+    #[webidl(converter = "enum")]
+    pub cache: Option<RequestCacheWebIdl>,
     #[webidl(converter = "enum")]
     pub mode: Option<RequestModeWebIdl>,
     #[webidl(converter = "enum")]
     pub redirect: Option<RequestRedirectModeWebIdl>,
+    #[webidl(converter = "usv_string")]
     pub referrer: Option<String>,
-    pub referrer_policy: Option<String>,
+    #[webidl(converter = "enum")]
+    pub referrer_policy: Option<ReferrerPolicyWebIdl>,
     pub integrity: Option<String>,
-    pub duplex: Option<String>,
+    #[webidl(converter = "enum")]
+    pub duplex: Option<RequestDuplexWebIdl>,
     #[webidl(with = request_init_headers_member)]
     pub headers: Option<Vec<(String, String)>>,
     #[webidl(name = "credentials", converter = "enum")]
@@ -52,6 +72,8 @@ pub struct RequestInitMembers<'s> {
     #[webidl(converter = "enum")]
     pub priority: Option<RequestPriorityWebIdl>,
     pub keepalive: Option<bool>,
+    #[webidl(name = "window", with = request_init_window_member)]
+    pub window_non_null: bool,
 }
 
 impl RequestInitMembers<'_> {
@@ -76,6 +98,20 @@ impl RequestInitMembers<'_> {
         // Explicit null is an init member but does not replace an input body.
         self.body.is_some_and(|body| !body.is_null_or_undefined())
     }
+}
+
+fn request_init_window_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    _key: &str,
+) -> Result<bool, webidl::WebIdlError> {
+    webidl::property_result(
+        scope,
+        object,
+        "window",
+        webidl::Context::member("RequestInit", "window"),
+    )
+    .map(|value| value.is_some_and(|value| !value.is_null_or_undefined()))
 }
 
 fn request_init_signal_member<'s>(
@@ -135,6 +171,33 @@ fn parse_request_priority_webidl(value: &str) -> Option<RequestPriorityWebIdl> {
     FetchPriorityHint::from_str(value)
         .ok()
         .map(RequestPriorityWebIdl)
+}
+
+fn parse_request_cache_webidl(value: &str) -> Option<RequestCacheWebIdl> {
+    Some(RequestCacheWebIdl(match value {
+        "default" => "default",
+        "no-store" => "no-store",
+        "reload" => "reload",
+        "no-cache" => "no-cache",
+        "force-cache" => "force-cache",
+        "only-if-cached" => "only-if-cached",
+        _ => return None,
+    }))
+}
+
+fn parse_referrer_policy_webidl(value: &str) -> Option<ReferrerPolicyWebIdl> {
+    Some(ReferrerPolicyWebIdl(match value {
+        "" => "",
+        "no-referrer" => "no-referrer",
+        "no-referrer-when-downgrade" => "no-referrer-when-downgrade",
+        "same-origin" => "same-origin",
+        "origin" => "origin",
+        "strict-origin" => "strict-origin",
+        "origin-when-cross-origin" => "origin-when-cross-origin",
+        "strict-origin-when-cross-origin" => "strict-origin-when-cross-origin",
+        "unsafe-url" => "unsafe-url",
+        _ => return None,
+    }))
 }
 
 #[cfg(test)]
