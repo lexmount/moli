@@ -5764,6 +5764,7 @@ dependencies = [
  "tokio",
  "tracing",
  "typed-num",
+ "unicode-segmentation",
  "url",
  "uuid",
  "v8",

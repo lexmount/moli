@@ -52,8 +52,7 @@ use crate::native_bridge::element::{
     perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
     perform_text_input, perform_wheel_scroll_default_action, replace_contenteditable_selection,
     replace_text_control_selection, select_contenteditable_contents,
-    text_control_set_selection_range_internal,
-    text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
+    text_control_set_selection_range_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
     CurrentInputEvent, CurrentInputEventScope, MouseReleaseFollowUp, PageScriptHost,
@@ -63,10 +62,7 @@ use crate::runtime::{
     RendererDragData, RendererInputDispatchOutcome, RendererInterceptedDrag,
     RendererPointerEventProperties, RendererTouchPoint, RendererWheelDispatchOutcome,
 };
-use crate::util::{
-    node_wrapper_from_handle, utf16_len, utf16_next_scalar_boundary,
-    utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, utf16_units,
-};
+use crate::util::{node_wrapper_from_handle, utf16_len};
 #[cfg(feature = "molio")]
 use crate::{host::EventTargetHandle, native_bridge::OwnerDispatchScope};
 
@@ -2006,7 +2002,8 @@ impl ScriptVm {
                                 runtime_ptr,
                                 target,
                                 position,
-                                modifiers & 8 != 0,
+                                click_count,
+                                moli_input::InputModifiers::from_bits(modifiers),
                             )?;
                         }
                     }
@@ -2184,7 +2181,7 @@ impl ScriptVm {
                         click_count.max(1),
                         modifiers,
                     );
-                    if click_count >= 2
+                    if click_count == 2
                         && let Some(event) = construct_mouse_event_with_detail_for_target(
                             scope,
                             runtime_ptr,
@@ -3296,93 +3293,14 @@ impl ScriptVm {
             }
 
             if target.is_text_control
-                && matches!(
-                    key_lower.as_str(),
-                    "arrowleft" | "left" | "arrowright" | "right" | "home" | "end"
-                )
-            {
-                let value_units = utf16_units(&text_control_value(runtime, handle));
-                let value_len = value_units.len() as u32;
-                let (start, end, direction) = current_selection_state(runtime, handle);
-                let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
-                let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
-                if shift {
-                    let (anchor, focus) = match direction.as_str() {
-                        "backward" => (end, start),
-                        "forward" => (start, end),
-                        _ => (end, end),
-                    };
-                    let next_focus = match key_lower.as_str() {
-                        "arrowleft" | "left" => {
-                            utf16_previous_scalar_boundary(&value_units, focus as usize) as u32
-                        }
-                        "arrowright" | "right" => {
-                            utf16_next_scalar_boundary(&value_units, focus as usize) as u32
-                        }
-                        "home" => 0,
-                        "end" => value_len,
-                        _ => focus,
-                    };
-                    if next_focus == focus
-                        && matches!(
-                            key_lower.as_str(),
-                            "arrowleft" | "left" | "arrowright" | "right"
-                        )
-                    {
-                        return Ok(input_dispatch_outcome(true));
-                    }
-                    let (next_start, next_end, next_direction) = if next_focus < anchor {
-                        (next_focus, anchor, "backward")
-                    } else if next_focus > anchor {
-                        (anchor, next_focus, "forward")
-                    } else {
-                        (anchor, anchor, "none")
-                    };
-                    let _ = text_control_set_selection_range_with_direction_internal(
-                        scope,
-                        runtime_ptr,
-                        handle,
-                        next_start,
-                        next_end,
-                        next_direction,
-                    );
-                    return Ok(input_dispatch_outcome(true));
-                }
-                let caret = match key_lower.as_str() {
-                    "arrowleft" | "left" => {
-                        if start != end {
-                            start
-                        } else {
-                            utf16_previous_scalar_boundary(&value_units, start as usize) as u32
-                        }
-                    }
-                    "arrowright" | "right" => {
-                        if start != end {
-                            end
-                        } else {
-                            utf16_next_scalar_boundary(&value_units, end as usize) as u32
-                        }
-                    }
-                    "home" => 0,
-                    "end" => value_len,
-                    _ => end,
-                };
-                if start == end
-                    && caret == start
-                    && matches!(
-                        key_lower.as_str(),
-                        "arrowleft" | "left" | "arrowright" | "right"
-                    )
-                {
-                    return Ok(input_dispatch_outcome(true));
-                }
-                let _ = text_control_set_selection_range_internal(
+                && text_control_selection::move_text_control_selection(
                     scope,
                     runtime_ptr,
                     handle,
-                    caret,
-                    caret,
-                );
+                    &key_lower,
+                    moli_input::InputModifiers::from_bits(modifiers),
+                )
+            {
                 return Ok(input_dispatch_outcome(true));
             }
 

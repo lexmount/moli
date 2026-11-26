@@ -6,7 +6,7 @@ edition = "2024"
 
 [features]
 default = ["devtools"]
-devtools = ["moli-command-types/devtools", "dep:moli-protocol-cdp"]
+devtools = ["moli-command-types/devtools", "dep:moli-protocol-cdp", "dep:unicode-segmentation"]
 media-ext = ["dep:moli-video", "moli-video?/media-ext", "moli-webapi/media-ext"]
 # Desktop viewport streaming and native editing use the existing input dispatch.
 molio = ["devtools", "moli-layout/molio"]
@@ -132,6 +132,7 @@ strum = { version = "0.28.0", features = ["derive"] }
 # I/O drivers and leak an eventpoll/eventfd pair per closed target on Linux.
 tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.41"
+unicode-segmentation = { version = "1.13.2", optional = true }
 url = "2.5.7"
 idna = "1.0"
 uuid = { version = "1.23.1", default-features = false }

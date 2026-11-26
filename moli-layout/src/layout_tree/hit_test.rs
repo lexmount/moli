@@ -92,6 +92,14 @@ pub struct LayoutCaretPosition<N> {
     pub ancestor_boxes: Vec<(N, LayoutBoxModel)>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayoutTextControlCaret {
+    /// The nearest UTF-16 boundary for inserting text.
+    pub offset: usize,
+    /// The UTF-16 start of the hit character cluster, for selecting its word.
+    pub cluster_start: usize,
+}
+
 impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -322,7 +330,11 @@ where
 
     /// Finds a UTF-16 value boundary using the control's own lines, including
     /// when a selection gesture has left the control's border box.
-    pub fn text_control_caret_offset(&self, source: N, point: LayoutPoint) -> Option<usize> {
+    pub fn text_control_caret(
+        &self,
+        source: N,
+        point: LayoutPoint,
+    ) -> Option<LayoutTextControlCaret> {
         let control = self
             .boxes
             .iter()
@@ -374,7 +386,13 @@ where
         Some(
             nearest_cluster
                 .and_then(|fragment| text_fragment_caret(fragment, local_point.x))
-                .map_or(line_start as usize, |(offset, _)| offset),
+                .map_or(
+                    LayoutTextControlCaret {
+                        offset: line_start as usize,
+                        cluster_start: line_start as usize,
+                    },
+                    |(caret, _)| caret,
+                ),
         )
     }
 
@@ -420,10 +438,10 @@ where
         };
         let local_to_viewport = self.local_to_viewport(entry.coordinate_space)?;
         let local_point = local_to_viewport.inverse()?.map_point(viewport_point);
-        let (offset, caret_x) = text_fragment_caret(fragment, local_point.x)?;
+        let (caret, caret_x) = text_fragment_caret(fragment, local_point.x)?;
         Some(LayoutCaretPosition {
             source: entry.source,
-            utf16_offset: Some(offset),
+            utf16_offset: Some(caret.offset),
             rect: local_to_viewport.map_rect(LayoutRect::new(
                 caret_x,
                 fragment.rect.y,
@@ -581,7 +599,7 @@ fn distance_to_interval(value: f32, start: f32, end: f32) -> f32 {
     (value - value.clamp(start, end)).abs()
 }
 
-fn text_fragment_caret(fragment: &LayoutFragment, x: f32) -> Option<(usize, f32)> {
+fn text_fragment_caret(fragment: &LayoutFragment, x: f32) -> Option<(LayoutTextControlCaret, f32)> {
     let LayoutFragmentKind::Text {
         source_utf16_range,
         rtl,
@@ -601,7 +619,13 @@ fn text_fragment_caret(fragment: &LayoutFragment, x: f32) -> Option<(usize, f32)
     } else {
         fragment.rect.right()
     };
-    Some((offset, caret_x))
+    Some((
+        LayoutTextControlCaret {
+            offset,
+            cluster_start: source_utf16_range.start,
+        },
+        caret_x,
+    ))
 }
 
 /// Scratch for exactly one viewport point. Shared clip ancestors are checked
