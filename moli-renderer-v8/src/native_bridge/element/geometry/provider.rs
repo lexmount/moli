@@ -33,7 +33,7 @@ pub(crate) fn observable_geometry_query(
     document: DomHandle,
     query: &LayoutQuery<DomHandle>,
 ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
-    runtime.ensure_observable_layout()?;
+    ensure_geometry_layout(runtime, std::slice::from_ref(query))?;
     published_geometry_query(runtime, document, query)
 }
 
@@ -55,8 +55,42 @@ pub(crate) fn observable_geometry_batch(
     document: DomHandle,
     batch: &LayoutQueryBatch<DomHandle>,
 ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-    runtime.ensure_observable_layout()?;
+    ensure_geometry_layout(runtime, &batch.queries)?;
     published_geometry_batch(runtime, document, batch)
+}
+
+fn ensure_geometry_layout(
+    runtime: &PageScriptHost,
+    queries: &[LayoutQuery<DomHandle>],
+) -> Result<(), LayoutError> {
+    let needs_svg_geometry = runtime.layout_policy().is_realtime()
+        && queries
+            .iter()
+            .any(|query| query_needs_svg_geometry(runtime, query));
+    runtime.ensure_observable_layout_with_svg(needs_svg_geometry)
+}
+
+fn query_needs_svg_geometry(runtime: &PageScriptHost, query: &LayoutQuery<DomHandle>) -> bool {
+    let mut node = match *query {
+        LayoutQuery::ClientRects { source }
+        | LayoutQuery::ContentQuads { source }
+        | LayoutQuery::ScrollIntoViewGeometry { source } => source,
+        LayoutQuery::IntersectionGeometry { target, .. } => target,
+        _ => return false,
+    };
+    let dom = runtime.dom_host().dom();
+    // The outer SVG contributes its CSS box. Only its descendants can
+    // contribute object quads from the decoded scene.
+    while let Some(parent) = dom.parent_node(node) {
+        if dom
+            .element(parent)
+            .is_some_and(|element| element.is_svg_element("svg"))
+        {
+            return true;
+        }
+        node = parent;
+    }
+    false
 }
 
 /// Style and observer sampling never initializes layout as a side effect.

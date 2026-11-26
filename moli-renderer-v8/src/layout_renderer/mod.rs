@@ -169,6 +169,7 @@ fn build_native_layout_pass_recursive(
             include_backgrounds: request.includes_backgrounds(),
             environment_override,
             frame_coverage: request.frame_coverage(),
+            defer_svg_geometry: request.defers_svg_geometry(),
             retain_scroll_projection: request.retains_scroll_projection(),
             retain_screen_paint: request.retains_screen_paint(),
             document_stack,
@@ -275,6 +276,7 @@ struct NativeEmbeddedFrameRenderer<'a> {
     include_backgrounds: bool,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     frame_coverage: moli_layout::LayoutFrameCoverage,
+    defer_svg_geometry: bool,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
     document_stack: &'a mut Vec<DomHandle>,
@@ -329,6 +331,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             LayoutPassRequest::new(viewport, self.reason)
         }
         .with_frame_coverage(self.frame_coverage)
+        .with_deferred_svg_geometry(self.defer_svg_geometry)
         .with_scroll_projection(self.retain_scroll_projection)
         .with_screen_paint(
             self.retain_screen_paint && viewport.css_width > 0 && viewport.css_height > 0,

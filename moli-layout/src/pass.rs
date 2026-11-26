@@ -96,6 +96,7 @@ pub struct LayoutPassRequest {
     pub reason: LayoutFlushReason,
     environment: crate::LayoutEnvironment,
     paint_capture: Option<PaintCaptureRequest>,
+    defer_svg_geometry: bool,
     frame_coverage: LayoutFrameCoverage,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
@@ -111,6 +112,7 @@ impl LayoutPassRequest {
                 scrollbars_hidden: false,
             },
             paint_capture: None,
+            defer_svg_geometry: false,
             frame_coverage: LayoutFrameCoverage::PositiveViewport,
             retain_scroll_projection: false,
             retain_screen_paint: false,
@@ -148,6 +150,16 @@ impl LayoutPassRequest {
 
     pub const fn frame_coverage(self) -> LayoutFrameCoverage {
         self.frame_coverage
+    }
+
+    /// Defers SVG descendant geometry when only CSS boxes are needed.
+    pub const fn with_deferred_svg_geometry(mut self, defer: bool) -> Self {
+        self.defer_svg_geometry = defer;
+        self
+    }
+
+    pub const fn defers_svg_geometry(self) -> bool {
+        self.defer_svg_geometry && !self.requests_paint() && !self.retains_screen_paint()
     }
 
     /// Retains box placement inputs needed to update screen geometry after scrolling.
@@ -715,7 +727,8 @@ where
         numeric_metrics,
     } = measured;
     let phase_started = Instant::now();
-    let object_geometry = prepare_svg_content(&mut world, source);
+    let (object_geometry, mut svg_geometry_deferred) =
+        prepare_svg_content(&mut world, source, request.defers_svg_geometry());
     let numeric_layout_elapsed = numeric_layout_elapsed + phase_started.elapsed();
     let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();
@@ -753,11 +766,12 @@ where
             request.viewport.device_pixel_ratio,
         );
         if let Some(snapshot) = frames.render_embedded_frame(source, viewport)? {
+            svg_geometry_deferred |= snapshot.tree.svg_geometry_deferred();
             embedded_frames.insert(crate::LayoutBoxId::from_index(index), (source, snapshot));
         }
     }
     let embedded_frame_elapsed = phase_started.elapsed();
-    finish_layout_pass(
+    let mut result = finish_layout_pass(
         world,
         source,
         request.viewport,
@@ -791,13 +805,16 @@ where
             retained_numeric_layout_hits: numeric_metrics.retained_layout_hits,
             retained_numeric_tree: numeric_metrics.reused_tree,
         },
-    )
+    )?;
+    result.tree.svg_geometry_deferred = svg_geometry_deferred;
+    Ok(result)
 }
 
 fn prepare_svg_content<S: LayoutSource>(
     world: &mut crate::LayoutWorld<S::NodeId>,
     source: &S,
-) -> Vec<crate::LayoutObjectGeometry<S::NodeId>> {
+    defer: bool,
+) -> (Vec<crate::LayoutObjectGeometry<S::NodeId>>, bool) {
     let mut objects = Vec::new();
     for (index, layout_box) in world.boxes.iter_mut().enumerate() {
         if !layout_box
@@ -809,6 +826,9 @@ fn prepare_svg_content<S: LayoutSource>(
         let Some(node) = layout_box.source() else {
             continue;
         };
+        if defer {
+            return (objects, true);
+        }
         let layout = layout_box.final_layout;
         let zoom = layout_box.style.effective_zoom();
         let viewport = crate::LayoutSize::new(
@@ -840,7 +860,7 @@ fn prepare_svg_content<S: LayoutSource>(
             }));
         }
     }
-    objects
+    (objects, false)
 }
 
 /// Resolves `overflow:auto` with a monotonic browser-style feedback loop.
