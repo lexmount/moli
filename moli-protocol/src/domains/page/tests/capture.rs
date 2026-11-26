@@ -1212,7 +1212,7 @@ async fn blurred_vision_uses_the_full_raster_scale_and_clip_neighborhood() {
     let fixture = screenshot_data_url(
         r#"<!doctype html>
         <style>
-          html, body { margin: 0; background: black; overflow: hidden }
+          html, body { margin: 0; background: #060707; overflow: hidden }
           div { position: absolute; width: 100px; height: 200px; background: white }
         </style><div></div>"#,
     );
@@ -1253,7 +1253,7 @@ async fn blurred_vision_uses_the_full_raster_scale_and_clip_neighborhood() {
     let boundary = decode_png_pixel(viewport, 200, 200);
     assert!(boundary[0] > 0 && boundary[0] < 255, "{boundary:?}");
     assert_eq!(decode_png_pixel(half_clip, 0, 200), boundary);
-    assert_eq!(decode_png_pixel(half_clip, 199, 200), [0, 0, 0, 255]);
+    assert_eq!(decode_png_pixel(half_clip, 199, 200), [6, 7, 7, 255]);
 
     ctx.process_async(json!({
         "id": 155, "sessionId": session, "method": "Emulation.setDeviceMetricsOverride",
