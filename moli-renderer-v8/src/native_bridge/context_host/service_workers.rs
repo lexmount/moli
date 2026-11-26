@@ -276,6 +276,15 @@ impl PageScriptHost {
         })
     }
 
+    pub(crate) fn service_worker_local_window_id(&self, scope: OwnerDispatchScope) -> Option<u64> {
+        Some(match self.current_window_execution_context_owner(scope)? {
+            super::WindowExecutionContextOwner::Frame(id) => id.0,
+            super::WindowExecutionContextOwner::LightweightPopup {
+                local_window_id, ..
+            } => local_window_id.as_u64(),
+        })
+    }
+
     pub(crate) fn service_worker_window_request_context(
         &mut self,
         dispatch_scope: OwnerDispatchScope,

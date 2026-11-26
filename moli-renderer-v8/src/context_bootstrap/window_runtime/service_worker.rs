@@ -30,6 +30,7 @@ const SERVICE_WORKER_NAVIGATION_PRELOAD_MANAGER_SCOPE_SLOT: &str =
     "__moliServiceWorkerNavigationPreloadManagerScope";
 const SERVICE_WORKER_WORKER_REGISTRATION_SLOT: &str = "__moliServiceWorkerWorkerRegistration";
 const SERVICE_WORKER_WORKER_VERSION_ID_SLOT: &str = "__moliServiceWorkerVersionId";
+const SERVICE_WORKER_LOCAL_WINDOW_ID_SLOT: &str = "__moliServiceWorkerLocalWindowId";
 const SERVICE_WORKER_CONTAINER_ONMESSAGE_SLOT: &str = "__moliServiceWorkerContainerOnmessage";
 const SERVICE_WORKER_CONTAINER_ONMESSAGEERROR_SLOT: &str =
     "__moliServiceWorkerContainerOnmessageerror";
@@ -2667,11 +2668,27 @@ fn service_worker_post_message_callback<'s>(
     ) else {
         return;
     };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let owner = service_worker_worker_owner_scope(scope, args.this());
+    let host = context_host_ptr_from_global_bridge(scope).map(|host| unsafe { &mut *host });
+    let receiver_window_id =
+        get_private_value(scope, args.this(), SERVICE_WORKER_LOCAL_WINDOW_ID_SLOT)
+            .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+            .and_then(|value| {
+                let (id, lossless) = value.u64_value();
+                lossless.then_some(id)
+            });
+    let Some(host) = host.filter(|host| {
+        receiver_window_id.is_some()
+            && host.service_worker_local_window_id(owner) == receiver_window_id
+    }) else {
+        webidl::throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            "The ServiceWorker's Document is no longer active.",
+        );
         return;
     };
-    let owner = service_worker_worker_owner_scope(scope, args.this());
-    let _ = unsafe { &*host_ptr }.dispatch_service_worker_message(version_id, owner, payload);
+    let _ = host.dispatch_service_worker_message(version_id, owner, payload);
 }
 
 fn service_worker_worker_set_state<'s>(
@@ -2704,6 +2721,21 @@ pub(in crate::context_bootstrap) fn service_worker_object_set_owner_scope<'s>(
 ) {
     let owner_token = service_worker_owner_token_value(scope, owner);
     set_private_value(scope, object, SERVICE_WORKER_OWNER_TOKEN_SLOT, owner_token);
+    // Lightweight popups can share the creator's V8 context. Keep the native
+    // LocalWindow identity on the wrapper throughout its lifetime.
+    if get_private_value(scope, object, SERVICE_WORKER_LOCAL_WINDOW_ID_SLOT)
+        .is_none_or(|value| value.is_undefined())
+        && let Some(window_id) = context_host_ptr_from_global_bridge(scope)
+            .and_then(|host| unsafe { &*host }.service_worker_local_window_id(owner))
+    {
+        let window_id = v8::BigInt::new_from_u64(scope, window_id);
+        set_private_value(
+            scope,
+            object,
+            SERVICE_WORKER_LOCAL_WINDOW_ID_SLOT,
+            window_id.into(),
+        );
+    }
 }
 
 fn service_worker_worker_set_owner_scope<'s>(
