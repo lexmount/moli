@@ -205,7 +205,7 @@ impl ScriptVm {
                 activity?
             }
             Err(error) => {
-                let activity = self.resolve_pending_subresource_fetch_body(
+                let activity = self.resolve_pending_subresource_fetch_completion(
                     pending,
                     request_url,
                     request_method,
@@ -215,7 +215,7 @@ impl ScriptVm {
                     skip_fetch_security_validation,
                     response_filter,
                     network_error_text,
-                    Err(error),
+                    AsyncSubresourceFetchResult::Failure(error),
                 );
                 trace_async_subresource_stage(
                     "async_subresource_complete_running_done",
@@ -1845,6 +1845,7 @@ impl ScriptVm {
                                 ),
                             );
                         }
+                        let request_origin = streaming.pending.request_origin();
                         if let PendingSubresourceContinuation::Xhr { xhr, initiator_url, .. } =
                             streaming.pending.continuation
                             && let Some(response_body) = xhr_delivery_body
@@ -1874,7 +1875,7 @@ impl ScriptVm {
                             {
                                 observable_head.headers =
                                     crate::network_host::filter_cors_exposed_response_headers(
-                                        &streaming.pending.request_origin,
+                                        &request_origin,
                                         &observable_head,
                                         streaming.pending.credentials_mode,
                                         streaming.pending.load.request_client().web_security_disabled(),

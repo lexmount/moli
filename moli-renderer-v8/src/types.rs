@@ -95,7 +95,8 @@ pub(super) enum PendingSubresourceContinuation {
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     },
     EventSource(v8::Global<v8::Object>),
-    Fetch(PendingWindowFetchContinuation),
+    Fetch(Box<PendingWindowFetchContinuation>),
+
     Image {
         image_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::ImageLoadEventId,
@@ -119,7 +120,7 @@ pub(super) enum PendingSubresourceContinuation {
         use_cors_preflight: bool,
         initiator_url: String,
     },
-    WebSocket(#[cfg(any(test, feature = "devtools"))] PendingWebSocketConnection),
+    WebSocket(#[cfg(any(test, feature = "devtools"))] Box<PendingWebSocketConnection>),
     /// A child frame navigation held before its request leaves the renderer.
     ChildDocument(Box<crate::native_bridge::ChildDocumentFetch>),
 }
@@ -570,6 +571,10 @@ pub(super) struct PendingSubresourceFetchState {
 }
 
 impl PendingSubresourceFetchState {
+    pub(super) fn request_origin(&self) -> moli_url::WebOrigin {
+        self.request_origin.clone()
+    }
+
     pub(super) fn detach_keepalive_window_fetch(&mut self) -> bool {
         let PendingSubresourceExecutionContext::WindowFetch(context) = &self.execution_context
         else {
