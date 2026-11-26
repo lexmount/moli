@@ -163,8 +163,8 @@ impl QueryElement<'_> {
         } else if element.namespace() == HTML_NAMESPACE {
             append_html_direction_declaration(*self, &mut block);
             append_html_text_alignment_declaration(*self, &mut block);
-            if element.local_name() == "object" {
-                append_html_object_dimension_declarations(element, &mut block);
+            if matches!(element.local_name(), "object" | "iframe") {
+                append_html_embedded_dimension_declarations(element, &mut block);
             }
             if element.local_name() == "iframe"
                 && let Some(value) = element.attribute_ns("", "frameborder")
@@ -715,7 +715,7 @@ fn append_html_table_cell_padding_declarations(
     }
 }
 
-fn append_html_object_dimension_declarations(
+fn append_html_embedded_dimension_declarations(
     element: &Element,
     block: &mut PropertyDeclarationBlock,
 ) {
