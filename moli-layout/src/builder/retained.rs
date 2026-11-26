@@ -60,6 +60,17 @@ pub(crate) fn can_retain_root<N: Copy + std::fmt::Debug + Eq + std::hash::Hash>(
         && can_refresh_box(root)
 }
 
+fn table_semantics_changed<S: LayoutSource>(
+    source: &S,
+    node: S::NodeId,
+    layout_box: &crate::LayoutBox<S::NodeId>,
+) -> bool {
+    layout_box.element_semantics().is_some_and(|previous| {
+        matches!(previous.category, LayoutElementCategory::Table(_))
+            && source.element_semantics(node).as_ref() != Some(previous)
+    })
+}
+
 struct RetainedBoxes<N> {
     sources: HashMap<N, LayoutBoxId>,
     css_image_sources: HashSet<N>,
@@ -155,6 +166,7 @@ where
         || source.quirks_mode() != world.quirks_mode
         || source.disables_viewport_user_scrolling()
             != world.viewport_scroll_policy.disables_user_scrolling()
+        || table_semantics_changed(source, root_source, root_box)
         || !styles.can_reuse_element_style(root_source, &root_box.style)
     {
         return Ok(None);
@@ -314,18 +326,20 @@ where
                         retained.pruned_sources = true;
                         continue;
                     }
+                    let table_changed = table_semantics_changed(self.source, child, old);
                     let source_kind = self.source.node_kind(child);
-                    let current = match source_kind {
-                        LayoutSourceKind::Element => {
-                            self.styles.can_reuse_element_style(child, &old.style)
-                        }
-                        LayoutSourceKind::Text => {
-                            (!restyled || refreshed_text_style.is_some())
-                                && old.kind == LayoutBoxKind::Text
-                                && self.source.text(child) == old.text.as_deref()
-                        }
-                        _ => false,
-                    };
+                    let current = !table_changed
+                        && match source_kind {
+                            LayoutSourceKind::Element => {
+                                self.styles.can_reuse_element_style(child, &old.style)
+                            }
+                            LayoutSourceKind::Text => {
+                                (!restyled || refreshed_text_style.is_some())
+                                    && old.kind == LayoutBoxKind::Text
+                                    && self.source.text(child) == old.text.as_deref()
+                            }
+                            _ => false,
+                        };
                     if current {
                         if source_kind == LayoutSourceKind::Text
                             && let Some(style) = &refreshed_text_style
@@ -343,7 +357,8 @@ where
                         )?;
                         continue;
                     }
-                    if !old.children.is_empty()
+                    if !table_changed
+                        && !old.children.is_empty()
                         && self.restyle_existing_container(world, previous, child)?
                     {
                         retained.rebuilt_in_place.insert(previous);

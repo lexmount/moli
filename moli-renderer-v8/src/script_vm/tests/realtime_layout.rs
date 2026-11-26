@@ -589,6 +589,54 @@ fn realtime_retains_stable_grid_and_table_box_branches() {
 }
 
 #[test]
+fn realtime_table_span_edits_match_fresh_geometry() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;overflow:hidden}",
+        "table{border-spacing:0;width:240px}td{width:80px;height:24px;padding:0}</style>",
+        "<table><tr><td id=wide></td><td id=next></td></tr>",
+        "<tr><td></td><td></td><td></td></tr></table>",
+        "<table><tr><td id=tall><span></span></td><td></td></tr>",
+        "<tr><td id=below></td></tr></table>",
+    ));
+    let sample =
+        "JSON.stringify([wide.offsetWidth,next.offsetLeft,tall.offsetHeight,below.offsetLeft])";
+    assert_eq!(vm.eval(sample).unwrap(), "[80,80,24,0]");
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+
+    for (edit, expected) in [
+        ("wide.colSpan=2", "[160,160,24,0]"),
+        ("tall.rowSpan=2", "[160,160,48,120]"),
+        ("wide.removeAttribute('colspan')", "[80,80,48,120]"),
+        ("tall.setAttribute('rowspan','1')", "[80,80,24,0]"),
+    ] {
+        assert_eq!(vm.eval(&format!("{edit};{sample}")).unwrap(), expected);
+        let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+        assert!(!metrics.retained_numeric_tree, "{edit}: {metrics:?}");
+        let host = host.borrow();
+        let fresh = host
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::new(viewport, moli_layout::LayoutFlushReason::Test),
+            )
+            .unwrap()
+            .unwrap();
+        for id in ["wide", "next", "tall", "below"] {
+            let node = vm.document_runtime.get_element_by_id(id).unwrap();
+            let retained = host.with_latest_layout_tree_for_document(document, |tree| {
+                tree.client_rects_for_source(node)
+            });
+            assert_eq!(
+                retained.unwrap(),
+                fresh.client_rects_for_source(node),
+                "{edit} {id}"
+            );
+        }
+    }
+}
+
+#[test]
 fn realtime_retained_inline_roles_match_fresh_geometry_and_paint() {
     let mut vm = realtime_vm(concat!(
         "<!doctype html><style>body{margin:0}p{margin:0;width:180px}",
