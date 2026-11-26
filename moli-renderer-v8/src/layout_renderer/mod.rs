@@ -4,9 +4,10 @@ mod screen_styles;
 #[cfg(test)]
 pub(crate) use inline_svg::parse_count as svg_parse_count;
 #[cfg(feature = "devtools")]
-pub(crate) use inline_svg::{SvgGeometry, prepare_svg_paint};
+pub(crate) use inline_svg::prepare_svg_paint;
 pub(crate) use inline_svg::{
-    decode_geometry as decode_frozen_svg_geometry, pending_svg_geometry, prepare_svg_geometry,
+    SvgGeometry, decode_geometry as decode_frozen_svg_geometry, pending_svg_geometry,
+    prepare_svg_geometry,
 };
 pub(crate) use screen_styles::screen_targets_allow_layout_reuse;
 mod source_view;
@@ -275,10 +276,7 @@ fn build_native_layout_pass_recursive(
                     paint: Some(&svg_image),
                 },
             )?;
-            let geometry = paint_geometry.into_inner();
-            if !geometry.is_empty() {
-                pass.tree.append_svg_geometry(root, geometry)?;
-            }
+            pass.record_painted_svg_geometry(paint_geometry.into_inner());
             Ok(pass)
         };
         if services.has_stylesheet_web_fonts() {

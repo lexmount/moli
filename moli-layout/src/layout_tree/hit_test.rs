@@ -614,7 +614,6 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            Vec::new(),
             FrozenCoordinateSpace {
                 owner: None,
                 local_to_viewport: LayoutTransform2D::IDENTITY,

@@ -8,7 +8,10 @@ use moli_layout::{
 
 use super::client_rect::{ClientRect, union_client_rect, zero_client_rect};
 use super::mock::{answer_queries as answer_mock_queries, answer_query as answer_mock_query};
-use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
+use crate::{
+    document_runtime::DomHandle,
+    native_bridge::{LayoutQueryMode, PageScriptHost},
+};
 
 fn query_source(
     runtime: &PageScriptHost,
@@ -33,18 +36,17 @@ pub(crate) fn observable_geometry_query(
     document: DomHandle,
     query: &LayoutQuery<DomHandle>,
 ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
-    ensure_geometry_layout(runtime, document, std::slice::from_ref(query))?;
-    published_geometry_query(runtime, document, query)
+    geometry_query(runtime, document, query, LayoutQueryMode::Observable)
 }
 
-/// Style sampling never initializes layout as a side effect.
-fn published_geometry_query(
+fn geometry_query(
     runtime: &PageScriptHost,
     document: DomHandle,
     query: &LayoutQuery<DomHandle>,
+    mode: LayoutQueryMode,
 ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
     if runtime.layout_policy().uses_real_layout() {
-        runtime.answer_layout_query_for_document(document, query)
+        runtime.answer_layout_query_for_document(document, query, mode)
     } else {
         Ok(answer_mock_query(runtime, document, query))
     }
@@ -55,20 +57,7 @@ pub(crate) fn observable_geometry_batch(
     document: DomHandle,
     batch: &LayoutQueryBatch<DomHandle>,
 ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-    ensure_geometry_layout(runtime, document, &batch.queries)?;
-    published_geometry_batch(runtime, document, batch)
-}
-
-fn ensure_geometry_layout(
-    runtime: &PageScriptHost,
-    document: DomHandle,
-    queries: &[LayoutQuery<DomHandle>],
-) -> Result<(), LayoutError> {
-    runtime.ensure_observable_layout()?;
-    if runtime.layout_policy().is_realtime() {
-        runtime.prepare_svg_query_geometry(document, queries)?;
-    }
-    Ok(())
+    geometry_batch(runtime, document, batch, LayoutQueryMode::Observable)
 }
 
 /// Style and observer sampling never initializes layout as a side effect.
@@ -77,8 +66,17 @@ pub(crate) fn published_geometry_batch(
     document: DomHandle,
     batch: &LayoutQueryBatch<DomHandle>,
 ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
+    geometry_batch(runtime, document, batch, LayoutQueryMode::Published)
+}
+
+fn geometry_batch(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    batch: &LayoutQueryBatch<DomHandle>,
+    mode: LayoutQueryMode,
+) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
     if runtime.layout_policy().uses_real_layout() {
-        runtime.answer_layout_for_document(document, batch)
+        runtime.answer_layout_for_document(document, batch, mode)
     } else {
         Ok(answer_mock_queries(
             runtime,
@@ -253,10 +251,11 @@ pub(crate) fn observable_used_grid_tracks(
     let Some(document) = runtime.layout_document_for_source(source) else {
         return Ok(None);
     };
-    let answer = match published_geometry_query(
+    let answer = match geometry_query(
         runtime,
         document,
         &LayoutQuery::UsedGridTracks { source },
+        LayoutQueryMode::Published,
     ) {
         Ok(answer) => answer,
         Err(LayoutError::NoLayoutSnapshot) => return Ok(None),

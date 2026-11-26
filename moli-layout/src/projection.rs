@@ -253,7 +253,6 @@ where
     let mut tree = projection.into_frozen_tree(
         source.root(),
         content_size,
-        Vec::new(),
         embedded_frames,
         scroll_projection,
     );
@@ -273,8 +272,8 @@ where
         if paint.is_none() {
             world.release_paint_storage();
         } else {
-            // Only layout-produced images, such as inline SVG, belong to
-            // the retained tree. Live inputs are sampled for each paint.
+            // Replaced images with live inputs are sampled during paint.
+            // Inline SVG scenes belong to the paint resource cache.
             for layout_box in &mut world.boxes {
                 if layout_box.source.is_some()
                     && layout_box
@@ -365,13 +364,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
             let size = projection.document_content_size();
             let metadata = include_paint.then(|| std::mem::take(&mut projection.paint_metadata));
             let diagnostics = include_paint.then(|| projection.diagnostics.clone());
-            let mut tree = projection.into_frozen_tree(
-                old.source_root(),
-                size,
-                Vec::new(),
-                Vec::new(),
-                scroll,
-            );
+            let mut tree = projection.into_frozen_tree(old.source_root(), size, Vec::new(), scroll);
             tree.svg_viewports.clone_from(&old.svg_viewports);
             tree.clear_inline_svg_geometry();
             tree.refresh_scroll_projection(scroll_offset).ok()?;
@@ -1518,7 +1511,6 @@ where
         self,
         source_root: N,
         content_size: LayoutSize,
-        object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
         embedded_frames: Vec<crate::FrozenEmbeddedFrame<N>>,
         scroll_projection: Option<Box<ScrollProjection<N>>>,
     ) -> FrozenLayoutTree<N> {
@@ -1599,7 +1591,6 @@ where
             boxes,
             self.fragments,
             self.scroll_proxy_links,
-            object_geometry,
             viewport_coordinate_space,
             self.clip_chain,
             embedded_frames,

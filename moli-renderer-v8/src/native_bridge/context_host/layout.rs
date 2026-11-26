@@ -35,6 +35,13 @@ pub(crate) enum LayoutInputChange {
     UsedGeometry,
 }
 
+/// Selects the layout input that a geometry consumer may sample.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutQueryMode {
+    Observable,
+    Published,
+}
+
 struct FrameLayoutPublication {
     // Full layout publication tracks the content boxes for viewport updates.
     // An absent entry leaves the prior viewport alone. A visited frame
@@ -505,7 +512,7 @@ impl PageScriptHost {
         } else {
             request
         };
-        let (pass, feedback) = {
+        let (mut pass, feedback) = {
             let mut state = self.document_layout_state.borrow_mut();
             let retained = if realtime_screen {
                 state.take_retained_layout()
@@ -580,7 +587,9 @@ impl PageScriptHost {
                 fallback_count = metrics.fallback_count,
             );
         }
-        pass.validate_retention_budget()?;
+        pass.tree.validate_retention_budget_with_svg_fallback(
+            crate::layout_renderer::decode_frozen_svg_geometry,
+        )?;
         Ok(Some((pass, feedback)))
     }
 
@@ -757,11 +766,9 @@ impl PageScriptHost {
         &self,
         document: DomHandle,
         queries: &LayoutQueryBatch<DomHandle>,
+        mode: LayoutQueryMode,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-        if !self.layout_policy.is_realtime() {
-            self.prepare_svg_query_geometry(document, &queries.queries)?;
-        }
-        self.with_published_layout_for_document(document, |tree, metrics| {
+        self.with_layout_answers(document, &queries.queries, mode, |tree, metrics| {
             tree.answer_queries_with(queries, metrics, |query| {
                 self.specialize_layout_query(tree, query)
             })
@@ -772,20 +779,30 @@ impl PageScriptHost {
         &self,
         document: DomHandle,
         query: &LayoutQuery<DomHandle>,
+        mode: LayoutQueryMode,
     ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
-        if !self.layout_policy.is_realtime() {
-            self.prepare_svg_query_geometry(document, std::slice::from_ref(query))?;
-        }
-        self.with_published_layout_for_document(document, |tree, _| {
+        self.with_layout_answers(document, std::slice::from_ref(query), mode, |tree, _| {
             self.answer_layout_query(tree, query)
         })
     }
 
-    fn with_published_layout_for_document<T>(
+    fn with_layout_answers<T>(
         &self,
         document: DomHandle,
+        queries: &[LayoutQuery<DomHandle>],
+        mode: LayoutQueryMode,
         inspect: impl FnOnce(&FrozenLayoutTree<DomHandle>, moli_layout::LayoutPassMetrics) -> T,
     ) -> Result<T, LayoutError> {
+        if mode == LayoutQueryMode::Observable {
+            self.ensure_observable_layout()?;
+        }
+        // A snapshot-only reader can hydrate frozen inputs even when the live
+        // DOM has changed. Realtime sampling requires a current publication.
+        if self.layout_policy.uses_real_layout()
+            && (!self.layout_policy.is_realtime() || mode == LayoutQueryMode::Observable)
+        {
+            self.prepare_svg_query_geometry(document, queries)?;
+        }
         let value = self
             .with_latest_layout_tree_for_document(document, |tree| {
                 self.last_layout_pass_metrics
@@ -828,7 +845,7 @@ impl PageScriptHost {
             .map(inspect)
     }
 
-    pub(crate) fn prepare_svg_query_geometry(
+    fn prepare_svg_query_geometry(
         &self,
         document: DomHandle,
         queries: &[LayoutQuery<DomHandle>],
@@ -886,8 +903,6 @@ impl PageScriptHost {
         }
         self.document_layout_state
             .borrow_mut()
-            .latest_tree_mut()
-            .ok_or(LayoutError::NoLayoutSnapshot)?
             .append_svg_geometry(root, geometry)
     }
 
@@ -1179,7 +1194,7 @@ impl GeometryProvider for PageScriptHost {
         queries: &LayoutQueryBatch<Self::NodeId>,
     ) -> Result<LayoutAnswers<Self::NodeId>, LayoutError> {
         let document = self.document_handle();
-        self.answer_layout_for_document(document, queries)
+        self.answer_layout_for_document(document, queries, LayoutQueryMode::Published)
     }
 }
 

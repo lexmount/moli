@@ -1,10 +1,12 @@
 #[cfg(feature = "devtools")]
 use moli_layout::LayoutTransform2D;
-use moli_layout::{FrozenLayoutTree, LayoutError, LayoutPoint, ScrollProjectionRefresh};
+use moli_layout::{
+    FrozenLayoutTree, LayoutError, LayoutPoint, LayoutTreeRetentionMetrics, ScrollProjectionRefresh,
+};
 #[cfg(feature = "devtools")]
 use std::{collections::HashMap, rc::Rc};
 
-use crate::document_runtime::DomHandle;
+use crate::{document_runtime::DomHandle, layout_renderer::SvgGeometry};
 
 #[cfg(feature = "devtools")]
 use super::{PageScriptHost, WindowDocumentTaskTarget};
@@ -56,6 +58,7 @@ impl PublishedFrameGeometry {
 struct LatestFrozenLayout {
     document: DomHandle,
     tree: Box<FrozenLayoutTree<DomHandle>>,
+    retention: Option<LayoutTreeRetentionMetrics>,
     #[cfg(feature = "devtools")]
     frame_geometry: Rc<PublishedFrameGeometry>,
 }
@@ -85,8 +88,25 @@ impl LatestLayoutTreeCache {
         self.latest.as_ref()?.tree.tree_for_root(root)
     }
 
-    pub(super) fn latest_tree_mut(&mut self) -> Option<&mut FrozenLayoutTree<DomHandle>> {
-        self.latest.as_mut().map(|snapshot| snapshot.tree.as_mut())
+    pub(super) fn append_svg_geometry(
+        &mut self,
+        root: DomHandle,
+        scenes: SvgGeometry,
+    ) -> Result<(), LayoutError> {
+        let snapshot = self.latest.as_mut().ok_or(LayoutError::NoLayoutSnapshot)?;
+        let retention = snapshot
+            .retention
+            .get_or_insert_with(|| snapshot.tree.retention_metrics());
+        snapshot
+            .tree
+            .append_svg_geometry_with_metrics(root, scenes, retention)
+    }
+
+    pub(super) fn clear_inline_svg_geometry(&mut self) {
+        if let Some(snapshot) = &mut self.latest {
+            snapshot.tree.clear_inline_svg_geometry();
+            snapshot.retention = None;
+        }
     }
 
     #[cfg(feature = "devtools")]
@@ -105,6 +125,7 @@ impl LatestLayoutTreeCache {
         self.latest = Some(LatestFrozenLayout {
             document,
             tree: Box::new(tree),
+            retention: None,
             #[cfg(feature = "devtools")]
             frame_geometry: Rc::new(frame_geometry),
         });
@@ -116,6 +137,7 @@ impl LatestLayoutTreeCache {
             .as_mut()
             .expect("projection needs published layout");
         *snapshot.tree = tree;
+        snapshot.retention = None;
     }
 
     pub(super) fn refresh_scroll_projection(

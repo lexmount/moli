@@ -1,6 +1,11 @@
 //! The retained layout tree and its memory-retention boundary.
 
-use std::{collections::HashMap, fmt::Debug, hash::Hash, ops::Deref};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    hash::Hash,
+    ops::Deref,
+};
 
 use crate::{LayoutDisplay, LayoutError, LayoutListMarkerPosition};
 
@@ -137,6 +142,7 @@ pub enum ScrollProjectionRefresh {
 pub(crate) struct FrozenInlineSvgInputs<N> {
     inputs: HashMap<N, crate::InlineSvgInput<N>>,
     owners: HashMap<N, N>,
+    payload_bytes: usize,
 }
 
 impl<N: Copy + Eq + Hash> FrozenInlineSvgInputs<N> {
@@ -144,6 +150,7 @@ impl<N: Copy + Eq + Hash> FrozenInlineSvgInputs<N> {
         Self {
             inputs: HashMap::new(),
             owners: HashMap::new(),
+            payload_bytes: 0,
         }
     }
 
@@ -151,7 +158,12 @@ impl<N: Copy + Eq + Hash> FrozenInlineSvgInputs<N> {
         for element in input.elements.iter().copied().skip(1) {
             self.owners.insert(element, root);
         }
-        self.inputs.insert(root, input);
+        self.payload_bytes = self.payload_bytes.saturating_add(input.estimated_bytes());
+        let previous = self.inputs.insert(root, input);
+        debug_assert!(
+            previous.is_none(),
+            "each frozen scene has one measured owner"
+        );
     }
 
     pub(crate) fn input(&self, root: N) -> Option<&crate::InlineSvgInput<N>> {
@@ -160,6 +172,7 @@ impl<N: Copy + Eq + Hash> FrozenInlineSvgInputs<N> {
 
     fn remove(&mut self, root: N) {
         if let Some(input) = self.inputs.remove(&root) {
+            self.payload_bytes -= input.estimated_bytes();
             for element in input.elements.into_iter().skip(1) {
                 if self.owners.get(&element) == Some(&root) {
                     self.owners.remove(&element);
@@ -177,12 +190,10 @@ impl<N: Copy + Eq + Hash> FrozenInlineSvgInputs<N> {
             .owners
             .capacity()
             .saturating_mul(std::mem::size_of::<(N, N)>());
-        self.inputs.values().fold(
-            std::mem::size_of::<Self>()
-                .saturating_add(keys)
-                .saturating_add(owners),
-            |bytes, input| bytes.saturating_add(input.estimated_bytes()),
-        )
+        std::mem::size_of::<Self>()
+            .saturating_add(keys)
+            .saturating_add(owners)
+            .saturating_add(self.payload_bytes)
     }
 }
 
@@ -258,49 +269,116 @@ where
         root: N,
         scenes: Vec<(N, Vec<(N, LayoutQuad)>)>,
     ) -> Result<(), LayoutError> {
+        let mut metrics = self.retention_metrics();
+        self.append_svg_geometry_with_metrics(root, scenes, &mut metrics)
+    }
+
+    /// Updates the caller's retained metrics for this exact tree on success.
+    /// The metrics must include all embedded members and outstanding inputs.
+    pub fn append_svg_geometry_with_metrics(
+        &mut self,
+        root: N,
+        mut scenes: Vec<(N, Vec<(N, LayoutQuad)>)>,
+        metrics: &mut LayoutTreeRetentionMetrics,
+    ) -> Result<(), LayoutError> {
         let member = self
-            .tree_for_root(root)
+            .tree_for_root_mut(root)
             .ok_or(LayoutError::NoLayoutSnapshot)?;
+        member.retain_pending_svg_scenes(&mut scenes);
+        if scenes.is_empty() {
+            return Ok(());
+        }
+
         let additional = scenes
             .iter()
             .map(|(_, objects)| objects.len())
             .sum::<usize>();
-        if additional != 0 {
-            let growth = member
-                .object_geometry
-                .len()
-                .saturating_add(additional)
-                .saturating_sub(member.object_geometry.capacity());
-            let mut metrics = self.retention_metrics();
-            metrics.fragment_count = metrics.fragment_count.saturating_add(additional);
-            metrics.estimated_geometry_bytes = metrics.estimated_geometry_bytes.saturating_add(
-                growth.saturating_mul(std::mem::size_of::<LayoutObjectGeometry<N>>()),
-            );
-            validate_retention_metrics(metrics)?;
-        }
-        let member = self
-            .tree_for_root_mut(root)
-            .expect("validated layout member");
-        member.object_geometry.reserve_exact(additional);
+        let capacity = member.object_geometry.capacity();
+        let growth = member
+            .object_geometry
+            .len()
+            .saturating_add(additional)
+            .saturating_sub(capacity);
+        let frozen_before = member
+            .frozen_inline_svg
+            .as_ref()
+            .map_or(0, |frozen| frozen.estimated_bytes());
+        let released = member.frozen_inline_svg.as_ref().map_or(0, |frozen| {
+            let mut count = 0;
+            let mut bytes = 0usize;
+            for (source, _) in &scenes {
+                if let Some(input) = frozen.input(*source) {
+                    count += 1;
+                    bytes = bytes.saturating_add(input.estimated_bytes());
+                }
+            }
+            if count == frozen.inputs.len() {
+                frozen_before
+            } else {
+                bytes
+            }
+        });
+        let geometry_size = std::mem::size_of::<LayoutObjectGeometry<N>>();
+        let fragment_count = metrics.fragment_count.saturating_add(additional);
+        validate_retention_metrics(LayoutTreeRetentionMetrics {
+            fragment_count,
+            estimated_geometry_bytes: metrics
+                .estimated_geometry_bytes
+                .saturating_sub(released)
+                .saturating_add(growth.saturating_mul(geometry_size)),
+            ..*metrics
+        })?;
+
+        member.apply_svg_geometry(scenes, additional);
+        let frozen_after = member
+            .frozen_inline_svg
+            .as_ref()
+            .map_or(0, |frozen| frozen.estimated_bytes());
+        let growth = member.object_geometry.capacity() - capacity;
+        metrics.fragment_count = fragment_count;
+        metrics.estimated_geometry_bytes = metrics
+            .estimated_geometry_bytes
+            .saturating_sub(frozen_before)
+            .saturating_add(frozen_after)
+            .saturating_add(growth.saturating_mul(geometry_size));
+        Ok(())
+    }
+
+    fn retain_pending_svg_scenes(&self, scenes: &mut Vec<(N, Vec<(N, LayoutQuad)>)>) {
+        let multiple = scenes.len() > 1;
+        let mut seen = HashSet::new();
+        scenes.retain(|(root, _)| {
+            self.pending_svg_viewport(*root).is_some() && (!multiple || seen.insert(*root))
+        });
+    }
+
+    /// Pass-local geometry is validated once after all frame members are built.
+    pub(crate) fn record_painted_svg_geometry(
+        &mut self,
+        mut scenes: Vec<(N, Vec<(N, LayoutQuad)>)>,
+    ) {
+        self.retain_pending_svg_scenes(&mut scenes);
+        let additional = scenes.iter().map(|(_, objects)| objects.len()).sum();
+        self.apply_svg_geometry(scenes, additional);
+    }
+
+    fn apply_svg_geometry(&mut self, scenes: Vec<(N, Vec<(N, LayoutQuad)>)>, additional: usize) {
+        self.object_geometry.reserve_exact(additional);
         for (source, objects) in scenes {
-            let Some(svg) = member
+            let svg = self
                 .svg_viewports
                 .get_mut(&source)
-                .filter(|svg| !svg.prepared)
-            else {
-                continue;
-            };
+                .expect("pending measured scene");
             svg.prepared = true;
-            if let Some(frozen) = &mut member.frozen_inline_svg {
+            if let Some(frozen) = &mut self.frozen_inline_svg {
                 frozen.remove(source);
                 if frozen.inputs.is_empty() {
-                    member.frozen_inline_svg = None;
+                    self.frozen_inline_svg = None;
                 }
             }
             let owner = svg.owner;
-            let geometry = &member.boxes[owner.index()].geometry;
-            member
-                .object_geometry
+            let geometry = &self.boxes[owner.index()].geometry;
+            self.object_geometry
                 .extend(objects.into_iter().map(|(source, quad)| {
                     let mut object = LayoutObjectGeometry {
                         source,
@@ -311,7 +389,6 @@ where
                     object
                 }));
         }
-        Ok(())
     }
 
     /// Invalidate sampled SVG content after a style-only publication update.
@@ -450,6 +527,46 @@ where
         validate_retention_metrics(self.retention_metrics())
     }
 
+    /// Prefer lazy inputs. If they would exceed the existing snapshot byte
+    /// budget, materialize their quads before admitting the publication.
+    pub fn validate_retention_budget_with_svg_fallback(
+        &mut self,
+        mut decode: impl FnMut(N, &crate::InlineSvgInput<N>, LayoutSize) -> Vec<(N, LayoutQuad)>,
+    ) -> Result<(), LayoutError> {
+        let mut metrics = self.retention_metrics();
+        if metrics.estimated_geometry_bytes > MAX_RETAINED_LAYOUT_TREE_BYTES
+            && metrics.box_count <= MAX_RETAINED_LAYOUT_BOXES
+            && metrics.fragment_count <= MAX_RETAINED_LAYOUT_FRAGMENTS
+            && self.materialize_frozen_svg_geometry(&mut decode)
+        {
+            metrics = self.retention_metrics();
+        }
+        validate_retention_metrics(metrics)
+    }
+
+    fn materialize_frozen_svg_geometry(
+        &mut self,
+        decode: &mut impl FnMut(N, &crate::InlineSvgInput<N>, LayoutSize) -> Vec<(N, LayoutQuad)>,
+    ) -> bool {
+        let mut materialized = false;
+        if let Some(frozen) = self.frozen_inline_svg.take() {
+            let scenes = frozen
+                .inputs
+                .into_iter()
+                .filter_map(|(root, input)| {
+                    let size = self.pending_svg_viewport(root)?;
+                    Some((root, decode(root, &input, size)))
+                })
+                .collect();
+            self.record_painted_svg_geometry(scenes);
+            materialized = true;
+        }
+        for frame in &mut self.embedded_frames {
+            materialized |= frame.tree.materialize_frozen_svg_geometry(decode);
+        }
+        materialized
+    }
+
     pub fn box_geometry(&self, id: LayoutOutputBoxId) -> Option<&LayoutBoxGeometry> {
         self.boxes
             .get(id.index())
@@ -584,7 +701,6 @@ where
         boxes: Vec<FrozenLayoutBox<N>>,
         fragments: Vec<LayoutFragment>,
         scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
-        object_geometry: Vec<LayoutObjectGeometry<N>>,
         viewport_coordinate_space: FrozenCoordinateSpace,
         clip_chain: Vec<LayoutClipNode>,
         embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
@@ -598,7 +714,7 @@ where
             boxes,
             fragments,
             scroll_proxy_links,
-            object_geometry,
+            object_geometry: Vec::new(),
             svg_viewports: HashMap::new(),
             frozen_inline_svg: None,
             viewport_coordinate_space,

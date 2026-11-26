@@ -400,11 +400,8 @@ impl PageScriptHost {
         let geometry = paint_geometry.into_inner();
         if !geometry.is_empty() {
             let mut layout = self.document_layout_state.borrow_mut();
-            let tree = layout
-                .latest_tree_mut()
-                .ok_or(LayoutError::NoLayoutSnapshot)?;
             for (root, scenes) in geometry {
-                tree.append_svg_geometry(root, scenes)?;
+                layout.append_svg_geometry(root, scenes)?;
             }
         }
         Ok(Some(snapshot))

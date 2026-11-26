@@ -247,7 +247,6 @@ where
     let mut active_clips = ActivePaintClipChain::default();
     let mut event_index = 0usize;
     let mut inline_text = HashMap::new();
-    let mut embedded_frames = HashMap::new();
     while event_index < projection.metadata.events.len() {
         let event = projection.metadata.events[event_index];
         if let PaintOrderEvent::PushStackingContext(_) = event {
@@ -278,44 +277,28 @@ where
             continue;
         }
 
-        if let PaintOrderEvent::BoxBackground(id) | PaintOrderEvent::BoxContents(id) = event
-            && let Some(kind @ (LayoutReplacedKind::Frame | LayoutReplacedKind::Svg)) =
-                projection.world.boxes[id.index()]
-                    .element_semantics()
-                    .and_then(|element| element.replaced)
-        {
-            let geometry = projection.geometry(id.index());
-            let clip = match event {
-                PaintOrderEvent::BoxBackground(_) => geometry.clip_chain,
-                _ => projection.metadata.boxes[id.index()].content_clip,
-            };
-            let frame_or_svg_cull = clipped_replaced_cull_region(
+        let contents_cull = if let PaintOrderEvent::BoxContents(id) = event
+            && projection.world.boxes[id.index()]
+                .element_semantics()
+                .and_then(|element| element.replaced)
+                .is_some_and(|kind| {
+                    matches!(kind, LayoutReplacedKind::Frame | LayoutReplacedKind::Svg)
+                }) {
+            let clipped = clipped_replaced_cull_region(
                 projection,
                 current_cull,
-                clip,
+                projection.metadata.boxes[id.index()].content_clip,
                 &active_clips.filter_output_clips,
             );
-            if cull_plan.event_misses(event_index, frame_or_svg_cull) {
+            if cull_plan.event_misses(event_index, clipped) {
                 metrics.culled_event_count = metrics.culled_event_count.saturating_add(1);
                 event_index += 1;
                 continue;
             }
-            if kind == LayoutReplacedKind::Frame
-                && projection.world.boxes[id.index()].style.is_visible()
-                && let std::collections::hash_map::Entry::Vacant(entry) = embedded_frames.entry(id)
-            {
-                let content = BoxAreas::for_box(projection, id).content_rect;
-                let local_to_viewport = projection.coordinate_spaces
-                    [geometry.coordinate_space.index()]
-                .paint
-                .local_transform()
-                .concatenate(crate::LayoutTransform2D::translation(content.x, content.y));
-                entry.insert(paint_frame(
-                    id,
-                    frame_or_svg_cull.local_rect(local_to_viewport),
-                )?);
-            }
-        }
+            clipped
+        } else {
+            current_cull
+        };
 
         match event {
             PaintOrderEvent::BoxOutsetShadow(id) => {
@@ -498,7 +481,6 @@ where
                     id,
                     &active_clips.filter_output_clips,
                     propagated_background,
-                    embedded_frames.get(&id).is_some_and(Option::is_some),
                     capture.include_backgrounds,
                     current_cull,
                     &mut metrics,
@@ -521,9 +503,11 @@ where
                 project_box_contents(
                     projection,
                     id,
-                    embedded_frames.remove(&id).flatten(),
+                    contents_cull,
+                    paint_frame,
+                    capture.include_backgrounds && propagated_background != Some(id),
                     &mut snapshot,
-                );
+                )?;
             }
             PaintOrderEvent::InlineContents(id) => {
                 active_clips.transition_to(
@@ -933,7 +917,6 @@ fn project_box_background<N>(
     id: LayoutBoxId,
     filter_output_clips: &[LayoutOutputBoxId],
     propagated_background: Option<LayoutBoxId>,
-    has_embedded_frame: bool,
     include_backgrounds: bool,
     cull: PaintCullRegion,
     metrics: &mut PaintProjectionMetrics,
@@ -960,16 +943,9 @@ fn project_box_background<N>(
 
     if include_backgrounds && propagated_background != Some(id) {
         let mut color = layout_box.style.background_color();
-        match unavailable_replaced_content_paint(projection, id, has_embedded_frame) {
+        match unavailable_replaced_content_paint(projection, id) {
             Some(UnavailableReplacedContentPaint::OpaquePlaceholder) => {
-                snapshot.push_diagnostic(PaintDiagnostic::new(
-                    "replaced-content-placeholder",
-                    format!(
-                        "{} uses deterministic placeholder paint because replaced content is unavailable",
-                        layout_box.source_label
-                    ),
-                    PaintDiagnosticSeverity::Warning,
-                ));
+                report_replaced_placeholder(&layout_box.source_label, snapshot);
                 if color.alpha <= 0.0 {
                     color = PaintColor::new(0.82, 0.84, 0.87, 1.0);
                 }
@@ -1211,31 +1187,75 @@ fn project_box_outline<N>(
 fn project_box_contents<N>(
     projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
-    embedded: Option<PaintSnapshot>,
+    cull: PaintCullRegion,
+    paint_frame: &mut dyn FnMut(
+        LayoutBoxId,
+        Option<crate::LayoutRect>,
+    ) -> Result<Option<PaintSnapshot>, LayoutError>,
+    include_placeholder: bool,
     snapshot: &mut PaintSnapshot,
-) where
+) -> Result<(), LayoutError>
+where
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
     if !layout_box.style.is_visible() {
-        return;
+        return Ok(());
     }
     let geometry = projection.geometry(id.index());
-    let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
-        .paint_space(snapshot.viewport_to_surface);
+    let viewport_space = projection.coordinate_spaces[geometry.coordinate_space.index()].paint;
+    let paint_space = viewport_space.with_outer_transform(snapshot.viewport_to_surface);
     let transform = paint_space.local_transform();
-    if let Some(child) = embedded {
+    if layout_box
+        .element_semantics()
+        .and_then(|element| element.replaced)
+        == Some(LayoutReplacedKind::Frame)
+    {
         let content = BoxAreas::for_box(projection, id).content_rect;
-        let local_to_surface =
-            transform.concatenate(crate::LayoutTransform2D::translation(content.x, content.y));
-        snapshot.append_embedded_snapshot(
-            child,
-            crate::PaintRect::new(0.0, 0.0, content.width, content.height),
-            local_to_surface,
-        );
+        let origin = crate::LayoutTransform2D::translation(content.x, content.y);
+        let local_to_viewport = viewport_space.local_transform().concatenate(origin);
+        if let Some(child) = paint_frame(id, cull.local_rect(local_to_viewport))? {
+            snapshot.append_embedded_snapshot(
+                child,
+                crate::PaintRect::new(0.0, 0.0, content.width, content.height),
+                transform.concatenate(origin),
+            );
+        } else if include_placeholder {
+            project_replaced_placeholder(projection, id, paint_space, snapshot);
+        }
+    } else {
+        project_replaced_image(projection, id, paint_space, include_placeholder, snapshot);
     }
-    project_replaced_image(projection, id, paint_space, snapshot);
     project_form_control_appearance(layout_box, geometry.border_box, transform, snapshot);
+    Ok(())
+}
+
+fn report_replaced_placeholder(label: &str, snapshot: &mut PaintSnapshot) {
+    snapshot.push_diagnostic(PaintDiagnostic::new(
+        "replaced-content-placeholder",
+        format!(
+            "{label} uses deterministic placeholder paint because replaced content is unavailable"
+        ),
+        PaintDiagnosticSeverity::Warning,
+    ));
+}
+
+fn project_replaced_placeholder<N: Copy + Debug + Eq + Hash>(
+    projection: &PaintProjection<'_, N>,
+    id: LayoutBoxId,
+    paint_space: PaintSpace,
+    snapshot: &mut PaintSnapshot,
+) {
+    let layout_box = &projection.world.boxes[id.index()];
+    report_replaced_placeholder(&layout_box.source_label, snapshot);
+    if !style_has_canvas_background(&layout_box.style) {
+        snapshot.push_fragment(PaintFragment::Fill {
+            fill_rule: crate::PaintFillRule::NonZero,
+            shape: BoxAreas::for_box(projection, id).shape(BoxModelBox::Content),
+            brush: crate::PaintBrush::Solid(PaintColor::new(0.82, 0.84, 0.87, 1.0)),
+            transform: paint_space.local_transform(),
+        });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1315,20 +1335,12 @@ fn project_box_text<N>(
 fn unavailable_replaced_content_paint<N>(
     projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
-    has_embedded_frame: bool,
 ) -> Option<UnavailableReplacedContentPaint>
 where
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
     if !layout_box.is_replaced() {
-        return None;
-    }
-    if has_embedded_frame
-        && layout_box
-            .element_semantics()
-            .is_some_and(|semantics| semantics.replaced == Some(LayoutReplacedKind::Frame))
-    {
         return None;
     }
     let semantics = layout_box.element_semantics()?;
@@ -1343,7 +1355,9 @@ where
             }
             // Ordinary HTML image fallback paint belongs to image projection:
             // it is a content-box outline, not an invented CSS background.
-            Some(LayoutReplacedKind::Image) => None,
+            Some(
+                LayoutReplacedKind::Image | LayoutReplacedKind::Svg | LayoutReplacedKind::Frame,
+            ) => None,
             Some(_) => Some(UnavailableReplacedContentPaint::OpaquePlaceholder),
             None => None,
         },
