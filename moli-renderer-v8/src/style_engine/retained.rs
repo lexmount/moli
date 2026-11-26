@@ -305,6 +305,8 @@ fn update_document_scope(
 
     let viewport_size_changed = retained.key.viewport_width_bits != key.viewport_width_bits
         || retained.key.viewport_height_bits != key.viewport_height_bits;
+    let device_pixel_ratio_changed =
+        retained.key.device_pixel_ratio_bits != key.device_pixel_ratio_bits;
     let used_color_scheme_changed = retained.key.environment.stylo_prefers_color_scheme()
         != key.environment.stylo_prefers_color_scheme()
         || retained.key.environment.stylo_page_color_schemes()
@@ -312,7 +314,7 @@ fn update_document_scope(
     let device_changed = viewport_size_changed
         || retained.key.screen_width_bits != key.screen_width_bits
         || retained.key.screen_height_bits != key.screen_height_bits
-        || retained.key.device_pixel_ratio_bits != key.device_pixel_ratio_bits
+        || device_pixel_ratio_changed
         || retained.key.environment != key.environment;
     let mut device_affected_origins = OriginSet::empty();
     if device_changed {
@@ -338,7 +340,9 @@ fn update_document_scope(
             install_active_stylesheet(host, shared_lock, source, key.quirks_mode)
         })
     });
-    let mut scope_fallback = false;
+    // Stylo snaps border widths during cascade using the current device scale.
+    // These values can change even when every media query still matches.
+    let mut scope_fallback = device_pixel_ratio_changed;
     if let Some(reconciliation) = stylesheet_reconciliation.as_ref() {
         let guard = shared_lock.read();
         scope_fallback |= reconciliation.stylesheet_removed();
