@@ -73,6 +73,7 @@ pub struct LayoutPassMetrics {
     pub retained_numeric_layout_hits: usize,
     pub retained_numeric_tree: bool,
     pub reused_inline_contexts: usize,
+    pub reused_overflow_projection: bool,
     pub fragment_count: usize,
     /// Paint-order events considered for this capture before viewport culling.
     pub paint_event_count: usize,

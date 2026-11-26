@@ -1155,6 +1155,7 @@ mod tests {
             retained_numeric_layout_hits: 0,
             retained_numeric_tree: false,
             reused_inline_contexts: 0,
+            reused_overflow_projection: false,
             fragment_count: 0,
             paint_event_count: 0,
             paint_culled_event_count: 0,

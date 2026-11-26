@@ -349,6 +349,7 @@ where
     reused_inline_contexts: usize,
     numeric_layout_elapsed: Duration,
     numeric_metrics: NumericLayoutMetrics,
+    overflow_projection: Option<OverflowProjection>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -419,7 +420,7 @@ where
             reused_inline_contexts,
             numeric_layout_elapsed,
             numeric_metrics,
-            ..
+            overflow_projection,
         } = self;
         let PreparedLayoutPass {
             world,
@@ -430,6 +431,7 @@ where
             ..
         } = prepared;
         drop(world);
+        drop(overflow_projection);
         let mut next =
             measure_prepared_layout_pass_with_scrollbars(prepare()?, services, frozen_scrollbars)?;
         next.prepared.started = started;
@@ -651,7 +653,7 @@ where
     let inline_preparation_elapsed = phase_started.elapsed();
     world.validate_invariants()?;
     let phase_started = Instant::now();
-    let numeric_metrics = compute_world_layout_with_scrollbars(
+    let (numeric_metrics, overflow_projection) = compute_world_layout_with_scrollbars(
         world,
         prepared.request.viewport,
         frozen_scrollbars,
@@ -684,6 +686,7 @@ where
         reused_inline_contexts,
         numeric_layout_elapsed,
         numeric_metrics,
+        overflow_projection,
     })
 }
 
@@ -713,6 +716,7 @@ where
         reused_inline_contexts,
         numeric_layout_elapsed,
         numeric_metrics,
+        overflow_projection,
     } = measured;
     let phase_started = Instant::now();
     let object_geometry = prepare_svg_content(&mut world, source);
@@ -769,6 +773,7 @@ where
         request.retains_layout_world(),
         object_geometry,
         embedded_frames,
+        overflow_projection,
         crate::projection::LayoutPassPhaseMetrics {
             box_tree_elapsed,
             list_marker_elapsed,
@@ -790,6 +795,7 @@ where
             pruned_source_count,
             retained_numeric_layout_hits: numeric_metrics.retained_layout_hits,
             retained_numeric_tree: numeric_metrics.reused_tree,
+            reused_overflow_projection: numeric_metrics.reused_overflow_projection,
         },
     )
 }
@@ -869,6 +875,7 @@ struct NumericLayoutMetrics {
     feedback_overflow_recomputed_node_count: usize,
     retained_layout_hits: usize,
     reused_tree: bool,
+    reused_overflow_projection: bool,
 }
 
 impl NumericLayoutMetrics {
@@ -891,7 +898,7 @@ fn compute_world_layout_with_scrollbars<N>(
     frozen_scrollbars: &AutoScrollbars<N>,
     reuse_numeric_layout: bool,
     mut invalidated: Vec<crate::LayoutBoxId>,
-) -> NumericLayoutMetrics
+) -> (NumericLayoutMetrics, Option<OverflowProjection>)
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
@@ -955,8 +962,22 @@ where
     }
     metrics.reused_tree = prepared.reused_tree;
     let preparation_elapsed = phase_started.elapsed();
-    let mut overflow_projection: Option<OverflowProjection> = None;
-    let mut pending_feedback_seeds = Vec::new();
+    let mut overflow_projection = prepared
+        .tree
+        .overflow
+        .take()
+        .filter(|_| reuse_numeric_layout)
+        .map(|projection| *projection);
+    let mut pending_feedback_seeds: Vec<_> = std::mem::take(&mut prepared.tree.overflow_dirty)
+        .into_iter()
+        .collect();
+    if overflow_projection.is_some() {
+        // The viewport and prior auto-gutter boxes were reset before this
+        // iteration. Their local geometry may change even on a cache hit.
+        pending_feedback_seeds.push(root_id);
+        pending_feedback_seeds.extend(invalidated);
+    }
+    metrics.reused_overflow_projection = overflow_projection.is_some();
     loop {
         metrics.pass_count = metrics.pass_count.saturating_add(1);
         let phase_started = Instant::now();
@@ -971,6 +992,13 @@ where
         // projection still computes scroll extents, so this demand needs no
         // scrollbar-feedback overflow projection or corrective numeric pass.
         if scrollbars_hidden {
+            if let Some(projection) = &mut overflow_projection {
+                let phase_started = Instant::now();
+                touched.append(&mut pending_feedback_seeds);
+                let affected = projection.refresh(world, viewport, &touched);
+                metrics.feedback_overflow_recomputed_node_count += affected.len();
+                metrics.overflow_detection_elapsed += phase_started.elapsed();
+            }
             break;
         }
         let phase_started = Instant::now();
@@ -1055,7 +1083,7 @@ where
         world.numeric_tree = Some(prepared.tree);
     }
     metrics.retained_layout_hits = world.finish_retained_cache_reads();
-    metrics
+    (metrics, overflow_projection)
 }
 
 fn css_viewport_dimension(value: f32) -> u32 {

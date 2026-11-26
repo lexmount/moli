@@ -745,6 +745,11 @@ where
     }
 
     pub(crate) fn clear_layout_caches(&mut self, id: LayoutBoxId) {
+        if let Some(tree) = &mut self.numeric_tree
+            && tree.overflow.is_some()
+        {
+            tree.overflow_dirty.insert(id);
+        }
         self.note_retained_cache_access(id, false);
         let layout_box = &mut self.boxes[id.index()];
         if let Some(slot) = layout_box.cache_slot {

@@ -563,6 +563,7 @@ impl PageScriptHost {
                 retained_numeric_layout_hits = metrics.retained_numeric_layout_hits,
                 retained_numeric_tree = metrics.retained_numeric_tree,
                 reused_inline_contexts = metrics.reused_inline_contexts,
+                reused_overflow_projection = metrics.reused_overflow_projection,
                 fragment_count = metrics.fragment_count,
                 paint_event_count = metrics.paint_event_count,
                 paint_culled_event_count = metrics.paint_culled_event_count,

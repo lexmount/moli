@@ -46,6 +46,8 @@ pub(crate) struct NumericTree {
     separate_fixed_viewport: bool,
     positioned_static_sources: Vec<PositionedStaticSource>,
     table_roots: Vec<LayoutBoxId>,
+    pub(crate) overflow: Option<Box<crate::overflow::OverflowProjection>>,
+    pub(crate) overflow_dirty: std::collections::HashSet<LayoutBoxId>,
 }
 
 impl NumericTree {
@@ -164,6 +166,10 @@ where
         tree.covers(world.boxes.len()) && tree.separate_fixed_viewport == separate_fixed_viewport
     });
     let reused_tree = retained_tree.is_some();
+    let preserve_final_layout = reuse_numeric_layout
+        && retained_tree
+            .as_ref()
+            .is_some_and(|tree| tree.overflow.is_some());
 
     world.resolved_grid_tracks.clear();
     world.native_grid_details.clear();
@@ -173,7 +179,9 @@ where
             world.boxes[index].unrounded_layout = Layout::with_order(0);
         }
         let layout_box = &mut world.boxes[index];
-        layout_box.final_layout = Layout::with_order(0);
+        if !preserve_final_layout {
+            layout_box.final_layout = Layout::with_order(0);
+        }
         layout_box.inline_static_position = None;
         if !reused_tree {
             layout_box.layout_parent = None;
@@ -195,6 +203,8 @@ where
             separate_fixed_viewport,
             positioned_static_sources,
             table_roots,
+            overflow: None,
+            overflow_dirty: std::collections::HashSet::new(),
         }
     });
     if let Some(layout) = &mut world.fixed_viewport_layout {
