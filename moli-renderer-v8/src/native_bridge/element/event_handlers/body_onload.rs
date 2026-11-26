@@ -267,11 +267,12 @@ pub(super) fn invalidate_body_window_event_attribute_handler(
         "onerror" => "onerror",
         _ => return,
     };
+    // A detached document has no Window for these attributes to update.
+    let Some(owner) = runtime.owner_dispatch_scope_for_node(handle) else {
+        return;
+    };
     let _ = set_body_window_event_handler_compiled(scope, handler_name, false);
-    if handler_name == "onload"
-        && runtime.owner_dispatch_scope_for_node(handle)
-            == Some(crate::native_bridge::OwnerDispatchScope::Top)
-    {
+    if handler_name == "onload" && owner == crate::native_bridge::OwnerDispatchScope::Top {
         // The shared attribute mutation entry has invalidated the Window
         // registration. Only the legacy compilation flag needs resetting here.
         return;
