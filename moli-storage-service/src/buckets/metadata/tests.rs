@@ -119,33 +119,37 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
         .unwrap();
     let mut registry = store.lock();
     let metadata = registry.metadata_for_identity_mut(&identity).unwrap();
-    metadata.cache_storage.get_mut("assets").unwrap().insert(
-        "resource".into(),
-        StorageBucketCacheEntry {
-            usage_bytes: 1_048_576,
-            request: StorageBucketCachedRequest::default(),
-            response: StorageBucketCachedResponse {
-                head: moli_fetch_types::FetchResponseHead {
-                    metadata: moli_fetch_types::FetchResponseMetadata {
-                        response_type: moli_fetch_types::FetchResponseType::Default,
-                        timing_allow_passed: true,
-                        url_list: vec![
-                            "https://a.test/resource"
-                                .parse()
-                                .expect("valid response URL"),
-                        ],
-                        redirected: false,
+    metadata
+        .cache_storage
+        .get_mut(&StorageBucketCacheName::from("assets"))
+        .unwrap()
+        .insert(
+            "resource".into(),
+            StorageBucketCacheEntry {
+                usage_bytes: 1_048_576,
+                request: StorageBucketCachedRequest::default(),
+                response: StorageBucketCachedResponse {
+                    head: moli_fetch_types::FetchResponseHead {
+                        metadata: moli_fetch_types::FetchResponseMetadata {
+                            response_type: moli_fetch_types::FetchResponseType::Default,
+                            timing_allow_passed: true,
+                            url_list: vec![
+                                "https://a.test/resource"
+                                    .parse()
+                                    .expect("valid response URL"),
+                            ],
+                            redirected: false,
+                        },
+                        status: 200,
+                        status_text: "OK".into(),
+                        headers: vec![],
                     },
-                    status: 200,
-                    status_text: "OK".into(),
-                    headers: vec![],
+                    body: vec![17; 1_048_576],
                 },
-                body: vec![17; 1_048_576],
+                insertion_order: 0,
             },
-            insertion_order: 0,
-        },
-    );
-    let pointer = metadata.cache_storage["assets"]["resource"]
+        );
+    let pointer = metadata.cache_storage[&StorageBucketCacheName::from("assets")]["resource"]
         .response
         .body
         .as_ptr();
@@ -153,9 +157,12 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
         .set_bucket_expires_for_identity(&identity, Some(123.0))
         .unwrap();
     let metadata = registry.metadata_for_identity(&identity).unwrap();
-    assert_eq!(metadata.cache_instance_ids["assets"], cache_id);
     assert_eq!(
-        metadata.cache_storage["assets"]["resource"]
+        metadata.cache_instance_ids[&StorageBucketCacheName::from("assets")],
+        cache_id
+    );
+    assert_eq!(
+        metadata.cache_storage[&StorageBucketCacheName::from("assets")]["resource"]
             .response
             .body
             .as_ptr(),
