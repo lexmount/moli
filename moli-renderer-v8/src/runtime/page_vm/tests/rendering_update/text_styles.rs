@@ -29,9 +29,11 @@ async fn legacy_line_clamp_keeps_flex_playlist_titles_in_their_rows() {
               .title{{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;
                  width:80px;overflow:hidden;word-break:break-all;color:red}}
               #short{{color:green}} #marker{{color:blue}}
+              #english{{width:72px;word-break:normal;color:magenta}}
               </style>`;
               document.body.innerHTML = `<div class=row><div id=long class=title>ABCDEFGHIJKLMNO</div></div>
-                <div class=row><div id=short class=title>AB</div></div><div id=marker>…</div>`;
+                <div class=row><div id=short class=title>AB</div></div>
+                <div id=english class=title>ABCDEF GHIJKL</div><div id=marker>…</div>`;
               'installed'"#
         ))?;
         page.vm_mut().prime_document_lifecycle_and_publish_stylesheets();
@@ -44,7 +46,7 @@ async fn legacy_line_clamp_keeps_flex_playlist_titles_in_their_rows() {
         );
         let snapshot = page
             .vm_mut()
-            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 110, 1.0))?
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 150, 1.0))?
             .expect("playlist paint");
         let glyph_runs = |color| {
             snapshot.fragments.iter().filter_map(move |fragment| match fragment {
@@ -52,16 +54,29 @@ async fn legacy_line_clamp_keeps_flex_playlist_titles_in_their_rows() {
                 _ => None,
             })
         };
-        let red: Vec<_> = glyph_runs(moli_layout::PaintColor::new(1., 0., 0., 1.)).collect();
         let reference = glyph_runs(moli_layout::PaintColor::new(0., 0., 1., 1.))
             .next().expect("reference ellipsis");
-        let ellipsis = red.last().expect("long title ellipsis");
-        assert!(red.len() >= 2 && red.iter().flat_map(|run| &run.glyphs).all(|glyph| glyph.y < 31.));
-        assert_eq!(ellipsis.font, reference.font);
-        assert_eq!(
-            ellipsis.glyphs.iter().map(|glyph| glyph.id).collect::<Vec<_>>(),
-            reference.glyphs.iter().map(|glyph| glyph.id).collect::<Vec<_>>()
-        );
+        for (color, row, word_length) in [
+            (moli_layout::PaintColor::new(1., 0., 0., 1.), 0.0..31.0, None),
+            (moli_layout::PaintColor::new(1., 0., 1., 1.), 70.0..101.0, Some(6)),
+        ] {
+            let runs: Vec<_> = glyph_runs(color).collect();
+            let (ellipsis, title) = runs.split_last().expect("title with ellipsis");
+            assert!(!title.is_empty(), "the visible text must precede its ellipsis");
+            assert!(
+                runs.iter().flat_map(|run| run.glyphs_in_surface()).all(|glyph| row.contains(&glyph.y)),
+                "title and ellipsis glyphs must stay inside {row:?}"
+            );
+            assert_eq!(ellipsis.font, reference.font);
+            assert_eq!(
+                ellipsis.glyphs.iter().map(|glyph| glyph.id).collect::<Vec<_>>(),
+                reference.glyphs.iter().map(|glyph| glyph.id).collect::<Vec<_>>()
+            );
+            if let Some(word_length) = word_length {
+                let painted_chars: usize = title.iter().map(|run| run.glyphs.len()).sum();
+                assert!((1..word_length).contains(&painted_chars), "the English word must make room for the ellipsis");
+            }
+        }
 
         page.vm_mut().eval("long.style.setProperty('-webkit-line-clamp', '2')")?;
         page.vm_mut().publish_layout_for_test()?;
@@ -73,6 +88,45 @@ async fn legacy_line_clamp_keeps_flex_playlist_titles_in_their_rows() {
     })
     .await
     .expect("legacy clamping should constrain playlist title layout and paint");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn legacy_line_clamp_keeps_hidden_range_geometry_out_of_hit_testing() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/clamped-hit-test.html")?,
+        );
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+        page.vm_mut().eval(r#"
+            document.head.innerHTML = `<style>
+                html,body { margin:0 }
+                #clamp { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:1;
+                         width:120px; height:72px; overflow:visible; font:16px/24px sans-serif }
+            </style>`;
+            document.body.innerHTML = '<div id=clamp><a id=shown href=#shown>Visible</a><br><a id=ghost href=#ghost>Hidden</a></div>';
+        "#)?;
+        page.vm_mut().prime_document_lifecycle_and_publish_stylesheets();
+        page.vm_mut().publish_layout_for_test()?;
+
+        let hits = r#"JSON.stringify([shown, ghost].map(link => {
+            const range = document.createRange();
+            range.selectNodeContents(link.firstChild);
+            const rect = range.getClientRects()[0];
+            const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+            return [rect.width > 0 && rect.height > 0, document.elementFromPoint(x, y)?.id,
+                    document.elementsFromPoint(x, y).includes(link)];
+        }))"#;
+        assert_eq!(page.vm_mut().eval(hits)?, r#"[[true,"shown",true],[true,"clamp",false]]"#);
+        page.vm_mut().eval("clamp.style.setProperty('-webkit-line-clamp', '2')")?;
+        page.vm_mut().publish_layout_for_test()?;
+        assert_eq!(page.vm_mut().eval(hits)?, r#"[[true,"shown",true],[true,"ghost",true]]"#);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("clamped lines should only become targets when visible");
 }
 
 #[tokio::test(flavor = "current_thread")]
