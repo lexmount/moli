@@ -13,8 +13,9 @@ use crate::{
 
 use super::{
     IntersectionEntryMetrics, IntersectionObserverOptions, LastReportedIntersection, ObserverStore,
-    RootlessIntersectionGeometryCache, mock_intersection_entry_metrics, queue_intersection_entry,
-    target_is_intersection_observable, threshold_adjusted_is_intersecting, thresholds_crossed,
+    RootlessIntersectionGeometryCache, can_report_initial_intersection,
+    mock_intersection_entry_metrics, queue_intersection_entry, target_is_intersection_observable,
+    threshold_adjusted_is_intersecting, thresholds_crossed,
 };
 
 struct IntersectionObserverCheckInput {
@@ -280,7 +281,7 @@ pub(super) fn compute_intersection_check_batch(
                 },
                 &check.options.thresholds,
             ),
-            None => target_is_intersection_observable(dom_host, check.target, &check.options),
+            None => can_report_initial_intersection(dom_host, check.target, &check.options),
         };
         results.push(IntersectionCheckResult {
             observer_id: check.observer_id,
@@ -319,9 +320,7 @@ fn compute_mock_intersection_check_batch(
                     },
                     &observer.options.thresholds,
                 ),
-                None => {
-                    target_is_intersection_observable(dom_host, target.target, &observer.options)
-                }
+                None => can_report_initial_intersection(dom_host, target.target, &observer.options),
             };
             results.push(IntersectionCheckResult {
                 observer_id: observer.observer_id,

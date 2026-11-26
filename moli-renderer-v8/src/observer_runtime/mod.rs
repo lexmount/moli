@@ -1709,6 +1709,17 @@ fn node_is_intersection_target(dom_host: &DomHost, node: NativeNodeId) -> bool {
     dom_host.node(node).is_some_and(|node| node.is_element())
 }
 
+fn can_report_initial_intersection(
+    dom_host: &DomHost,
+    target: NativeNodeId,
+    options: &IntersectionObserverOptions,
+) -> bool {
+    match options.root {
+        Some(root) => root_is_observable(dom_host, root, target),
+        None => target_is_intersection_observable(dom_host, target, options),
+    }
+}
+
 fn target_is_intersection_observable(
     dom_host: &DomHost,
     target: NativeNodeId,

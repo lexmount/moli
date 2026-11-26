@@ -16,11 +16,11 @@ use super::{
     ObserverMutationPlan, ObserverStore, build_intersection_entries_array,
     build_mutation_records_array,
     callback::ObserverCallback,
+    can_report_initial_intersection,
     intersection::{self, IntersectionCheckBatch},
     invoke_intersection_deliveries, invoke_mutation_deliveries, node_is_intersection_root,
     node_is_intersection_target,
     schedule::{self, ObserverTask},
-    target_is_intersection_observable,
 };
 
 pub(crate) struct ObserverStoreAccessToken {
@@ -326,7 +326,7 @@ pub(super) fn observe_intersection_target(
         return true;
     }
     let should_check = options.as_ref().is_some_and(|options| {
-        access.read(|host| target_is_intersection_observable(host.dom_host(), target, options))
+        access.read(|host| can_report_initial_intersection(host.dom_host(), target, options))
     });
     if should_check {
         request_task_with_access(&mut access, scope, ObserverTask::IntersectionCheck);
