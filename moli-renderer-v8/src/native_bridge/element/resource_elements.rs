@@ -1,3 +1,4 @@
+use super::class_list::{blocking_getter_function, blocking_setter_function};
 use super::*;
 
 fn anchor_url_string_function_getter<'s>(
@@ -1416,6 +1417,12 @@ pub(super) fn frame_owner_content_window_getter_function<'s>(
 #[webapi(interface = web_api_interfaces::HTMLScriptElement, enumerable)]
 pub(super) struct HtmlScriptElementPrototypeDeclaration {
     #[webapi(
+        accessor_property,
+        getter = blocking_getter_function,
+        setter = blocking_setter_function
+    )]
+    blocking: (),
+    #[webapi(
         accessor_property = "innerText",
         getter = script_inner_text_getter_function,
         setter = script_inner_text_setter_function
@@ -2118,6 +2125,12 @@ pub(super) struct HtmlBaseElementUrlPrototypeDeclaration {
 pub(super) struct HtmlLinkElementUrlPrototypeDeclaration {
     #[webapi(
         accessor_property,
+        getter = blocking_getter_function,
+        setter = blocking_setter_function
+    )]
+    blocking: (),
+    #[webapi(
+        accessor_property,
         getter = link_disabled_getter_function,
         setter = link_disabled_setter_function
     )]
@@ -2219,8 +2232,8 @@ pub(super) struct HtmlStyleElementPrototypeDeclaration {
     media: (),
     #[webapi(
         accessor_property,
-        getter = style_blocking_getter_function,
-        setter = style_blocking_setter_function
+        getter = blocking_getter_function,
+        setter = blocking_setter_function
     )]
     blocking: (),
     #[webapi(

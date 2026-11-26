@@ -3067,3 +3067,31 @@ fn svg_svg_element_deselect_all_clears_the_owner_document_selection() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn blocking_lists_reflect_attributes_on_link_script_and_style_elements() {
+    let mut vm = new_storage_test_vm("https://blocking-list.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  for (const tag of ['link', 'script', 'style']) {
+    const node = document.createElement(tag);
+    const tokens = node.blocking;
+    if (!(tokens instanceof DOMTokenList) || tokens !== node.blocking ||
+        !tokens.supports('ReNdEr') || tokens.supports('extra')) return false;
+    node.blocking = 'render extra render';
+    if (tokens.value !== 'render extra render' || tokens.length !== 2) return false;
+    tokens.remove('extra');
+    if (node.getAttribute('blocking') !== 'render') return false;
+    node.removeAttribute('blocking');
+    if (tokens.length || tokens.value !== '') return false;
+  }
+  return true;
+})()
+"#
+        )
+        .unwrap(),
+        "true"
+    );
+}

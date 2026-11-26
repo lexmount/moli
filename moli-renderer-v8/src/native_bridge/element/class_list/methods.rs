@@ -314,16 +314,14 @@ pub(super) fn class_list_supports_callback<'s>(
         rv.set_bool(false);
         return;
     };
-    match kind {
+    rv.set_bool(match kind {
         DomTokenListKind::Class | DomTokenListKind::Part => {
             throw_type_error(scope, "DOMTokenList has no supported tokens.");
             return;
         }
-        DomTokenListKind::Rel => {}
-    }
-    rv.set_bool(rel_list_supports_token(
-        unsafe { &*runtime_ptr },
-        handle,
-        &parsed.token,
-    ));
+        DomTokenListKind::Rel => {
+            rel_list_supports_token(unsafe { &*runtime_ptr }, handle, &parsed.token)
+        }
+        DomTokenListKind::Blocking => parsed.token.eq_ignore_ascii_case("render"),
+    });
 }
