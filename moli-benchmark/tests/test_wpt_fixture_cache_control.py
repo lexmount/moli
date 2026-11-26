@@ -8,7 +8,7 @@ from moli_benchmark.wpt_cross.server import WptFixtureServer
 
 
 class WptFixtureCacheControlTests(unittest.TestCase):
-    def test_explicit_cache_control_precedes_fixture_default(self) -> None:
+    def test_static_file_uses_fixture_cache_control(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             (root_path / "resources").mkdir()
@@ -17,7 +17,7 @@ class WptFixtureCacheControlTests(unittest.TestCase):
             sidecar = root_path / "module.json.headers"
             with WptFixtureServer(root_path) as server:
                 for header, pipe, expected in (
-                    (None, "", ["no-store"]),
+                    (None, "", None),
                     ("max-age=600", "", ["max-age=600"]),
                     ("", "", [""]),
                     (None, "header(Cache-Control,max-age=30)", ["max-age=30"]),

@@ -119,12 +119,12 @@ class WptPipeFixtureTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(headers.get_all("X-Test"), expected)
 
-    def test_explicit_cache_control_is_not_overridden_by_the_fixture_default(self) -> None:
+    def test_static_file_cache_control_comes_from_fixture_headers(self) -> None:
         for method in ("GET", "HEAD"):
             with self.subTest(method=method, source="default"):
                 status, headers, _ = self.request("", method=method)
                 self.assertEqual(status, 200)
-                self.assertEqual(headers.get_all("Cache-Control"), ["no-store"])
+                self.assertIsNone(headers.get_all("Cache-Control"))
         (self.root / "module.json.headers").write_text("cAcHe-CoNtRoL: max-age=600\n")
         for pipe, expected in (
             ("", ["max-age=600"]),
