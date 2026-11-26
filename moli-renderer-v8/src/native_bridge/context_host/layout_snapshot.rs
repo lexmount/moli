@@ -85,6 +85,10 @@ impl LatestLayoutTreeCache {
         self.latest.as_ref()?.tree.tree_for_root(root)
     }
 
+    pub(super) fn latest_tree_mut(&mut self) -> Option<&mut FrozenLayoutTree<DomHandle>> {
+        self.latest.as_mut().map(|snapshot| snapshot.tree.as_mut())
+    }
+
     #[cfg(feature = "devtools")]
     pub(super) fn frame_geometry(&self) -> Option<&Rc<PublishedFrameGeometry>> {
         self.latest

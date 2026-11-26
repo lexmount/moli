@@ -60,6 +60,22 @@ impl<'a> NativeLayoutSourceView<'a> {
     pub(super) fn has_text_selection(&self) -> bool {
         !self.text_selections.is_empty()
     }
+
+    pub(super) fn svg_content(
+        &self,
+        node: DomHandle,
+        style: &moli_layout::ResolvedLayoutStyle,
+        viewport: moli_layout::LayoutSize,
+    ) -> Option<moli_layout::LayoutSvgContent<DomHandle>> {
+        super::inline_svg::layout_content(
+            self.runtime,
+            node,
+            style,
+            viewport,
+            &self.styles,
+            self.paint_resources,
+        )
+    }
 }
 
 pub(crate) fn native_replaced_image(
@@ -320,22 +336,6 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             .map_or_else(LayoutCssImageState::default, |(images, document)| {
                 images.image(document, resolved_url)
             })
-    }
-
-    fn svg_content(
-        &self,
-        node: DomHandle,
-        style: &moli_layout::ResolvedLayoutStyle,
-        viewport: moli_layout::LayoutSize,
-    ) -> Option<moli_layout::LayoutSvgContent<DomHandle>> {
-        super::inline_svg::layout_content(
-            self.runtime,
-            node,
-            style,
-            viewport,
-            &self.styles,
-            self.paint_resources,
-        )
     }
 }
 

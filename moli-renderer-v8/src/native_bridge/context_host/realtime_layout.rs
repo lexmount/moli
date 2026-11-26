@@ -413,19 +413,13 @@ impl PageScriptHost {
     /// Public geometry and coordinate input share this policy decision.
     /// Explicitly sampled geometry continues to use the snapshot-only APIs.
     pub(crate) fn ensure_observable_layout(&self) -> Result<(), LayoutError> {
-        self.ensure_observable_layout_with_svg(false)
-    }
-
-    pub(crate) fn ensure_observable_layout_with_svg(
-        &self,
-        needs_svg_geometry: bool,
-    ) -> Result<(), LayoutError> {
         match self.layout_policy {
             moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::OnDemand => {
                 self.ensure_initial_layout()
             }
-            moli_page_types::LayoutPolicy::Realtime => self
-                .ensure_screen_layout(LayoutFlushReason::SynchronousGeometry, needs_svg_geometry),
+            moli_page_types::LayoutPolicy::Realtime => {
+                self.ensure_current_screen_layout(LayoutFlushReason::SynchronousGeometry)
+            }
         }
     }
 
@@ -472,14 +466,6 @@ impl PageScriptHost {
         &self,
         reason: LayoutFlushReason,
     ) -> Result<(), LayoutError> {
-        self.ensure_screen_layout(reason, false)
-    }
-
-    fn ensure_screen_layout(
-        &self,
-        reason: LayoutFlushReason,
-        needs_svg_geometry: bool,
-    ) -> Result<(), LayoutError> {
         if self.layout_pass_active.get() {
             return Err(LayoutError::ReentrantLayoutPass);
         }
@@ -489,22 +475,13 @@ impl PageScriptHost {
             .expect("Realtime policy installs its document state");
         let inputs = self.screen_layout_inputs(state)?;
         let document = self.document_handle();
-        let retain_paint = state.has_screen_paint_consumers();
-        let needs_svg_geometry = needs_svg_geometry || retain_paint;
-        let covers_svg_geometry = !needs_svg_geometry
-            || self
-                .document_layout_state
-                .borrow()
-                .latest_layout(document)
-                .is_none_or(|tree| !tree.svg_geometry_deferred());
         let resolve_style_changes = self.has_screen_style_invalidations(&inputs);
         if resolve_style_changes {
             self.prepare_current_screen_styles(&inputs);
         }
         let inline_style_update = resolve_style_changes
             && self.published_layout_matches_inline_style_update(state, &inputs);
-        if covers_svg_geometry
-            && (self.screen_layout_matches_inputs(state, &inputs) || inline_style_update)
+        if (self.screen_layout_matches_inputs(state, &inputs) || inline_style_update)
             && (!resolve_style_changes || self.screen_styles_allow_layout_reuse(&inputs))
             && (inputs.documents[0].root.is_none()
                 || !state.scroll_projection_dirty.get()
@@ -512,6 +489,9 @@ impl PageScriptHost {
                     != ScrollProjectionRefresh::Unavailable)
         {
             if resolve_style_changes {
+                if let Some(tree) = self.document_layout_state.borrow_mut().latest_tree_mut() {
+                    tree.clear_inline_svg_geometry();
+                }
                 for document in &inputs.documents {
                     self.style_engine
                         .consume_screen_style_work(document.document);
@@ -531,10 +511,10 @@ impl PageScriptHost {
             self.prepare_current_screen_styles(&inputs);
         }
         let source_dom_version = self.dom_host().dom_version();
+        let retain_paint = state.has_screen_paint_consumers();
         let request = LayoutPassRequest::new(inputs.viewport, reason)
             .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
             .with_scroll_projection(true)
-            .with_deferred_svg_geometry(!needs_svg_geometry)
             .with_screen_paint(retain_paint);
         let Some((pass, feedback)) =
             self.build_layout_pass_for_document_in_environment(document, request, None, true)?
