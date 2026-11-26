@@ -61,12 +61,19 @@ pub(super) struct ReadyImageResource {
 /// one document-owned slot still retains it.
 #[derive(Clone, Default)]
 pub(super) struct ReadyImageResourceIndex {
-    inner: Arc<Mutex<HashMap<ImageRequestKey, Weak<ReadyImageResource>>>>,
+    inner: Arc<Mutex<ReadyImageResourceSnapshot>>,
 }
 
-impl ReadyImageResourceIndex {
-    pub(super) fn get(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
-        self.inner.lock().get(request).and_then(Weak::upgrade)
+/// Freezes the exact requests available to a paint without keeping their
+/// decoded content alive after the owning slots are retired.
+#[derive(Clone, Default)]
+pub(super) struct ReadyImageResourceSnapshot(
+    Arc<HashMap<ImageRequestKey, Weak<ReadyImageResource>>>,
+);
+
+impl ReadyImageResourceSnapshot {
+    fn get(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
+        self.0.get(request).and_then(Weak::upgrade)
     }
 
     /// CSS paint may only reuse content that has actually been decoded.
@@ -77,22 +84,35 @@ impl ReadyImageResourceIndex {
         self.get(request)
             .filter(|resource| resource.pixels.is_some() || resource.svg.is_some())
     }
+}
+
+impl ReadyImageResourceIndex {
+    pub(super) fn snapshot(&self) -> ReadyImageResourceSnapshot {
+        self.inner.lock().clone()
+    }
+
+    pub(super) fn get(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
+        self.inner.lock().get(request)
+    }
+
+    pub(super) fn get_decoded(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
+        self.inner.lock().get_decoded(request)
+    }
 
     pub(super) fn insert(&self, request: ImageRequestKey, resource: &Arc<ReadyImageResource>) {
-        self.inner.lock().insert(request, Arc::downgrade(resource));
+        Arc::make_mut(&mut self.inner.lock().0).insert(request, Arc::downgrade(resource));
     }
 
     pub(super) fn contains_live(&self, request: &ImageRequestKey) -> bool {
         self.inner
             .lock()
+            .0
             .get(request)
             .is_some_and(|resource| resource.strong_count() > 0)
     }
 
     pub(super) fn prune_dead(&self) {
-        self.inner
-            .lock()
-            .retain(|_, resource| resource.strong_count() > 0);
+        Arc::make_mut(&mut self.inner.lock().0).retain(|_, resource| resource.strong_count() > 0);
     }
 }
 
