@@ -19,7 +19,13 @@
     for(const attr of Array.from(copy.attributes))if(attr.name.toLowerCase().startsWith('on'))copy.removeAttribute(attr.name);
     if(node.localName==='script'&&!['application/json','application/ld+json'].includes(node.type))copy.setAttribute('type','application/x-moli-arena-snapshot');
     if(node.localName==='style'&&node.sheet){
-      try {copy.textContent=node.sheet.disabled?'':Array.from(node.sheet.cssRules,r=>r.cssText).join('\n')}catch{}
+      try {
+        const active=Array.from(node.sheet.cssRules,r=>r.cssText).join('\n');
+        let unchanged=false;
+        try {const parsed=new CSSStyleSheet();parsed.replaceSync(node.textContent);
+          unchanged=Array.from(parsed.cssRules,r=>r.cssText).join('\n')===active;}catch{}
+        copy.textContent=node.sheet.disabled?'':unchanged?node.textContent:active;
+      }catch{}
     }
     if(node.localName==='link'&&node.sheet){
       try {

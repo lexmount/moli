@@ -21,14 +21,36 @@ from pathlib import Path
 import websockets
 
 SITES = {
+    "python_docs": "https://docs.python.org/3/tutorial/",
+    "rust_book": "https://doc.rust-lang.org/book/",
+    "vue": "https://vuejs.org/guide/introduction.html",
+    "react": "https://react.dev/learn",
+    "typescript": "https://www.typescriptlang.org/docs/handbook/intro.html",
     "finance": "https://finance.baidu.com/index/ab-000001",
+    "baidu": "https://www.baidu.com/",
+    "rust": "https://www.rust-lang.org/",
+    "bing": "https://www.bing.com/",
     "google": "https://www.google.com/?hl=en",
     "wikipedia": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
-    "hh": "https://hh.ru/",
-    "baidu": "https://www.baidu.com/",
-    "bilibili": "https://www.bilibili.com/",
-    "rust": "https://www.rust-lang.org/",
+    "github": "https://github.com/lexmount/moli",
+    "stackoverflow": "https://stackoverflow.com/questions",
+    "mdn": "https://developer.mozilla.org/en-US/docs/Web/CSS",
+    "npm": "https://www.npmjs.com/package/react",
+    "pypi": "https://pypi.org/project/requests/",
+    "hn": "https://news.ycombinator.com/",
+    "bbc": "https://www.bbc.com/news",
+    "cnn": "https://www.cnn.com/",
     "sina": "https://news.sina.com.cn/",
+    "163": "https://news.163.com/",
+    "qq": "https://news.qq.com/",
+    "sohu": "https://www.sohu.com/",
+    "douban": "https://www.douban.com/",
+    "zhihu": "https://www.zhihu.com/explore",
+    "v2ex": "https://www.v2ex.com/",
+    "bilibili": "https://www.bilibili.com/",
+    "jd": "https://www.jd.com/",
+    "taobao": "https://www.taobao.com/",
+    "hh": "https://hh.ru/",
 }
 
 
@@ -63,9 +85,12 @@ FREEZE_BOOTSTRAP = r"""(() => {
 
 OBSERVE = r"""(() => {
   const nodes=Array.from(document.querySelectorAll('body *'));
-  const boxes=nodes.filter(n=>n.getClientRects().length).slice(0,1000).map(n=>{
-    const r=n.getBoundingClientRect();return [n.localName,n.id,r.x,r.y,r.width,r.height];
-  });
+  const boxes=[];
+  for(const n of nodes){
+    if(boxes.length===1000)break;
+    if(!n.getClientRects().length)continue;
+    const r=n.getBoundingClientRect();boxes.push([n.localName,n.id,r.x,r.y,r.width,r.height]);
+  }
   return {url:location.href,title:document.title,ready:document.readyState,nodes:nodes.length,
     text:document.body?.textContent?.length||0, boxes,
     navigation:performance.getEntriesByType('navigation').map(e=>e.toJSON())};
@@ -90,7 +115,7 @@ def proc_resources(pid):
     mem = {
         k: int(v)
         for k, v in re.findall(
-            r"^(Rss|Pss|Private_Dirty|Private_Clean):\s+(\d+)",
+            r"^(Rss|Pss|Pss_Anon|Pss_File|Private_Dirty|Private_Clean|Anonymous|Swap):\s+(\d+)",
             (base / "smaps_rollup").read_text(),
             re.MULTILINE,
         )
@@ -103,6 +128,53 @@ def proc_resources(pid):
         "monotonic": time.monotonic(),
         "unix_time": time.time(),
     }
+
+
+class ResourceSampler:
+    """Sample process residency without asking V8 to collect garbage."""
+
+    def __init__(self, proc, folder, interval, max_rss_mib):
+        self.proc = proc
+        self.folder = folder
+        self.interval = interval
+        self.max_rss_kib = max_rss_mib * 1024
+        self.phase = "startup"
+        self.samples = []
+        self.guard = None
+        self.task = asyncio.create_task(self.run()) if interval > 0 else None
+
+    async def run(self):
+        while self.proc.poll() is None:
+            try:
+                point = proc_resources(self.proc.pid)
+            except (FileNotFoundError, ProcessLookupError):
+                break
+            point["phase"] = self.phase
+            self.samples.append(point)
+            if self.max_rss_kib and point["memory_kib"]["Rss"] > self.max_rss_kib:
+                self.guard = {
+                    "reason": "RSS exceeded benchmark limit",
+                    "limit_kib": self.max_rss_kib,
+                    "sample": point,
+                }
+                os.killpg(self.proc.pid, signal.SIGKILL)
+                return
+            await asyncio.sleep(self.interval)
+
+    async def stop(self):
+        if self.task:
+            self.task.cancel()
+            outcomes = await asyncio.gather(self.task, return_exceptions=True)
+            errors = [repr(value) for value in outcomes if isinstance(value, Exception)]
+            if errors:
+                (self.folder / "sampling-error.json").write_text(json.dumps(errors))
+        (self.folder / "memory-samples.jsonl").write_text(
+            "".join(json.dumps(point) + "\n" for point in self.samples)
+        )
+        if self.guard:
+            (self.folder / "resource-limit.json").write_text(
+                json.dumps(self.guard, indent=2)
+            )
 
 
 class Client:
@@ -119,20 +191,26 @@ class Client:
         self.read_task = asyncio.create_task(self.read())
 
     async def read(self):
-        async for raw in self.ws:
-            message = json.loads(raw)
-            if "id" in message:
-                future = self.pending.get(message["id"])
-                if future and not future.done():
-                    future.set_result(message)
-            else:
-                message["_received_monotonic"] = time.monotonic()
-                self.events.append(message)
-                if message.get("method") == "Fetch.requestPaused" and self.handler:
-                    task = asyncio.create_task(self.handler(message["params"]))
-                    self.tasks.add(task)
-                    task.add_done_callback(self.tasks.discard)
-                    task.add_done_callback(self.task_finished)
+        try:
+            async for raw in self.ws:
+                message = json.loads(raw)
+                if "id" in message:
+                    future = self.pending.get(message["id"])
+                    if future and not future.done():
+                        future.set_result(message)
+                else:
+                    message["_received_monotonic"] = time.monotonic()
+                    self.events.append(message)
+                    if message.get("method") == "Fetch.requestPaused" and self.handler:
+                        task = asyncio.create_task(self.handler(message["params"]))
+                        self.tasks.add(task)
+                        task.add_done_callback(self.tasks.discard)
+                        task.add_done_callback(self.task_finished)
+
+        finally:
+            for future in self.pending.values():
+                if not future.done():
+                    future.set_exception(ConnectionError("CDP connection closed"))
 
     def task_finished(self, task):
         if not task.cancelled() and task.exception():
@@ -168,6 +246,12 @@ class Client:
 
 async def one_run(args):
     folder = args.output.resolve()
+    idle_seconds = getattr(args, "idle_seconds", 0)
+    close_seconds = getattr(args, "close_seconds", 0)
+    batch_count = getattr(args, "pulse_batches", 1)
+    update_count = getattr(args, "pulse_updates", 96)
+    observe_only = getattr(args, "observe_only", False)
+    network_mode = getattr(args, "network_mode", "direct")
     folder.mkdir(parents=True, exist_ok=False)
     archive = args.archive.resolve()
     if args.mode == "record":
@@ -175,11 +259,12 @@ async def one_run(args):
         (archive / "bodies").mkdir()
         entries = []
     else:
-        entries = (
-            json.loads((archive / "archive.json").read_text())["entries"]
+        archive_data = (
+            json.loads((archive / "archive.json").read_text())
             if args.mode in ["replay", "snapshot"]
-            else []
+            else {}
         )
+        entries = archive_data.get("entries", [])
     recorded_observation = (
         json.loads((archive / "archive.json").read_text()).get("observation")
         if args.mode == "snapshot"
@@ -212,7 +297,7 @@ async def one_run(args):
         str(port),
         "--realtime",
         "--http-no-proxy",
-        "*",
+        "*" if network_mode == "direct" else "127.0.0.1,localhost",
         "--timeout",
         "150",
         "--log-level",
@@ -246,7 +331,14 @@ async def one_run(args):
         "clock_ticks": os.sysconf("SC_CLK_TCK"),
         "cpus": args.cpus,
     }
+    sampler = ResourceSampler(
+        proc,
+        folder,
+        getattr(args, "sample_interval", 0),
+        getattr(args, "max_rss_mib", 0),
+    )
     client = None
+    navigation = None
     try:
         version = None
         deadline = time.monotonic() + 30
@@ -282,9 +374,10 @@ async def one_run(args):
             "Emulation.setDeviceMetricsOverride",
             {"width": 1280, "height": 720, "deviceScaleFactor": 1, "mobile": False},
         )
-        await client.command(
-            "Page.addScriptToEvaluateOnNewDocument", {"source": FREEZE_BOOTSTRAP}
-        )
+        if not observe_only:
+            await client.command(
+                "Page.addScriptToEvaluateOnNewDocument", {"source": FREEZE_BOOTSTRAP}
+            )
 
         async def paused(params):
             ident = params["requestId"]
@@ -348,6 +441,28 @@ async def one_run(args):
                     await client.command("Fetch.continueResponse", {"requestId": ident})
             elif args.mode in ["replay", "snapshot"]:
                 options = by_key.get(key)
+                is_snapshot_root = (
+                    snapshot
+                    and request["url"].split("#")[0] == snapshot["url"].split("#")[0]
+                    and params.get("resourceType") == "Document"
+                )
+                if (
+                    not options
+                    and is_snapshot_root
+                    and archive_data.get("main_response")
+                ):
+                    response = archive_data["main_response"]
+                    options = [
+                        {
+                            "status": int(response["status"]),
+                            "headers": [
+                                {"name": k, "value": str(v)}
+                                for k, v in response.get("headers", {}).items()
+                            ],
+                            "error": None,
+                            "body_sha256": None,
+                        }
+                    ]
                 if not options:
                     misses.append(
                         {
@@ -370,10 +485,29 @@ async def one_run(args):
                         {"requestId": ident, "errorReason": entry["error"]},
                     )
                     return
-                digest = entry["body_sha256"]
-                if digest not in body_cache:
+                digest = entry.get("body_sha256")
+                main_snapshot = (
+                    snapshot
+                    and request["url"].split("#")[0] == snapshot["url"].split("#")[0]
+                    and params.get("resourceType") == "Document"
+                )
+                css_snapshot = snapshot and request["url"] in snapshot["css"]
+                if digest is None and not (main_snapshot or css_snapshot):
+                    misses.append(
+                        {
+                            "url": request["url"],
+                            "type": params.get("resourceType"),
+                            "reason": "Response metadata exists but original body is unavailable",
+                        }
+                    )
+                    await client.command(
+                        "Fetch.failRequest",
+                        {"requestId": ident, "errorReason": "Failed"},
+                    )
+                    return
+                if digest is not None and digest not in body_cache:
                     body_cache[digest] = (archive / "bodies" / digest).read_bytes()
-                body = body_cache[digest]
+                body = body_cache[digest] if digest is not None else b""
                 headers = [
                     h
                     for h in entry["headers"]
@@ -445,13 +579,31 @@ async def one_run(args):
                     ]
                 },
             )
+        sampler.phase = "blank"
         before = proc_resources(proc.pid)
+        sampler.phase = "initialization"
         started = time.monotonic()
         event_start = len(client.events)
         navigation = await client.command(
             "Page.navigate", {"url": snapshot["url"] if snapshot else SITES[args.site]}
         )
-        await asyncio.sleep(args.seconds)
+        load_timeout = getattr(args, "load_timeout", 0)
+        if snapshot and load_timeout:
+            load_deadline = started + load_timeout
+            while not any(
+                e.get("method") == "Page.loadEventFired"
+                for e in client.events[event_start:]
+            ):
+                if proc.poll() is not None or time.monotonic() >= load_deadline:
+                    break
+                await asyncio.sleep(0.02)
+        remaining = (
+            max(0, args.seconds - (time.monotonic() - started))
+            if observe_only or load_timeout
+            else args.seconds
+        )
+        await asyncio.sleep(remaining)
+        sampler.phase = "capture" if args.mode == "record" else "settled"
         if args.mode == "record":
             recorded = {entry["key"] for entry in entries}
             network_requests = {
@@ -514,34 +666,121 @@ async def one_run(args):
                         f"Uncaptured response: {request['url']}: {error!r}"
                     )
         after_initialization = proc_resources(proc.pid)
-        await client.evaluate("window.__arenaFreeze?.()")
-        if snapshot:
-            state = json.dumps(
-                {
-                    k: snapshot[k]
-                    for k in ["canvases", "active", "scroll", "viewportScroll"]
-                }
+        if observe_only:
+            observation = await client.evaluate(
+                "JSON.stringify({url:location.href,title:document.title,ready:document.readyState,nodes:document.querySelectorAll('body *').length})"
             )
-            restore = """(async()=>{const s=STATE;const locate=p=>p?.reduce((n,i)=>n?.children[i],document.documentElement);
-                const nodes=Array.from(document.querySelectorAll('canvas'));
-                await Promise.all(s.canvases.map(async(data,i)=>{if(!data||!nodes[i])return;const image=new Image();
-                    await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject;image.src=data});
-                    nodes[i].getContext('2d').drawImage(image,0,0)}));
-                const active=locate(s.active);if(active?.focus)active.focus({preventScroll:true});
-                for(const value of s.scroll){const node=locate(value.path);if(node){node.scrollLeft=value.x;node.scrollTop=value.y}}
-                scrollTo(...s.viewportScroll);return true})()""".replace("STATE", state)
-            await client.evaluate(restore)
-        if args.mode == "record":
-            snap = await client.evaluate(
-                (Path(__file__).resolve().parent / "snapshot_capture.js").read_text()
+            observation = json.loads(observation)
+            before_pulse = after_pulse = after_initialization
+            pulse = {"samples": [], "geometry": [], "total": 0}
+            pulse_batches = []
+            after_observation = observation
+        else:
+            await client.evaluate("window.__arenaFreeze?.()")
+            if snapshot:
+                state = json.dumps(
+                    {
+                        k: snapshot[k]
+                        for k in ["canvases", "active", "scroll", "viewportScroll"]
+                    }
+                )
+                restore = """(async()=>{const s=STATE;const locate=p=>p?.reduce((n,i)=>n?.children[i],document.documentElement);
+                    const nodes=Array.from(document.querySelectorAll('canvas'));
+                    await Promise.all(s.canvases.map(async(data,i)=>{if(!data||!nodes[i])return;const image=new Image();
+                        await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject;image.src=data});
+                        nodes[i].getContext('2d').drawImage(image,0,0)}));
+                    const active=locate(s.active);if(active?.focus)active.focus({preventScroll:true});
+                    for(const value of s.scroll){const node=locate(value.path);if(node){node.scrollLeft=value.x;node.scrollTop=value.y}}
+                    scrollTo(...s.viewportScroll);return true})()""".replace(
+                    "STATE", state
+                )
+                await client.evaluate(restore)
+            if args.mode == "record":
+                snap = await client.evaluate(
+                    (
+                        Path(__file__).resolve().parent / "snapshot_capture.js"
+                    ).read_text()
+                )
+                preserved_css = []
+                for url, active_css in list(snap["css"].items()):
+                    entry = next(
+                        (
+                            e
+                            for e in entries
+                            if e["url"] == url
+                            and e.get("body_sha256")
+                            and e.get("status") == 200
+                        ),
+                        None,
+                    )
+                    if entry is None:
+                        continue
+                    try:
+                        raw_css = (
+                            (archive / "bodies" / entry["body_sha256"])
+                            .read_bytes()
+                            .decode("utf-8-sig")
+                        )
+                        normalized = await client.evaluate(
+                            "(text=>{const sheet=new CSSStyleSheet();sheet.replaceSync(text);return Array.from(sheet.cssRules,r=>r.cssText).join('\\n')})("
+                            + json.dumps(raw_css)
+                            + ")"
+                        )
+                        if normalized == active_css:
+                            del snap["css"][url]
+                            preserved_css.append(url)
+                    except (RuntimeError, UnicodeError):
+                        pass  # Keep the active CSSOM capture when exact original CSS cannot be established.
+                snap["preserved_stylesheet_urls"] = preserved_css
+                (archive / "snapshot.json").write_text(
+                    json.dumps(snap, ensure_ascii=False)
+                )
+            await asyncio.sleep(0.1)
+            observation = await client.evaluate(OBSERVE)
+            pulse_batches = []
+            for batch in range(batch_count):
+                sampler.phase = f"pulse_{batch + 1}"
+                batch_before = proc_resources(proc.pid)
+                batch_pulse = await client.evaluate(
+                    PULSE.replace("i<96", f"i<{update_count}")
+                )
+                batch_after = proc_resources(proc.pid)
+                pulse_batches.append(
+                    {"before": batch_before, "after": batch_after, "pulse": batch_pulse}
+                )
+            before_pulse = pulse_batches[0]["before"]
+            after_pulse = pulse_batches[-1]["after"]
+            pulse = {
+                "samples": [
+                    value
+                    for batch in pulse_batches
+                    for value in batch["pulse"]["samples"]
+                ],
+                "geometry": [
+                    value
+                    for batch in pulse_batches
+                    for value in batch["pulse"]["geometry"]
+                ],
+                "total": sum(batch["pulse"]["total"] for batch in pulse_batches),
+            }
+            sampler.phase = "post_pulse_observation"
+            after_observation = await client.evaluate(OBSERVE)
+
+        after_workload = proc_resources(proc.pid)
+        sampler.phase = "live_followup" if observe_only else "idle"
+        if idle_seconds:
+            await asyncio.sleep(idle_seconds)
+        after_idle = proc_resources(proc.pid)
+        after_close = None
+        if getattr(args, "close_page", False):
+            sampler.phase = "close_page"
+            await client.command(
+                "Target.closeTarget", {"targetId": target["targetId"]}, root=True
             )
-            (archive / "snapshot.json").write_text(json.dumps(snap, ensure_ascii=False))
-        await asyncio.sleep(0.1)
-        observation = await client.evaluate(OBSERVE)
-        before_pulse = proc_resources(proc.pid)
-        pulse = await client.evaluate(PULSE)
-        after_pulse = proc_resources(proc.pid)
-        after_observation = await client.evaluate(OBSERVE)
+            sampler.phase = "after_close"
+            if close_seconds:
+                await asyncio.sleep(close_seconds)
+            after_close = proc_resources(proc.pid)
         loads = [
             e["_received_monotonic"] - started
             for e in client.events[event_start:]
@@ -550,6 +789,17 @@ async def one_run(args):
         manifest.update(
             load_event_seconds=loads[0] if loads else None,
             after_observation=after_observation,
+            after_workload=after_workload,
+            after_idle=after_idle,
+            after_close=after_close,
+            pulse_batches=pulse_batches,
+            pulse_updates=update_count,
+            network_mode=network_mode,
+            idle_seconds=idle_seconds,
+            close_seconds=close_seconds,
+            observe_only=observe_only,
+            sample_interval=getattr(args, "sample_interval", 0),
+            rss_limit_mib=getattr(args, "max_rss_mib", 0),
             navigation=navigation,
             elapsed=time.monotonic() - started,
             before=before,
@@ -616,6 +866,7 @@ async def one_run(args):
             flush=True,
         )
     finally:
+        await sampler.stop()
         if client:
             (folder / "events.jsonl").write_text(
                 "".join(json.dumps(e) + "\n" for e in client.events)
@@ -627,6 +878,40 @@ async def one_run(args):
             client.read_task.cancel()
             await asyncio.gather(client.read_task, return_exceptions=True)
         if args.mode == "record":
+            recorded_keys = {entry["key"] for entry in entries}
+            request_events = (
+                {
+                    e["params"]["requestId"]: e["params"]["request"]
+                    for e in client.events
+                    if e.get("method") == "Network.requestWillBeSent"
+                }
+                if client
+                else {}
+            )
+            for event in client.events if client else []:
+                if event.get("method") != "Network.responseReceived":
+                    continue
+                received = event["params"]
+                request = request_events.get(received["requestId"])
+                if not request or request_key(request) in recorded_keys:
+                    continue
+                response = received["response"]
+                entries.append(
+                    {
+                        "key": request_key(request),
+                        "url": request["url"],
+                        "type": received.get("type"),
+                        "status": int(response["status"]),
+                        "headers": [
+                            {"name": k, "value": str(v)}
+                            for k, v in response.get("headers", {}).items()
+                        ],
+                        "error": None,
+                        "body_sha256": None,
+                        "capture": "response-metadata-only",
+                    }
+                )
+                recorded_keys.add(request_key(request))
             (archive / "archive.json").write_text(
                 json.dumps(
                     {
@@ -636,6 +921,20 @@ async def one_run(args):
                         "observation": manifest.get("observation"),
                         "handler_errors": client.errors if client else [],
                         "capture_warnings": capture_warnings,
+                        "main_response": next(
+                            (
+                                event["params"]["response"]
+                                for event in reversed(client.events)
+                                if event.get("method") == "Network.responseReceived"
+                                and event["params"].get("type") == "Document"
+                                and navigation
+                                and event["params"].get("frameId")
+                                == navigation["frameId"]
+                            ),
+                            None,
+                        )
+                        if client
+                        else None,
                     },
                     indent=2,
                 )
@@ -661,4 +960,14 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seconds", type=float, default=20)
     parser.add_argument("--cpus", default="")
+    parser.add_argument("--network-mode", choices=["direct", "proxy"], default="direct")
+    parser.add_argument("--idle-seconds", type=float, default=0)
+    parser.add_argument("--load-timeout", type=float, default=0)
+    parser.add_argument("--close-seconds", type=float, default=0)
+    parser.add_argument("--pulse-batches", type=int, default=1)
+    parser.add_argument("--pulse-updates", type=int, default=96)
+    parser.add_argument("--close-page", action="store_true")
+    parser.add_argument("--observe-only", action="store_true")
+    parser.add_argument("--sample-interval", type=float, default=0)
+    parser.add_argument("--max-rss-mib", type=float, default=0)
     asyncio.run(one_run(parser.parse_args()))
