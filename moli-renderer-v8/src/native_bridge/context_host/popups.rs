@@ -62,7 +62,7 @@ const LIGHTWEIGHT_POPUP_JAVASCRIPT_NAVIGATION_ID_SLOT: &str =
 const LIGHTWEIGHT_POPUP_JAVASCRIPT_SOURCE_SLOT: &str = "__lmLightweightPopupJavascriptSource";
 const LIGHTWEIGHT_POPUP_DOCUMENT_WRITE_SESSION_SLOT: &str =
     "__lmLightweightPopupDocumentWriteSession";
-const LIGHTWEIGHT_POPUP_VIEWPORT_SURFACE_PROPERTIES: &[&str] = &[
+const LIGHTWEIGHT_POPUP_VIEWPORT_SURFACE_PROPERTIES: [&str; 5] = [
     "innerWidth",
     "innerHeight",
     "outerWidth",
@@ -411,6 +411,7 @@ pub(super) struct LightweightPopupBrowsingContextRecord {
     opener: Option<super::PendingWindowMessageEndpoint>,
     location_url: Url,
     opener_sandbox_policy: Option<DocumentSandboxPolicy>,
+    inherited_viewport: Option<[f64; LIGHTWEIGHT_POPUP_VIEWPORT_SURFACE_PROPERTIES.len()]>,
     lifecycle: LightweightPopupLifecycle,
     navigation_id: LightweightPopupNavigationId,
 }
@@ -751,6 +752,50 @@ impl PageScriptHost {
         })
     }
 
+    fn lightweight_popup_opener_viewport<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        opener: v8::Local<'s, v8::Object>,
+        opener_child_handle: Option<DomHandle>,
+    ) -> [f64; LIGHTWEIGHT_POPUP_VIEWPORT_SURFACE_PROPERTIES.len()] {
+        if let Some(viewport) = lightweight_popup_id_from_window(scope, opener)
+            .and_then(|id| self.lightweight_popup_record(id))
+            .and_then(|record| record.inherited_viewport)
+        {
+            return viewport;
+        }
+        let surface = self.viewport_surface().unwrap_or_default();
+        let default_inner_size = (
+            f64::from(surface.inner_width),
+            f64::from(surface.inner_height),
+        );
+        let (inner_width, inner_height) = opener_child_handle.map_or(default_inner_size, |frame| {
+            if self.layout_policy().is_realtime() {
+                if !self.child_browsing_context_host_is_active(frame) {
+                    return (0.0, 0.0);
+                }
+                let _ = self.ensure_observable_layout();
+            }
+            let viewport = crate::native_bridge::element::iframe_handle_viewport(self, frame);
+            let profile = moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
+            (
+                viewport
+                    .and_then(|v| v.width)
+                    .unwrap_or(profile.inner_width),
+                viewport
+                    .and_then(|v| v.height)
+                    .unwrap_or(profile.inner_height),
+            )
+        });
+        [
+            inner_width,
+            inner_height,
+            f64::from(surface.outer_width),
+            f64::from(surface.outer_height),
+            surface.device_pixel_ratio,
+        ]
+    }
+
     pub(crate) fn create_lightweight_popup_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -851,12 +896,19 @@ impl PageScriptHost {
         set_object_slot(scope, window, "parent", window.into());
         set_object_slot(scope, window, "top", window.into());
         set_object_slot(scope, window, "frames", window.into());
-        if let Some(opener) = opener {
-            set_private_value(scope, window, LIGHTWEIGHT_POPUP_OPENER_SLOT, opener.into());
-            install_lightweight_popup_viewport_surface_from_opener(scope, opener, window);
-        } else {
-            let opener = v8::null(scope);
-            set_private_value(scope, window, LIGHTWEIGHT_POPUP_OPENER_SLOT, opener.into());
+        let inherited_viewport = opener.map(|opener| {
+            self.lightweight_popup_opener_viewport(scope, opener, opener_child_handle)
+        });
+        let opener_value = opener.map_or_else(|| v8::null(scope).into(), Into::into);
+        set_private_value(scope, window, LIGHTWEIGHT_POPUP_OPENER_SLOT, opener_value);
+        if let Some(viewport) = inherited_viewport {
+            for (property, value) in LIGHTWEIGHT_POPUP_VIEWPORT_SURFACE_PROPERTIES
+                .into_iter()
+                .zip(viewport)
+            {
+                let value = v8::Number::new(scope, value);
+                set_object_slot(scope, window, property, value.into());
+            }
         }
         if let Ok(navigator) =
             crate::context_bootstrap::build_lightweight_popup_window_navigator_object(
@@ -938,6 +990,7 @@ impl PageScriptHost {
                 opener: opener_endpoint,
                 location_url: initial_url.clone(),
                 opener_sandbox_policy,
+                inherited_viewport,
                 lifecycle: LightweightPopupLifecycle::Open(Box::new(LightweightPopupOpenState {
                     document: LightweightPopupDocumentRecord {
                         owner: initial_document_owner,
@@ -4474,21 +4527,6 @@ fn install_lightweight_popup_indexed_db_factory<'s>(
     let factory_value: v8::Local<'s, v8::Value> = factory.into();
     set_object_slot(scope, window, "indexedDB", factory_value);
     true
-}
-
-fn install_lightweight_popup_viewport_surface_from_opener<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    opener: v8::Local<'s, v8::Object>,
-    window: v8::Local<'s, v8::Object>,
-) {
-    for property in LIGHTWEIGHT_POPUP_VIEWPORT_SURFACE_PROPERTIES {
-        let Some(value) = opener.get(scope, v8str(scope, property).into()) else {
-            continue;
-        };
-        if value.is_number() {
-            set_object_slot(scope, window, property, value);
-        }
-    }
 }
 
 fn lightweight_popup_window_name_getter<'s>(
