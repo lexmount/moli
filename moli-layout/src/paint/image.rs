@@ -26,6 +26,7 @@ pub(super) fn project_replaced_image<N>(
     projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     paint_space: PaintSpace,
+    include_placeholder: bool,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -47,18 +48,21 @@ pub(super) fn project_replaced_image<N>(
     ) {
         return;
     }
-    let Some(resource) = projection.replaced_image(id) else {
-        if kind == LayoutReplacedKind::Image {
-            project_unavailable_image(projection, id, paint_space, snapshot);
+    let Some(resource) = projection
+        .replaced_image(id)
+        .filter(|resource| resource.pixels.is_some() || resource.svg.is_some())
+    else {
+        match kind {
+            LayoutReplacedKind::Image => {
+                project_unavailable_image(projection, id, paint_space, snapshot)
+            }
+            LayoutReplacedKind::Svg if include_placeholder => {
+                super::project_replaced_placeholder(projection, id, paint_space, snapshot)
+            }
+            _ => {}
         }
         return;
     };
-    if resource.pixels.is_none() && resource.svg.is_none() {
-        if kind == LayoutReplacedKind::Image {
-            project_unavailable_image(projection, id, paint_space, snapshot);
-        }
-        return;
-    }
     let areas = BoxAreas::for_box(projection, id);
     let container = LayoutSize::new(
         areas.content_rect.width.max(0.0),

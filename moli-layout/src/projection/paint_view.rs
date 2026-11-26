@@ -123,9 +123,8 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
                 .element_semantics()
                 .and_then(|element| element.replaced)
         {
-            if kind == LayoutReplacedKind::Svg
-                && let Some(svg) = &self.inline_svg
-            {
+            if kind == LayoutReplacedKind::Svg {
+                let svg = self.inline_svg.as_ref()?;
                 return svg
                     .images
                     .borrow_mut()

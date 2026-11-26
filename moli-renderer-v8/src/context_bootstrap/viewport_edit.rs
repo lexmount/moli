@@ -572,7 +572,11 @@ fn editor_rect(host: &PageScriptHost, editor: &Editor, range: Range<usize>) -> O
         utf16_range: start..if end_node == source { end } else { start },
     };
     let rect = match host
-        .answer_layout_query_for_document(document, &query)
+        .answer_layout_query_for_document(
+            document,
+            &query,
+            crate::native_bridge::LayoutQueryMode::Published,
+        )
         .ok()?
     {
         LayoutQueryAnswer::TextRangeRects(rects) => rects.first().map(|quad| quad.bounding_rect()),
@@ -585,6 +589,7 @@ fn editor_rect(host: &PageScriptHost, editor: &Editor, range: Range<usize>) -> O
                 &LayoutQuery::ClientRects {
                     source: editor.target,
                 },
+                crate::native_bridge::LayoutQueryMode::Published,
             )
             .ok()?
         else {

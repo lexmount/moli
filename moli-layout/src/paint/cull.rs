@@ -308,15 +308,22 @@ where
     if !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    if layout_box
+    match layout_box
         .element_semantics()
         .and_then(|element| element.replaced)
-        == Some(LayoutReplacedKind::Svg)
-        && !layout_box.style.clips_overflow()
     {
-        // Visible SVG overflow can extend beyond the measured box. Its ink
-        // bounds are unavailable until the scene has been decoded.
-        return PaintCullBounds::Unbounded;
+        Some(LayoutReplacedKind::Svg) if !layout_box.style.clips_overflow() => {
+            // The scene can contribute beyond its CSS content box.
+            return PaintCullBounds::Unbounded;
+        }
+        Some(LayoutReplacedKind::Svg | LayoutReplacedKind::Frame) => {
+            return map_box_rect(
+                projection,
+                id,
+                BoxAreas::for_box(projection, id).content_rect,
+            );
+        }
+        _ => {}
     }
     let mut local = projection.geometry(id.index()).border_box;
     if let Some(context) = layout_box.inline_layout.as_ref() {

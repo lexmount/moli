@@ -643,12 +643,11 @@ pub trait LayoutSource {
         None
     }
 
-    /// Samples immutable replaced content into the current pass.
+    /// Samples immutable replaced content already available to the source.
     ///
-    /// The resolved root style is supplied because atomic document resources
-    /// such as inline SVG inherit paint inputs (`currentColor`, `font-size`)
-    /// from their outer CSS box. Implementations must not retain the style or
-    /// call back into live DOM/style state after returning.
+    /// Inline SVG scenes come from the paint consumer. Implementations must
+    /// not retain the supplied style or call into live DOM/style state after
+    /// returning.
     fn replaced_image(
         &self,
         _node: Self::NodeId,

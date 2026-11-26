@@ -1016,11 +1016,101 @@ mod tests {
                 fragment(valid_fragment, Some(valid_box_model)),
             ],
             Vec::new(),
-            Vec::new(),
             identity_space(None),
             Vec::new(),
             Vec::new(),
         )
+    }
+
+    fn add_frozen_svg(tree: &mut FrozenLayoutTree<u8>, source: u8, style_bytes: usize) {
+        tree.svg_viewports.insert(
+            source,
+            crate::pass::InlineSvgViewport {
+                owner: LayoutOutputBoxId::from_index(0),
+                size: crate::LayoutSize::new(100.0, 100.0),
+                prepared: false,
+            },
+        );
+        tree.frozen_inline_svg
+            .get_or_insert_with(|| Box::new(crate::layout_tree::FrozenInlineSvgInputs::new()))
+            .insert(
+                source,
+                crate::InlineSvgInput {
+                    xml: "<svg/>".into(),
+                    elements: vec![source, source + 1],
+                    styles: Vec::new(),
+                    style_bytes,
+                },
+            );
+    }
+
+    #[test]
+    fn svg_geometry_budget_accounts_for_the_frozen_input_it_replaces() {
+        let mut tree = inline_fragment_tree();
+        let limit = crate::layout_tree::MAX_RETAINED_LAYOUT_TREE_BYTES;
+        let base = tree.retention_metrics().estimated_geometry_bytes;
+        // Account for a large SVG stylesheet without allocating it in the test.
+        add_frozen_svg(&mut tree, 1, limit - base - 4096);
+        add_frozen_svg(&mut tree, 3, 0);
+        tree.validate_retention_budget().unwrap();
+        let mut metrics = tree.retention_metrics();
+        let quad = LayoutTransform2D::IDENTITY.map_rect(LayoutRect::new(1.0, 2.0, 10.0, 20.0));
+
+        assert!(matches!(
+            tree.append_svg_geometry_with_metrics(0, vec![(3, vec![(4, quad); 256])], &mut metrics),
+            Err(crate::LayoutError::TreeRetentionBudgetExceeded { .. })
+        ));
+        assert_eq!(metrics, tree.retention_metrics());
+        assert!(tree.pending_frozen_svg_input(4).is_some());
+
+        tree.append_svg_geometry_with_metrics(
+            0,
+            vec![
+                (1, vec![(2, quad); 256]),
+                (1, vec![(2, quad)]),
+                (9, vec![(10, quad)]),
+            ],
+            &mut metrics,
+        )
+        .unwrap();
+        assert_eq!(metrics, tree.retention_metrics());
+        assert_eq!(tree.object_geometry.len(), 256);
+        assert!(tree.pending_frozen_svg_input(2).is_none());
+        assert!(tree.pending_frozen_svg_input(4).is_some());
+
+        tree.append_svg_geometry_with_metrics(0, vec![(3, vec![(4, quad)])], &mut metrics)
+            .unwrap();
+        assert_eq!(metrics, tree.retention_metrics());
+        assert!(tree.frozen_inline_svg.is_none());
+    }
+
+    #[test]
+    fn oversized_frozen_svg_inputs_fall_back_to_eager_geometry() {
+        let mut tree = inline_fragment_tree();
+        add_frozen_svg(&mut tree, 1, 0);
+        tree.validate_retention_budget_with_svg_fallback(|_, _, _| panic!("inputs fit"))
+            .unwrap();
+        assert!(tree.pending_frozen_svg_input(2).is_some());
+
+        add_frozen_svg(
+            &mut tree,
+            3,
+            crate::layout_tree::MAX_RETAINED_LAYOUT_TREE_BYTES,
+        );
+        assert!(matches!(
+            tree.validate_retention_budget(),
+            Err(crate::LayoutError::TreeRetentionBudgetExceeded { .. })
+        ));
+        let quad = LayoutTransform2D::IDENTITY.map_rect(LayoutRect::new(1.0, 2.0, 10.0, 20.0));
+        tree.validate_retention_budget_with_svg_fallback(|root, input, size| {
+            assert_eq!(input.elements, [root, root + 1]);
+            assert_eq!(size, crate::LayoutSize::new(100.0, 100.0));
+            vec![(root + 1, quad)]
+        })
+        .unwrap();
+        assert!(tree.frozen_inline_svg.is_none());
+        assert_eq!(tree.client_rects_for_source(2), vec![quad]);
+        assert_eq!(tree.client_rects_for_source(4), vec![quad]);
     }
 
     #[test]

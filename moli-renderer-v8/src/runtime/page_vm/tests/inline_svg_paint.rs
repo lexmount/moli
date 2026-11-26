@@ -354,6 +354,61 @@ async fn inline_svg_capture_decodes_only_the_effective_paint_region() {
     .expect("viewport, clipped, and full-page captures select their own SVG scenes");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn inline_svg_and_iframe_borders_paint_without_preparing_contents() {
+    use moli_layout::{LayoutFlushReason, LayoutRect, LayoutViewport, PaintCaptureRequest};
+
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+            let mut page_vm = test_page_vm_with_loader_and_document_url(
+                &loader, Vec::new(), Url::parse("https://example.com/replaced-border.html")?,
+            );
+            let viewport = LayoutViewport::new(180, 100, 1.0);
+            page_vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+                inner_width: viewport.css_width,
+                inner_height: viewport.css_height,
+                device_pixel_ratio: 1.0,
+                ..Default::default()
+            }))?;
+            page_vm.vm_mut().set_layout_policy(policy);
+            let vm = page_vm.vm_mut();
+            vm.eval(r#"
+                document.body.style.margin = '0';
+                document.body.innerHTML = '<style>svg,iframe{position:absolute;top:0;width:40px;height:40px;' +
+                    'border:20px solid blue;overflow:hidden} svg{left:0}iframe{left:90px}</style>' +
+                    '<svg><rect width="40" height="40" fill="red"/></svg><iframe id="frame"></iframe>';
+                const child = document.getElementById('frame').contentDocument;
+                child.body.style.margin = '0';
+                child.body.innerHTML = '<svg width="40" height="40"><rect width="40" height="40" fill="lime"/></svg>';
+            "#)?;
+            let count = crate::layout_renderer::svg_parse_count();
+            let clip = LayoutRect::new(0.0, 0.0, 180.0, 8.0);
+            let border = vm.paint_layout_snapshot_with_capture(
+                viewport, LayoutFlushReason::Screenshot, PaintCaptureRequest::page_clip(clip, 1.0),
+                crate::native_bridge::LayoutPublicationRequest::Screen, None,
+            )?.expect("border capture");
+            assert_eq!(crate::layout_renderer::svg_parse_count(), count, "{policy:?}");
+            let layouts = vm.layout_pass_observability_for_test().1;
+            assert_eq!(vm.eval("child.querySelector('svg').getBoundingClientRect().width")?, "40");
+            assert_eq!(vm.layout_pass_observability_for_test().1, layouts);
+            assert_eq!(crate::layout_renderer::svg_parse_count(), count);
+            let border = moli_paint::raster_snapshot(&border)?;
+            let screen = vm.screenshot_layout_snapshot(viewport)?.expect("screen capture");
+            assert_eq!(crate::layout_renderer::svg_parse_count(), count + 2, "{policy:?}");
+            let screen = moli_paint::raster_snapshot(&screen)?;
+            assert_eq!(border.rgba, screen.rgba[..border.rgba.len()]);
+            for (x, rgba) in [(35, [255, 0, 0, 255]), (120, [0, 255, 0, 255])] {
+                let pixel = (35 * screen.width as usize + x) * 4;
+                assert_eq!(&screen.rgba[pixel..pixel+4], rgba);
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("CSS border paint has no SVG or frame content dependency");
+}
+
 #[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn realtime_screencast_decodes_new_svg_content_as_it_scrolls_into_view() {

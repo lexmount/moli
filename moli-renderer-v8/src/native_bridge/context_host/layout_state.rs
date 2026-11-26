@@ -216,8 +216,12 @@ impl DocumentLayoutState {
         self.latest_layout.get_for_root(root)
     }
 
-    pub(super) fn latest_tree_mut(&mut self) -> Option<&mut FrozenLayoutTree<DomHandle>> {
-        self.latest_layout.latest_tree_mut()
+    pub(super) fn append_svg_geometry(
+        &mut self,
+        root: DomHandle,
+        scenes: crate::layout_renderer::SvgGeometry,
+    ) -> Result<(), LayoutError> {
+        self.latest_layout.append_svg_geometry(root, scenes)
     }
 
     #[cfg(feature = "devtools")]
@@ -246,9 +250,7 @@ impl DocumentLayoutState {
     }
 
     pub(super) fn clear_inline_svg_content(&mut self) {
-        if let Some(tree) = self.latest_tree_mut() {
-            tree.clear_inline_svg_geometry();
-        }
+        self.latest_layout.clear_inline_svg_geometry();
         if let Some(retained) = &mut self.retained_layout {
             retained.clear_inline_svg_images();
         }

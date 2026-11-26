@@ -114,6 +114,7 @@ mod font_loading;
 mod internal_node_refs;
 mod intersection_observer_tasks;
 mod layout;
+pub(crate) use layout::LayoutQueryMode;
 mod layout_snapshot;
 #[cfg(feature = "devtools")]
 pub(crate) use layout_snapshot::PublishedFrameGeometry;
