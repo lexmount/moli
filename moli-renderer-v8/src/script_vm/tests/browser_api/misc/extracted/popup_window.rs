@@ -130,6 +130,24 @@ async fn window_open_lightweight_named_reuse_updates_dom_opener_synchronously() 
             .unwrap(),
         "true"
     );
+    let activations = vm.take_pending_popup_activations();
+    let popup_id = |name| {
+        activations
+            .iter()
+            .find(|activation| activation.target_name() == name)
+            .and_then(|activation| activation.popup_id())
+            .expect("named popup activation should retain its identity")
+    };
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    assert_eq!(
+        host.borrow()
+            .lightweight_popup_opener_endpoint(popup_id("child")),
+        Some(
+            crate::native_bridge::PendingWindowMessageEndpoint::LightweightPopup(popup_id(
+                "sibling"
+            ))
+        ),
+    );
 }
 
 #[tokio::test]

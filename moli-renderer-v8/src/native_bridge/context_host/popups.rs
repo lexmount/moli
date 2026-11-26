@@ -699,6 +699,11 @@ impl PageScriptHost {
         {
             let window = self.lightweight_popup_window(scope, popup_id)?;
             if update_existing_opener && let Some(opener) = opener {
+                let endpoint =
+                    lightweight_popup_initiator_endpoint(scope, Some(opener), opener_child_handle);
+                if let Some(record) = self.lightweight_popup_record_mut(popup_id) {
+                    record.opener = endpoint;
+                }
                 set_private_value(scope, window, LIGHTWEIGHT_POPUP_OPENER_SLOT, opener.into());
             }
             if href.is_empty() {
@@ -1169,7 +1174,7 @@ impl PageScriptHost {
             .map(|record| v8::Local::new(scope, &record.window_proxy))
     }
 
-    pub(in crate::native_bridge::context_host) fn lightweight_popup_opener_endpoint(
+    pub(crate) fn lightweight_popup_opener_endpoint(
         &self,
         popup_id: u64,
     ) -> Option<super::PendingWindowMessageEndpoint> {
