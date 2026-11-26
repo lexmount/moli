@@ -21,6 +21,16 @@ fn can_refresh_box<N>(layout_box: &crate::LayoutBox<N>) -> bool {
             | LayoutBoxKind::PrincipalInlineBlock
             | LayoutBoxKind::PrincipalFlex
             | LayoutBoxKind::PrincipalInlineFlex
+            | LayoutBoxKind::PrincipalGrid
+            | LayoutBoxKind::PrincipalInlineGrid
+            | LayoutBoxKind::TableWrapper
+            | LayoutBoxKind::InlineTableWrapper
+            | LayoutBoxKind::TableCaption
+            | LayoutBoxKind::TableRowGroup
+            | LayoutBoxKind::TableHeaderGroup
+            | LayoutBoxKind::TableFooterGroup
+            | LayoutBoxKind::TableRow
+            | LayoutBoxKind::TableCell
             | LayoutBoxKind::LineBreak
             | LayoutBoxKind::Text
     ) && layout_box.element_semantics.as_ref().is_none_or(|element| {
@@ -28,9 +38,14 @@ fn can_refresh_box<N>(layout_box: &crate::LayoutBox<N>) -> bool {
             && element.replaced.is_none()
             && matches!(
                 element.category,
-                LayoutElementCategory::Generic | LayoutElementCategory::LineBreak
+                LayoutElementCategory::Generic
+                    | LayoutElementCategory::Table(_)
+                    | LayoutElementCategory::LineBreak
             )
     }) && can_refresh_style(&layout_box.style)
+        && (!crate::table::is_table_root(layout_box.kind)
+            || (!layout_box.style.uses_fixed_table_layout()
+                && !layout_box.style.table_border_is_collapsed()))
 }
 
 pub(crate) fn can_retain_root<N: Copy + std::fmt::Debug + Eq + std::hash::Hash>(

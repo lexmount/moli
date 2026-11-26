@@ -486,6 +486,109 @@ fn realtime_reuses_numeric_links_until_box_roles_change() {
 }
 
 #[test]
+fn realtime_shared_shadow_stylesheet_mutations_are_visible_on_first_read() {
+    for first in ["color", "width", "offsetWidth"] {
+        let mut vm = realtime_vm("<!doctype html><section></section><section></section>");
+        let setup = r#"
+            const roots = [...document.querySelectorAll('section')].map(
+                node => node.attachShadow({mode:'open'})
+            );
+            const targets = roots.map(root => root.appendChild(document.createElement('div')));
+            const sheet = new CSSStyleSheet();
+            sheet.replaceSync('div {width:100px;height:18px;color:rgb(1,2,3)}');
+            roots.forEach(root => { root.adoptedStyleSheets = [sheet]; });
+            const styles = targets.map(node => getComputedStyle(node));
+            function sample() {
+                const first = firstRead === 'offsetWidth'
+                    ? targets.map(node => node.offsetWidth)
+                    : styles.map(style => style[firstRead]);
+                return [first,styles.map(style=>style.color),targets.map(node=>node.offsetWidth)];
+            }
+            JSON.stringify(sample())
+        "#;
+        let expected = |color: &str, width: u32| {
+            let first_value = match first {
+                "color" => serde_json::json!(color),
+                "width" => serde_json::json!(format!("{width}px")),
+                _ => serde_json::json!(width),
+            };
+            serde_json::json!([[first_value, first_value], [color, color], [width, width]])
+        };
+        assert_eq!(
+            vm.eval(&format!("const firstRead={first:?};{setup}"))
+                .unwrap(),
+            expected("rgb(1, 2, 3)", 100).to_string(),
+        );
+        assert_eq!(
+            vm.eval(concat!(
+                "sheet.replaceSync('div {width:200px;height:18px;color:rgb(4,5,6)}');",
+                "JSON.stringify(sample())",
+            ))
+            .unwrap(),
+            expected("rgb(4, 5, 6)", 200).to_string(),
+        );
+        assert_eq!(
+            vm.eval(concat!(
+                "sheet.cssRules[0].style.width='300px';sheet.cssRules[0].style.color='rgb(7,8,9)';",
+                "JSON.stringify(sample())",
+            ))
+            .unwrap(),
+            expected("rgb(7, 8, 9)", 300).to_string(),
+        );
+    }
+}
+
+#[test]
+fn realtime_retains_stable_grid_and_table_box_branches() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{overflow:hidden}",
+        "#grid{display:grid;grid-template-columns:30px 50px}",
+        "#plain{border-collapse:separate;table-layout:auto}",
+        "</style><div id=control style='width:20px'></div>",
+        "<div id=grid><div>A</div><div>B</div><div>C</div><div>D</div></div>",
+        "<table id=plain><tbody><tr><td id=cell>Text</td><td>Cell</td></tr>",
+        "<tr><td>Other</td><td>Row</td></tr></tbody></table>",
+    ));
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+
+    for (index, edit) in [
+        "control.style.width='32px'",
+        "plain.tBodies[0].insertRow().insertCell().textContent='New row'",
+        "grid.firstElementChild.style.order='2'",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        vm.eval(edit).unwrap();
+        let retained = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+        if index == 0 {
+            let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+            assert!(metrics.pruned_source_count >= 13, "{metrics:?}");
+        }
+        assert_eq!(
+            vm.eval("getComputedStyle(grid).gridTemplateColumns")
+                .unwrap(),
+            "30px 50px"
+        );
+        let fresh = host
+            .borrow()
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::with_paint(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Screenshot,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(&retained), fresh.paint_snapshot(), "{edit}");
+    }
+}
+
+#[test]
 fn realtime_retained_inline_roles_match_fresh_geometry_and_paint() {
     let mut vm = realtime_vm(concat!(
         "<!doctype html><style>body{margin:0}p{margin:0;width:180px}",

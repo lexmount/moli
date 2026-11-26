@@ -409,8 +409,9 @@ fn realtime_screencast_releases_paint_when_the_document_becomes_empty() {
         );
         page.layout_configuration.policy = LayoutPolicy::Realtime;
         page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        // Vertical writing mode keeps screen paint without a reusable layout.
         page.vm_mut()
-            .eval("document.documentElement.style.display = 'grid'; document.body.textContent = 'Visible text'")
+            .eval("document.documentElement.style.writingMode = 'vertical-rl'; document.body.textContent = 'Visible text'")
             .unwrap();
 
         let session = RendererScreencastPaintSession::default();
@@ -424,7 +425,7 @@ fn realtime_screencast_releases_paint_when_the_document_becomes_empty() {
         let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
         assert!(
             !host.borrow().has_retained_layout_for_test(),
-            "a grid root still retains paint"
+            "screen paint can outlive a pass that cannot retain layout",
         );
 
         page.vm_mut()
