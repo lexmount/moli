@@ -426,6 +426,17 @@ fn invalidate_structure(
                     *next_sibling,
                     subtrees,
                 );
+                if stylist.is_some()
+                    && flags.intersects(
+                        Flags::HAS_EDGE_CHILD_SELECTOR
+                            | Flags::HAS_SLOW_SELECTOR_NTH
+                            | Flags::HAS_SLOW_SELECTOR_NTH_OF,
+                    )
+                {
+                    // An existing child can enter or leave a positional
+                    // match even when the spliced nodes match no dependency.
+                    invalidate_relative_boundaries(host, adapter, *parent, subtrees);
+                }
             }
             let Some(stylist) = stylist else {
                 return;
@@ -554,6 +565,19 @@ fn invalidate_child_positions(
     subtrees: &mut IndexSet<DomHandle>,
 ) {
     use ElementSelectorFlags as Flags;
+    if flags.for_parent().is_empty() {
+        return;
+    }
+    if [previous, next]
+        .into_iter()
+        .flatten()
+        .any(|sibling| host.parent_node(sibling) != Some(parent))
+    {
+        // Deferred splices may also remove an earlier splice's neighbor.
+        // Revalidate this parent when that boundary can no longer be read.
+        subtrees.insert(parent);
+        return;
+    }
     let previous = adjacent_element(host, previous, |host, node| {
         host.node(node).and_then(Node::prev_sibling)
     });
