@@ -1185,6 +1185,39 @@ fn line_items_with_content<'a>(
     })
 }
 
+/// Returns the first in-flow item in the line's reading direction.
+pub(crate) fn first_in_flow_item_index(
+    context: &InlineFormattingContext,
+    layout: &Layout<TextBrush>,
+    line: &parley::Line<'_, TextBrush>,
+) -> Option<usize> {
+    let mut items = line_items_with_content(context, layout, line)
+        .enumerate()
+        .filter_map(|(index, (item, contributes))| {
+            let in_flow = match item {
+                PositionedLayoutItem::GlyphRun(run) => {
+                    contributes && !glyph_run_is_collapsible_whitespace(context, &run)
+                }
+                PositionedLayoutItem::InlineBox(positioned) => {
+                    contributes
+                        || (positioned.width > 0.0
+                            && context.object(positioned.id).is_some_and(|object| {
+                                matches!(
+                                    object.role,
+                                    InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
+                                )
+                            }))
+                }
+            };
+            in_flow.then_some(index)
+        });
+    if layout.is_rtl() {
+        items.last()
+    } else {
+        items.next()
+    }
+}
+
 fn glyph_run_is_collapsible_whitespace(
     context: &InlineFormattingContext,
     glyph_run: &parley::GlyphRun<'_, TextBrush>,

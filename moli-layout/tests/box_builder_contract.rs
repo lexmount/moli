@@ -1922,6 +1922,89 @@ fn relative_atomic_inline_resolves_insets_against_the_ifc_content_box() {
 }
 
 #[test]
+fn block_absolute_static_position_uses_line_edges_around_inline_content() {
+    let blue = PaintColor::new(0.0, 0.0, 1.0, 1.0);
+    let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    for (children, expected_y) in [(vec![2, 3], 8.0), (vec![3, 2], 40.0)] {
+        let source = TestSource {
+            root: 0,
+            nodes: vec![
+                TestNode::element("relative", vec![1]),
+                TestNode::element("line-owner", children),
+                TestNode::element("absolute-block", Vec::new()),
+                TestNode::element("atomic", Vec::new()),
+            ],
+        };
+        let mut styles = TestStyles::default();
+        styles.primary.insert(
+            0,
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(100.0),
+                        height: length(100.0),
+                    },
+                    padding: Rect {
+                        left: length(8.0),
+                        right: length(8.0),
+                        top: length(8.0),
+                        bottom: length(8.0),
+                    },
+                    ..Style::default()
+                },
+                PaintColor::TRANSPARENT,
+            )
+            .with_position(LayoutPosition::Relative),
+        );
+        styles.primary.insert(1, style(LayoutDisplay::Block));
+        let square = |display, color| {
+            ResolvedLayoutStyle::synthetic(
+                display,
+                Style {
+                    size: Size {
+                        width: length(32.0),
+                        height: length(32.0),
+                    },
+                    ..Style::default()
+                },
+                color,
+            )
+        };
+        styles.primary.insert(
+            2,
+            square(LayoutDisplay::Block, red).with_position(LayoutPosition::Absolute),
+        );
+        styles.primary.insert(
+            3,
+            square(LayoutDisplay::InlineBlock, blue)
+                .with_inline_alignment(LayoutInlineAlignment::Bottom),
+        );
+
+        let snapshot = build_screenshot_snapshot(
+            &source,
+            &mut styles,
+            &mut DocumentLayoutServices::new(),
+            ScreenshotLayoutRequest::new(PaintViewport::new(160, 140, 1.0)),
+        )
+        .unwrap();
+        let rect_for = |color| {
+            snapshot
+                .fragments
+                .iter()
+                .find_map(|fragment| {
+                    fragment
+                        .solid_fill_in_surface()
+                        .and_then(|(rect, fill)| (fill == color).then_some(rect))
+                })
+                .expect("fixture box must paint")
+        };
+        assert_eq!(rect_for(blue), PaintRect::new(8.0, 8.0, 32.0, 32.0));
+        assert_eq!(rect_for(red), PaintRect::new(8.0, expected_y, 32.0, 32.0));
+    }
+}
+
+#[test]
 fn all_auto_absolute_inline_uses_the_zero_width_placeholder_after_atomic_content() {
     let source = TestSource {
         root: 0,

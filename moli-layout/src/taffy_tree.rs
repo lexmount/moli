@@ -21,8 +21,8 @@ use crate::{
         InlineContentWidthsMemo, InlineEdgeContribution, InlineFormattingContext, InlineFragments,
         InlineLinePlacement, InlineMeasurementInputs, InlineNumericInputs, InlineObjectRole,
         break_inline_lines, build_inline_fragments, build_inline_line_placements,
-        measure_inline_lines, position_inline_edges, relative_atomic_inset_offset,
-        reset_inline_layout_for_probe,
+        first_in_flow_item_index, measure_inline_lines, position_inline_edges,
+        relative_atomic_inset_offset, reset_inline_layout_for_probe,
     },
     positioned::{
         FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
@@ -3229,7 +3229,9 @@ where
                 floated.parent_width,
             );
         }
+        let rtl = layout.is_rtl();
         for (line_index, line) in layout.lines().enumerate() {
+            let mut line_content_boundary = None;
             let line_placement = measurement
                 .line_placements
                 .as_ref()
@@ -3247,9 +3249,34 @@ where
                     .map(|placement| placement.item_offset(item_index))
                     .unwrap_or_default();
                 if object.role == InlineObjectRole::OutOfFlow {
-                    let inline_level = self.boxes[object.box_id.index()]
-                        .style
-                        .hypothetical_display_is_inline_level();
+                    let style = &self.boxes[object.box_id.index()].style;
+                    let inline_level = style.hypothetical_display_is_inline_level();
+                    let block_offset = if !inline_level
+                        && style.taffy.inset.top.is_auto()
+                        && style.taffy.inset.bottom.is_auto()
+                        && let Some(placement) = line_placement
+                    {
+                        let first_in_flow = *line_content_boundary.get_or_insert_with(|| {
+                            first_in_flow_item_index(context, layout, &line)
+                        });
+                        let has_preceding_content = first_in_flow.is_some_and(|index| {
+                            if rtl {
+                                index > item_index
+                            } else {
+                                index < item_index
+                            }
+                        });
+                        // A hypothetical block starts at the line's block-start,
+                        // or after the line when in-flow content precedes it.
+                        placement.rect.y
+                            + if has_preceding_content {
+                                placement.rect.height
+                            } else {
+                                0.0
+                            }
+                    } else {
+                        positioned.y + vertical_offset
+                    };
                     self.boxes[object.box_id.index()].inline_static_position =
                         Some(InlineStaticPosition {
                             owner: self.boxes[object.box_id.index()]
@@ -3257,7 +3284,7 @@ where
                                 .unwrap_or_else(|| panic!("out-of-flow IFC object lost its owner")),
                             point: Point {
                                 x: content_offset.x + if inline_level { positioned.x } else { 0.0 },
-                                y: content_offset.y + positioned.y + vertical_offset,
+                                y: content_offset.y + block_offset,
                             },
                             inline_level,
                         });
