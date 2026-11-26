@@ -2017,6 +2017,46 @@ fn preferred_stylesheet_title_filters_cascade_only() {
 
     assert_eq!(result, "rgb(0, 128, 0)|null,null,Preferred,Not preferred");
 }
+
+#[test]
+fn stylesheet_title_is_live_only_in_a_document_tree() {
+    let mut vm = new_storage_test_vm("https://stylesheet-title.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const head = document.head || root.appendChild(document.createElement('head'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const style = head.appendChild(document.createElement('style'));
+  const sheet = style.sheet;
+  style.getAttribute = () => 'overridden';
+  style.setAttribute('title', 'Native title');
+  const nativeTitle = sheet.title === 'Native title';
+  style.removeAttribute('title');
+  const emptyTitle = sheet.title === null;
+
+  const host = body.appendChild(document.createElement('div'));
+  const shadow = host.attachShadow({ mode: 'open' });
+  shadow.innerHTML = `
+    <style title="First">.target { color: red; }</style>
+    <style title="Second">.target { color: green; }</style>
+    <span class="target"></span>
+  `;
+  const [first, second] = shadow.querySelectorAll('style');
+  second.setAttribute('title', 'Renamed');
+  const untitled = first.sheet.title === null && second.sheet.title === null;
+  const color = getComputedStyle(shadow.querySelector('.target')).color;
+  head.appendChild(second);
+  return [nativeTitle, emptyTitle, untitled, color, second.sheet.title].join('|');
+})()
+"#,
+        )
+        .expect("stylesheet titles should follow the document tree");
+
+    assert_eq!(result, "true|true|true|rgb(0, 128, 0)|Renamed");
+}
+
 #[test]
 fn stylesheet_list_intrinsic_iterator_ignores_item_tampering() {
     let mut vm = new_storage_test_vm("https://stylesheet-list-intrinsic-iterator.test/");

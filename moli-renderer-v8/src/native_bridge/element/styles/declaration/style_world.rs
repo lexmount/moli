@@ -344,6 +344,9 @@ pub(super) fn active_stylesheet_handles(
                 && stylesheet_owner_type_is_supported(element)
         })
         .collect::<Vec<_>>();
+    if !runtime.dom_host().node(root).is_some_and(Node::is_document) {
+        return handles;
+    }
     let preferred_title = handles
         .iter()
         .filter_map(|handle| {
