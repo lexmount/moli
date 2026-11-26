@@ -76,7 +76,7 @@ async fn realtime_publication_hover_refreshes_screen_after_temporary_viewport() 
             let paint = |vm: &mut StandaloneScriptVmHarness| {
                 let snapshot = vm
                     .paint_current_screen_layout(
-                        &session,
+                        Some(&session),
                         viewport,
                         moli_layout::PaintCaptureRequest::viewport(),
                         LayoutFlushReason::RenderingOpportunity,

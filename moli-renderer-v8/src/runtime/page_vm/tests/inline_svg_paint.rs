@@ -444,7 +444,7 @@ async fn realtime_screencast_decodes_new_svg_content_as_it_scrolls_into_view() {
         let session = crate::runtime::RendererScreencastPaintSession::default();
         let capture = |vm: &mut crate::script_vm::ScriptVm| -> anyhow::Result<_> {
             let frame = vm.paint_current_screen_layout(
-                &session,
+                Some(&session),
                 viewport,
                 PaintCaptureRequest::viewport(),
                 LayoutFlushReason::Screencast,

@@ -254,8 +254,8 @@ impl RendererCaptureScreenshotRequest {
 }
 
 impl PageVm {
-    /// Captures an explicit screenshot. These demands always execute a fresh
-    /// paint pass and never carry screencast state.
+    /// Captures an explicit screenshot, borrowing screen paint when it is
+    /// already retained by a continuous consumer.
     pub(super) fn capture_screenshot(
         &mut self,
         request: RendererCaptureScreenshotRequest,
@@ -458,14 +458,19 @@ impl PageVm {
         };
         let layout_started = profile_enabled.then(Instant::now);
         #[cfg(feature = "devtools")]
-        let reusable = match paint_session {
-            Some(session) => self.vm_mut().paint_current_screen_layout(
-                session,
+        let reusable = if paint_session.is_some()
+            || (reason == LayoutFlushReason::Screenshot
+                && self.layout_configuration.policy.is_realtime()
+                && !self.vm().is_debugger_paused())
+        {
+            self.vm_mut().paint_current_screen_layout(
+                paint_session,
                 viewport,
                 paint_capture,
                 reason,
-            )?,
-            None => None,
+            )?
+        } else {
+            None
         };
         #[cfg(not(feature = "devtools"))]
         let reusable = None;
