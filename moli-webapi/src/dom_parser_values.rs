@@ -23,14 +23,21 @@ pub fn dom_parser_constructor_callback<'s>(
         throw_type_error(scope, "DOMParser constructor must be called with new");
         return;
     }
+    initialize_dom_parser_object(scope, args.this());
+    rv.set(args.this().into());
+}
+
+pub fn initialize_dom_parser_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    parser: v8::Local<'s, v8::Object>,
+) {
     // The constructor's Window is independent of newTarget.prototype. Keep
     // a V8-traced creation-Realm witness, not a native persistent Context root
     // or a WindowProxy that can be rebound to another Window on navigation.
     let realm = moli_v8_util::new_null_prototype_object(scope);
     DomParserObjectDeclaration::new(realm)
-        .initialize(scope, args.this())
+        .initialize(scope, parser)
         .expect("DOMParser state should initialize");
-    rv.set(args.this().into());
 }
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
