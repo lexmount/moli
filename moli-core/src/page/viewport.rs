@@ -77,6 +77,20 @@ impl Page {
         }
     }
 
+    /// Runs the default cut action for the focused editor in this document.
+    pub async fn cut_viewport_selection(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+    ) -> Result<Option<String>> {
+        match self
+            .dispatch_page_command_async(RendererPageCommand::CutViewportSelection(document))
+            .await?
+        {
+            RendererPageReply::OptionalString(text) => Ok(text),
+            _ => anyhow::bail!("unexpected viewport cut reply"),
+        }
+    }
+
     pub async fn drop_viewport_files(
         &mut self,
         document: crate::RendererDocumentLifecycleIdentity,

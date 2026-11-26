@@ -951,6 +951,13 @@ impl ScriptVm {
         })
     }
 
+    pub(crate) fn cut_viewport_selection(&mut self) -> Result<Option<String>> {
+        let result = self.with_default_context_scope(|scope, host| {
+            Ok(crate::context_bootstrap::viewport_edit::cut_viewport_selection(scope, host))
+        });
+        self.finish_input_event_dispatch_turn(result)
+    }
+
     pub(crate) fn viewport_editor_snapshot(
         &mut self,
         editing: &crate::context_bootstrap::viewport_edit::ViewportEditing,

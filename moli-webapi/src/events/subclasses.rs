@@ -421,4 +421,4 @@ pub fn build_template<'s>(
     }
 }
 
-pub use values::construct_original_page_transition_event;
+pub use values::{construct_native_clipboard_event, construct_original_page_transition_event};

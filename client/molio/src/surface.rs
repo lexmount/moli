@@ -699,9 +699,18 @@ impl MoliSurface {
         };
         if primary && !event.keystroke.modifiers.alt {
             match (event.keystroke.key.as_str(), self.document) {
-                ("c", Some(document)) => {
+                ("c" | "x", Some(document)) => {
                     let (reply, text) = oneshot::channel();
-                    self.send(TabCommand::Copy { document, reply });
+                    let command = if event.keystroke.key == "x" {
+                        TabCommand::Cut {
+                            document,
+                            key: viewport_key_input("keydown", &event.keystroke, event.is_held),
+                            reply,
+                        }
+                    } else {
+                        TabCommand::Copy { document, reply }
+                    };
+                    self.send(command);
                     cx.spawn_in(window, async move |_, cx| {
                         if let Ok(Some(text)) = text.await {
                             let _ = cx.update(|_, cx| {
@@ -749,14 +758,9 @@ impl MoliSurface {
     }
 
     fn key(&self, event: &'static str, keystroke: &Keystroke, repeat: bool) {
-        let (key, code) = dom_key(keystroke);
-        self.send(TabCommand::Key(KeyInput {
-            event,
-            key,
-            code,
-            repeat,
-            modifiers: modifiers(keystroke.modifiers),
-        }));
+        self.send(TabCommand::Key(viewport_key_input(
+            event, keystroke, repeat,
+        )));
     }
 }
 
@@ -992,6 +996,17 @@ fn mouse_button(button: MouseButton) -> (i32, i32) {
         MouseButton::Middle => (1, 4),
         MouseButton::Right => (2, 2),
         _ => (-1, 0),
+    }
+}
+
+fn viewport_key_input(event: &'static str, keystroke: &Keystroke, repeat: bool) -> KeyInput {
+    let (key, code) = dom_key(keystroke);
+    KeyInput {
+        event,
+        key,
+        code,
+        repeat,
+        modifiers: modifiers(keystroke.modifiers),
     }
 }
 

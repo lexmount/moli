@@ -2030,6 +2030,99 @@ async fn viewport_ime_replaces_composition_and_reports_utf16_offsets() -> Result
 }
 
 #[tokio::test]
+async fn viewport_cut_copies_and_edits_only_the_current_editable_selection() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser
+        .fetch(&html_url("<input id=editor value='A😀B'>"))
+        .await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        window.events = [];
+        window.cancelDeletion = false;
+        window.customCut = false;
+        editor.addEventListener('cut', e => {
+          events.push([e.type, e instanceof ClipboardEvent, e.isTrusted]);
+          if (customCut) {
+            e.clipboardData.setData('text/plain', 'custom');
+            e.preventDefault();
+          }
+        });
+        for (const name of ['beforeinput', 'input']) {
+          editor.addEventListener(name, e => {
+            events.push([name, e.inputType, e.data, e.isTrusted]);
+            if (name === 'beforeinput' && cancelDeletion) e.preventDefault();
+          });
+        }
+        editor.focus();
+        editor.setSelectionRange(1, 3);
+    "#,
+    )
+    .await?;
+    assert_eq!(
+        page.cut_viewport_selection(document).await?.as_deref(),
+        Some("😀")
+    );
+    let state = page
+        .evaluate_runtime_expression_async(
+            "JSON.stringify([editor.value, editor.selectionStart, editor.selectionEnd, events])",
+        )
+        .await?;
+    assert_eq!(
+        state["value"],
+        r#"["AB",1,1,[["cut",true,true],["beforeinput","deleteByCut",null,true],["input","deleteByCut",null,true]]]"#
+    );
+    assert_eq!(page.cut_viewport_selection(document).await?, None);
+
+    page.evaluate_runtime_expression_async(
+        "editor.value='A😀B'; editor.setSelectionRange(1,3); cancelDeletion=true; events=[]",
+    )
+    .await?;
+    assert_eq!(
+        page.cut_viewport_selection(document).await?.as_deref(),
+        Some("😀")
+    );
+    let state = page
+        .evaluate_runtime_expression_async("JSON.stringify([editor.value, events.map(e => e[0])])")
+        .await?;
+    assert_eq!(state["value"], r#"["A😀B",["cut","beforeinput"]]"#);
+
+    page.evaluate_runtime_expression_async("customCut=true; events=[]")
+        .await?;
+    assert_eq!(
+        page.cut_viewport_selection(document).await?.as_deref(),
+        Some("custom")
+    );
+    let state = page
+        .evaluate_runtime_expression_async("JSON.stringify([editor.value, events.map(e => e[0])])")
+        .await?;
+    assert_eq!(state["value"], r#"["A😀B",["cut"]]"#);
+
+    for setting in [
+        "editor.readOnly=true",
+        "editor.readOnly=false;editor.type='password'",
+    ] {
+        page.evaluate_runtime_expression_async(&format!(
+            "{setting}; editor.focus();editor.select();events=[]"
+        ))
+        .await?;
+        assert_eq!(page.cut_viewport_selection(document).await?, None);
+        let state = page
+            .evaluate_runtime_expression_async("JSON.stringify([editor.value, events.length])")
+            .await?;
+        assert_eq!(state["value"], r#"["A😀B",0]"#);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_ime_replaces_a_selection_across_contenteditable_nodes() -> Result<()> {
     use moli_core::{RendererViewportEdit, RendererViewportEditAction};
 

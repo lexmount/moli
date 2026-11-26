@@ -385,6 +385,10 @@ impl PageVm {
                 .read_viewport_selection(document)
                 .map(RendererPageReply::OptionalString),
             #[cfg(feature = "molio")]
+            RendererPageCommand::CutViewportSelection(document) => self
+                .cut_viewport_selection(document)
+                .map(RendererPageReply::OptionalString),
+            #[cfg(feature = "molio")]
             RendererPageCommand::ApplyViewportEdit(edit) => self.apply_viewport_edit(edit).map(RendererPageReply::ViewportEdit),
             #[cfg(feature = "molio")]
             RendererPageCommand::DropViewportFiles { document, x, y, files, modifiers } => self
