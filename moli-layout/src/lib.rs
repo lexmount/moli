@@ -85,7 +85,6 @@ pub use scrollbar::{
     LayoutScrollbarGeometry, LayoutScrollbarGutter, LayoutScrollbarHit, LayoutScrollbarPart,
     LayoutScrollbarWidth,
 };
-pub(crate) use snapshot::pixel_snap_paint_rect;
 pub use snapshot::{
     PaintBlendMode, PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintBoxShadow,
     PaintBrush, PaintColor, PaintCompositeMode, PaintConicGradient, PaintCornerRadii,
@@ -98,7 +97,7 @@ pub use snapshot::{
     PaintRect, PaintShape, PaintSize, PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId,
     PaintSvgImageResource, PaintTextDecoration, PaintTextDecorationStyle, PaintTextSemantics,
     PaintTextShadow, PaintTextStroke, PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles,
-    PaintTransform2D, PaintViewport, pixel_snap_paint_axis,
+    PaintTransform2D, PaintViewport,
 };
 pub use source::{
     ChildBoxPolicy, InlineSvgConsumers, InlineSvgImageLookup, InlineSvgInput, InlineSvgInputLookup,

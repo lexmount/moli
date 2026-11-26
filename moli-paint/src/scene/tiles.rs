@@ -5,8 +5,8 @@ use std::ops::Range;
 use anyrender::{ImageRenderer, PaintScene};
 use anyrender_vello_cpu::VelloCpuImageRenderer;
 use moli_layout::{
-    PaintImageSampling, PaintSnapshot, PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles,
-    pixel_snap_paint_axis,
+    PaintImageSampling, PaintPixelGrid, PaintSnapshot, PaintTileAxis, PaintTileGrid,
+    PaintTileSource, PaintTiles,
 };
 use peniko::kurbo::{Affine, Point, Rect, Shape};
 use peniko::{
@@ -29,10 +29,10 @@ pub(super) fn paint_tiles(
     scale: f64,
     output: Rect,
 ) {
-    let grid = tiles.grid;
-    let Some(coverage) = grid_coverage(grid) else {
+    let Some(grid) = ResolvedTileGrid::new(tiles.grid, snapshot.pixel_grid()) else {
         return;
     };
+    let coverage = grid.coverage;
     let Some(source) = to_backend_rect(tiles.source_rect) else {
         return;
     };
@@ -56,12 +56,16 @@ pub(super) fn paint_tiles(
         }
         let full = Rect::new(0.0, 0.0, f64::from(image.width), f64::from(image.height));
         if source == full
-            && !grid.snap_tiles
-            && [grid.x, grid.y].iter().all(|axis| axis.step == axis.size)
+            && !tiles.grid.snap_tiles
+            && [grid.x.axis, grid.y.axis]
+                .iter()
+                .all(|axis| axis.step == axis.size)
         {
             let brush = raster_brush(image, sampling, Extend::Repeat, Extend::Repeat);
-            let tile =
-                Rect::from_origin_size((grid.x.start, grid.y.start), (grid.x.size, grid.y.size));
+            let tile = Rect::from_origin_size(
+                (grid.x.axis.start, grid.y.axis.start),
+                (grid.x.axis.size, grid.y.axis.size),
+            );
             scene.fill(
                 Fill::NonZero,
                 transform,
@@ -77,20 +81,20 @@ pub(super) fn paint_tiles(
             sampling,
             false,
         ) {
-            paint_sampled_tiles(scene, texture, grid, coverage, visible, transform, inverse);
+            paint_sampled_tiles(scene, texture, grid, visible, transform, inverse);
         }
         return;
     }
 
     let local = inverse.transform_rect_bbox(visible).intersect(coverage);
-    let columns = visible_tiles(grid.x, local.x0, local.x1, grid.snap_tiles);
-    let rows = visible_tiles(grid.y, local.y0, local.y1, grid.snap_tiles);
+    let columns = grid.x.visible_tiles(local.x0, local.x1);
+    let rows = grid.y.visible_tiles(local.y0, local.y1);
     // Keep vector output for ordinary patterns. Extremely dense grids can be
     // filled from one rendered tile without retaining a command for each copy.
     if columns.len().saturating_mul(rows.len()) > MAX_VECTOR_TILES {
         let [a, b, c, d, _, _] = transform.as_coeffs();
-        let width = (grid.x.size * a.hypot(b)).ceil().clamp(1.0, 1024.0) as u32;
-        let height = (grid.y.size * c.hypot(d)).ceil().clamp(1.0, 1024.0) as u32;
+        let width = (grid.x.axis.size * a.hypot(b)).ceil().clamp(1.0, 1024.0) as u32;
+        let height = (grid.y.axis.size * c.hypot(d)).ceil().clamp(1.0, 1024.0) as u32;
         let target = Rect::new(0.0, 0.0, f64::from(width), f64::from(height));
         let mut pixels = Vec::new();
         let mut renderer = VelloCpuImageRenderer::new(width, height);
@@ -116,14 +120,14 @@ pub(super) fn paint_tiles(
             PaintImageSampling::Linear,
             true,
         ) {
-            paint_sampled_tiles(scene, texture, grid, coverage, visible, transform, inverse);
+            paint_sampled_tiles(scene, texture, grid, visible, transform, inverse);
         }
         return;
     }
     for row in rows {
-        let (top, bottom) = tile_edges(grid.y, row, grid.snap_tiles);
+        let (top, bottom) = grid.y.edges(row);
         for column in columns.clone() {
-            let (left, right) = tile_edges(grid.x, column, grid.snap_tiles);
+            let (left, right) = grid.x.edges(column);
             let tile = Rect::new(left, top, right, bottom);
             let clip = tile.intersect(coverage);
             if !clip.is_zero_area() {
@@ -188,17 +192,8 @@ fn paint_vector_tile(
     }
 }
 
-pub(crate) fn grid_coverage(grid: PaintTileGrid) -> Option<Rect> {
-    let coverage = to_backend_rect(grid.coverage)?;
-    if ![grid.x, grid.y].into_iter().all(valid_tile_axis) {
-        return None;
-    }
-    let (left, _) = tile_edges(grid.x, 0, grid.snap_tiles);
-    let (top, _) = tile_edges(grid.y, 0, grid.snap_tiles);
-    let (_, right) = tile_edges(grid.x, grid.x.count - 1, grid.snap_tiles);
-    let (_, bottom) = tile_edges(grid.y, grid.y.count - 1, grid.snap_tiles);
-    let bounds = coverage.intersect(Rect::new(left, top, right, bottom));
-    (!bounds.is_zero_area() && bounds.is_finite()).then_some(bounds)
+pub(crate) fn grid_coverage(grid: PaintTileGrid, pixel_grid: PaintPixelGrid) -> Option<Rect> {
+    ResolvedTileGrid::new(grid, pixel_grid).map(|grid| grid.coverage)
 }
 
 pub(crate) fn valid_tile_axis(axis: PaintTileAxis) -> bool {
@@ -211,44 +206,97 @@ pub(crate) fn valid_tile_axis(axis: PaintTileAxis) -> bool {
         && (axis.start + axis.size + f64::from(axis.count - 1) * axis.step).is_finite()
 }
 
-fn tile_edges(axis: PaintTileAxis, index: u32, snap: bool) -> (f64, f64) {
-    let start = axis.start + f64::from(index) * axis.step;
-    if snap && (axis.count == 1 || axis.size >= 1.0) {
-        let (start, size) = pixel_snap_paint_axis(start as f32, axis.size as f32);
-        (f64::from(start), f64::from(start) + f64::from(size))
-    } else {
-        (start, start + axis.size)
+struct ResolvedTileGrid {
+    x: TileAxis,
+    y: TileAxis,
+    coverage: Rect,
+}
+
+impl ResolvedTileGrid {
+    fn new(grid: PaintTileGrid, pixel_grid: PaintPixelGrid) -> Option<Self> {
+        let coverage = to_backend_rect(grid.coverage)?;
+        if ![grid.x, grid.y].into_iter().all(valid_tile_axis) {
+            return None;
+        }
+        let x = TileAxis::new(grid.x, grid.snap_tiles, pixel_grid);
+        let y = TileAxis::new(grid.y, grid.snap_tiles, pixel_grid);
+        let (left, _) = x.edges(0);
+        let (top, _) = y.edges(0);
+        let (_, right) = x.edges(grid.x.count - 1);
+        let (_, bottom) = y.edges(grid.y.count - 1);
+        let coverage = coverage.intersect(Rect::new(left, top, right, bottom));
+        (!coverage.is_zero_area() && coverage.is_finite()).then_some(Self { x, y, coverage })
     }
 }
 
-fn visible_tiles(axis: PaintTileAxis, from: f64, to: f64, snap: bool) -> Range<u32> {
-    if axis.count == 1 {
-        return 0..1;
-    }
-    let fringe = if snap && axis.size >= 1.0 { 0.5 } else { 0.0 };
-    let first = ((from - axis.start - axis.size - fringe) / axis.step).ceil() as u32;
-    let last = ((to - axis.start + fringe) / axis.step).ceil() as u32;
-    first.min(axis.count)..last.min(axis.count)
+#[derive(Clone, Copy)]
+struct TileAxis {
+    axis: PaintTileAxis,
+    snap: Option<PaintPixelGrid>,
 }
 
-fn tile_position(axis: PaintTileAxis, coordinate: f64, snap: bool) -> Option<f64> {
-    let index = if axis.count == 1 {
-        0
-    } else if snap && axis.size >= 1.0 {
-        // A start snapped to N is visible at N precisely when its original
-        // position is below N + 0.5. Use the last tile satisfying that bound.
-        (((coordinate.floor() + 0.5 - axis.start) / axis.step).ceil() - 1.0) as u32
-    } else {
-        ((coordinate - axis.start) / axis.step).floor() as u32
+impl TileAxis {
+    fn new(axis: PaintTileAxis, snap: bool, grid: PaintPixelGrid) -> Self {
+        Self {
+            axis,
+            snap: (snap && (axis.count == 1 || axis.size >= grid.pixel_size())).then_some(grid),
+        }
     }
-    .min(axis.count - 1);
-    let (start, end) = tile_edges(axis, index, snap);
-    if end <= start || (coordinate >= end && index + 1 < axis.count) {
-        return None;
+
+    fn raw_start(self, index: u32) -> f64 {
+        self.axis.start + f64::from(index) * self.axis.step
     }
-    // Pad at the edges of the first and last tile. The compositor clips the
-    // grid's exterior and supplies coverage for transformed AA edges there.
-    Some(((coordinate - start) / (end - start)).clamp(0.0, 1.0))
+
+    fn edges(self, index: u32) -> (f64, f64) {
+        let start = self.raw_start(index);
+        let size = self.axis.size;
+        let (start, size) = self
+            .snap
+            .map_or((start, size), |grid| grid.snap_axis(start, size));
+        (start, start + size)
+    }
+
+    fn visible_tiles(self, from: f64, to: f64) -> Range<u32> {
+        let axis = self.axis;
+        if axis.count == 1 {
+            return 0..1;
+        }
+        let fringe = self.snap.map_or(0.0, |grid| grid.pixel_size() * 0.5);
+        let first = ((from - axis.start - axis.size - fringe) / axis.step).ceil() as u32;
+        let last = ((to - axis.start + fringe) / axis.step).ceil() as u32;
+        first.min(axis.count)..last.min(axis.count)
+    }
+
+    fn position(self, coordinate: f64) -> Option<f64> {
+        let axis = self.axis;
+        let mut index = if axis.count == 1 {
+            0
+        } else {
+            (((coordinate - axis.start) / axis.step).floor() as u32).min(axis.count - 1)
+        };
+        let (mut start, mut end) = self.edges(index);
+        // Snapping can move a start by at most half a device pixel. A
+        // snapped repeated axis has at least a device pixel between starts.
+        if let Some(grid) = self.snap {
+            if coordinate < start && index > 0 {
+                index -= 1;
+                (start, end) = self.edges(index);
+            } else if index + 1 < axis.count
+                && coordinate >= self.raw_start(index + 1) - grid.pixel_size() * 0.5
+            {
+                let next = self.edges(index + 1);
+                if coordinate >= next.0 {
+                    index += 1;
+                    (start, end) = next;
+                }
+            }
+        }
+        if end <= start || (coordinate >= end && index + 1 < axis.count) {
+            return None;
+        }
+        // The clip supplies transformed antialiasing at the exterior edges.
+        Some(((coordinate - start) / (end - start)).clamp(0.0, 1.0))
+    }
 }
 
 struct Texture<'a> {
@@ -332,8 +380,7 @@ impl<'a> Texture<'a> {
 fn paint_sampled_tiles(
     scene: &mut impl PaintScene,
     texture: Texture<'_>,
-    grid: PaintTileGrid,
-    coverage: Rect,
+    grid: ResolvedTileGrid,
     visible: Rect,
     transform: Affine,
     inverse: Affine,
@@ -346,26 +393,26 @@ fn paint_sampled_tiles(
     }
     let sample = |x, y| {
         let location = inverse * Point::new(x, y);
-        match (
-            tile_position(grid.x, location.x, grid.snap_tiles),
-            tile_position(grid.y, location.y, grid.snap_tiles),
-        ) {
+        match (grid.x.position(location.x), grid.y.position(location.y)) {
             (Some(u), Some(v)) => texture.sample(u, v),
             _ => [0.0; 4],
         }
     };
     let [a, b, c, d, e, f] = transform.as_coeffs();
-    let aligned =
-        grid.snap_tiles && b == 0.0 && c == 0.0 && [a, d, e, f].iter().all(|v| v.fract() == 0.0);
-    let antialias_gaps = !aligned
-        && [grid.x, grid.y]
-            .iter()
-            .any(|axis| axis.count > 1 && axis.step > axis.size);
+    let aligned_transform = b == 0.0 && c == 0.0 && e.fract() == 0.0 && f.fract() == 0.0;
+    let antialias_gaps = [(grid.x, a), (grid.y, d)].into_iter().any(|(axis, scale)| {
+        axis.axis.count > 1
+            && axis.axis.step > axis.axis.size
+            && !(aligned_transform
+                && axis
+                    .snap
+                    .is_some_and(|grid| (scale * grid.pixel_size()).fract() == 0.0))
+    });
 
     // Work and temporary sampling buffers are bounded by the visible output,
     // irrespective of the source size or how many periods the grid contains.
     let rows_per_band = (4 * 1024 * 1024 / (width * 4)).max(1);
-    scene.push_clip_layer(transform, &coverage);
+    scene.push_clip_layer(transform, &grid.coverage);
     for first in (0..height).step_by(rows_per_band as usize) {
         let rows = rows_per_band.min(height - first);
         let origin_y = bounds.y0 + f64::from(first);

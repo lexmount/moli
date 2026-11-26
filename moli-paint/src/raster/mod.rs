@@ -146,7 +146,7 @@ pub fn raster_damage_rows(
             PaintFragment::Tiles(tiles) => match tiles.source {
                 moli_layout::PaintTileSource::Image(id, _) => (
                     id,
-                    crate::scene::tiles::grid_coverage(tiles.grid),
+                    crate::scene::tiles::grid_coverage(tiles.grid, grid),
                     tiles.transform,
                 ),
                 _ => continue,

@@ -425,6 +425,30 @@ fn native_path_fill_rules_reach_pdf_vector_operators() {
 }
 
 #[test]
+fn pdf_images_use_the_snapshot_device_grid() {
+    let mut snapshot = PaintSnapshot::new(PaintViewport::new(300, 600, 2.0), PaintColor::WHITE);
+    let image = snapshot.add_image(Arc::new(
+        moli_image::RgbaImage::try_new(1, 1, vec![0, 0, 255, 255]).unwrap(),
+    ));
+    let page_content = |mut snapshot: PaintSnapshot, destination| {
+        snapshot.push_fragment(PaintFragment::Image(moli_layout::PaintImage {
+            image,
+            destination,
+            sampling: moli_layout::PaintImageSampling::Nearest,
+            transform: PaintTransform2D::IDENTITY,
+        }));
+        let pdf = document(&snapshot, &options());
+        let content = pdf.get_page_content(pdf.get_pages()[&1]);
+        assert!(!content.is_empty());
+        content
+    };
+    assert_eq!(
+        page_content(snapshot.clone(), PaintRect::new(10.26, 12.26, 8.0, 6.0)),
+        page_content(snapshot, PaintRect::new(10.5, 12.5, 8.0, 6.0))
+    );
+}
+
+#[test]
 fn repeated_images_fill_the_clipped_pdf_region() {
     let mut snapshot = snapshot();
     let image = snapshot.add_image(Arc::new(

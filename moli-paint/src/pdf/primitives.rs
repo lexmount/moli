@@ -226,6 +226,11 @@ impl<'a, 's> PdfPainter<'a, 's> {
                     self.rasterize(std::slice::from_ref(fragment))?;
                 }
                 PaintFragment::Image(image) => {
+                    let Some(destination) = self.snapshot.pixel_grid().snap_rect(image.destination)
+                    else {
+                        i += 1;
+                        continue;
+                    };
                     let resource = self.snapshot.image(image.image).expect("validated image");
                     let interpolate = image.sampling == moli_layout::PaintImageSampling::Linear;
                     let key = (image.image.index(), interpolate);
@@ -235,13 +240,10 @@ impl<'a, 's> PdfPainter<'a, 's> {
                     }
                     let data = self.images[&key].clone();
                     let matrix = crate::geometry::to_backend_transform(image.transform)
-                        * Affine::translate((
-                            image.destination.x as f64,
-                            image.destination.y as f64,
-                        ))
+                        * Affine::translate((destination.x as f64, destination.y as f64))
                         * Affine::scale_non_uniform(
-                            image.destination.width as f64 / resource.image.width as f64,
-                            image.destination.height as f64 / resource.image.height as f64,
+                            destination.width as f64 / resource.image.width as f64,
+                            destination.height as f64 / resource.image.height as f64,
                         );
                     self.surface.push_transform(&transform(matrix));
                     self.surface.draw_image(
@@ -520,21 +522,25 @@ fn fragment_bounds(
             destination,
             transform,
             ..
-        }) => {
+        })
+        | PaintFragment::Border {
+            rect: destination,
+            transform,
+            ..
+        } => {
             let Some(rect) = snapshot.pixel_grid().snap_rect(*destination) else {
                 return Ok(None);
             };
             (super::rect(rect), *transform)
         }
         PaintFragment::Tiles(tiles) => {
-            let Some(bounds) = crate::scene::tiles::grid_coverage(tiles.grid) else {
+            let Some(bounds) =
+                crate::scene::tiles::grid_coverage(tiles.grid, snapshot.pixel_grid())
+            else {
                 return Ok(None);
             };
             (bounds, tiles.transform)
         }
-        PaintFragment::Border {
-            rect, transform, ..
-        } => (super::rect(*rect), *transform),
         PaintFragment::Stroke(stroke) => (
             super::rect(stroke.path.bounds).inflate(
                 (stroke.width * stroke.miter_limit.max(1.0)) as f64,
