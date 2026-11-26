@@ -345,6 +345,108 @@ async fn websocket_cdp_capture_screenshot_tracks_paint_and_layout_mutations() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_cdp_layered_gradient_border_stays_even_when_device_scale_changes() {
+    let html = r#"<!doctype html>
+<style>
+body { margin: 0; background: white }
+.frame {
+    position: absolute; left: 10.5px; top: 12.25px;
+    box-sizing: border-box; width: 120px; height: 42px;
+    border: 1.5px solid transparent; border-radius: 12px;
+}
+.ring {
+    background: linear-gradient(white, white) padding-box,
+                linear-gradient(160deg, #2955ff, #ab50ff) border-box;
+}
+.foreground {
+    background: linear-gradient(white, white) border-box;
+    background-clip: padding-box;
+}
+</style>
+<div class="frame ring"></div><div class="frame foreground"></div>"#;
+    let fixture_url = format!(
+        "data:text/html;charset=utf-8,{}",
+        url::form_urlencoded::byte_serialize(html.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20")
+    );
+    let (cdp_addr, protocol_server) =
+        spawn_test_protocol_server_with_layout_policy(LayoutPolicy::Realtime).await;
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect screenshot CDP websocket");
+    let target = open_screenshot_target(&mut browser, &fixture_url).await;
+
+    for (index, (scale, border_width)) in [(1.0_f32, 1), (1.25, 1), (2.0, 3), (1.0, 1)]
+        .into_iter()
+        .enumerate()
+    {
+        let id = 7 + 2 * index as u64;
+        let metrics = send_cdp_command(
+            &mut browser,
+            id,
+            "Emulation.setDeviceMetricsOverride",
+            Some(&target.session_id),
+            json!({
+                "width": 160,
+                "height": 80,
+                "deviceScaleFactor": scale,
+                "mobile": false,
+            }),
+        )
+        .await;
+        assert_cdp_success(&metrics, id);
+        let png = capture_png(&mut browser, &target.session_id, id + 1).await;
+        let (width, height, pixels) = decode_png(&png);
+        assert_eq!(
+            (width, height),
+            ((160.0 * scale) as u32, (80.0 * scale) as u32)
+        );
+
+        let left = (10.5 * scale).round() as i32;
+        let top = (12.25 * scale).round() as i32;
+        let right = (130.5 * scale).round() as i32;
+        let bottom = (54.25 * scale).round() as i32;
+        let center_x = (left + right) / 2;
+        let center_y = (top + bottom) / 2;
+        for (x, y, dx, dy) in [
+            (left, center_y, 1, 0),
+            (right - 1, center_y, -1, 0),
+            (center_x, top, 0, 1),
+            (center_x, bottom - 1, 0, -1),
+        ] {
+            let sample = |inset| {
+                pixel(
+                    &pixels,
+                    width,
+                    (x + dx * inset) as u32,
+                    (y + dy * inset) as u32,
+                )
+            };
+            assert_eq!(sample(-1), [255; 4], "outside ({x}, {y}), DPR {scale}");
+            for inset in 0..border_width {
+                let color = sample(inset);
+                assert!(
+                    color[1] < 100 && color[2] >= 254,
+                    "border ({x}, {y}) at inset {inset}, DPR {scale}: {color:?}"
+                );
+            }
+            assert_eq!(
+                sample(border_width),
+                [255; 4],
+                "inside ({x}, {y}), DPR {scale}"
+            );
+        }
+    }
+
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_capture_screenshot_paints_fresh_canvas_pixels() {
     let (fixture_addr, _fixture_server) =
         spawn_dedicated_fixture_server(screenshot_fixture_app(), "canvas-screenshot");

@@ -21,14 +21,14 @@ use style::{
 
 use super::{
     PaintSpace,
-    geometry::{BoxAreas, BoxModelBox},
+    geometry::{BoxAreas, BoxModelBox, canonical_shape},
     push_diagnostic_once,
 };
 use crate::{
     LayoutBox, LayoutImageResource, LayoutRect, LayoutSize, LayoutTransform2D, PaintBlendMode,
-    PaintBrush, PaintColor, PaintCompositeMode, PaintFragment, PaintImage, PaintImageSampling,
-    PaintShape, PaintSnapshot, PaintSvgImage, PaintTileAxis, PaintTileGrid, PaintTileSource,
-    PaintTiles, gradient::project_gradient,
+    PaintBrush, PaintColor, PaintCompositeMode, PaintCornerRadii, PaintFragment, PaintImage,
+    PaintImageSampling, PaintShape, PaintSnapshot, PaintSvgImage, PaintTileAxis, PaintTileGrid,
+    PaintTileSource, PaintTiles, gradient::project_gradient,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,6 +205,38 @@ pub(super) fn project_background_layers<N>(
                 if tiles.is_empty() {
                     continue;
                 }
+                if !clips_to_text
+                    && let [tile] = tiles.as_slice()
+                    && *tile == origin_rect
+                    && tile.x <= clip_rect.x
+                    && tile.y <= clip_rect.y
+                    && tile.right() >= clip_rect.right()
+                    && tile.bottom() >= clip_rect.bottom()
+                {
+                    // Size the single generated tile and its destination on
+                    // the same grid, including when padding-box clips a
+                    // border-box tile.
+                    let scale = snapshot.viewport.device_pixel_ratio;
+                    let Some(tile) = snapped_gradient_rect(*tile, paint_space, scale) else {
+                        continue;
+                    };
+                    let Some(rect) = snapped_gradient_rect(clip_rect, paint_space, scale) else {
+                        continue;
+                    };
+                    if let Some(brush) = project_gradient(gradient, tile, &current_color) {
+                        let radii = match clip_shape {
+                            PaintShape::RoundedRect { radii, .. } => radii,
+                            _ => PaintCornerRadii::ZERO,
+                        };
+                        snapshot.push_fragment(PaintFragment::Fill {
+                            fill_rule: crate::PaintFillRule::NonZero,
+                            shape: canonical_shape(rect, radii),
+                            brush,
+                            transform,
+                        });
+                    }
+                    continue;
+                }
                 let text_clip_shape = if clips_to_text {
                     let Some(shape) =
                         begin_background_text_clip_layer(areas, paint_space, snapshot)
@@ -273,6 +305,33 @@ pub(super) fn project_background_layers<N>(
             }
         }
     }
+}
+
+fn snapped_gradient_rect(
+    rect: LayoutRect,
+    paint_space: PaintSpace,
+    device_scale: f32,
+) -> Option<LayoutRect> {
+    let scale = if device_scale.is_finite() && device_scale > 0.0 {
+        device_scale
+    } else {
+        1.0
+    };
+    // Blink's layout paint space already includes the screen scale. Moli
+    // keeps CSS pixels here, so snap in device pixels before the transform.
+    let rect = paint_space.pre_transform_rect(rect);
+    let snapped = crate::pixel_snap_paint_rect(LayoutRect::new(
+        rect.x * scale,
+        rect.y * scale,
+        rect.width * scale,
+        rect.height * scale,
+    ))?;
+    Some(LayoutRect::new(
+        snapped.x / scale - paint_space.paint_offset.x,
+        snapped.y / scale - paint_space.paint_offset.y,
+        snapped.width / scale,
+        snapped.height / scale,
+    ))
 }
 
 /// Begins the isolated background buffer used by Chromium's
