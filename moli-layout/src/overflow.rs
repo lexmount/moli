@@ -26,12 +26,13 @@ pub(crate) struct OverflowBoxGeometry {
     local_overflow: LayoutRect,
 }
 
-/// One pass-local, incrementally refreshed scrollable-overflow projection.
+/// Scrollable overflow with local geometry and an incremental dependency walk.
 ///
 /// The initial build touches each numeric box and overflow edge once. After a
 /// scrollbar changes layout, callers provide the boxes Taffy actually touched;
 /// a worklist expands only through their overflow ancestors. Unaffected local
 /// geometry and descendant aggregates remain reusable across feedback turns.
+#[derive(Debug)]
 pub(crate) struct OverflowProjection {
     geometries: Vec<OverflowBoxGeometry>,
     scrollable_overflow: Vec<LayoutRect>,
@@ -72,6 +73,21 @@ impl OverflowProjection {
         };
         projection.resolve_all(world);
         projection
+    }
+
+    /// Bound the extra retained storage beside the frozen layout tree.
+    pub(crate) fn fits_in_retained_budget(&self) -> bool {
+        const MAX_RETAINED_OVERFLOW_BYTES: usize = 8 * 1024 * 1024;
+
+        let child_capacity = self.children.iter().map(Vec::capacity).sum::<usize>();
+        self.geometries.capacity() * size_of::<OverflowBoxGeometry>()
+            + self.scrollable_overflow.capacity() * size_of::<LayoutRect>()
+            + self.parents.capacity() * size_of::<Option<LayoutBoxId>>()
+            + self.children.capacity() * size_of::<Vec<LayoutBoxId>>()
+            + child_capacity * size_of::<LayoutBoxId>()
+            + self.affected.capacity() * size_of::<bool>()
+            + self.remaining_affected_children.capacity() * size_of::<usize>()
+            <= MAX_RETAINED_OVERFLOW_BYTES
     }
 
     pub(crate) fn len(&self) -> usize {

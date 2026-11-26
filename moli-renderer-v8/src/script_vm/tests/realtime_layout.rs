@@ -139,7 +139,7 @@ fn realtime_retained_numeric_layout_matches_fresh_geometry_and_paint() {
 
     // Changing the content height removes and restores the automatic gutter.
     let target = vm.document_runtime.get_element_by_id("target").unwrap();
-    for height in [2, 70] {
+    for (height, should_overflow) in [(2, "false"), (70, "true")] {
         vm.eval(&format!(
             "target.style.height='{height}px';getComputedStyle(target).color"
         ))
@@ -158,6 +158,12 @@ fn realtime_retained_numeric_layout_matches_fresh_geometry_and_paint() {
         let metrics = vm.layout_pass_observability_for_test().3.unwrap();
         assert!(metrics.retained_box_count > 0);
         assert!(metrics.retained_numeric_layout_hits > 0);
+        assert!(metrics.reused_overflow_projection, "{metrics:?}");
+        assert_eq!(
+            vm.eval("String(panel.scrollHeight > panel.clientHeight)")
+                .unwrap(),
+            should_overflow,
+        );
         let host = host.borrow();
         let fresh = host
             .build_layout_pass_for_document(
@@ -391,6 +397,10 @@ fn realtime_reuses_numeric_links_until_box_roles_change() {
         let metrics = vm.layout_pass_observability_for_test().3.unwrap();
         assert_eq!(
             metrics.retained_numeric_tree, reused_tree,
+            "{edit}: {metrics:?}"
+        );
+        assert_eq!(
+            metrics.reused_overflow_projection, reused_tree,
             "{edit}: {metrics:?}"
         );
         assert_eq!(

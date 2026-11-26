@@ -67,6 +67,7 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) retained_numeric_layout_hits: usize,
     pub(crate) retained_numeric_tree: bool,
     pub(crate) reused_inline_contexts: usize,
+    pub(crate) reused_overflow_projection: bool,
 }
 
 pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
@@ -81,13 +82,16 @@ pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
     retain_layout_world: bool,
     mut object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
     mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
+    overflow_projection: Option<OverflowProjection>,
     phase_metrics: LayoutPassPhaseMetrics,
 ) -> Result<LayoutPassResult<N>, LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
 {
     let projection_started = Instant::now();
-    let overflow = OverflowProjection::new(&world, viewport);
+    // The final scrollbar iteration used these exact rounded box dimensions.
+    // A pass with hidden scrollbars builds overflow here for the first time.
+    let overflow = overflow_projection.unwrap_or_else(|| OverflowProjection::new(&world, viewport));
     let mut projection = OutputProjection::new(&world, viewport);
     projection.build_local_box_geometry(&overflow);
     projection.build_scroll_extents(&overflow);
@@ -180,6 +184,7 @@ where
         retained_numeric_layout_hits: phase_metrics.retained_numeric_layout_hits,
         retained_numeric_tree: phase_metrics.retained_numeric_tree,
         reused_inline_contexts: phase_metrics.reused_inline_contexts,
+        reused_overflow_projection: phase_metrics.reused_overflow_projection,
         fragment_count: projection.fragments.len(),
         paint_event_count: paint_projection_metrics.event_count,
         paint_culled_event_count: paint_projection_metrics.culled_event_count,
@@ -229,6 +234,10 @@ where
         }
         if !reusable_layout {
             world.release_numeric_cache_storage();
+        } else if let Some(tree) = &mut world.numeric_tree
+            && (phase_metrics.reused_overflow_projection || overflow.fits_in_retained_budget())
+        {
+            tree.overflow = Some(Box::new(overflow));
         }
         if paint.is_none() {
             world.release_paint_storage();
