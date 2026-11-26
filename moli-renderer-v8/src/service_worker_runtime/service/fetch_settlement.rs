@@ -15,6 +15,19 @@ fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
 
+fn direct_network_fallback_response_filter(
+    origin: &moli_url::WebOrigin,
+    head: &moli_fetch::ResponseHead,
+    request_mode: moli_fetch::RequestMode,
+    redirect_mode: moli_fetch::RequestRedirectMode,
+    web_security_disabled: bool,
+) -> Option<crate::types::AsyncSubresourceFetchResponseFilter> {
+    if redirect_mode == moli_fetch::RequestRedirectMode::Manual && is_redirect_status(head.status) {
+        return Some(crate::types::FetchResponseType::OpaqueRedirect.into());
+    }
+    crate::network_host::network_response_filter(origin, head, request_mode, web_security_disabled)
+}
+
 fn service_worker_redirect_target(
     job: &ServiceWorkerFetchJob,
     response: &ServiceWorkerFetchResponse,
@@ -314,6 +327,7 @@ impl ServiceWorkerRuntimeService {
             }
         };
         let request_mode = job.request.request_mode;
+        let redirect_mode = job.request.redirect_mode();
         let credentials_mode = job.request.credentials_mode;
         job.resource_task_runner.spawn(async move {
             let result = match request_client
@@ -341,10 +355,11 @@ impl ServiceWorkerRuntimeService {
                             completion_tx.send(ServiceWorkerDirectFetchResult::Failure(message));
                         return;
                     }
-                    let response_filter = crate::network_host::network_response_filter(
+                    let response_filter = direct_network_fallback_response_filter(
                         &request_origin,
                         &head,
                         request_mode,
+                        redirect_mode,
                         request_client.web_security_disabled(),
                     );
                     let body = response.clone_body_bytes();
@@ -934,6 +949,42 @@ fn service_worker_response_type_filter(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_network_fallback_uses_an_opaque_redirect_for_manual_mode() {
+        use moli_fetch::RequestRedirectMode::{Error, Follow, Manual};
+        let url = url("https://example.test/fallback");
+        let origin = moli_url::WebOrigin::from_url(&url);
+        let mut head = moli_fetch::ResponseHead {
+            final_url: url,
+            status: 200,
+            status_text: None,
+            headers: Vec::new(),
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            cache_state: Default::default(),
+            negotiated_http_version: None,
+        };
+        for status in [200, 301, 302, 303, 304, 307, 308] {
+            head.status = status;
+            for mode in [Manual, Follow, Error] {
+                let filter = direct_network_fallback_response_filter(
+                    &origin,
+                    &head,
+                    moli_fetch::RequestMode::Cors,
+                    mode,
+                    false,
+                );
+                let expected = (mode == Manual && matches!(status, 301 | 302 | 303 | 307 | 308))
+                    .then(|| crate::types::FetchResponseType::OpaqueRedirect.into());
+                assert_eq!(filter, expected, "{mode:?} {status}");
+            }
+        }
+    }
+
     use crate::page_task_queue::RendererResourceCompletionSender;
     use std::collections::{HashMap, HashSet, VecDeque};
     use url::Url;
