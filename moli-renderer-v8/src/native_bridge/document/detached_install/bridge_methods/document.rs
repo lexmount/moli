@@ -31,9 +31,6 @@ struct DetachedHtmlDocumentCreationMethodsDeclaration {
         callback = detached_create_cdata_section_html_method_callback
     )]
     create_cdata_section: (),
-
-    #[webapi(method, callback = detached_html_document_write_method_callback)]
-    write: (),
 }
 
 #[derive(WebApiObject)]
@@ -203,31 +200,6 @@ fn install_detached_document_creation_methods<'s>(
             .initialize(scope, plain_doc_proto)
             .expect("detached Document creation method declaration should initialize");
     }
-}
-
-fn detached_html_document_write_method_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let mut html = String::new();
-    for index in 0..args.length() {
-        if let Some(chunk) = callback_arg_string(scope, &args, index) {
-            html.push_str(&chunk);
-        }
-    }
-    let Some(body_value) = args.this().get(scope, v8str(scope, "body").into()) else {
-        rv.set_undefined();
-        return;
-    };
-    let Ok(body) = v8::Local::<v8::Object>::try_from(body_value) else {
-        rv.set_undefined();
-        return;
-    };
-    if let Some(value) = v8_string(scope, &html) {
-        let _ = body.set(scope, v8str(scope, "innerHTML").into(), value.into());
-    }
-    rv.set_undefined();
 }
 
 fn install_detached_document_state_accessors<'s>(

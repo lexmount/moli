@@ -111,12 +111,14 @@ fn detached_document_write_preserves_existing_noscript_text() {
             r#"
 (() => {
   const doc = document.implementation.createHTMLDocument("");
+  doc.write("<!doctype html><body>");
   const noscript = doc.createElement("noscript");
   noscript.textContent = "<em>fallback&</em>";
   doc.body.append(noscript);
   doc.write("<span>tail</span>");
   return [
     doc.body.innerHTML,
+    doc.body.firstElementChild === noscript,
     noscript.innerHTML,
     noscript.firstElementChild === null,
     doc.body.lastElementChild?.localName
@@ -130,7 +132,7 @@ fn detached_document_write_preserves_existing_noscript_text() {
         result,
         concat!(
             "<noscript>&lt;em&gt;fallback&amp;&lt;/em&gt;</noscript><span>tail</span>|",
-            "&lt;em&gt;fallback&amp;&lt;/em&gt;|true|span"
+            "true|&lt;em&gt;fallback&amp;&lt;/em&gt;|true|span"
         )
     );
 }
