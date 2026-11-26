@@ -25,6 +25,17 @@ pub struct LayoutObjectGeometry<N> {
     pub quad: LayoutQuad,
 }
 
+impl<N> LayoutObjectGeometry<N> {
+    pub(crate) fn place_in_box(&mut self, geometry: &LayoutBoxGeometry) {
+        let content = geometry.content_box;
+        let zoom = geometry.effective_zoom;
+        self.quad.points = self
+            .quad
+            .points
+            .map(|point| LayoutPoint::new(content.x + point.x * zoom, content.y + point.y * zoom));
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CssSizingBox {
     Content,
@@ -146,7 +157,7 @@ where
     /// principal box but can still nominate rendered descendants for scroll.
     pub scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     pub object_geometry: Vec<LayoutObjectGeometry<N>>,
-    pub(crate) svg_geometry_deferred: bool,
+    pub(crate) svg_viewports: Vec<crate::pass::InlineSvgViewport<N>>,
     viewport_coordinate_space: FrozenCoordinateSpace,
     pub clip_chain: Vec<LayoutClipNode>,
     embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
@@ -157,9 +168,88 @@ impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    /// Whether this publication or an embedded frame omitted SVG descendant geometry.
-    pub fn svg_geometry_deferred(&self) -> bool {
-        self.svg_geometry_deferred
+    /// The measured viewport of an inline SVG whose object quads are needed
+    /// for the first time in this publication.
+    pub fn pending_svg_viewport(&self, source: N) -> Option<LayoutSize> {
+        self.svg_viewports
+            .iter()
+            .find(|svg| svg.source == source)
+            .filter(|svg| !svg.prepared)
+            .map(|svg| svg.size)
+    }
+
+    pub fn has_svg_viewports(&self) -> bool {
+        !self.svg_viewports.is_empty()
+    }
+
+    /// Publish object quads in the exact layout member that measured the SVG.
+    /// Each input quad is local to its SVG viewport in unzoomed CSS pixels.
+    pub fn append_svg_geometry(
+        &mut self,
+        root: N,
+        scenes: Vec<(N, Vec<(N, LayoutQuad)>)>,
+    ) -> Result<(), LayoutError> {
+        let member = self
+            .tree_for_root(root)
+            .ok_or(LayoutError::NoLayoutSnapshot)?;
+        let additional = scenes
+            .iter()
+            .map(|(_, objects)| objects.len())
+            .sum::<usize>();
+        if additional != 0 {
+            let growth = member
+                .object_geometry
+                .len()
+                .saturating_add(additional)
+                .saturating_sub(member.object_geometry.capacity());
+            let mut metrics = self.retention_metrics();
+            metrics.fragment_count = metrics.fragment_count.saturating_add(additional);
+            metrics.estimated_geometry_bytes = metrics.estimated_geometry_bytes.saturating_add(
+                growth.saturating_mul(std::mem::size_of::<LayoutObjectGeometry<N>>()),
+            );
+            validate_retention_metrics(metrics)?;
+        }
+        let member = self
+            .tree_for_root_mut(root)
+            .expect("validated layout member");
+        member.object_geometry.reserve_exact(additional);
+        for (source, objects) in scenes {
+            let Some(svg) = member
+                .svg_viewports
+                .iter_mut()
+                .find(|svg| svg.source == source && !svg.prepared)
+            else {
+                continue;
+            };
+            svg.prepared = true;
+            let owner = svg.owner;
+            let geometry = &member.boxes[owner.index()].geometry;
+            member
+                .object_geometry
+                .extend(objects.into_iter().map(|(source, quad)| {
+                    let mut object = LayoutObjectGeometry {
+                        source,
+                        owner,
+                        quad,
+                    };
+                    object.place_in_box(geometry);
+                    object
+                }));
+        }
+        Ok(())
+    }
+
+    /// Invalidate sampled SVG content after a style-only publication update.
+    pub fn clear_inline_svg_geometry(&mut self) {
+        if !self.svg_viewports.is_empty() {
+            self.object_geometry.clear();
+            for svg in &mut self.svg_viewports {
+                svg.prepared = false;
+            }
+        }
+        for frame in &mut self.embedded_frames {
+            frame.tree.clear_inline_svg_geometry();
+        }
     }
 
     /// Source root whose complete layout projection this member tree owns.
@@ -177,6 +267,15 @@ where
         self.embedded_frames
             .iter()
             .find_map(|frame| frame.tree.tree_for_root(source_root))
+    }
+
+    fn tree_for_root_mut(&mut self, source_root: N) -> Option<&mut Self> {
+        if self.source_root == source_root {
+            return Some(self);
+        }
+        self.embedded_frames
+            .iter_mut()
+            .find_map(|frame| frame.tree.tree_for_root_mut(source_root))
     }
 
     pub fn retention_metrics(&self) -> LayoutTreeRetentionMetrics {
@@ -223,6 +322,9 @@ where
             .saturating_add(allocation::<LayoutFragment>(self.fragments.capacity()))
             .saturating_add(allocation::<LayoutObjectGeometry<N>>(
                 self.object_geometry.capacity(),
+            ))
+            .saturating_add(allocation::<crate::pass::InlineSvgViewport<N>>(
+                self.svg_viewports.capacity(),
             ))
             .saturating_add(allocation::<(N, LayoutOutputBoxId)>(
                 self.scroll_proxy_links.capacity(),
@@ -417,7 +519,7 @@ where
             fragments,
             scroll_proxy_links,
             object_geometry,
-            svg_geometry_deferred: false,
+            svg_viewports: Vec::new(),
             viewport_coordinate_space,
             clip_chain,
             embedded_frames,

@@ -216,6 +216,10 @@ impl DocumentLayoutState {
         self.latest_layout.get_for_root(root)
     }
 
+    pub(super) fn latest_tree_mut(&mut self) -> Option<&mut FrozenLayoutTree<DomHandle>> {
+        self.latest_layout.latest_tree_mut()
+    }
+
     #[cfg(feature = "devtools")]
     pub(super) fn frame_geometry(&self) -> Option<&std::rc::Rc<PublishedFrameGeometry>> {
         self.latest_layout.frame_geometry()

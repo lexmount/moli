@@ -98,7 +98,6 @@ pub struct LayoutPassRequest {
     pub reason: LayoutFlushReason,
     environment: crate::LayoutEnvironment,
     paint_capture: Option<PaintCaptureRequest>,
-    defer_svg_geometry: bool,
     frame_coverage: LayoutFrameCoverage,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
@@ -114,7 +113,6 @@ impl LayoutPassRequest {
                 scrollbars_hidden: false,
             },
             paint_capture: None,
-            defer_svg_geometry: false,
             frame_coverage: LayoutFrameCoverage::PositiveViewport,
             retain_scroll_projection: false,
             retain_screen_paint: false,
@@ -152,16 +150,6 @@ impl LayoutPassRequest {
 
     pub const fn frame_coverage(self) -> LayoutFrameCoverage {
         self.frame_coverage
-    }
-
-    /// Defers SVG descendant geometry when only CSS boxes are needed.
-    pub const fn with_deferred_svg_geometry(mut self, defer: bool) -> Self {
-        self.defer_svg_geometry = defer;
-        self
-    }
-
-    pub const fn defers_svg_geometry(self) -> bool {
-        self.defer_svg_geometry && !self.requests_paint() && !self.retains_screen_paint()
     }
 
     /// Retains box placement inputs needed to update screen geometry after scrolling.
@@ -374,6 +362,77 @@ where
     numeric_layout_elapsed: Duration,
     numeric_metrics: NumericLayoutMetrics,
     overflow_projection: Option<OverflowProjection>,
+    svg_objects: Option<Vec<crate::LayoutObjectGeometry<N>>>,
+}
+
+impl<N: Copy + std::fmt::Debug + Eq + Hash> MeasuredLayoutPass<N> {
+    /// Attach the SVG resources requested by a paint or frozen snapshot
+    /// consumer after CSS layout has measured the viewports.
+    pub fn with_svg_content(
+        mut self,
+        mut load: impl FnMut(
+            N,
+            &crate::ResolvedLayoutStyle,
+            crate::LayoutSize,
+        ) -> Option<crate::LayoutSvgContent<N>>,
+    ) -> Self {
+        let mut objects = Vec::new();
+        for (index, layout_box) in self.prepared.world.boxes.iter_mut().enumerate() {
+            if !layout_box
+                .element_semantics()
+                .is_some_and(|element| element.replaced == Some(crate::LayoutReplacedKind::Svg))
+            {
+                continue;
+            }
+            let Some(source) = layout_box.source() else {
+                continue;
+            };
+            if let Some(content) = load(source, &layout_box.style, svg_viewport_size(layout_box)) {
+                layout_box.replaced_image = content.image;
+                let owner = crate::LayoutOutputBoxId::from_index(index);
+                objects.extend(content.objects.into_iter().map(|(source, quad)| {
+                    crate::LayoutObjectGeometry {
+                        source,
+                        owner,
+                        quad,
+                    }
+                }));
+            }
+        }
+        self.svg_objects = Some(objects);
+        self
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct InlineSvgViewport<N> {
+    pub(crate) source: N,
+    pub(crate) owner: crate::LayoutOutputBoxId,
+    pub(crate) size: crate::LayoutSize,
+    pub(crate) prepared: bool,
+}
+
+fn svg_viewport_size<N: Copy>(layout_box: &crate::LayoutBox<N>) -> crate::LayoutSize {
+    let layout = layout_box.final_layout;
+    let zoom = layout_box.style.effective_zoom();
+    crate::LayoutSize::new(
+        ((layout.size.width
+            - layout.border.left
+            - layout.border.right
+            - layout.padding.left
+            - layout.padding.right
+            - layout.scrollbar_size.width)
+            / zoom)
+            .max(0.0),
+        ((layout.size.height
+            - layout.border.top
+            - layout.border.bottom
+            - layout.padding.top
+            - layout.padding.bottom
+            - layout.scrollbar_size.height)
+            / zoom)
+            .max(0.0),
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -445,6 +504,7 @@ where
             numeric_layout_elapsed,
             numeric_metrics,
             overflow_projection,
+            svg_objects: _,
         } = self;
         let PreparedLayoutPass {
             world,
@@ -711,6 +771,7 @@ where
         numeric_layout_elapsed,
         numeric_metrics,
         overflow_projection,
+        svg_objects: None,
     })
 }
 
@@ -726,7 +787,7 @@ where
     let MeasuredLayoutPass {
         prepared:
             PreparedLayoutPass {
-                mut world,
+                world,
                 request,
                 started,
                 box_tree_elapsed,
@@ -741,23 +802,35 @@ where
         numeric_layout_elapsed,
         numeric_metrics,
         overflow_projection,
+        svg_objects,
     } = measured;
     let phase_started = Instant::now();
-    let (object_geometry, mut svg_geometry_deferred) =
-        prepare_svg_content(&mut world, source, request.defers_svg_geometry());
-    let numeric_layout_elapsed = numeric_layout_elapsed + phase_started.elapsed();
-    let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();
+    let mut svg_viewports = Vec::new();
     for (index, layout_box) in world.boxes.iter().enumerate() {
-        if !layout_box
+        let Some(kind) = layout_box
             .element_semantics()
-            .is_some_and(|semantics| semantics.replaced == Some(crate::LayoutReplacedKind::Frame))
-        {
+            .and_then(|element| element.replaced)
+        else {
             continue;
-        }
+        };
         let Some(source) = layout_box.source() else {
             continue;
         };
+        if kind == crate::LayoutReplacedKind::Svg && svg_objects.is_none() {
+            let size = svg_viewport_size(layout_box);
+            if size.width > 0.0 && size.height > 0.0 {
+                svg_viewports.push(InlineSvgViewport {
+                    source,
+                    owner: crate::LayoutOutputBoxId::from_index(index),
+                    size,
+                    prepared: false,
+                });
+            }
+        }
+        if kind != crate::LayoutReplacedKind::Frame {
+            continue;
+        }
         let layout = layout_box.final_layout();
         let width = (layout.size.width
             - layout.border.left
@@ -782,7 +855,6 @@ where
             request.viewport.device_pixel_ratio,
         );
         if let Some(snapshot) = frames.render_embedded_frame(source, viewport)? {
-            svg_geometry_deferred |= snapshot.tree.svg_geometry_deferred();
             embedded_frames.insert(crate::LayoutBoxId::from_index(index), (source, snapshot));
         }
     }
@@ -797,7 +869,7 @@ where
         request.retains_scroll_projection(),
         request.retains_screen_paint(),
         request.retains_layout_world(),
-        object_geometry,
+        svg_objects.unwrap_or_default(),
         embedded_frames,
         overflow_projection,
         crate::projection::LayoutPassPhaseMetrics {
@@ -824,61 +896,8 @@ where
             reused_overflow_projection: numeric_metrics.reused_overflow_projection,
         },
     )?;
-    result.tree.svg_geometry_deferred = svg_geometry_deferred;
+    result.tree.svg_viewports = svg_viewports;
     Ok(result)
-}
-
-fn prepare_svg_content<S: LayoutSource>(
-    world: &mut crate::LayoutWorld<S::NodeId>,
-    source: &S,
-    defer: bool,
-) -> (Vec<crate::LayoutObjectGeometry<S::NodeId>>, bool) {
-    let mut objects = Vec::new();
-    for (index, layout_box) in world.boxes.iter_mut().enumerate() {
-        if !layout_box
-            .element_semantics()
-            .is_some_and(|semantics| semantics.replaced == Some(crate::LayoutReplacedKind::Svg))
-        {
-            continue;
-        }
-        let Some(node) = layout_box.source() else {
-            continue;
-        };
-        if defer {
-            return (objects, true);
-        }
-        let layout = layout_box.final_layout;
-        let zoom = layout_box.style.effective_zoom();
-        let viewport = crate::LayoutSize::new(
-            ((layout.size.width
-                - layout.border.left
-                - layout.border.right
-                - layout.padding.left
-                - layout.padding.right
-                - layout.scrollbar_size.width)
-                / zoom)
-                .max(0.0),
-            ((layout.size.height
-                - layout.border.top
-                - layout.border.bottom
-                - layout.padding.top
-                - layout.padding.bottom
-                - layout.scrollbar_size.height)
-                / zoom)
-                .max(0.0),
-        );
-        if let Some(content) = source.svg_content(node, &layout_box.style, viewport) {
-            layout_box.replaced_image = content.image;
-            objects.extend(content.objects.into_iter().map(|(source, quad)| {
-                crate::LayoutObjectGeometry {
-                    source,
-                    owner: crate::LayoutOutputBoxId::from_index(index),
-                    quad,
-                }
-            }));
-        }
-    }
-    (objects, false)
 }
 
 /// Resolves `overflow:auto` with a monotonic browser-style feedback loop.

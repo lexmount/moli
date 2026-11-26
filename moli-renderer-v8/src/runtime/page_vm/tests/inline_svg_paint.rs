@@ -53,6 +53,7 @@ async fn realtime_inline_svg_outer_boxes_defer_scene_decoding() {
             parsed,
             "text nodes do not need SVG object quads"
         );
+        let passes = page_vm.vm().layout_pass_observability_for_test().1;
 
         let child_geometry = r#"
             JSON.stringify((r => [r.x,r.y,r.width,r.height])(
@@ -62,10 +63,13 @@ async fn realtime_inline_svg_outer_boxes_defer_scene_decoding() {
         assert_eq!(page_vm.vm_mut().eval(child_geometry)?, "[110,50,10,10]");
         assert_eq!(page_vm.vm_mut().eval(child_geometry)?, "[110,50,10,10]");
         assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, passes);
 
         page_vm.vm_mut().eval("mutateSvgLayoutPublication()")?;
         assert_eq!(page_vm.vm_mut().eval(boxes)?, "[300,200,100,100]");
         assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        assert_eq!(page_vm.vm_mut().eval(child_geometry)?, "[330,50,100,10]");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 2);
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(500, 160, 1.0))?
@@ -74,7 +78,7 @@ async fn realtime_inline_svg_outer_boxes_defer_scene_decoding() {
         let pixel = (55 * raster.width as usize + 335) * 4;
         assert_eq!(&raster.rgba[pixel..pixel + 4], [0, 255, 0, 255]);
         assert_eq!(page_vm.vm_mut().eval(child_geometry)?, "[330,50,100,10]");
-        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 2);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 3);
         Ok::<_, anyhow::Error>(())
     })
     .await
@@ -82,7 +86,7 @@ async fn realtime_inline_svg_outer_boxes_defer_scene_decoding() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn realtime_inline_svg_geometry_upgrades_an_embedded_frame() {
+async fn realtime_inline_svg_geometry_decodes_only_the_queried_scene_in_a_frame() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
         let mut page_vm = test_page_vm_with_loader_and_document_url(
@@ -92,32 +96,37 @@ async fn realtime_inline_svg_geometry_upgrades_an_embedded_frame() {
         );
         page_vm.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
         page_vm.vm_mut().eval(r#"
-            document.body.innerHTML = '<iframe id="frame" style="width:200px;height:160px"></iframe>';
+            document.body.innerHTML = '<iframe id="frame" style="width:300px;height:200px"></iframe>';
             const child = document.getElementById('frame').contentDocument;
             child.body.style.margin = '0';
             child.body.innerHTML =
-                '<svg width="120" height="80"><svg x="10" y="20" width="40" height="30">' +
-                '<rect x="2" y="3" width="25" height="15"/></svg></svg>';
+                '<svg style="display:contents">' +
+                '<svg id="scene" style="display:block;width:120px;height:80px;zoom:2;border:1px solid;padding:3px">' +
+                '<svg x="10" y="20" width="40" height="30">' +
+                '<rect x="2" y="3" width="25" height="15"/></svg></svg></svg>' +
+                '<svg width="5" height="5"><rect width="5" height="5"/></svg>'.repeat(499);
         "#)?;
         let parsed = crate::layout_renderer::svg_parse_count();
         assert_eq!(
-            page_vm.vm_mut().eval("child.querySelector('svg').getBoundingClientRect().width")?,
-            "120"
+            page_vm.vm_mut().eval("child.getElementById('scene').getBoundingClientRect().width")?,
+            "256"
         );
         assert_eq!(crate::layout_renderer::svg_parse_count(), parsed);
+        let passes = page_vm.vm().layout_pass_observability_for_test().1;
         assert_eq!(
             page_vm.vm_mut().eval(r#"
                 const range = child.createRange();
                 range.selectNode(child.querySelector('rect'));
                 JSON.stringify((r => [r.x, r.y, r.width, r.height])(range.getBoundingClientRect()))
             "#)?,
-            "[12,23,25,15]"
+            "[32,54,50,30]"
         );
         assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, passes);
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("a child document's SVG range upgrades the shared screen publication");
+    .expect("an SVG range prepares only its scene and reuses the frame layout");
 }
 
 #[tokio::test(flavor = "current_thread")]

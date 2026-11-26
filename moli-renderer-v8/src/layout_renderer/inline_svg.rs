@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // This is a narrow port of Blitz's inline-SVG replaced-element bridge. The
-// live SVG subtree remains owned by NativeDom; a layout pass serializes its
-// original XML into one bounded, immutable `usvg::Tree`. Only numeric source
-// geometry survives with the outer frozen layout; paint retains the image.
+// live SVG subtree remains owned by NativeDom; a geometry or paint consumer
+// serializes its original XML into one bounded, immutable `usvg::Tree`.
+// Geometry keeps object quads for the measured viewport; paint keeps the image.
 //
 // The isolated tree also needs document CSS: sample the computed SVG paint
 // and text inputs separately, after matching selectors on original attributes.
@@ -67,6 +67,30 @@ thread_local! { static PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::
 #[cfg(test)]
 pub(crate) fn parse_count() -> usize {
     PARSE_COUNT.with(std::cell::Cell::get)
+}
+
+pub(crate) fn prepare_svg_geometry(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    viewport: moli_layout::LayoutViewport,
+    pending: Vec<(DomHandle, moli_layout::LayoutSize)>,
+) -> Vec<(DomHandle, Vec<(DomHandle, moli_layout::LayoutQuad)>)> {
+    let reads = RefCell::new(super::style_resolver::layout_style_read_scope(
+        runtime, document, viewport, None,
+    ));
+    pending
+        .into_iter()
+        .map(|(node, size)| {
+            let computed = reads.borrow_mut().read(node).computed_values();
+            let objects = computed
+                .and_then(|computed| {
+                    let style = ResolvedLayoutStyle::from_stylo(computed);
+                    layout_content(runtime, node, &style, size, &reads, false)
+                })
+                .map_or_else(Vec::new, |content| content.objects);
+            (node, objects)
+        })
+        .collect()
 }
 
 pub(super) fn layout_content(

@@ -98,13 +98,7 @@ where
     let scroll_projection =
         projection.build_coordinate_spaces(paint_capture.is_some(), retain_scroll_projection)?;
     for object in &mut object_geometry {
-        let owner = object.owner.index();
-        let content = projection.boxes[owner].content_box;
-        let zoom = world.boxes[owner].style.effective_zoom();
-        object.quad.points = object
-            .quad
-            .points
-            .map(|point| LayoutPoint::new(content.x + point.x * zoom, content.y + point.y * zoom));
+        object.place_in_box(&projection.boxes[object.owner.index()]);
     }
     projection.build_fragments();
     projection.assign_clip_and_paint_order();
@@ -300,7 +294,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
         styles: Vec<(N, style::servo_arc::Arc<style::properties::ComputedValues>)>,
         scroll_offset: impl Fn(N) -> LayoutPoint,
     ) -> Option<FrozenLayoutTree<N>> {
-        if !old.object_geometry.is_empty()
+        if (!old.object_geometry.is_empty() && old.svg_viewports.is_empty())
             || old.embedded_frames().next().is_some()
             || self
                 .world
@@ -333,7 +327,8 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
                 Vec::new(),
                 scroll,
             );
-            tree.svg_geometry_deferred = old.svg_geometry_deferred;
+            tree.svg_viewports.clone_from(&old.svg_viewports);
+            tree.clear_inline_svg_geometry();
             tree.refresh_scroll_projection(scroll_offset).ok()?;
             Some((tree, diagnostics, metadata))
         })?;

@@ -816,6 +816,62 @@ impl PageScriptHost {
             .map(inspect)
     }
 
+    pub(crate) fn prepare_svg_query_geometry(
+        &self,
+        document: DomHandle,
+        sources: impl Iterator<Item = DomHandle>,
+    ) -> Result<(), LayoutError> {
+        let mut sources = sources.peekable();
+        if sources.peek().is_none() {
+            return Ok(());
+        }
+        let Some((root, viewport, pending)) = self
+            .with_latest_layout_tree_for_document(document, |tree| {
+                if !tree.has_svg_viewports() {
+                    return None;
+                }
+                let dom = self.dom_host().dom();
+                let mut seen = std::collections::HashSet::new();
+                let pending = sources
+                    .filter_map(|source| {
+                        // The scene associates quads with elements. Nested SVGs
+                        // share the nearest ancestor with a measured viewport.
+                        dom.element(source)?;
+                        let mut node = source;
+                        while let Some(parent) = dom.parent_node(node) {
+                            if dom
+                                .element(parent)
+                                .is_some_and(|element| element.is_svg_element("svg"))
+                                && let Some(size) = tree.pending_svg_viewport(parent)
+                            {
+                                return Some((parent, size));
+                            }
+                            node = parent;
+                        }
+                        None
+                    })
+                    .filter(|(source, _)| seen.insert(*source))
+                    .collect::<Vec<_>>();
+                Some((tree.source_root(), tree.viewport, pending))
+            })
+            .flatten()
+        else {
+            return Ok(());
+        };
+        if pending.is_empty() {
+            return Ok(());
+        }
+        // Style observation and decode run outside the layout-state borrow.
+        // This native operation runs no page callbacks.
+        let geometry =
+            crate::layout_renderer::prepare_svg_geometry(self, document, viewport, pending);
+        self.document_layout_state
+            .borrow_mut()
+            .latest_tree_mut()
+            .ok_or(LayoutError::NoLayoutSnapshot)?
+            .append_svg_geometry(root, geometry)
+    }
+
     fn answer_layout_query(
         &self,
         tree: &FrozenLayoutTree<DomHandle>,
