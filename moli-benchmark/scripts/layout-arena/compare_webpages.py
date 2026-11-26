@@ -48,11 +48,17 @@ def native_metrics(folder, result):
         target = (
             passes if layout_pass else retention if retention_pass else cache_traces
         )
+        if layout_pass:
+            values["retained_numeric_tree"] = (
+                "1" if "retained_numeric_tree=true" in line else "0"
+            )
         target.append({k: int(v) for k, v in values.items()})
     if not passes:
         raise RuntimeError(f"No layout traces in pulse window: {folder}")
     return {
         "passes": len(passes),
+        "retained_box_visits": sum(p.get("retained_box_count", 0) for p in passes),
+        "retained_tree_passes": sum(p.get("retained_numeric_tree", 0) for p in passes),
         "box_retention_ms": sum(p["total_us"] for p in retention) / 1000,
         "retention_calls": len(retention),
         "inline_layout_hits": statistics.median(

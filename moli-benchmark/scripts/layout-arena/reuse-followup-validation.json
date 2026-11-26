@@ -1,0 +1,271 @@
+{
+  "base": "d7e0a70f28e42db46b04f716b750466c272bad02",
+  "variants": {
+    "slotmap": {
+      "source_commit": "dc7d49bfb0b9f7c2593babad70997b1e20370fd9",
+      "format": {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all"
+        ],
+        "exit_code": 0
+      },
+      "checks": {
+        "clippy": {
+          "command": [
+            "cargo",
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "seconds": 257.1800508289598,
+          "changed_during_run": [],
+          "source_sha256": {
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout.rs": "df0368e1e7ca665c8adf67d271547a36ab314a6244ea6bd9cca81b5bcd6dc7ea",
+            "moli-layout/src/taffy_tree.rs": "4ee5b66f8ba3af18381bcee890fa7a445f27cbf240fc99eb775709b858694b02",
+            "moli-layout/src/inline/numeric_reuse/measurement.rs": "3eb6a2c0488b4e33cf8547e87fb04507e8e9647a7868e947f1ad72a745d446d9",
+            "moli-layout/src/builder/retained.rs": "fb7ff643de070ca38c4cef3a0282fd43ea5d4f4b3c137a68ddd8aa558be89580",
+            "moli-layout/src/pass.rs": "925362ded5844425a0f8bff56f3272227343018429b99363393874375a5d6405",
+            "moli-layout/src/world/storage/tests.rs": "ed4a65a01eb810e2a89b7496d816034e62360b07553963073c768b869abfa3a0",
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout/viewport_reuse.rs": "2711e326861a014f5a7fd89a4cea2b687ec9237359c8928ab6cb79afcbd6aa24",
+            "moli-layout/src/world.rs": "b3b3f3d0a59d406c8bb4bf613be2ffd93833ec53adc6b0d0c6171f3ec1f1b9d4",
+            "moli-layout/src/projection.rs": "b35810953def2b67a33cf65919f4162b9ec02241659df9f7d74ff81d7cbab198",
+            "moli-layout/src/world/storage.rs": "aaf83fb5869adbf5cdb0623204cf04a33a95d3cbe86e78163a1b522e67c29890",
+            "moli-layout/src/inline/numeric_reuse.rs": "a2cc93d83ad5c550aefc1194a29999884a43720c5a098015da41b709658e8268"
+          }
+        },
+        "focused": {
+          "command": [
+            "cargo",
+            "nextest",
+            "run",
+            "-p",
+            "moli-layout",
+            "--no-fail-fast"
+          ],
+          "exit_code": 0,
+          "seconds": 20.239221623167396,
+          "changed_during_run": [],
+          "source_sha256": {
+            "moli-layout/src/world/storage/tests.rs": "ed4a65a01eb810e2a89b7496d816034e62360b07553963073c768b869abfa3a0",
+            "moli-layout/src/builder/retained.rs": "fb7ff643de070ca38c4cef3a0282fd43ea5d4f4b3c137a68ddd8aa558be89580",
+            "moli-layout/src/projection.rs": "b35810953def2b67a33cf65919f4162b9ec02241659df9f7d74ff81d7cbab198",
+            "moli-layout/src/inline/numeric_reuse.rs": "a2cc93d83ad5c550aefc1194a29999884a43720c5a098015da41b709658e8268",
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout.rs": "df0368e1e7ca665c8adf67d271547a36ab314a6244ea6bd9cca81b5bcd6dc7ea",
+            "moli-layout/src/inline/numeric_reuse/measurement.rs": "3eb6a2c0488b4e33cf8547e87fb04507e8e9647a7868e947f1ad72a745d446d9",
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout/viewport_reuse.rs": "2711e326861a014f5a7fd89a4cea2b687ec9237359c8928ab6cb79afcbd6aa24",
+            "moli-layout/src/world.rs": "b3b3f3d0a59d406c8bb4bf613be2ffd93833ec53adc6b0d0c6171f3ec1f1b9d4",
+            "moli-layout/src/taffy_tree.rs": "4ee5b66f8ba3af18381bcee890fa7a445f27cbf240fc99eb775709b858694b02",
+            "moli-layout/src/pass.rs": "925362ded5844425a0f8bff56f3272227343018429b99363393874375a5d6405",
+            "moli-layout/src/world/storage.rs": "aaf83fb5869adbf5cdb0623204cf04a33a95d3cbe86e78163a1b522e67c29890"
+          }
+        },
+        "nextest": {
+          "command": [
+            "cargo",
+            "nextest",
+            "run",
+            "--no-fail-fast"
+          ],
+          "exit_code": 0,
+          "seconds": 940.6959468568675,
+          "changed_during_run": [],
+          "source_sha256": {
+            "moli-layout/src/pass.rs": "925362ded5844425a0f8bff56f3272227343018429b99363393874375a5d6405",
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout/viewport_reuse.rs": "2711e326861a014f5a7fd89a4cea2b687ec9237359c8928ab6cb79afcbd6aa24",
+            "moli-layout/src/inline/numeric_reuse.rs": "a2cc93d83ad5c550aefc1194a29999884a43720c5a098015da41b709658e8268",
+            "moli-layout/src/taffy_tree.rs": "4ee5b66f8ba3af18381bcee890fa7a445f27cbf240fc99eb775709b858694b02",
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout.rs": "df0368e1e7ca665c8adf67d271547a36ab314a6244ea6bd9cca81b5bcd6dc7ea",
+            "moli-layout/src/world/storage.rs": "aaf83fb5869adbf5cdb0623204cf04a33a95d3cbe86e78163a1b522e67c29890",
+            "moli-layout/src/inline/numeric_reuse/measurement.rs": "3eb6a2c0488b4e33cf8547e87fb04507e8e9647a7868e947f1ad72a745d446d9",
+            "moli-layout/src/world.rs": "b3b3f3d0a59d406c8bb4bf613be2ffd93833ec53adc6b0d0c6171f3ec1f1b9d4",
+            "moli-layout/src/builder/retained.rs": "fb7ff643de070ca38c4cef3a0282fd43ea5d4f4b3c137a68ddd8aa558be89580",
+            "moli-layout/src/world/storage/tests.rs": "ed4a65a01eb810e2a89b7496d816034e62360b07553963073c768b869abfa3a0",
+            "moli-layout/src/projection.rs": "b35810953def2b67a33cf65919f4162b9ec02241659df9f7d74ff81d7cbab198"
+          }
+        }
+      },
+      "full_tests_passed": 24374,
+      "existing_skips": 20,
+      "admission_passed": 20,
+      "admission_failed": 0,
+      "build": {
+        "recorded_parent_head": "2838d85ec41b781154eb9dfcd02d42bb745f296b",
+        "built_before_rust_commit": true,
+        "source_matches_committed_files": true,
+        "binary_sha256": "f0c1552b79e88d84bc073706e2c0acea8210acce8b0f00588a5427b047c21400",
+        "exit_code": 0,
+        "seconds": 308.8492248740513,
+        "changed_during_build": []
+      }
+    },
+    "dense": {
+      "source_commit": "5bf7d373196020a242a0b28ba218cfbc00ee5653",
+      "format": {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all"
+        ],
+        "exit_code": 0
+      },
+      "checks": {
+        "clippy": {
+          "command": [
+            "cargo",
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "seconds": 63.54219769896008,
+          "changed_during_run": [],
+          "source_sha256": {
+            "moli-layout/src/world.rs": "b3b3f3d0a59d406c8bb4bf613be2ffd93833ec53adc6b0d0c6171f3ec1f1b9d4",
+            "moli-layout/src/inline/numeric_reuse/measurement.rs": "3eb6a2c0488b4e33cf8547e87fb04507e8e9647a7868e947f1ad72a745d446d9",
+            "moli-layout/src/pass.rs": "925362ded5844425a0f8bff56f3272227343018429b99363393874375a5d6405",
+            "moli-layout/src/projection.rs": "b35810953def2b67a33cf65919f4162b9ec02241659df9f7d74ff81d7cbab198",
+            "moli-layout/src/taffy_tree.rs": "4ee5b66f8ba3af18381bcee890fa7a445f27cbf240fc99eb775709b858694b02",
+            "moli-layout/src/world/storage/tests.rs": "ed4a65a01eb810e2a89b7496d816034e62360b07553963073c768b869abfa3a0",
+            "moli-layout/src/builder/retained.rs": "fb7ff643de070ca38c4cef3a0282fd43ea5d4f4b3c137a68ddd8aa558be89580",
+            "moli-layout/src/world/storage.rs": "39c61541cd939445cfa744e715fe2eca3691dc7fbc6fa96ce361830438ac0434",
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout.rs": "df0368e1e7ca665c8adf67d271547a36ab314a6244ea6bd9cca81b5bcd6dc7ea",
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout/viewport_reuse.rs": "2711e326861a014f5a7fd89a4cea2b687ec9237359c8928ab6cb79afcbd6aa24",
+            "moli-layout/src/inline/numeric_reuse.rs": "a2cc93d83ad5c550aefc1194a29999884a43720c5a098015da41b709658e8268"
+          }
+        },
+        "focused": {
+          "command": [
+            "cargo",
+            "nextest",
+            "run",
+            "-p",
+            "moli-layout",
+            "--no-fail-fast"
+          ],
+          "exit_code": 0,
+          "seconds": 10.78597382386215,
+          "changed_during_run": [],
+          "source_sha256": {
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout.rs": "df0368e1e7ca665c8adf67d271547a36ab314a6244ea6bd9cca81b5bcd6dc7ea",
+            "moli-layout/src/world/storage/tests.rs": "ed4a65a01eb810e2a89b7496d816034e62360b07553963073c768b869abfa3a0",
+            "moli-layout/src/world/storage.rs": "39c61541cd939445cfa744e715fe2eca3691dc7fbc6fa96ce361830438ac0434",
+            "moli-layout/src/projection.rs": "b35810953def2b67a33cf65919f4162b9ec02241659df9f7d74ff81d7cbab198",
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout/viewport_reuse.rs": "2711e326861a014f5a7fd89a4cea2b687ec9237359c8928ab6cb79afcbd6aa24",
+            "moli-layout/src/inline/numeric_reuse/measurement.rs": "3eb6a2c0488b4e33cf8547e87fb04507e8e9647a7868e947f1ad72a745d446d9",
+            "moli-layout/src/inline/numeric_reuse.rs": "a2cc93d83ad5c550aefc1194a29999884a43720c5a098015da41b709658e8268",
+            "moli-layout/src/taffy_tree.rs": "4ee5b66f8ba3af18381bcee890fa7a445f27cbf240fc99eb775709b858694b02",
+            "moli-layout/src/pass.rs": "925362ded5844425a0f8bff56f3272227343018429b99363393874375a5d6405",
+            "moli-layout/src/builder/retained.rs": "fb7ff643de070ca38c4cef3a0282fd43ea5d4f4b3c137a68ddd8aa558be89580",
+            "moli-layout/src/world.rs": "b3b3f3d0a59d406c8bb4bf613be2ffd93833ec53adc6b0d0c6171f3ec1f1b9d4"
+          }
+        },
+        "nextest": {
+          "command": [
+            "cargo",
+            "nextest",
+            "run",
+            "--no-fail-fast"
+          ],
+          "exit_code": 0,
+          "seconds": 723.7861598581076,
+          "changed_during_run": [],
+          "source_sha256": {
+            "moli-layout/src/inline/numeric_reuse.rs": "a2cc93d83ad5c550aefc1194a29999884a43720c5a098015da41b709658e8268",
+            "moli-layout/src/world/storage/tests.rs": "ed4a65a01eb810e2a89b7496d816034e62360b07553963073c768b869abfa3a0",
+            "moli-layout/src/world.rs": "b3b3f3d0a59d406c8bb4bf613be2ffd93833ec53adc6b0d0c6171f3ec1f1b9d4",
+            "moli-layout/src/world/storage.rs": "39c61541cd939445cfa744e715fe2eca3691dc7fbc6fa96ce361830438ac0434",
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout.rs": "df0368e1e7ca665c8adf67d271547a36ab314a6244ea6bd9cca81b5bcd6dc7ea",
+            "moli-layout/src/taffy_tree.rs": "4ee5b66f8ba3af18381bcee890fa7a445f27cbf240fc99eb775709b858694b02",
+            "moli-renderer-v8/src/script_vm/tests/realtime_layout/viewport_reuse.rs": "2711e326861a014f5a7fd89a4cea2b687ec9237359c8928ab6cb79afcbd6aa24",
+            "moli-layout/src/inline/numeric_reuse/measurement.rs": "3eb6a2c0488b4e33cf8547e87fb04507e8e9647a7868e947f1ad72a745d446d9",
+            "moli-layout/src/pass.rs": "925362ded5844425a0f8bff56f3272227343018429b99363393874375a5d6405",
+            "moli-layout/src/builder/retained.rs": "fb7ff643de070ca38c4cef3a0282fd43ea5d4f4b3c137a68ddd8aa558be89580",
+            "moli-layout/src/projection.rs": "b35810953def2b67a33cf65919f4162b9ec02241659df9f7d74ff81d7cbab198"
+          }
+        }
+      },
+      "full_tests_passed": 24374,
+      "existing_skips": 20,
+      "admission_passed": 20,
+      "admission_failed": 0,
+      "build": {
+        "recorded_parent_head": "ef7737fd073ff6da6e53df7f718a8a94672bcf1d",
+        "built_before_rust_commit": true,
+        "source_matches_committed_files": true,
+        "binary_sha256": "421cf82dd7838e49ffd17b78c9f56f76a5b1f804a91c3418230aefbe856a9a55",
+        "exit_code": 0,
+        "seconds": 321.3750862670131,
+        "changed_during_build": []
+      }
+    }
+  },
+  "formal": {
+    "successful_fresh_processes": 150,
+    "failed_processes": 0,
+    "real_page_snapshots": 10,
+    "measured_updates": 6000,
+    "repetitions": 3,
+    "scenarios": [
+      "viewport",
+      "container_width",
+      "text",
+      "display",
+      "detach"
+    ],
+    "verified_bodies": {
+      "finance": 81,
+      "baidu": 46,
+      "rust": 8,
+      "pypi": 17,
+      "hn": 3,
+      "zhihu": 85,
+      "wikipedia": 10,
+      "python_docs": 19,
+      "rust_book": 21,
+      "typescript": 25
+    },
+    "binary_sha256": {
+      "baseline": "47208ddeab779343a408138c674b633120248c3b429699565985240b79e997e4",
+      "slotmap_before": "23bc258afd8442d6c8887a83cb89a07fc56b922d4b57cea95a987d1b6ec07474",
+      "dense_before": "873a41ab4726484fc63c27d628eda1e9626d786cf7d8580b4df6be91b07b21cf",
+      "slotmap": "f0c1552b79e88d84bc073706e2c0acea8210acce8b0f00588a5427b047c21400",
+      "dense": "421cf82dd7838e49ffd17b78c9f56f76a5b1f804a91c3418230aefbe856a9a55"
+    }
+  },
+  "scope": "Frozen initialized real DOM/CSS/assets, scripts inert. No forced GC/trim. Formal matrix runs after all owned builds/tests; functional admission timings excluded. Current-main rebase/revalidation is still required before merging either draft.",
+  "development_regression": {
+    "test": "moli-layout projection::dependency_tests::sticky_resolves_a_scroll_space_outside_its_layout_parent_chain",
+    "cause": "An attempted projection optimization read geometry parent IDs before the geometry list existed.",
+    "resolution": "Reverted this ordered-path optimization; original test/assertions retained. Final full checks pass independently for both backends. The rejected binary was excluded from all formal measurements."
+  },
+  "viewport_mode_fixture": {
+    "passes": 5,
+    "steps_per_variant": 5,
+    "coverage": [
+      "desktop/mobile mode",
+      "dynamic meta viewport",
+      "DPR",
+      "fixed position",
+      "root gutters and overflow",
+      "original geometry restoration"
+    ],
+    "binary_sha256": {
+      "baseline": "47208ddeab779343a408138c674b633120248c3b429699565985240b79e997e4",
+      "slotmap_before": "23bc258afd8442d6c8887a83cb89a07fc56b922d4b57cea95a987d1b6ec07474",
+      "dense_before": "873a41ab4726484fc63c27d628eda1e9626d786cf7d8580b4df6be91b07b21cf",
+      "slotmap": "f0c1552b79e88d84bc073706e2c0acea8210acce8b0f00588a5427b047c21400",
+      "dense": "421cf82dd7838e49ffd17b78c9f56f76a5b1f804a91c3418230aefbe856a9a55"
+    }
+  }
+}

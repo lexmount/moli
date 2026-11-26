@@ -210,3 +210,62 @@ network and incomplete-page exclusions:
 uv run --project moli-benchmark python "$ARENA_SCRIPT/summarize_live_cpu.py" \
   "$ARENA_SCRIPT/measurements.csv" --output "$ARENA_LAYOUT/live-cpu"
 ```
+
+## Viewport retention and direct storage traversal followup
+
+[Followup results](results-reuse-followup-d7e0a70f.md) compare five saved executables
+in the same new cohort: Vec, the prior SlotMap and DenseSlotMap implementations,
+and both updated implementations. This is a within-cohort before/after comparison;
+the prior report's timings are not subtracted from new measurements.
+
+The update retains compatible layout boxes and shaped text across viewport changes,
+revalidates all styles, and discards prior numeric constraints. Root restyling can
+update a compatible container. Unordered scans directly iterate arena values; tree
+and publication traversal retain their existing order. Numeric feedback snapshots
+use the same physical storage order with a revision guard, and IFC owner lookup
+uses generation-checked compact arrays. No new numeric node IDs, dense-reference
+array, or replacement of the Taffy bridge is needed for this followup.
+
+The formal matrix uses the same ten archived real-page snapshots, five scenario
+families, three rotating rounds, and eight measured steps per scenario. Original
+application scripts are inert; responsive CSS and actual layout changes run. Each
+step checks sampled geometry exactly against all other variants/rounds, and each
+family restores its original geometry. Archived body hashes are verified before
+and after the matrix. Failures remain recorded and do not count as wins.
+
+The numeric exports retain CPU time per update, CPU activity, wall time, RSS/PSS,
+kernel RSS high-water, JS heap used/total at scenario boundaries, native phase
+timings, retention counters, and all original before/after trials and min/max
+ranges. Heap gauges run outside timed steps; no forced GC or allocator trim is
+used. Boundary RSS and retained JS heap are different observations, and neither
+establishes a long-term leak. Timing remains instrumented and based on pinned
+main d7e0a70f; this does not establish live initialization speed or Chromium parity.
+
+```sh
+ARENA_SCRIPT=moli-benchmark/scripts/layout-arena
+ARENA_DATA=/absolute/path/to/captured-inputs
+ARENA_BINS=/absolute/path/to/saved/binaries
+ARENA_FOLLOWUP=moli-benchmark/results/reuse-followup-new
+uv run --project moli-benchmark python "$ARENA_SCRIPT/compare_layout_followup.py" \
+  --plan "$ARENA_DATA/snapshot-plan-v2.json" --binaries "$ARENA_BINS" \
+  --output "$ARENA_FOLLOWUP/formal" --repetitions 3 --steps 8 --large-steps 8
+uv run --project moli-benchmark python "$ARENA_SCRIPT/summarize_followup.py" \
+  "$ARENA_FOLLOWUP/formal" --output "$ARENA_FOLLOWUP/report"
+uv run --project moli-benchmark python "$ARENA_SCRIPT/viewport_mode_check.py" \
+  --binaries "$ARENA_BINS" --output "$ARENA_FOLLOWUP/viewport-modes"
+```
+
+The binary directory additionally contains `slotmap_before-moli` and
+`dense_before-moli`; the original three filenames are unchanged. Render figures
+with `render_followup.py` after measurements, with Matplotlib and NumPy available.
+`viewport_mode_check.py` is a separate, self-authored fixture for desktop/mobile
+mode changes, dynamic meta viewport, DPR, fixed positioning and root gutters. It
+asserts exact geometry parity across the five executables and restoration of the
+original desktop layout; its timings are excluded from the formal matrix.
+
+[Validation record](reuse-followup-validation.json) records the tested source
+revisions, executable hashes, independent required Rust checks, and separate
+functional admissions. Retained full-workspace failures found during development
+are described there; the final checks pass without weakening their assertions.
+Both alternatives remain drafts requiring current-main synchronization and full
+revalidation before a production merge.
