@@ -1152,6 +1152,7 @@ mod tests {
             box_count: 0,
             retained_box_count: 0,
             pruned_source_count: 0,
+            retained_embedded_box_count: 0,
             retained_numeric_layout_hits: 0,
             retained_numeric_tree: false,
             reused_inline_contexts: 0,

@@ -69,6 +69,7 @@ pub struct LayoutPassMetrics {
     pub retained_box_count: usize,
     /// Sources whose retained boxes skipped DOM and style revalidation.
     pub pruned_source_count: usize,
+    pub retained_embedded_box_count: usize,
     /// Final numeric cache hits populated by the previous screen pass.
     pub retained_numeric_layout_hits: usize,
     pub retained_numeric_tree: bool,
@@ -155,7 +156,9 @@ where
             tree: self.tree,
             paint: self.paint_snapshot,
             css_image_references: self.css_image_references,
-            retained_layout: self.retained_layout.filter(|layout| layout.has_paint()),
+            retained_layout: self.retained_layout,
+            retained_box_count: self.metrics.retained_box_count
+                + self.metrics.retained_embedded_box_count,
         }
     }
 

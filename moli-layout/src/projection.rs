@@ -181,6 +181,10 @@ where
         box_count: projection.boxes.len(),
         retained_box_count: phase_metrics.retained_box_count,
         pruned_source_count: phase_metrics.pruned_source_count,
+        retained_embedded_box_count: embedded_frames
+            .values()
+            .map(|(_, snapshot)| snapshot.retained_box_count)
+            .sum(),
         retained_numeric_layout_hits: phase_metrics.retained_numeric_layout_hits,
         retained_numeric_tree: phase_metrics.retained_numeric_tree,
         reused_inline_contexts: phase_metrics.reused_inline_contexts,
@@ -213,7 +217,6 @@ where
         .collect();
     let paint = retain_screen_paint.then(|| {
         Box::new(RetainedPaintData {
-            frames: screen_frames,
             paint_metadata: std::mem::take(&mut projection.paint_metadata),
             diagnostics: projection.diagnostics.clone(),
         })
@@ -257,6 +260,7 @@ where
             world,
             viewport,
             reusable_layout,
+            frames: screen_frames,
             paint,
         })
     });
@@ -270,13 +274,8 @@ where
     ))
 }
 
-/// Additional inputs for painting one published screen layout. Each embedded
-/// Document retains its own world only to paint its corresponding subtree.
-pub(crate) struct RetainedPaintData<N>
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    frames: HashMap<N, (LayoutBoxId, Box<RetainedLayoutWorld<N>>)>,
+/// Additional inputs for painting one published screen layout.
+pub(crate) struct RetainedPaintData {
     diagnostics: Vec<PaintDiagnostic>,
     paint_metadata: PaintMetadata,
 }
@@ -523,7 +522,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
             if frame.tree.viewport.css_width == 0 || frame.tree.viewport.css_height == 0 {
                 continue;
             }
-            let (id, retained) = paint.frames.get(&frame.source).ok_or_else(|| {
+            let (id, retained) = self.frames.get(&frame.source).ok_or_else(|| {
                 LayoutError::source_contract("screen paint", "missing embedded paint inputs")
             })?;
             let child_request = PaintCaptureRequest {

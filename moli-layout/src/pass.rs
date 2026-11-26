@@ -23,6 +23,7 @@ where
     pub paint: Option<PaintSnapshot>,
     pub css_image_references: Vec<crate::LayoutCssImageReference<N>>,
     pub(crate) retained_layout: Option<Box<RetainedLayoutWorld<N>>>,
+    pub(crate) retained_box_count: usize,
 }
 
 impl<N> EmbeddedFrameSnapshot<N>
@@ -40,6 +41,7 @@ where
             paint,
             css_image_references,
             retained_layout: None,
+            retained_box_count: 0,
         }
     }
 }
@@ -51,8 +53,8 @@ where
 /// computed-style estimate. Implementations must return an owned, source-free
 /// snapshot and must not run JavaScript, lifecycle work, or an event-loop turn.
 /// Recursive child layout is allowed because every nested world remains local
-/// to the same synchronous demand. The child tree is consumed into the single
-/// parent-owned frozen snapshot; it is not a separately retained cache entry.
+/// to the same synchronous demand. The parent owns the child tree and any
+/// retained work from the child's publication.
 pub trait EmbeddedFrameRenderer<N>
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
@@ -313,7 +315,8 @@ where
     pub(crate) world: LayoutWorld<N>,
     pub(crate) viewport: LayoutViewport,
     pub(crate) reusable_layout: bool,
-    pub(crate) paint: Option<Box<RetainedPaintData<N>>>,
+    pub(crate) frames: HashMap<N, (crate::LayoutBoxId, Box<RetainedLayoutWorld<N>>)>,
+    pub(crate) paint: Option<Box<RetainedPaintData>>,
 }
 
 impl<N: Copy + std::fmt::Debug + Eq + Hash> RetainedLayoutWorld<N> {
@@ -330,7 +333,16 @@ impl<N: Copy + std::fmt::Debug + Eq + Hash> RetainedLayoutWorld<N> {
     pub fn discard_paint(&mut self) {
         if self.paint.take().is_some() {
             self.world.release_paint_storage();
+            self.frames.retain(|_, (_, frame)| {
+                frame.discard_paint();
+                frame.can_reuse_layout()
+            });
         }
+    }
+
+    /// The parent refresh moves each frame's existing work into its next pass.
+    pub fn take_embedded_layouts(&mut self) -> HashMap<N, (crate::LayoutBoxId, Box<Self>)> {
+        std::mem::take(&mut self.frames)
     }
 
     fn into_layout_world(mut self) -> LayoutWorld<N> {
