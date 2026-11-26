@@ -10,6 +10,8 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use roxmltree::{Document, Node, ParsingOptions};
+
 pub use usvg::ElementStyleProperty as SvgStyleProperty;
 /// Shared final style profile, applied after matching the original SVG XML.
 pub type SvgElementStyle = Arc<[SvgStyleProperty]>;
@@ -34,7 +36,7 @@ pub struct SvgScene {
 /// larger tree. Keeping this below the raster input limit bounds that expansion
 /// before `usvg` receives attacker-controlled bytes.
 pub const MAX_ENCODED_SVG_BYTES: usize = 16 * 1024 * 1024;
-/// Bounds element recursion in vector parsing and scene rendering.
+/// Maximum XML element nesting admitted to SVG scene conversion.
 pub const MAX_SVG_ELEMENT_DEPTH: usize = 128;
 
 const DEFAULT_OBJECT_WIDTH: f32 = 300.0;
@@ -325,20 +327,10 @@ pub fn decode_inline_svg_scene(
     styles: &[Option<SvgElementStyle>],
     viewport: (f32, f32),
 ) -> Result<SvgScene, SvgDecodeError> {
-    check_encoded_budget(bytes)?;
-    let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
-    check_svg_element_depth(source)?;
-    let xml = usvg::roxmltree::Document::parse_with_options(
-        source,
-        usvg::roxmltree::ParsingOptions {
-            allow_dtd: true,
-            ..Default::default()
-        },
-    )
-    .map_err(|error| SvgDecodeError::MalformedXml(error.to_string()))?;
+    let xml = parse_svg_xml(bytes)?;
     let elements = xml
         .descendants()
-        .filter(|node| node.is_element())
+        .filter(Node::is_element)
         .collect::<Vec<_>>();
     if elements.len() != styles.len() {
         return Err(SvgDecodeError::StyleElementCount {
@@ -412,9 +404,7 @@ fn decode_svg_image_with_fonts(
     metadata: SvgImageMetadata,
     fonts: &SvgFonts,
 ) -> Result<SvgImage, SvgDecodeError> {
-    check_encoded_budget(bytes)?;
-    let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
-    check_svg_element_depth(source)?;
+    let xml = parse_svg_xml(bytes)?;
     let default_size = usvg::Size::from_wh(metadata.concrete_width, metadata.concrete_height)
         .ok_or(SvgDecodeError::InvalidConcreteSize)?;
     let options = usvg::Options {
@@ -434,7 +424,7 @@ fn decode_svg_image_with_fonts(
         },
         ..Default::default()
     };
-    let tree = usvg::Tree::from_data(bytes, &options)?;
+    let tree = usvg::Tree::from_xmltree(&xml, &options)?;
     Ok(SvgImage { tree, metadata })
 }
 
@@ -467,26 +457,39 @@ fn check_encoded_budget(bytes: &[u8]) -> Result<(), SvgDecodeError> {
     Ok(())
 }
 
-fn check_svg_element_depth(source: &str) -> Result<(), SvgDecodeError> {
+fn parse_svg_xml(bytes: &[u8]) -> Result<Document<'_>, SvgDecodeError> {
+    check_encoded_budget(bytes)?;
+    let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
+    let xml = Document::parse_with_options(
+        source,
+        ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| SvgDecodeError::MalformedXml(error.to_string()))?;
+
+    // roxmltree 0.21.2 parses element nesting iteratively. Check the expanded
+    // tree in document order before passing it to recursive SVG conversion.
+    let mut previous = xml.root();
     let mut depth = 0usize;
-    for token in xmlparser::Tokenizer::from(source) {
-        match token.map_err(|error| SvgDecodeError::MalformedXml(error.to_string()))? {
-            xmlparser::Token::ElementStart { .. } => {
-                depth += 1;
-                if depth > MAX_SVG_ELEMENT_DEPTH {
-                    return Err(SvgDecodeError::ElementNestingDepthExceeded {
-                        limit: MAX_SVG_ELEMENT_DEPTH,
-                    });
-                }
-            }
-            xmlparser::Token::ElementEnd {
-                end: xmlparser::ElementEnd::Empty | xmlparser::ElementEnd::Close(..),
-                ..
-            } => depth = depth.saturating_sub(1),
-            _ => {}
+    for element in xml.descendants().filter(Node::is_element) {
+        let parent = element.parent().expect("an XML element has a parent");
+        while previous != parent {
+            previous = previous
+                .parent()
+                .expect("the next element's parent is on the current path");
+            depth -= 1;
         }
+        depth += 1;
+        if depth > MAX_SVG_ELEMENT_DEPTH {
+            return Err(SvgDecodeError::ElementNestingDepthExceeded {
+                limit: MAX_SVG_ELEMENT_DEPTH,
+            });
+        }
+        previous = element;
     }
-    Ok(())
+    Ok(xml)
 }
 
 #[derive(Default)]
@@ -596,6 +599,38 @@ mod tests {
             decode_inline_svg_scene(deep.as_bytes(), &[], (100.0, 100.0)),
             Err(SvgDecodeError::ElementNestingDepthExceeded { .. })
         ));
+    }
+
+    #[test]
+    fn svg_element_depth_includes_expanded_entity_content() {
+        let svg = |groups| {
+            format!(
+                r#"<!DOCTYPE svg [<!ENTITY nested "{}<rect id='shape' width='1' height='1'/>{}">]>
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">&nested;</svg>"#,
+                "<g>".repeat(groups),
+                "</g>".repeat(groups)
+            )
+        };
+        let groups = MAX_SVG_ELEMENT_DEPTH - 2;
+        let at_limit = svg(groups);
+        let styles = vec![None; groups + 2];
+        let image = decode_svg_image(at_limit.as_bytes()).unwrap();
+        assert!(image.tree().node_by_id("shape").is_some());
+        let scene = decode_inline_svg_scene(at_limit.as_bytes(), &styles, (10.0, 10.0)).unwrap();
+        assert!(scene.image.tree().node_by_id("shape").is_some());
+
+        for groups in [groups + 1, 4096] {
+            let over_limit = svg(groups);
+            let styles = vec![None; groups + 2];
+            assert!(matches!(
+                decode_svg_image(over_limit.as_bytes()),
+                Err(SvgDecodeError::ElementNestingDepthExceeded { .. })
+            ));
+            assert!(matches!(
+                decode_inline_svg_scene(over_limit.as_bytes(), &styles, (10.0, 10.0)),
+                Err(SvgDecodeError::ElementNestingDepthExceeded { .. })
+            ));
+        }
     }
 
     #[test]
