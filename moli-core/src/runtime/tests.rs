@@ -5392,7 +5392,7 @@ async fn renderer_owner_created_page_runs_input_query_commands() -> Result<()> {
         <!doctype html>
         <html>
           <body style="margin:0">
-            <input id="field" style="position:absolute;left:12px;top:8px;width:120px;height:24px" value="seed">
+            <input id="field" style="box-sizing:border-box;position:absolute;left:12px;top:8px;width:120px;height:24px" value="seed">
           </body>
         </html>
     "#

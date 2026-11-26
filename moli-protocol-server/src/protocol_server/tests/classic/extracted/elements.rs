@@ -620,7 +620,7 @@ async fn webdriver_classic_element_user_prompt_behavior_matches_chromium_wpt() {
             .expect("classic session id");
         let url = classic_data_url(
             r#"
-            <input id="foo" style="display:block;width:120px;height:40px" value="foo">
+            <input id="foo" style="display:block;box-sizing:border-box;width:120px;height:40px" value="foo">
             <p id="text">bar</p>
             <input id="checked" type="checkbox" checked>
             <input id="active">

@@ -980,7 +980,7 @@ document.body.innerHTML = `
             .trim_end_matches("px")
             .parse::<f32>()?;
         assert!((control_font_size - 13.3333).abs() <= 0.01);
-        assert_eq!(computed["textInput"]["boxSizing"], "border-box");
+        assert_eq!(computed["textInput"]["boxSizing"], "content-box");
         assert_eq!(computed["textInput"]["padding"], "1px 2px");
         assert_eq!(computed["textInput"]["borderTopWidth"], "2px");
         assert_eq!(computed["textInput"]["borderTopStyle"], "inset");
