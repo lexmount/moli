@@ -131,6 +131,58 @@ fn rounded_border_miter_preserves_adjacent_edge_colors() {
 }
 
 #[test]
+fn rounded_border_miter_stays_clear_of_the_opposite_corner() {
+    let mut snapshot = snapshot(100, 100, 1.0);
+    let large_radius = PaintCornerRadius::new(90.0, 90.0);
+    snapshot.push_fragment(PaintFragment::Border {
+        rect: PaintRect::new(0.0, 0.0, 100.0, 100.0),
+        widths: PaintEdgeSizes::new(5.0, 5.0, 5.0, 5.0),
+        colors: PaintBorderColors {
+            top: PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            ..PaintBorderColors::all(PaintColor::TRANSPARENT)
+        },
+        styles: PaintBorderStyles::default(),
+        radii: PaintCornerRadii {
+            top_left: large_radius,
+            bottom_right: large_radius,
+            ..PaintCornerRadii::default()
+        },
+        transform: PaintTransform2D::IDENTITY,
+    });
+    let image = raster_snapshot(&snapshot).expect("opposing rounded corners should rasterize");
+    assert_eq!(pixel(&image, 85, 2), [255, 0, 0, 255]);
+    assert_eq!(pixel(&image, 75, 68), [255; 4]);
+}
+
+#[test]
+fn asymmetric_rounded_border_stays_inside_the_outer_contour() {
+    for reflected in [false, true] {
+        let mut snapshot = snapshot(100, 100, 1.0);
+        let transform = if reflected {
+            PaintTransform2D::new([-1.0, 0.0, 0.0, 1.0, 100.0, 0.0])
+        } else {
+            PaintTransform2D::IDENTITY
+        };
+        snapshot.push_fragment(PaintFragment::Border {
+            rect: PaintRect::new(0.0, 0.0, 100.0, 100.0),
+            widths: PaintEdgeSizes::new(1.0, 50.0, 1.0, 1.0),
+            colors: PaintBorderColors::all(PaintColor::new(1.0, 0.0, 0.0, 1.0)),
+            styles: PaintBorderStyles::default(),
+            radii: PaintCornerRadii {
+                top_left: PaintCornerRadius::new(100.0, 100.0),
+                ..PaintCornerRadii::default()
+            },
+            transform,
+        });
+        let image = raster_snapshot(&snapshot).expect("asymmetric rounded border should rasterize");
+        let sample = |x, y| pixel(&image, if reflected { 99 - x } else { x }, y);
+        assert_eq!(sample(80, 35), [255, 0, 0, 255]);
+        assert_eq!(sample(30, 20), [255; 4]);
+        assert_eq!(sample(15, 50), [255; 4]);
+    }
+}
+
+#[test]
 fn rounded_border_patterns_stay_inside_the_outer_contour() {
     let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
     let transparent = PaintBorderColors::all(PaintColor::TRANSPARENT);
