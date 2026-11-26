@@ -14,6 +14,52 @@ use crate::worker::abort as worker_abort;
 use moli_webapi::abort_signal::AbortSignalOwner;
 pub(crate) use moli_webapi::abort_signal::ResolvedAbortSignal;
 
+const WEAK_ABORT_ALGORITHM: &str = "__moliWeakAbortAlgorithm";
+
+pub(crate) enum AbortAlgorithm {
+    Strong(v8::Global<v8::Function>),
+    Weak(v8::Weak<v8::Function>),
+}
+
+impl AbortAlgorithm {
+    pub(crate) fn new<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        function: v8::Local<'s, v8::Function>,
+    ) -> Self {
+        if crate::util::get_private_value(scope, function.into(), WEAK_ABORT_ALGORITHM)
+            .is_some_and(|value| value.is_true())
+        {
+            Self::Weak(v8::Weak::new(scope, function))
+        } else {
+            Self::Strong(v8::Global::new(scope, function))
+        }
+    }
+
+    pub(crate) fn prepare<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Function>> {
+        match self {
+            Self::Strong(function) => Some(v8::Local::new(scope, function)),
+            Self::Weak(function) => function.to_local(scope),
+        }
+    }
+}
+
+pub(crate) fn register_weak_algorithm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: ResolvedAbortSignal<'s>,
+    algorithm: v8::Local<'s, v8::Function>,
+) -> bool {
+    crate::util::set_private_value(
+        scope,
+        algorithm.into(),
+        WEAK_ABORT_ALGORITHM,
+        v8::Boolean::new(scope, true).into(),
+    );
+    signal.register_algorithm(scope, algorithm)
+}
+
 static WINDOW_SIGNALS: AbortSignalOwner = AbortSignalOwner {
     is_aborted: |scope, signal| {
         context_host_ptr_from_global_bridge(scope)

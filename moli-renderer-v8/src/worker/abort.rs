@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, rc::Rc};
 
+use crate::abort_signal_route::AbortAlgorithm;
 use crate::exception_reporting::invoke_callback;
 use crate::util::{get_private_value, set_private_value, v8str};
 use crate::webidl;
@@ -31,7 +32,7 @@ pub(super) struct WorkerAbortStore {
 pub(super) struct WorkerAbortSignalState {
     signal: Option<crate::util::RealmObjectHandle>,
     aborted: bool,
-    abort_algorithms: Vec<v8::Global<v8::Function>>,
+    abort_algorithms: Vec<AbortAlgorithm>,
     // None for a source; Some (including empty) for a dependent signal's ordered roots.
     source_signals: Option<Vec<u32>>,
     dependent_signals: Vec<u32>,
@@ -180,7 +181,7 @@ impl WorkerAbortStore {
         };
         state
             .abort_algorithms
-            .push(v8::Global::new(scope, algorithm));
+            .push(AbortAlgorithm::new(scope, algorithm));
         true
     }
 
@@ -197,8 +198,9 @@ impl WorkerAbortStore {
             return false;
         };
         state.abort_algorithms.retain(|candidate| {
-            let candidate = v8::Local::new(scope, candidate);
-            !candidate.strict_equals(algorithm.into())
+            candidate
+                .prepare(scope)
+                .is_some_and(|candidate| !candidate.strict_equals(algorithm.into()))
         });
         true
     }
@@ -310,10 +312,12 @@ fn invoke_worker_abort_algorithms<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     signal: v8::Local<'s, v8::Object>,
     reason: v8::Local<'s, v8::Value>,
-    abort_algorithms: Vec<v8::Global<v8::Function>>,
+    abort_algorithms: Vec<AbortAlgorithm>,
 ) {
     for algorithm in abort_algorithms {
-        let algorithm = v8::Local::new(scope, &algorithm);
+        let Some(algorithm) = algorithm.prepare(scope) else {
+            continue;
+        };
         let _ = invoke_callback(
             scope,
             "Worker AbortSignal abort algorithm",
