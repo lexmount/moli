@@ -758,6 +758,36 @@ fn object_dimension_attributes_participate_in_the_css_cascade() {
 }
 
 #[test]
+fn iframe_dimension_attributes_follow_the_cascade_and_update_layout() {
+    let mut vm = new_parsed_test_vm(
+        "https://iframe-dimensions.test/",
+        r#"<!doctype html>
+        <iframe id="frame" width="360" height="454" style="border: 0"></iframe>
+        <iframe id="overridden" height="500" style="height: 80px; border: 0"></iframe>"#,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.getElementById('frame');
+  const size = element => [element.offsetWidth, element.offsetHeight];
+  const values = [size(frame), document.getElementById('overridden').offsetHeight];
+  frame.setAttribute('height', '260');
+  values.push(size(frame));
+  frame.removeAttribute('height');
+  values.push(size(frame));
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("iframe dimension hints should update layout");
+
+    assert_eq!(result, "[[360,454],80,[360,260],[360,150]]");
+}
+
+#[test]
 fn svg_generic_presentation_attributes_apply_to_every_svg_element() {
     let mut vm = new_parsed_test_vm(
         "https://svg-generic-presentation-attributes.test/",
