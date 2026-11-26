@@ -1,6 +1,8 @@
 use super::*;
 use moli_page_types::LayoutPolicy;
 
+mod inline_compaction;
+
 fn realtime_vm(markup: &str) -> StandaloneScriptVmHarness {
     let mut vm = new_parsed_test_vm("https://realtime-layout.test/", markup);
     vm.set_layout_policy(LayoutPolicy::Realtime);

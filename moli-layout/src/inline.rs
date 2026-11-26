@@ -540,6 +540,41 @@ impl InlineFormattingContext {
             })
     }
 
+    /// Rebase preparation onto the compacted construction graph. Parley's
+    /// styles and inline objects contain paragraph-local indices, so only
+    /// their external box maps need updating. Accepted numeric output must be
+    /// recomputed after IDs change, even when the shaped text is unchanged.
+    pub(crate) fn remap_construction_ids(&mut self, remap: &[Option<LayoutBoxId>]) -> bool {
+        if !self.references_only(|id| remap.get(id.index()).is_some_and(Option::is_some)) {
+            return false;
+        }
+        self.prepare_for_retention(false);
+        let map = |id: &mut LayoutBoxId| {
+            *id = remap[id.index()].expect("retained inline references were validated");
+        };
+        map(&mut self.root_style);
+        for unit in &mut self.text_units {
+            map(&mut unit.style_box);
+            unit.ancestors.iter_mut().for_each(map);
+            for source in &mut unit.sources {
+                map(&mut source.box_id);
+            }
+        }
+        for source in &mut self.source_map {
+            map(&mut source.box_id);
+        }
+        for object in &mut self.objects {
+            map(&mut object.box_id);
+            object.ancestors.iter_mut().for_each(map);
+        }
+        self.style_parents.iter_mut().for_each(map);
+        for state in &mut self.structural_boxes {
+            map(&mut state.box_id);
+            map(&mut state.parent);
+        }
+        true
+    }
+
     /// Retain one paragraph and its source mapping. A validated final numeric
     /// entry can also keep its accepted lines and local fragments; all other
     /// IFCs retain preparation alone.
