@@ -416,7 +416,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         rv.set_bool(false);
         return;
     }
-    let click_activation_target = if event_type.as_deref() == Some("click")
+    let click_activation = if event_type.as_deref() == Some("click")
         && event_is_mouse_event(scope, event)
         && let EventTargetHandle::Node(handle) = target
     {
@@ -426,11 +426,13 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
             crate::context_bootstrap::event_bool_attribute(scope, event, "bubbles"),
             crate::context_bootstrap::event_bool_attribute(scope, event, "composed"),
         )
+        .map(|activation_target| (activation_target, handle))
     } else {
         None
     };
-    let legacy_click_activation = click_activation_target
-        .and_then(|handle| prepare_legacy_activation_for_dispatched_click(scope, host_ptr, handle));
+    let legacy_click_activation = click_activation.and_then(|(activation_target, _)| {
+        prepare_legacy_activation_for_dispatched_click(scope, host_ptr, activation_target)
+    });
     match host.dispatch_public_event(scope, host_ptr, target, event) {
         Ok(dispatch) => {
             let return_value = dispatch.dispatch_event_return_value();
@@ -445,8 +447,14 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
                     return_value,
                 );
             }
-            if return_value && let Some(handle) = click_activation_target {
-                perform_click_default_action_for_dispatched_event(scope, host_ptr, handle, event);
+            if return_value && let Some((activation_target, event_target)) = click_activation {
+                perform_click_default_action_for_dispatched_event(
+                    scope,
+                    host_ptr,
+                    activation_target,
+                    event_target,
+                    event,
+                );
             }
             rv.set_bool(return_value);
         }
