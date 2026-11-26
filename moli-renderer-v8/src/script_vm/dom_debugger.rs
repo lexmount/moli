@@ -258,9 +258,9 @@ fn host_listener_snapshots(
         EventTargetHandle::ChildWindow(target) => {
             host.child_window_inspector_listener_snapshots(target)
         }
-        EventTargetHandle::Window | EventTargetHandle::Node(_) => {
-            host.inspector_event_listener_snapshots(target)
-        }
+        EventTargetHandle::Window
+        | EventTargetHandle::PopupWindow(_)
+        | EventTargetHandle::Node(_) => host.inspector_event_listener_snapshots(target),
     }
 }
 
