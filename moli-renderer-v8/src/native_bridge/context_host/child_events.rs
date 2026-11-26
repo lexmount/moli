@@ -183,11 +183,7 @@ impl PageScriptHost {
             return;
         };
         let Some(handler) = handler else {
-            if let Some(callback_id) =
-                self.remove_child_window_event_handler_property(handle, event_type)
-            {
-                self.release_event_callback(callback_id);
-            }
+            self.clear_child_window_event_handler_property(handle, event_type);
             return;
         };
         let owner = self.frame_owner_current_child_snapshot(handle);
@@ -259,13 +255,17 @@ impl PageScriptHost {
             })
     }
 
-    fn remove_child_window_event_handler_property(
+    pub(crate) fn clear_child_window_event_handler_property(
         &mut self,
         handle: DomHandle,
         event_type: &str,
-    ) -> Option<EventCallbackId> {
-        let target_map = self.child_window_event_listeners.get_mut(&handle)?;
-        let entries = target_map.get_mut(event_type)?;
+    ) {
+        let Some(target_map) = self.child_window_event_listeners.get_mut(&handle) else {
+            return;
+        };
+        let Some(entries) = target_map.get_mut(event_type) else {
+            return;
+        };
         let callback_id = entries
             .iter()
             .find(|entry| {
@@ -281,7 +281,9 @@ impl PageScriptHost {
         if target_map.is_empty() {
             self.child_window_event_listeners.remove(&handle);
         }
-        callback_id
+        if let Some(callback_id) = callback_id {
+            self.release_event_callback(callback_id);
+        }
     }
 
     pub(crate) fn current_child_window_event_target(

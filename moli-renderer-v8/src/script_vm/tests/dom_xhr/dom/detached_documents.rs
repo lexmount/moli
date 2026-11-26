@@ -109,6 +109,48 @@ fn detached_document_write_preserves_window_event_handlers() {
 }
 
 #[test]
+fn detached_document_write_updates_only_the_adopting_iframe_window() {
+    let mut vm = new_storage_html_test_vm("https://detached-write-iframe-handlers.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.body.appendChild(document.createElement('iframe'));
+  const child = frame.contentWindow;
+  const childDoc = frame.contentDocument;
+  const source = document.implementation.createHTMLDocument();
+  source.write('<!doctype html><html><head></head>');
+  const root = childDoc.adoptNode(source.documentElement);
+  childDoc.replaceChild(root, childDoc.documentElement);
+
+  const parentLoad = () => {};
+  const parentError = () => {};
+  const childLoad = () => {};
+  const childError = () => {};
+  window.onload = parentLoad;
+  window.onerror = parentError;
+  child.onload = childLoad;
+  child.onerror = childError;
+  const childHandlersInstalled = child.onload === childLoad && child.onerror === childError;
+
+  source.write('<body onload="void 0" onerror="void 0">');
+  return JSON.stringify({
+    inChildDocument: root.querySelector('body')?.ownerDocument === childDoc,
+    childHandlersInstalled,
+    parentHandlersPreserved: [window.onload === parentLoad, window.onerror === parentError],
+    childHandlersReplaced: [child.onload !== childLoad, child.onerror !== childError],
+  });
+})()
+"#,
+        )
+        .expect("writing into the adopted iframe root should evaluate");
+    assert_eq!(
+        result,
+        r#"{"inChildDocument":true,"childHandlersInstalled":true,"parentHandlersPreserved":[true,true],"childHandlersReplaced":[true,true]}"#
+    );
+}
+
+#[test]
 fn detached_document_write_open_resets_quirks_before_a_complete_doctype() {
     let mut vm = new_storage_html_test_vm("https://detached-document-write-quirks.test/");
     let result = vm
