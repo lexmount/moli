@@ -1,9 +1,107 @@
 use super::*;
+use moli_page_types::LayoutPolicy;
 
 const SVG_PUBLICATION_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/inline-svg-layout-publication.js"
 ));
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_inline_svg_outer_boxes_defer_scene_decoding() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/svg-outer-boxes.html")?,
+        );
+        page_vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 500,
+            inner_height: 160,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))?;
+        page_vm.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page_vm.vm_mut().eval(&format!(
+            "{SVG_PUBLICATION_FIXTURE}\ninstallSvgLayoutPublication()"
+        ))?;
+        let parsed = crate::layout_renderer::svg_parse_count();
+        let boxes = r#"
+            JSON.stringify([
+                document.getElementById('html').getBoundingClientRect().width,
+                document.getElementById('scene').getBoundingClientRect().width,
+                document.getElementById('scene').getBoundingClientRect().height,
+                document.getElementById('shape').getBBox().width,
+            ])
+        "#;
+        assert_eq!(page_vm.vm_mut().eval(boxes)?, "[80,200,100,10]");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed);
+
+        let child_geometry = r#"
+            JSON.stringify((r => [r.x,r.y,r.width,r.height])(
+                document.getElementById('shape').getBoundingClientRect()
+            ))
+        "#;
+        assert_eq!(page_vm.vm_mut().eval(child_geometry)?, "[110,50,10,10]");
+        assert_eq!(page_vm.vm_mut().eval(child_geometry)?, "[110,50,10,10]");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+
+        page_vm.vm_mut().eval("mutateSvgLayoutPublication()")?;
+        assert_eq!(page_vm.vm_mut().eval(boxes)?, "[300,200,100,100]");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(500, 160, 1.0))?
+            .expect("screenshot requests paint");
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = (55 * raster.width as usize + 335) * 4;
+        assert_eq!(&raster.rgba[pixel..pixel + 4], [0, 255, 0, 255]);
+        assert_eq!(page_vm.vm_mut().eval(child_geometry)?, "[330,50,100,10]");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 2);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("only SVG descendant queries and paint need a decoded scene");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_inline_svg_geometry_upgrades_an_embedded_frame() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/svg-embedded-geometry.html")?,
+        );
+        page_vm.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page_vm.vm_mut().eval(r#"
+            document.body.innerHTML = '<iframe id="frame" style="width:200px;height:160px"></iframe>';
+            const child = document.getElementById('frame').contentDocument;
+            child.body.style.margin = '0';
+            child.body.innerHTML =
+                '<svg width="120" height="80"><svg x="10" y="20" width="40" height="30">' +
+                '<rect x="2" y="3" width="25" height="15"/></svg></svg>';
+        "#)?;
+        let parsed = crate::layout_renderer::svg_parse_count();
+        assert_eq!(
+            page_vm.vm_mut().eval("child.querySelector('svg').getBoundingClientRect().width")?,
+            "120"
+        );
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed);
+        assert_eq!(
+            page_vm.vm_mut().eval(r#"
+                const range = child.createRange();
+                range.selectNode(child.querySelector('rect'));
+                JSON.stringify((r => [r.x, r.y, r.width, r.height])(range.getBoundingClientRect()))
+            "#)?,
+            "[12,23,25,15]"
+        );
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("a child document's SVG range upgrades the shared screen publication");
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn inline_svg_negative_intrinsic_lengths_respect_css_viewport_sizes() {

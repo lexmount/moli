@@ -146,6 +146,7 @@ where
     /// principal box but can still nominate rendered descendants for scroll.
     pub scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     pub object_geometry: Vec<LayoutObjectGeometry<N>>,
+    pub(crate) svg_geometry_deferred: bool,
     viewport_coordinate_space: FrozenCoordinateSpace,
     pub clip_chain: Vec<LayoutClipNode>,
     embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
@@ -156,6 +157,11 @@ impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    /// Whether this publication or an embedded frame omitted SVG descendant geometry.
+    pub fn svg_geometry_deferred(&self) -> bool {
+        self.svg_geometry_deferred
+    }
+
     /// Source root whose complete layout projection this member tree owns.
     pub const fn source_root(&self) -> N {
         self.source_root
@@ -411,6 +417,7 @@ where
             fragments,
             scroll_proxy_links,
             object_geometry,
+            svg_geometry_deferred: false,
             viewport_coordinate_space,
             clip_chain,
             embedded_frames,

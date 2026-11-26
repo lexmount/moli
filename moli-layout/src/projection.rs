@@ -333,6 +333,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
                 Vec::new(),
                 scroll,
             );
+            tree.svg_geometry_deferred = old.svg_geometry_deferred;
             tree.refresh_scroll_projection(scroll_offset).ok()?;
             Some((tree, diagnostics, metadata))
         })?;
