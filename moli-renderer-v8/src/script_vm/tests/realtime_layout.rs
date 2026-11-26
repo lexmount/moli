@@ -188,6 +188,66 @@ fn realtime_retained_numeric_layout_matches_fresh_geometry_and_paint() {
     }
 }
 
+#[test]
+fn realtime_refreshes_retained_overflow_after_transform_projection() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;overflow:hidden}",
+        "#panel{overflow:scroll;width:160px;height:48px}",
+        "#target{width:24px;height:16px;transform:translateX(8px)}",
+        "#resized{width:40px;height:12px}</style>",
+        "<div id=panel><div id=target></div></div><div id=resized></div>",
+    ));
+    vm.publish_layout_for_test().unwrap();
+    let before = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval(
+            "target.style.transform='translateX(185px)';\
+             JSON.stringify([target.getBoundingClientRect().left,panel.scrollWidth])"
+        )
+        .unwrap(),
+        "[185,209]"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+
+    assert_eq!(
+        vm.eval(
+            "resized.style.width='52px';JSON.stringify([resized.offsetWidth,\
+             target.getBoundingClientRect().left,panel.scrollWidth])"
+        )
+        .unwrap(),
+        "[52,185,209]"
+    );
+    let (_, passes, _, metrics) = vm.layout_pass_observability_for_test();
+    assert_eq!(passes, before + 1);
+    let metrics = metrics.unwrap();
+    assert!(metrics.reused_overflow_projection, "{metrics:?}");
+
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let host = host.borrow();
+    let document = host.document_handle();
+    let viewport = host.layout_viewport_for_document(document);
+    let fresh = host
+        .build_layout_pass_for_document(
+            document,
+            moli_layout::LayoutPassRequest::new(viewport, moli_layout::LayoutFlushReason::Test),
+        )
+        .unwrap()
+        .unwrap();
+    let panel = vm.document_runtime.get_element_by_id("panel").unwrap();
+    let target = vm.document_runtime.get_element_by_id("target").unwrap();
+    host.with_latest_layout_tree_for_document(document, |tree| {
+        assert_eq!(
+            tree.element_metrics_for_source(panel),
+            fresh.element_metrics_for_source(panel)
+        );
+        assert_eq!(
+            tree.client_rects_for_source(target),
+            fresh.client_rects_for_source(target)
+        );
+    })
+    .unwrap();
+}
+
 #[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn realtime_repaints_native_color_damage_without_rebuilding_geometry() {
