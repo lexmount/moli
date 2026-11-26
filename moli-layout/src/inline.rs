@@ -1056,7 +1056,12 @@ pub(crate) fn break_inline_lines(
         breaker
             .state_mut()
             .set_line_x(if rtl { reserved } else { 0.0 });
-        match breaker.break_next() {
+        let next = if reserved > 0.0 {
+            breaker.break_next_with_emergency_wrap()
+        } else {
+            breaker.break_next()
+        };
+        match next {
             Some(parley::YieldData::LineBreak(_)) => {
                 breaker.set_prior_line_width(available);
                 line_index += 1;

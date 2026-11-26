@@ -2663,7 +2663,7 @@ dependencies = [
 [[package]]
 name = "fontique"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 dependencies = [
  "hashbrown 0.17.1",
  "linebender_resource_handle",
@@ -7316,7 +7316,7 @@ dependencies = [
 [[package]]
 name = "parlance"
 version = "0.1.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 
 [[package]]
 name = "parlance"
@@ -7327,7 +7327,7 @@ checksum = "73072a9470554c8e794778acece2312661218aaabb635600957d952cf01c716e"
 [[package]]
 name = "parley"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 dependencies = [
  "fontique 0.11.0",
  "hashbrown 0.17.1",
@@ -7354,7 +7354,7 @@ dependencies = [
 [[package]]
 name = "parley_data"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 dependencies = [
  "icu_collections",
  "icu_properties",
@@ -7373,7 +7373,7 @@ dependencies = [
 [[package]]
 name = "parley_emoji"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 
 [[package]]
 name = "parley_emoji"
@@ -7384,7 +7384,7 @@ checksum = "9c4482d912d7671a7cd2089794f90ef3bb5f5f8c738230fb0fcd50fa020f0ed3"
 [[package]]
 name = "parley_engine"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 dependencies = [
  "fontique 0.11.0",
  "harfrust",

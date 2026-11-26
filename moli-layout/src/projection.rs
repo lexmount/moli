@@ -1269,18 +1269,27 @@ where
 
     fn assign_owner_paint_metadata(&mut self, id: LayoutBoxId, text: bool) {
         let index = id.index();
+        let Some(context) = self.world.boxes[index].inline_layout.as_ref() else {
+            return;
+        };
+        let visible_lines = context.visible_lines(context.fragments.lines.len());
         let metadata = &self.paint_metadata.boxes[index];
         let clip = metadata.content_clip;
         for fragment_index in metadata.inline_fragments.clone() {
-            let is_text = matches!(
-                self.fragments[fragment_index].kind,
-                LayoutFragmentKind::Text { .. }
-            );
-            if is_text == text {
+            let line_index = match self.fragments[fragment_index].kind {
+                LayoutFragmentKind::Text { line_index, .. } if text => line_index,
+                LayoutFragmentKind::InlineBox { line_index, .. } if !text => line_index,
+                _ => continue,
+            };
+            if line_index < visible_lines {
                 self.assign_fragment_paint_metadata(
                     LayoutFragmentId::from_index(fragment_index),
                     clip,
                 );
+            } else {
+                // Keep the geometry and clip chain for CSSOM. Hit testing only
+                // considers fragments that participate in paint order.
+                self.fragments[fragment_index].clip_chain = clip;
             }
         }
     }
