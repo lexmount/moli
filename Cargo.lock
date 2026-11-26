@@ -5288,6 +5288,7 @@ dependencies = [
  "image",
  "libjpeg-turbo-rs",
  "moli-system-fonts",
+ "parking_lot",
  "png",
  "thiserror 2.0.18",
  "usvg",

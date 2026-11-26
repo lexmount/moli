@@ -506,24 +506,11 @@ impl PageScriptHost {
         request_url: &url::Url,
         kind: DocumentSubresourceCspKind,
     ) -> DocumentCspOutcome {
-        let Some(owner) = self.owner_dispatch_scope_for_node(element) else {
+        let Some((owner, check)) = self.element_subresource_csp_check(element, request_url, kind)
+        else {
             return DocumentCspOutcome::Allowed;
         };
-        let Some(snapshot) = self.owner_document_policy_snapshot(owner) else {
-            return DocumentCspOutcome::Allowed;
-        };
-        // The element's Document owns this request even when a different
-        // Window's script changes its source or queues the update microtask.
-        // SAFETY: this host and its DocumentRuntime are owned by the same ScriptVm.
-        let (report_only_violation, enforced_violation) = unsafe { &*self.document_runtime }
-            .document_subresource_csp_check_for_document(
-                snapshot.document_handle,
-                &snapshot.document_url,
-                &snapshot.policy_container,
-                request_url,
-                kind,
-            )
-            .into_violations();
+        let (report_only_violation, enforced_violation) = check.into_violations();
         let host_ptr: *mut PageScriptHost = self;
         if let Some(violation) = report_only_violation {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
@@ -543,6 +530,36 @@ impl PageScriptHost {
             );
         }
         DocumentCspOutcome::Blocked(violation)
+    }
+
+    pub(crate) fn allows_element_image_resource(
+        &self,
+        element: DomHandle,
+        request_url: &url::Url,
+    ) -> bool {
+        self.element_subresource_csp_check(element, request_url, DocumentSubresourceCspKind::Image)
+            .is_none_or(|(_, check)| check.into_violations().1.is_none())
+    }
+
+    fn element_subresource_csp_check(
+        &self,
+        element: DomHandle,
+        request_url: &url::Url,
+        kind: DocumentSubresourceCspKind,
+    ) -> Option<(OwnerDispatchScope, DocumentContentSecurityPolicyCheck)> {
+        let owner = self.owner_dispatch_scope_for_node(element)?;
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        // The element's Document owns requests even when another Window
+        // changes the source. Policy evaluation itself does not run callbacks.
+        // SAFETY: this host and its DocumentRuntime are owned by the same ScriptVm.
+        let check = unsafe { &*self.document_runtime }.document_subresource_csp_check_for_document(
+            snapshot.document_handle,
+            &snapshot.document_url,
+            &snapshot.policy_container,
+            request_url,
+            kind,
+        );
+        Some((owner, check))
     }
 
     pub(crate) fn owner_dispatch_scope_for_node(

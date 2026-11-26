@@ -7,7 +7,14 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, OnceLock},
+};
+
+use parking_lot::Mutex;
+
+use crate::{
+    MAX_DECODED_RGBA_BYTES, RasterImageFormat, RasterImageMetadata, RgbaImage,
+    decode_raster_image_with_metadata, probe_raster_image,
 };
 
 pub use usvg::ElementStyleProperty as SvgStyleProperty;
@@ -211,6 +218,20 @@ impl SvgImageMetadata {
 pub struct SvgImage {
     tree: usvg::Tree,
     metadata: SvgImageMetadata,
+    embedded_rasters: HashMap<usize, EmbeddedRaster>,
+}
+
+struct EmbeddedRaster {
+    bytes: Arc<Vec<u8>>,
+    metadata: RasterImageMetadata,
+    decoded: OnceLock<Option<Arc<RgbaImage>>>,
+}
+
+/// A raster layer in an inline SVG and its transform from pixels to SVG coordinates.
+pub struct SvgRasterLayer<'a> {
+    pub image: &'a Arc<RgbaImage>,
+    pub transform: [f64; 6],
+    pub nearest: bool,
 }
 
 impl SvgImage {
@@ -220,6 +241,39 @@ impl SvgImage {
 
     pub const fn metadata(&self) -> SvgImageMetadata {
         self.metadata
+    }
+
+    pub fn raster_layer(&self, node: &usvg::Node) -> Option<SvgRasterLayer<'_>> {
+        let usvg::Node::Image(image) = node else {
+            return None;
+        };
+        let bytes = match image.kind() {
+            usvg::ImageKind::PNG(bytes)
+            | usvg::ImageKind::JPEG(bytes)
+            | usvg::ImageKind::GIF(bytes)
+            | usvg::ImageKind::WEBP(bytes) => bytes,
+            usvg::ImageKind::SVG(_) => return None,
+        };
+        let raster = self.embedded_rasters.get(&(Arc::as_ptr(bytes) as usize))?;
+        let pixels = raster
+            .decoded
+            .get_or_init(|| {
+                decode_raster_image_with_metadata(&raster.bytes, raster.metadata)
+                    .ok()
+                    .map(|decoded| Arc::new(decoded.image))
+            })
+            .as_ref()?;
+        let t = image.abs_transform();
+        Some(SvgRasterLayer {
+            image: pixels,
+            transform: [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty].map(f64::from),
+            nearest: matches!(
+                image.rendering_mode(),
+                usvg::ImageRendering::OptimizeSpeed
+                    | usvg::ImageRendering::CrispEdges
+                    | usvg::ImageRendering::Pixelated
+            ),
+        })
     }
 }
 
@@ -320,6 +374,7 @@ pub fn decode_inline_svg_scene(
     bytes: &[u8],
     styles: &[Option<SvgElementStyle>],
     viewport: (f32, f32),
+    allow_embedded_rasters: bool,
 ) -> Result<SvgScene, SvgDecodeError> {
     check_encoded_budget(bytes)?;
     let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
@@ -354,6 +409,7 @@ pub fn decode_inline_svg_scene(
         .map(|(index, node)| (node.id(), index))
         .collect::<HashMap<_, _>>();
     let fonts = &SVG_FONTS;
+    let rasters = Mutex::new((MAX_DECODED_RGBA_BYTES, HashMap::new()));
     let options = usvg::Options {
         fontdb: fonts.database.clone(),
         font_family: fonts.default_family.clone(),
@@ -362,12 +418,40 @@ pub fn decode_inline_svg_scene(
         element_styles: Some(Arc::new(overrides)),
         collect_object_geometry: true,
         image_href_resolver: usvg::ImageHrefResolver {
-            resolve_data: Box::new(|_, _, _| None),
+            // Inline data images share one decoded-byte budget. Only paint
+            // needs their pixels, so defer decoding and share it across paints.
+            resolve_data: Box::new(|_, bytes, _| {
+                if !allow_embedded_rasters {
+                    return None;
+                }
+                let metadata = probe_raster_image(&bytes).ok()?;
+                let kind = match metadata.format {
+                    RasterImageFormat::Png => usvg::ImageKind::PNG(bytes.clone()),
+                    RasterImageFormat::Jpeg => usvg::ImageKind::JPEG(bytes.clone()),
+                    RasterImageFormat::Gif => usvg::ImageKind::GIF(bytes.clone()),
+                    RasterImageFormat::WebP => usvg::ImageKind::WEBP(bytes.clone()),
+                    RasterImageFormat::Bmp => return None,
+                };
+                let mut rasters = rasters.lock();
+                rasters.0 = rasters.0.checked_sub(metadata.decoded_byte_len())?;
+                // Keep the shared input alive for the lifetime of its lookup key.
+                rasters.1.insert(
+                    Arc::as_ptr(&bytes) as usize,
+                    EmbeddedRaster {
+                        bytes,
+                        metadata,
+                        decoded: OnceLock::new(),
+                    },
+                );
+                Some(kind)
+            }),
+            // Never resolve a nested path or network URL within the parser.
             resolve_string: Box::new(|_, _| None),
         },
         ..Default::default()
     };
     let mut tree = usvg::Tree::from_xmltree(&xml, &options)?;
+    drop(options);
     let objects = tree
         .take_object_geometry()
         .into_iter()
@@ -389,7 +473,11 @@ pub fn decode_inline_svg_scene(
         concrete_height: viewport.1,
     };
     Ok(SvgScene {
-        image: SvgImage { tree, metadata },
+        image: SvgImage {
+            tree,
+            metadata,
+            embedded_rasters: rasters.into_inner().1,
+        },
         objects,
     })
 }
@@ -428,7 +516,11 @@ fn decode_svg_image_with_fonts(
         ..Default::default()
     };
     let tree = usvg::Tree::from_data(bytes, &options)?;
-    Ok(SvgImage { tree, metadata })
+    Ok(SvgImage {
+        tree,
+        metadata,
+        embedded_rasters: HashMap::new(),
+    })
 }
 
 fn concrete_object_size(width: Option<f32>, height: Option<f32>, ratio: Option<f32>) -> (f32, f32) {
@@ -553,7 +645,7 @@ mod tests {
         let source = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><clipPath id="empty"/></defs><rect x="10" y="20" width="30" height="40" clip-path="url(#empty)"/></svg>"##;
         let profile: SvgElementStyle = Arc::from([SvgStyleProperty::new("fill", "red")]);
         let styles = [None, None, None, Some(profile)];
-        let mut scene = decode_inline_svg_scene(source, &styles, (100.0, 100.0)).unwrap();
+        let mut scene = decode_inline_svg_scene(source, &styles, (100.0, 100.0), true).unwrap();
         let shape = scene
             .objects
             .iter()
@@ -569,7 +661,7 @@ mod tests {
             "numeric geometry is moved out, never duplicated in the retained paint tree"
         );
         assert!(matches!(
-            decode_inline_svg_scene(source, &[], (100.0, 100.0)),
+            decode_inline_svg_scene(source, &[], (100.0, 100.0), true),
             Err(SvgDecodeError::StyleElementCount { .. })
         ));
     }

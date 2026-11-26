@@ -108,10 +108,19 @@ pub(super) fn draw_svg(
     transform: Affine,
 ) {
     // Blitz's SVG executor reports unsupported nodes by painting red boxes.
-    // Paint output must not invent visible fallback pixels, so retain
-    // supported vector content and silently omit unsupported masks, filters,
-    // patterns, or embedded raster nodes until their backends are wired.
-    anyrender_svg::render_svg_tree_with(scene, image.tree(), transform, &mut |_scene, _node| {});
+    // Handle embedded raster nodes through the same decoder and brush as
+    // other images. Leave other unsupported SVG features unpainted.
+    anyrender_svg::render_svg_tree_with(scene, image.tree(), transform, &mut |scene, node| {
+        if let Some(layer) = image.raster_layer(node) {
+            let sampling = if layer.nearest {
+                PaintImageSampling::Nearest
+            } else {
+                PaintImageSampling::Linear
+            };
+            let brush = raster_brush(layer.image, sampling, Extend::Pad, Extend::Pad);
+            scene.draw_image(brush.as_ref(), transform * Affine::new(layer.transform));
+        }
+    });
 }
 
 fn pixel_snapped_image_destination(destination: PaintRect) -> Option<PaintRect> {

@@ -7,6 +7,50 @@ const SVG_PUBLICATION_FIXTURE: &str = include_str!(concat!(
 ));
 
 #[tokio::test(flavor = "current_thread")]
+async fn inline_svg_data_image_respects_the_document_image_policy() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for (policy, expected) in [
+            ("img-src data:", [255, 0, 0, 255]),
+            ("img-src 'none'", [0, 255, 0, 255]),
+        ] {
+            let mut page = test_page_vm_with_loader_and_document_url(
+                &loader,
+                Vec::new(),
+                Url::parse("https://example.com/svg-image-policy.html")?,
+            );
+            page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+            page.vm_mut()
+                .set_response_content_security_policies(&[policy.into()]);
+            page.vm_mut().eval(
+                r#"
+                document.body.style.margin = '0';
+                document.body.innerHTML = `<svg id="scene" width="20" height="20">
+                    <rect width="20" height="20" fill="lime"/>
+                </svg>`;
+                const image = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+                image.setAttribute('width', '20');
+                image.setAttribute('height', '20');
+                image.setAttributeNS('http://www.w3.org/1999/xlink', 'href',
+                  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP8z8Dwn4GBgYEJRIAwAB8XAgICR7MUAAAAAElFTkSuQmCC');
+                document.getElementById('scene').append(image);
+                "#,
+            )?;
+            let snapshot = page
+                .vm_mut()
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(100, 100, 1.0))?
+                .expect("inline SVG screenshot");
+            let raster = moli_paint::raster_snapshot(&snapshot)?;
+            let pixel = (10 * raster.width as usize + 10) * 4;
+            assert_eq!(&raster.rgba[pixel..pixel + 4], expected, "{policy}");
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn realtime_inline_svg_outer_boxes_defer_scene_decoding() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

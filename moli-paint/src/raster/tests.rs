@@ -325,6 +325,29 @@ fn snapshot_svg_resource_rasterizes_at_its_resolved_destination_size() {
 }
 
 #[test]
+fn inline_svg_raster_layers_use_the_group_transform_and_clip() {
+    let source = br##"<svg xmlns="http://www.w3.org/2000/svg" width="30" height="20">
+      <defs><clipPath id="clip"><rect width="6" height="12"/></clipPath></defs>
+      <g transform="translate(5 3)" clip-path="url(#clip)">
+        <image width="12" height="12" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP8z8Dwn4GBgYEJRIAwAB8XAgICR7MUAAAAAElFTkSuQmCC"/>
+      </g>
+    </svg>"##;
+    let svg = moli_image::decode_inline_svg_scene(source, &[const { None }; 6], (30.0, 20.0), true)
+        .unwrap();
+    let mut snapshot = snapshot(30, 20, 1.0);
+    let image = snapshot.add_svg_image(Arc::new(svg.image));
+    snapshot.push_fragment(PaintFragment::SvgImage(PaintSvgImage {
+        image,
+        destination: PaintRect::new(0.0, 0.0, 30.0, 20.0),
+        transform: PaintTransform2D::IDENTITY,
+    }));
+    let rendered = raster_snapshot(&snapshot).unwrap();
+    assert_eq!(pixel(&rendered, 8, 8), [255, 0, 0, 255]);
+    assert_eq!(pixel(&rendered, 13, 8), [255; 4]);
+    assert_eq!(pixel(&rendered, 3, 8), [255; 4]);
+}
+
+#[test]
 fn transformed_svg_text_matches_equivalent_authored_coordinates() {
     let render = |content: &str| {
         let source = format!(
