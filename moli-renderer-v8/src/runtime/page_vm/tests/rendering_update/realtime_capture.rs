@@ -4,9 +4,130 @@ use super::realtime_opportunity::run_opportunity;
 use super::*;
 use crate::runtime::{
     RendererCaptureScreencastFrameReply as Reply, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererScreencastPaintSession,
+    RendererCaptureScreenshotRequest, RendererOutputStreamIdentity, RendererOwnerLocalHostId,
+    RendererScreencastPaintSession, RendererTurnOutputJournal,
 };
-use moli_page_types::LayoutPolicy;
+use moli_page_types::{DevToolsSessionKey, LayoutPolicy};
+
+#[test]
+fn paused_screencast_repaints_after_a_scanned_preload_decodes() {
+    use crate::{
+        native_bridge::ScannedImagePreloadAdmission,
+        network::{RendererResourceTaskRunner, ResourceRequestClient},
+        protocol_types::{NavigationResponse, ViewportSurface},
+        types::{ImageRequestCorsMode, ImageRequestKey},
+    };
+    use std::{sync::Arc, time::Duration};
+
+    run_page_vm_large_stack_async_test("paused-preload-screencast", || async move {
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let url = Url::parse("https://example.test/").unwrap();
+        let image_url = url.join("held.png").unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), url);
+        page.layout_configuration.policy = LayoutPolicy::OnDemand;
+        page.vm_mut().set_layout_policy(LayoutPolicy::OnDemand);
+        page.set_viewport_surface(Some(ViewportSurface {
+            inner_width: 32,
+            inner_height: 32,
+            outer_width: 32,
+            outer_height: 32,
+            screen_width: 32,
+            screen_height: 32,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))
+        .unwrap();
+        page.vm_mut()
+            .eval(
+                r#"document.body.style.margin = '0';
+                document.body.innerHTML =
+                    '<div style="width:20px;height:20px;background:lime url(/held.png)"></div>';"#,
+            )
+            .unwrap();
+        page.vm_mut().publish_layout().unwrap();
+
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let key = ImageRequestKey::with_density(
+            image_url.as_str().to_owned(),
+            ImageRequestCorsMode::NoCors,
+            1.0,
+        );
+        let ScannedImagePreloadAdmission::Fetch(preload) =
+            host.borrow_mut().admit_scanned_image_preload(key)
+        else {
+            panic!("the current document should admit the scanned image");
+        };
+
+        let target = page.vm().devtools_target();
+        let pause = target.pause_ref();
+        let agent = page.devtools_agent_token();
+        pause.configure_page_route(RendererTurnOutputJournal::new(
+            RendererOutputStreamIdentity::new_page(
+                RendererOwnerLocalHostId::new_for_testing(1),
+                PageId::new_for_testing(1),
+                agent,
+            ),
+        ));
+        // Keep the renderer in the pause-loop state while the worker decodes.
+        target
+            .outbound_route(agent, DevToolsSessionKey::Primary)
+            .route_notification(
+                &serde_json::json!({"method":"Debugger.paused","params":{"callFrames":[]}}).into(),
+            );
+        assert!(pause.enter_pause().is_some());
+        let Reply::Captured(pending) = page
+            .capture_screencast_frame(viewport_screencast_request(None))
+            .unwrap()
+        else {
+            panic!("expected a paused frame with the pending preload");
+        };
+        let pixels = moli_image::decode_png(&pending.image.bytes).unwrap();
+        assert_eq!(&pixels.rgba[..4], &[0, 255, 0, 255]);
+        assert!(
+            page.vm()
+                .css_image_resource_observability_for_test()
+                .4
+                .is_empty()
+        );
+        let next = viewport_screencast_request(Some(pending.visual_state));
+        assert!(matches!(
+            page.capture_screencast_frame(next.clone()).unwrap(),
+            Reply::Unchanged
+        ));
+
+        let pixels = moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 255]).unwrap();
+        let encoded = moli_parkable_image::ParkableImageManager::default()
+            .from_frozen_bytes(moli_image::encode_png(&pixels).unwrap().bytes);
+        let response = NavigationResponse::from_text_body(
+            image_url.clone(),
+            200,
+            vec![("Content-Type".into(), b"image/png".to_vec())],
+            String::new(),
+        );
+        preload.finish_network_result(
+            RendererResourceTaskRunner::for_test(),
+            Arc::new(Ok(response)),
+            Some(encoded),
+            true,
+        );
+        tokio::time::timeout(Duration::from_secs(3), preload.wait_outcome())
+            .await
+            .expect("the preload worker should finish decoding");
+        assert!(
+            page.vm()
+                .css_image_resource_is_ready_for_test(image_url.as_str())
+        );
+        assert!(page.vm().is_debugger_paused());
+        let next = page.capture_screencast_frame(next);
+        pause.leave_pause();
+        let Reply::Captured(ready) = next.unwrap() else {
+            panic!("a paint-ready scanned preload should invalidate the previous frame");
+        };
+        let pixels = moli_image::decode_png(&ready.image.bytes).unwrap();
+        assert_eq!(&pixels.rgba[..4], &[255, 0, 0, 255]);
+    });
+}
 
 #[test]
 fn realtime_css_images_load_during_rendering_and_repaint_with_retained_layout() {
