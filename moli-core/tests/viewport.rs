@@ -2082,6 +2082,20 @@ async fn viewport_cut_copies_and_edits_only_the_current_editable_selection() -> 
     assert_eq!(page.cut_viewport_selection(document).await?, None);
 
     page.evaluate_runtime_expression_async(
+        "editor.value='A😀B'; editor.setSelectionRange(1,1); events=[];\n\
+         editor.addEventListener('cut', () => editor.setSelectionRange(1,3), {once:true})",
+    )
+    .await?;
+    assert_eq!(
+        page.cut_viewport_selection(document).await?.as_deref(),
+        Some("😀")
+    );
+    let state = page
+        .evaluate_runtime_expression_async("JSON.stringify([editor.value, events.map(e => e[0])])")
+        .await?;
+    assert_eq!(state["value"], r#"["AB",["cut","beforeinput","input"]]"#);
+
+    page.evaluate_runtime_expression_async(
         "editor.value='A😀B'; editor.setSelectionRange(1,3); cancelDeletion=true; events=[]",
     )
     .await?;
@@ -2094,31 +2108,60 @@ async fn viewport_cut_copies_and_edits_only_the_current_editable_selection() -> 
         .await?;
     assert_eq!(state["value"], r#"["A😀B",["cut","beforeinput"]]"#);
 
-    page.evaluate_runtime_expression_async("customCut=true; events=[]")
+    for setting in [
+        "editor.setSelectionRange(1,3)",
+        "editor.setSelectionRange(1,1)",
+        "editor.readOnly=true;editor.select()",
+    ] {
+        page.evaluate_runtime_expression_async(&format!("{setting}; customCut=true; events=[]"))
+            .await?;
+        assert_eq!(
+            page.cut_viewport_selection(document).await?.as_deref(),
+            Some("custom"),
+            "{setting}"
+        );
+        let state = page
+            .evaluate_runtime_expression_async(
+                "JSON.stringify([editor.value, events.map(e => e[0])])",
+            )
+            .await?;
+        assert_eq!(state["value"], r#"["A😀B",["cut"]]"#, "{setting}");
+    }
+
+    page.evaluate_runtime_expression_async("customCut=false; events=[]")
         .await?;
-    assert_eq!(
-        page.cut_viewport_selection(document).await?.as_deref(),
-        Some("custom")
-    );
+    assert_eq!(page.cut_viewport_selection(document).await?, None);
     let state = page
         .evaluate_runtime_expression_async("JSON.stringify([editor.value, events.map(e => e[0])])")
         .await?;
     assert_eq!(state["value"], r#"["A😀B",["cut"]]"#);
 
-    for setting in [
-        "editor.readOnly=true",
-        "editor.readOnly=false;editor.type='password'",
-    ] {
-        page.evaluate_runtime_expression_async(&format!(
-            "{setting}; editor.focus();editor.select();events=[]"
-        ))
+    page.evaluate_runtime_expression_async(
+        "editor.readOnly=false; editor.type='password'; editor.focus(); editor.select(); customCut=true; events=[]",
+    )
+    .await?;
+    assert_eq!(page.cut_viewport_selection(document).await?, None);
+    let state = page
+        .evaluate_runtime_expression_async("JSON.stringify([editor.value, events.length])")
         .await?;
-        assert_eq!(page.cut_viewport_selection(document).await?, None);
-        let state = page
-            .evaluate_runtime_expression_async("JSON.stringify([editor.value, events.length])")
-            .await?;
-        assert_eq!(state["value"], r#"["A😀B",0]"#);
-    }
+    assert_eq!(state["value"], r#"["A😀B",0]"#);
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        editor.blur();
+        document.body.addEventListener('cut', event => {
+          if (event.target === document.body) {
+            event.clipboardData.setData('text/plain', 'body');
+            event.preventDefault();
+          }
+        }, {once:true});
+        "#,
+    )
+    .await?;
+    assert_eq!(
+        page.cut_viewport_selection(document).await?.as_deref(),
+        Some("body")
+    );
     Ok(())
 }
 
