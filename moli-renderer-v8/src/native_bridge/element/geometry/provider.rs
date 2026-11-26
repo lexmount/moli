@@ -79,8 +79,11 @@ fn query_needs_svg_geometry(runtime: &PageScriptHost, query: &LayoutQuery<DomHan
         _ => return false,
     };
     let dom = runtime.dom_host().dom();
-    // The outer SVG contributes its CSS box. Only its descendants can
-    // contribute object quads from the decoded scene.
+    // The decoded scene associates object quads with descendant elements.
+    if dom.element(node).is_none() {
+        return false;
+    }
+    // The outer SVG contributes its CSS box.
     while let Some(parent) = dom.parent_node(node) {
         if dom
             .element(parent)

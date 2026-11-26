@@ -25,6 +25,14 @@ async fn realtime_inline_svg_outer_boxes_defer_scene_decoding() {
         page_vm.vm_mut().eval(&format!(
             "{SVG_PUBLICATION_FIXTURE}\ninstallSvgLayoutPublication()"
         ))?;
+        page_vm.vm_mut().eval(
+            r#"
+            document.getElementById('html').textContent = 'Body text';
+            const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+            title.textContent = 'Icon label';
+            document.getElementById('scene').prepend(title);
+        "#,
+        )?;
         let parsed = crate::layout_renderer::svg_parse_count();
         let boxes = r#"
             JSON.stringify([
@@ -36,6 +44,15 @@ async fn realtime_inline_svg_outer_boxes_defer_scene_decoding() {
         "#;
         assert_eq!(page_vm.vm_mut().eval(boxes)?, "[80,200,100,10]");
         assert_eq!(crate::layout_renderer::svg_parse_count(), parsed);
+        assert_eq!(
+            page_vm.vm_mut().eval("document.body.innerText")?,
+            "Body text"
+        );
+        assert_eq!(
+            crate::layout_renderer::svg_parse_count(),
+            parsed,
+            "text nodes do not need SVG object quads"
+        );
 
         let child_geometry = r#"
             JSON.stringify((r => [r.x,r.y,r.width,r.height])(
