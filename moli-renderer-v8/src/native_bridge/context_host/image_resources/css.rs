@@ -6,7 +6,10 @@ use parking_lot::Mutex;
 use super::{
     ImageResponseDescriptor,
     decode::{DecodedImageContent, ReadyDecodedImage},
-    state::{ReadyImageResource, ReadyImageResourceIndex, intrinsic_dimensions},
+    state::{
+        ReadyImageResource, ReadyImageResourceIndex, ReadyImageResourceSnapshot,
+        intrinsic_dimensions,
+    },
 };
 use crate::{
     document_runtime::DomHandle,
@@ -56,7 +59,7 @@ pub(super) struct CssImageResourceStore {
 struct CssImageResourceStoreInner {
     next_request_id: u64,
     slots: HashMap<CssImageResourceKey, CssImageResourceSlot>,
-    paint_snapshot: Option<CssImagePaintSnapshot>,
+    paint_states: Option<Arc<CssImagePaintStates>>,
 }
 
 struct CssImageResourceSlot {
@@ -73,18 +76,45 @@ enum CssImageResourceState {
 
 /// One immutable sample for an entire paint, including embedded Documents.
 #[derive(Clone, Default)]
-pub(crate) struct CssImagePaintSnapshot(
-    Arc<HashMap<DomHandle, HashMap<String, LayoutCssImageState>>>,
-);
+pub(crate) struct CssImagePaintSnapshot {
+    documents: Arc<CssImagePaintStates>,
+    shared_ready: Option<ReadyImageResourceSnapshot>,
+}
+
+type CssImagePaintStates = HashMap<DomHandle, HashMap<String, LayoutCssImageState>>;
 
 impl CssImagePaintSnapshot {
     pub(crate) fn image(&self, document: DomHandle, url: &str) -> LayoutCssImageState {
-        self.0
+        if let Some(state) = self
+            .documents
             .get(&document)
             .and_then(|images| images.get(url))
-            .cloned()
-            .unwrap_or_default()
+        {
+            return state.clone();
+        }
+        // A CSS URL first discovered during this paint can already be decoded
+        // by another consumer of the same request.
+        self.shared_ready
+            .as_ref()
+            .and_then(|ready| ready.get_decoded(&css_image_request_key(url.to_owned())))
+            .map_or(LayoutCssImageState::Unrequested, |resource| {
+                ready_for_paint(&resource)
+            })
     }
+}
+
+fn css_image_request_key(url: String) -> ImageRequestKey {
+    ImageRequestKey::with_density(url, ImageRequestCorsMode::NoCors, 1.0)
+}
+
+fn ready_for_paint(resource: &ReadyImageResource) -> LayoutCssImageState {
+    let (intrinsic_width, intrinsic_height) = intrinsic_dimensions(resource);
+    LayoutCssImageState::Ready(LayoutImageResource {
+        intrinsic_width,
+        intrinsic_height,
+        pixels: resource.pixels.clone(),
+        svg: resource.svg.clone(),
+    })
 }
 
 impl CssImageResourceStore {
@@ -109,8 +139,7 @@ impl CssImageResourceStore {
         document_owner: FrameDocumentTaskOwner,
         resolved_url: String,
     ) -> CssImageResourceAdmission {
-        let request_key =
-            ImageRequestKey::with_density(resolved_url, ImageRequestCorsMode::NoCors, 1.0);
+        let request_key = css_image_request_key(resolved_url);
         let key = CssImageResourceKey {
             document_handle,
             request_key: request_key.clone(),
@@ -148,7 +177,7 @@ impl CssImageResourceStore {
                 state,
             },
         );
-        inner.paint_snapshot = None;
+        inner.paint_states = None;
         self.visual_generation.bump();
         if reused {
             #[cfg(test)]
@@ -165,11 +194,7 @@ impl CssImageResourceStore {
         document_owner: FrameDocumentTaskOwner,
         resolved_url: &str,
     ) -> bool {
-        let request_key = ImageRequestKey::with_density(
-            resolved_url.to_owned(),
-            ImageRequestCorsMode::NoCors,
-            1.0,
-        );
+        let request_key = css_image_request_key(resolved_url.to_owned());
         self.inner
             .lock()
             .slots
@@ -223,7 +248,7 @@ impl CssImageResourceStore {
         self.ready_by_request
             .insert(identity.request_key.clone(), &resource);
         slot.state = CssImageResourceState::Ready(resource);
-        inner.paint_snapshot = None;
+        inner.paint_states = None;
         self.visual_generation.bump();
         #[cfg(test)]
         self.completion_notify.notify_waiters();
@@ -242,43 +267,38 @@ impl CssImageResourceStore {
             return false;
         }
         slot.state = CssImageResourceState::Failed;
-        inner.paint_snapshot = None;
+        inner.paint_states = None;
         self.visual_generation.bump();
         #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
     }
 
-    pub(super) fn paint_snapshot(&self) -> CssImagePaintSnapshot {
+    pub(super) fn paint_snapshot(&self, reuse_shared: bool) -> CssImagePaintSnapshot {
         let mut inner = self.inner.lock();
-        if let Some(snapshot) = &inner.paint_snapshot {
-            return snapshot.clone();
-        }
-        let mut documents = HashMap::<_, HashMap<_, _>>::new();
-        for (key, slot) in &inner.slots {
-            let state = match &slot.state {
-                CssImageResourceState::Pending | CssImageResourceState::DecodeQueued(_) => {
-                    LayoutCssImageState::Pending
-                }
-                CssImageResourceState::Ready(resource) => {
-                    let (intrinsic_width, intrinsic_height) = intrinsic_dimensions(resource);
-                    LayoutCssImageState::Ready(LayoutImageResource {
-                        intrinsic_width,
-                        intrinsic_height,
-                        pixels: resource.pixels.clone(),
-                        svg: resource.svg.clone(),
-                    })
-                }
-                CssImageResourceState::Failed => LayoutCssImageState::Failed,
-            };
+        let documents = inner.paint_states.clone().unwrap_or_else(|| {
+            let mut documents = CssImagePaintStates::new();
+            for (key, slot) in &inner.slots {
+                let state = match &slot.state {
+                    CssImageResourceState::Pending | CssImageResourceState::DecodeQueued(_) => {
+                        LayoutCssImageState::Pending
+                    }
+                    CssImageResourceState::Ready(resource) => ready_for_paint(resource),
+                    CssImageResourceState::Failed => LayoutCssImageState::Failed,
+                };
+                documents
+                    .entry(key.document_handle)
+                    .or_default()
+                    .insert(key.request_key.url().to_owned(), state);
+            }
+            let documents = Arc::new(documents);
+            inner.paint_states = Some(documents.clone());
             documents
-                .entry(key.document_handle)
-                .or_default()
-                .insert(key.request_key.url().to_owned(), state);
+        });
+        CssImagePaintSnapshot {
+            documents,
+            shared_ready: reuse_shared.then(|| self.ready_by_request.snapshot()),
         }
-        let snapshot = CssImagePaintSnapshot(Arc::new(documents));
-        inner.paint_snapshot = Some(snapshot.clone());
-        snapshot
     }
 
     pub(super) fn retire_document(&self, document_handle: DomHandle) -> usize {
@@ -289,7 +309,7 @@ impl CssImageResourceStore {
             .retain(|key, _| key.document_handle != document_handle);
         let removed = before - inner.slots.len();
         if removed != 0 {
-            inner.paint_snapshot = None;
+            inner.paint_states = None;
             self.visual_generation.bump();
             #[cfg(test)]
             self.completion_notify.notify_waiters();
@@ -374,6 +394,7 @@ mod tests {
             height: 1,
         });
         let document = DomHandle::new(10);
+        let other_document = DomHandle::new(20);
         let url = "https://example.test/async.png";
         let CssImageResourceAdmission::Fetch(identity) =
             store.admit(document, owner(1), url.to_owned())
@@ -381,7 +402,7 @@ mod tests {
             panic!("a new CSS image must create a fetch identity");
         };
         assert!(store.mark_decode_queued(&identity, descriptor));
-        let pending = store.paint_snapshot();
+        let pending = store.paint_snapshot(true);
         let before = generation.current();
         let worker_store = store.clone();
         let completed =
@@ -395,7 +416,16 @@ mod tests {
             LayoutCssImageState::Pending
         ));
         assert!(matches!(
-            store.paint_snapshot().image(document, url),
+            pending.image(other_document, url),
+            LayoutCssImageState::Unrequested
+        ));
+        let ready = store.paint_snapshot(true);
+        assert!(matches!(
+            ready.image(document, url),
+            LayoutCssImageState::Ready(_)
+        ));
+        assert!(matches!(
+            ready.image(other_document, url),
             LayoutCssImageState::Ready(_)
         ));
     }
@@ -437,7 +467,7 @@ mod tests {
             "a duplicate failure terminal must not replace ready content"
         );
         let LayoutCssImageState::Ready(replacement) =
-            store.paint_snapshot().image(first_document, url)
+            store.paint_snapshot(true).image(first_document, url)
         else {
             panic!("replacement ready resource");
         };
@@ -445,6 +475,10 @@ mod tests {
             replacement.pixels.expect("decoded raster").rgba,
             [255, 0, 0, 255]
         );
+        assert!(matches!(
+            store.paint_snapshot(false).image(second_document, url),
+            LayoutCssImageState::Unrequested
+        ));
 
         assert!(matches!(
             store.admit(second_document, owner(3), url.to_owned()),
@@ -452,14 +486,14 @@ mod tests {
         ));
         assert!(
             matches!(
-                store.paint_snapshot().image(second_document, url),
+                store.paint_snapshot(true).image(second_document, url),
                 LayoutCssImageState::Ready(_)
             ),
             "another live Document may share the immutable decoded resource"
         );
         assert_eq!(store.retire_document(first_document), 1);
         assert!(matches!(
-            store.paint_snapshot().image(second_document, url),
+            store.paint_snapshot(true).image(second_document, url),
             LayoutCssImageState::Ready(_)
         ));
         assert_eq!(store.retire_document(second_document), 1);
@@ -483,6 +517,12 @@ mod tests {
             _decoded_bytes_permit: None,
         });
         ready_index.insert(metadata_only_key, &metadata_only);
+        assert!(matches!(
+            store
+                .paint_snapshot(true)
+                .image(DomHandle::new(40), metadata_only_url),
+            LayoutCssImageState::Unrequested
+        ));
         assert!(matches!(
             store.admit(DomHandle::new(40), owner(5), metadata_only_url.to_owned()),
             CssImageResourceAdmission::Fetch(_)

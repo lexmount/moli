@@ -7,7 +7,7 @@ mod state;
 use moli_parkable_image::ParkableImage;
 
 use crate::{
-    document_runtime::DomHandle,
+    document_runtime::{DocumentRuntime, DomHandle},
     frame_owner_model::FrameDocumentTaskOwner,
     page_task_queue::{RendererPageImageLoadEventKind, RendererPageImageLoadEventTaskId},
     types::ImageRequestKey,
@@ -230,7 +230,9 @@ impl super::PageScriptHost {
     }
 
     pub(crate) fn css_image_paint_snapshot(&self) -> CssImagePaintSnapshot {
-        self.image_resources.css.paint_snapshot()
+        self.image_resources
+            .css
+            .paint_snapshot(DocumentRuntime::css_image_fetch_enabled(self))
     }
 
     #[cfg(test)]
