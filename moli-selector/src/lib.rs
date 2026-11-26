@@ -1385,6 +1385,9 @@ mod tests {
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
         host.reset_html_document_shell();
         let body = host.document_body_handle().unwrap();
+        let engine = QueryEngine;
+        assert!(engine.matches_host(&host, body, r#":lang("")"#).unwrap());
+        assert!(!engine.matches_host(&host, body, r#":lang("*")"#).unwrap());
         assert!(host.set_attribute(body, "lang", "en"));
         let paragraph = host.create_element("p");
         assert!(host.set_attribute(paragraph, "lang", "de"));
@@ -1392,7 +1395,6 @@ mod tests {
         assert!(host.append_child(paragraph, child));
         assert!(host.append_child(body, paragraph));
 
-        let engine = QueryEngine;
         assert!(engine.matches_host(&host, paragraph, ":lang(de)").unwrap());
         assert!(!engine.matches_host(&host, paragraph, ":lang(en)").unwrap());
         assert!(engine.matches_host(&host, child, ":lang(de)").unwrap());
@@ -1401,7 +1403,7 @@ mod tests {
     }
 
     #[test]
-    fn dom_api_selectors_lang_uses_stylo_extended_filtering() {
+    fn dom_api_selectors_lang_uses_extended_filtering() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
         host.reset_html_document_shell();
