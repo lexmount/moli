@@ -133,6 +133,59 @@ pub enum ScrollProjectionRefresh {
     Changed,
 }
 
+/// Inputs retained by a frozen snapshot until a descendant requests geometry.
+pub(crate) struct FrozenInlineSvgInputs<N> {
+    inputs: HashMap<N, crate::InlineSvgInput<N>>,
+    owners: HashMap<N, N>,
+}
+
+impl<N: Copy + Eq + Hash> FrozenInlineSvgInputs<N> {
+    pub(crate) fn new() -> Self {
+        Self {
+            inputs: HashMap::new(),
+            owners: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn insert(&mut self, root: N, input: crate::InlineSvgInput<N>) {
+        for element in input.elements.iter().copied().skip(1) {
+            self.owners.insert(element, root);
+        }
+        self.inputs.insert(root, input);
+    }
+
+    pub(crate) fn input(&self, root: N) -> Option<&crate::InlineSvgInput<N>> {
+        self.inputs.get(&root)
+    }
+
+    fn remove(&mut self, root: N) {
+        if let Some(input) = self.inputs.remove(&root) {
+            for element in input.elements.into_iter().skip(1) {
+                if self.owners.get(&element) == Some(&root) {
+                    self.owners.remove(&element);
+                }
+            }
+        }
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        let keys = self
+            .inputs
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(N, crate::InlineSvgInput<N>)>());
+        let owners = self
+            .owners
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(N, N)>());
+        self.inputs.values().fold(
+            std::mem::size_of::<Self>()
+                .saturating_add(keys)
+                .saturating_add(owners),
+            |bytes, input| bytes.saturating_add(input.estimated_bytes()),
+        )
+    }
+}
+
 /// DOM-independent layout tree produced by one complete pass.
 ///
 /// The box tree is stored densely through parent IDs. Text/inline fragments,
@@ -158,6 +211,7 @@ where
     pub scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     pub object_geometry: Vec<LayoutObjectGeometry<N>>,
     pub(crate) svg_viewports: HashMap<N, crate::pass::InlineSvgViewport>,
+    pub(crate) frozen_inline_svg: Option<Box<FrozenInlineSvgInputs<N>>>,
     viewport_coordinate_space: FrozenCoordinateSpace,
     pub clip_chain: Vec<LayoutClipNode>,
     embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
@@ -177,8 +231,24 @@ where
             .map(|svg| svg.size)
     }
 
+    pub fn pending_svg_viewports(&self) -> impl Iterator<Item = (N, LayoutSize)> + '_ {
+        self.svg_viewports
+            .iter()
+            .filter_map(|(&source, svg)| (!svg.prepared).then_some((source, svg.size)))
+    }
+
     pub fn has_svg_viewports(&self) -> bool {
         !self.svg_viewports.is_empty()
+    }
+
+    /// Locate a scene by the descendant identity from the sampled DOM.
+    pub fn pending_frozen_svg_input(
+        &self,
+        element: N,
+    ) -> Option<(N, LayoutSize, &crate::InlineSvgInput<N>)> {
+        let frozen = self.frozen_inline_svg.as_ref()?;
+        let root = *frozen.owners.get(&element)?;
+        Some((root, self.pending_svg_viewport(root)?, frozen.input(root)?))
     }
 
     /// Publish object quads in the exact layout member that measured the SVG.
@@ -221,6 +291,12 @@ where
                 continue;
             };
             svg.prepared = true;
+            if let Some(frozen) = &mut member.frozen_inline_svg {
+                frozen.remove(source);
+                if frozen.inputs.is_empty() {
+                    member.frozen_inline_svg = None;
+                }
+            }
             let owner = svg.owner;
             let geometry = &member.boxes[owner.index()].geometry;
             member
@@ -325,6 +401,11 @@ where
             .saturating_add(allocation::<(N, crate::pass::InlineSvgViewport)>(
                 self.svg_viewports.capacity(),
             ))
+            .saturating_add(
+                self.frozen_inline_svg
+                    .as_ref()
+                    .map_or(0, |frozen| frozen.estimated_bytes()),
+            )
             .saturating_add(allocation::<(N, LayoutOutputBoxId)>(
                 self.scroll_proxy_links.capacity(),
             ))
@@ -519,6 +600,7 @@ where
             scroll_proxy_links,
             object_geometry,
             svg_viewports: HashMap::new(),
+            frozen_inline_svg: None,
             viewport_coordinate_space,
             clip_chain,
             embedded_frames,

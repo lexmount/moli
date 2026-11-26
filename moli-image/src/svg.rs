@@ -346,6 +346,24 @@ pub fn decode_inline_svg_scene(
     styles: &[Option<SvgElementStyle>],
     viewport: (f32, f32),
 ) -> Result<SvgScene, SvgDecodeError> {
+    decode_inline_svg(bytes, styles, viewport, true)
+}
+
+/// Decodes the paint resource without collecting per-element geometry.
+pub fn decode_inline_svg_image(
+    bytes: &[u8],
+    styles: &[Option<SvgElementStyle>],
+    viewport: (f32, f32),
+) -> Result<SvgImage, SvgDecodeError> {
+    decode_inline_svg(bytes, styles, viewport, false).map(|scene| scene.image)
+}
+
+fn decode_inline_svg(
+    bytes: &[u8],
+    styles: &[Option<SvgElementStyle>],
+    viewport: (f32, f32),
+    collect_object_geometry: bool,
+) -> Result<SvgScene, SvgDecodeError> {
     let (xml, depth) = parse_svg_xml(bytes)?;
     let elements = xml
         .descendants()
@@ -364,14 +382,16 @@ pub fn decode_inline_svg_scene(
         .zip(styles)
         .filter_map(|(node, style)| style.clone().map(|style| (node.id(), style)))
         .collect();
-    let sources = elements
-        .iter()
-        .enumerate()
-        .map(|(index, node)| (node.id(), index))
-        .collect::<HashMap<_, _>>();
+    let sources = collect_object_geometry.then(|| {
+        elements
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.id(), index))
+            .collect::<HashMap<_, _>>()
+    });
     let options = usvg::Options {
         element_styles: Some(Arc::new(overrides)),
-        collect_object_geometry: true,
+        collect_object_geometry,
         ..SVG_FONTS.options(default_size)
     };
     let mut tree = convert_svg_tree(&xml, &options, depth)?;
@@ -382,7 +402,7 @@ pub fn decode_inline_svg_scene(
             let rect = geometry.bounding_box;
             let t = geometry.transform;
             Some(SvgObjectGeometry {
-                element_index: *sources.get(&geometry.source)?,
+                element_index: *sources.as_ref()?.get(&geometry.source)?,
                 bounds: [rect.x(), rect.y(), rect.width(), rect.height()],
                 transform: [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty],
             })
@@ -656,6 +676,10 @@ mod tests {
         ));
         assert!(matches!(
             decode_inline_svg_scene(over_limit.as_bytes(), &[], (10.0, 10.0)),
+            Err(SvgDecodeError::ElementNestingDepthExceeded { limit: 5_000 })
+        ));
+        assert!(matches!(
+            decode_inline_svg_image(over_limit.as_bytes(), &[], (10.0, 10.0)),
             Err(SvgDecodeError::ElementNestingDepthExceeded { limit: 5_000 })
         ));
     }

@@ -40,37 +40,47 @@ impl ScriptVm {
                 ),
             "Node does not have screenshot bounds"
         );
-        let bounds = runtime
-            .build_layout_pass_for_document(
+        let Some((mut pass, _layout_feedback)) = runtime
+            .build_layout_pass_for_document_in_environment(
                 document,
                 moli_layout::LayoutPassRequest::new(
                     viewport,
                     moli_layout::LayoutFlushReason::Screenshot,
                 ),
+                None,
+                crate::layout_renderer::LayoutInputRetention::Transient,
             )?
-            .and_then(|pass| {
-                let tree = &pass.tree;
-                if is_document {
-                    Some(LayoutRect::new(
-                        0.0,
-                        0.0,
-                        tree.content_size.width,
-                        tree.content_size.height,
-                    ))
-                } else {
-                    node_quads(tree, handle)
-                        .iter()
-                        .map(|quad| quad.bounding_rect())
-                        .filter(|rect| rect.width > 0.0 && rect.height > 0.0)
-                        .reduce(LayoutRect::union)
-                        .map(|mut rect| {
-                            rect.x += tree.viewport_scroll.x;
-                            rect.y += tree.viewport_scroll.y;
-                            rect
-                        })
-                }
-            })
-            .ok_or_else(|| anyhow::anyhow!("Node does not have screenshot bounds"))?;
+        else {
+            anyhow::bail!("Node does not have screenshot bounds");
+        };
+        let tree = &mut pass.tree;
+        let bounds = if is_document {
+            LayoutRect::new(0.0, 0.0, tree.content_size.width, tree.content_size.height)
+        } else {
+            let pending = crate::layout_renderer::pending_svg_geometry(
+                &runtime,
+                tree,
+                std::iter::once(handle),
+            );
+            if !pending.is_empty() {
+                let geometry = crate::layout_renderer::prepare_svg_geometry(
+                    &runtime,
+                    document,
+                    tree.viewport,
+                    pending,
+                );
+                tree.append_svg_geometry(tree.source_root(), geometry)?;
+            }
+            let mut rect = node_quads(tree, handle)
+                .iter()
+                .map(|quad| quad.bounding_rect())
+                .filter(|rect| rect.width > 0.0 && rect.height > 0.0)
+                .reduce(LayoutRect::union)
+                .ok_or_else(|| anyhow::anyhow!("Node does not have screenshot bounds"))?;
+            rect.x += tree.viewport_scroll.x;
+            rect.y += tree.viewport_scroll.y;
+            rect
+        };
         Ok(crate::runtime::RendererScreenshotClip {
             x: f64::from(bounds.x),
             y: f64::from(bounds.y),
@@ -87,16 +97,25 @@ impl ScriptVm {
     ) -> Result<bool> {
         let runtime = self._context_host.borrow();
         let reason = moli_layout::LayoutFlushReason::SynchronousGeometry;
-        let pass = runtime.build_layout_pass_for_document(
-            runtime.document_handle(),
-            moli_layout::LayoutPassRequest::new(viewport, reason),
-        )?;
-        if let Some(pass) = &pass {
-            // Temporary inspection geometry must never replace the page's
-            // published layout or frame viewports.
-            visitor(&pass.tree);
+        let Some((mut pass, _layout_feedback)) = runtime
+            .build_layout_pass_for_document_in_environment(
+                runtime.document_handle(),
+                moli_layout::LayoutPassRequest::new(viewport, reason),
+                None,
+                crate::layout_renderer::LayoutInputRetention::Transient,
+            )?
+        else {
+            return Ok(false);
+        };
+        // The visitor receives all snapshot geometry and can query any source.
+        // Collect it against the temporary layout's style environment.
+        let mut geometry = Vec::new();
+        collect_inspection_svg_geometry(&runtime, &pass.tree, &mut geometry);
+        for (root, scenes) in geometry {
+            pass.tree.append_svg_geometry(root, scenes)?;
         }
-        Ok(pass.is_some())
+        visitor(&pass.tree);
+        Ok(true)
     }
     pub(crate) fn inspection_styles(
         &self,
@@ -163,6 +182,25 @@ impl ScriptVm {
         )
     }
 }
+fn collect_inspection_svg_geometry(
+    runtime: &crate::native_bridge::PageScriptHost,
+    tree: &moli_layout::FrozenLayoutTree<DomHandle>,
+    output: &mut Vec<(DomHandle, crate::layout_renderer::SvgGeometry)>,
+) {
+    let pending = tree.pending_svg_viewports().collect::<Vec<_>>();
+    if !pending.is_empty()
+        && let Some(document) = runtime.layout_document_for_source(tree.source_root())
+    {
+        output.push((
+            tree.source_root(),
+            crate::layout_renderer::prepare_svg_geometry(runtime, document, tree.viewport, pending),
+        ));
+    }
+    for frame in tree.embedded_frames() {
+        collect_inspection_svg_geometry(runtime, &frame.tree, output);
+    }
+}
+
 fn node_quads(
     tree: &moli_layout::FrozenLayoutTree<DomHandle>,
     handle: DomHandle,

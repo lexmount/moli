@@ -231,26 +231,17 @@ pub(super) fn compute_intersection_check_batch(
             })
             .collect();
         let queries = moli_layout::LayoutQueryBatch::new(queries);
-        let answers: Vec<_> = if runtime.layout_policy().is_realtime() {
-            match crate::native_bridge::element::observable_geometry_batch(
-                runtime, document, &queries,
-            ) {
-                Ok(answers) => answers.answers,
-                // Missing frame members and inert Documents have no layout.
-                // Their targets retain None geometry and report nonintersection.
-                Err(moli_layout::LayoutError::NoLayoutSnapshot) => continue,
-                Err(error) => return Err(error),
-            }
+        let answers = if runtime.layout_policy().is_realtime() {
+            crate::native_bridge::element::observable_geometry_batch(runtime, document, &queries)
         } else {
-            runtime
-                .with_latest_layout_tree_for_document(document, |tree| {
-                    queries
-                        .queries
-                        .iter()
-                        .map(|query| tree.answer_query(query))
-                        .collect()
-                })
-                .unwrap_or_default()
+            crate::native_bridge::element::published_geometry_batch(runtime, document, &queries)
+        };
+        let answers = match answers {
+            Ok(answers) => answers.answers,
+            // Missing frame members and inert Documents have no layout.
+            // Their targets retain None geometry and report nonintersection.
+            Err(moli_layout::LayoutError::NoLayoutSnapshot) => continue,
+            Err(error) => return Err(error),
         };
         for (index, answer) in indices.into_iter().zip(answers) {
             let moli_layout::LayoutQueryAnswer::IntersectionGeometry(geometry) = answer else {

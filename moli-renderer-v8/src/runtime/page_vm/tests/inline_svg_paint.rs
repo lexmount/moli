@@ -188,6 +188,243 @@ async fn realtime_inline_svg_range_geometry_follows_transform_and_scroll() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn ondemand_inline_svg_decodes_the_frozen_scene_after_a_live_move() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/frozen-svg-input.html")?,
+        );
+        page_vm.vm_mut().set_layout_policy(LayoutPolicy::OnDemand);
+        let vm = page_vm.vm_mut();
+        vm.eval(
+            r#"
+            document.body.style.margin = '0';
+            document.body.innerHTML =
+                '<svg style="display:block" width="100" height="40">' +
+                '<rect id="shape" x="10" y="5" width="12" height="10"/></svg>' +
+                '<svg id="other" style="display:block" width="100" height="40">' +
+                '<rect id="neighbor" x="5" y="7" width="10" height="10"/></svg>';
+            const shape = document.getElementById('shape');
+            const other = document.getElementById('other');
+            const neighbor = document.getElementById('neighbor');
+            const rect = node => JSON.stringify((r => [r.x, r.y, r.width, r.height])(
+                node.getBoundingClientRect()
+            ));
+        "#,
+        )?;
+        let parsed = crate::layout_renderer::svg_parse_count();
+        assert_eq!(vm.eval("rect(other)")?, "[0,40,100,40]");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed);
+        let passes = vm.layout_pass_observability_for_test().1;
+        vm.eval("shape.setAttribute('width','48'); other.append(shape)")?;
+
+        assert_eq!(vm.eval("rect(shape)")?, "[10,5,12,10]");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        assert_eq!(vm.eval("rect(shape)")?, "[10,5,12,10]");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        assert_eq!(vm.eval("rect(neighbor)")?, "[5,47,10,10]");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 2);
+        assert_eq!(vm.layout_pass_observability_for_test().1, passes);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("OnDemand geometry decodes the input and source identities from its snapshot");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inline_svg_capture_decodes_only_the_effective_paint_region() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+            let mut page_vm = test_page_vm_with_loader_and_document_url(
+                &loader,
+                Vec::new(),
+                Url::parse("https://example.com/inline-svg-capture-region.html")?,
+            );
+            let viewport = moli_layout::LayoutViewport::new(160, 100, 1.0);
+            page_vm.set_scrollbars_hidden(true)?;
+            page_vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+                inner_width: viewport.css_width,
+                inner_height: viewport.css_height,
+                device_pixel_ratio: 1.0,
+                ..Default::default()
+            }))?;
+            page_vm.vm_mut().set_layout_policy(policy);
+            let vm = page_vm.vm_mut();
+            vm.eval(
+                r#"
+                const icon = (top, fill) => '<svg width="20" height="20" ' +
+                    'style="position:absolute;top:' + top + 'px;left:0">' +
+                    '<rect width="20" height="20" fill="' + fill + '"/></svg>';
+                document.body.style.margin = '0';
+                const frame = (id, top) => '<iframe id="' + id + '" style="position:absolute;' +
+                    'left:50px;top:' + top + 'px;width:80px;height:80px;border:0"></iframe>';
+                document.body.innerHTML = icon(10, 'red') + frame('near', 10) + frame('far', 250) +
+                    '<div style="position:absolute;top:0;left:30px;width:20px;height:10px;' +
+                    'overflow:hidden">' + icon(30, 'lime') + '</div>' +
+                    '<svg width="20" height="20" style="position:absolute;top:110px;left:135px;' +
+                    'filter:drop-shadow(0 -25px 0 magenta)">' +
+                    '<rect width="20" height="20" fill="blue"/></svg>' +
+                    Array.from({length:64}, (_, i) => icon(400 + 25*i, 'blue')).join('');
+                const install = (id, contents) => {
+                    const child = document.getElementById(id).contentDocument;
+                    child.body.style.margin = '0';
+                    child.body.innerHTML = contents;
+                };
+                install('near', icon(5, 'lime') + icon(40, 'blue') + icon(100, 'red'));
+                install('far', icon(5, 'lime'));
+            "#,
+            )?;
+            let parsed = crate::layout_renderer::svg_parse_count();
+            let shot = vm
+                .screenshot_layout_snapshot(viewport)?
+                .expect("viewport screenshot");
+            assert_eq!(
+                crate::layout_renderer::svg_parse_count(),
+                parsed + 4,
+                "{policy:?}"
+            );
+            let screen = moli_paint::raster_snapshot(&shot)?;
+            let pixel = (20 * screen.width as usize + 55) * 4;
+            assert_eq!(&screen.rgba[pixel..pixel + 4], [0, 255, 0, 255]);
+            let shadow = (90 * screen.width as usize + 140) * 4;
+            assert_eq!(&screen.rgba[shadow..shadow + 4], [255, 0, 255, 255]);
+
+            let clip = moli_layout::LayoutRect::new(50.0, 10.0, 80.0, 20.0);
+            let shot = vm
+                .paint_layout_snapshot_with_capture(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Screenshot,
+                    moli_layout::PaintCaptureRequest::page_clip(clip, 1.0),
+                    crate::native_bridge::LayoutPublicationRequest::Transient,
+                    None,
+                )?
+                .expect("clipped screenshot");
+            assert_eq!(
+                crate::layout_renderer::svg_parse_count(),
+                parsed + 5,
+                "{policy:?}"
+            );
+            let crop = moli_paint::raster_snapshot(&shot)?;
+            for (y, row) in crop.rgba.as_chunks::<{ 80 * 4 }>().0.iter().enumerate() {
+                let start = ((10 + y) * screen.width as usize + 50) * 4;
+                assert_eq!(row, &screen.rgba[start..start + row.len()]);
+            }
+
+            let shot = vm
+                .paint_layout_snapshot_with_capture(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Screenshot,
+                    moli_layout::PaintCaptureRequest::full_document(),
+                    crate::native_bridge::LayoutPublicationRequest::Transient,
+                    None,
+                )?
+                .expect("full-page screenshot");
+            assert_eq!(
+                crate::layout_renderer::svg_parse_count(),
+                parsed + 5 + 69,
+                "{policy:?}"
+            );
+            let full = moli_paint::raster_snapshot(&shot)?;
+            let pixel = (260 * full.width as usize + 55) * 4;
+            assert_eq!(&full.rgba[pixel..pixel + 4], [0, 255, 0, 255]);
+            for (y, row) in screen.rgba.as_chunks::<{ 160 * 4 }>().0.iter().enumerate() {
+                let start = y * full.width as usize * 4;
+                assert_eq!(row, &full.rgba[start..start + row.len()]);
+            }
+
+            #[cfg(feature = "ace-protocol")]
+            {
+                vm.eval("document.querySelector('svg rect').id = 'cropTarget'")?;
+                let source = vm.document_runtime.get_element_by_id("cropTarget").unwrap();
+                let parsed = crate::layout_renderer::svg_parse_count();
+                let bounds = vm.node_screenshot_clip(source, viewport)?;
+                assert_eq!(
+                    [bounds.x, bounds.y, bounds.width, bounds.height],
+                    [0.0, 10.0, 20.0, 20.0]
+                );
+                assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("viewport, clipped, and full-page captures select their own SVG scenes");
+}
+
+#[cfg(feature = "devtools")]
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_screencast_decodes_new_svg_content_as_it_scrolls_into_view() {
+    run_page_vm_async_test(async move {
+        use moli_layout::{LayoutFlushReason, LayoutViewport, PaintCaptureRequest};
+
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/retained-svg-screen-paint.html")?,
+        );
+        let viewport = LayoutViewport::new(160, 100, 1.0);
+        page_vm.set_scrollbars_hidden(true)?;
+        page_vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: viewport.css_width,
+            inner_height: viewport.css_height,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))?;
+        page_vm.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        let vm = page_vm.vm_mut();
+        vm.eval(r#"
+            document.body.style.cssText = 'margin:0;height:1000px';
+            document.body.innerHTML =
+                '<svg style="display:block" width="20" height="20"><rect id="shape" width="20" height="20" fill="red"/></svg>' +
+                '<iframe id="frame" style="position:absolute;top:300px;left:0;width:60px;height:60px;border:0"></iframe>';
+            const child = document.getElementById('frame').contentDocument;
+            child.body.style.margin = '0';
+            child.body.innerHTML = '<svg style="display:block" width="20" height="20"><rect width="20" height="20" fill="blue"/></svg>';
+        "#)?;
+        let parsed = crate::layout_renderer::svg_parse_count();
+        let session = crate::runtime::RendererScreencastPaintSession::default();
+        let capture = |vm: &mut crate::script_vm::ScriptVm| -> anyhow::Result<_> {
+            let frame = vm.paint_current_screen_layout(
+                &session,
+                viewport,
+                PaintCaptureRequest::viewport(),
+                LayoutFlushReason::Screencast,
+            )?.expect("retained screen paint");
+            Ok(moli_paint::raster_snapshot(&frame)?)
+        };
+        let first = capture(vm)?;
+        assert_eq!(&first.rgba[..4], [255, 0, 0, 255]);
+        assert_eq!(vm.eval("document.getElementById('shape').getBoundingClientRect().width")?, "20");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        let passes = vm.layout_pass_observability_for_test().1;
+        assert_eq!(capture(vm)?.rgba, first.rgba);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+
+        vm.eval("scrollTo(0, 300)")?;
+        let scrolled = capture(vm)?;
+        assert_eq!(&scrolled.rgba[..4], [0, 0, 255, 255]);
+        assert_eq!(vm.eval("child.querySelector('rect').getBoundingClientRect().width")?, "20");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 2);
+        assert_eq!(vm.layout_pass_observability_for_test().1, passes);
+        vm.eval("scrollTo(0, 0)")?;
+        assert_eq!(capture(vm)?.rgba, first.rgba);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 2);
+        assert_eq!(vm.layout_pass_observability_for_test().1, passes);
+
+        vm.eval("document.getElementById('shape').setAttribute('fill','lime')")?;
+        assert_eq!(&capture(vm)?.rgba[..4], [0, 255, 0, 255]);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 3);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("screen paint reuses decoded scenes until the layout inputs change");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inline_svg_negative_intrinsic_lengths_respect_css_viewport_sizes() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

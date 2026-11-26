@@ -4,6 +4,7 @@ use crate::{
     PaintCaptureRequest, PaintSnapshot, PaintViewport, build_layout_world,
     form::prepare_form_controls,
     inline::prepare_inline_contexts,
+    layout_tree::FrozenInlineSvgInputs,
     list::prepare_list_markers,
     overflow::OverflowProjection,
     projection::{RetainedPaintData, finish_layout_pass},
@@ -46,6 +47,14 @@ where
     }
 }
 
+/// Paint demand for a child viewport sampled by its parent's capture.
+#[derive(Clone, Copy)]
+pub struct EmbeddedFramePaintRequest {
+    pub include_backgrounds: bool,
+    /// The parent capture's bounds in child viewport coordinates.
+    pub cull_rect: Option<crate::LayoutRect>,
+}
+
 /// Renderer-owned bridge for one live embedded browsing context.
 ///
 /// The parent numeric layout has already completed when this callback runs, so
@@ -63,6 +72,7 @@ where
         &mut self,
         frame: N,
         viewport: LayoutViewport,
+        paint: Option<EmbeddedFramePaintRequest>,
     ) -> Result<Option<EmbeddedFrameSnapshot<N>>, LayoutError>;
 }
 
@@ -76,6 +86,7 @@ where
         &mut self,
         _frame: N,
         _viewport: LayoutViewport,
+        _paint: Option<EmbeddedFramePaintRequest>,
     ) -> Result<Option<EmbeddedFrameSnapshot<N>>, LayoutError> {
         Ok(None)
     }
@@ -98,6 +109,7 @@ pub struct LayoutPassRequest {
     pub reason: LayoutFlushReason,
     environment: crate::LayoutEnvironment,
     paint_capture: Option<PaintCaptureRequest>,
+    paint_cull_rect: Option<crate::LayoutRect>,
     frame_coverage: LayoutFrameCoverage,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
@@ -113,6 +125,7 @@ impl LayoutPassRequest {
                 scrollbars_hidden: false,
             },
             paint_capture: None,
+            paint_cull_rect: None,
             frame_coverage: LayoutFrameCoverage::PositiveViewport,
             retain_scroll_projection: false,
             retain_screen_paint: false,
@@ -139,6 +152,12 @@ impl LayoutPassRequest {
     /// Sets document-wide runtime policy without changing authored CSS styles.
     pub const fn with_environment(mut self, environment: crate::LayoutEnvironment) -> Self {
         self.environment = environment;
+        self
+    }
+
+    /// Narrows embedded paint to the part exposed by the parent capture.
+    pub const fn with_paint_cull_rect(mut self, rect: Option<crate::LayoutRect>) -> Self {
+        self.paint_cull_rect = rect;
         self
     }
 
@@ -362,46 +381,6 @@ where
     numeric_layout_elapsed: Duration,
     numeric_metrics: NumericLayoutMetrics,
     overflow_projection: Option<OverflowProjection>,
-    svg_objects: Option<Vec<crate::LayoutObjectGeometry<N>>>,
-}
-
-impl<N: Copy + std::fmt::Debug + Eq + Hash> MeasuredLayoutPass<N> {
-    /// Attach the SVG resources requested by a paint or frozen snapshot
-    /// consumer after CSS layout has measured the viewports.
-    pub fn with_svg_content(
-        mut self,
-        mut load: impl FnMut(
-            N,
-            &crate::ResolvedLayoutStyle,
-            crate::LayoutSize,
-        ) -> Option<crate::LayoutSvgContent<N>>,
-    ) -> Self {
-        let mut objects = Vec::new();
-        for (index, layout_box) in self.prepared.world.boxes.iter_mut().enumerate() {
-            if !layout_box
-                .element_semantics()
-                .is_some_and(|element| element.replaced == Some(crate::LayoutReplacedKind::Svg))
-            {
-                continue;
-            }
-            let Some(source) = layout_box.source() else {
-                continue;
-            };
-            if let Some(content) = load(source, &layout_box.style, svg_viewport_size(layout_box)) {
-                layout_box.replaced_image = content.image;
-                let owner = crate::LayoutOutputBoxId::from_index(index);
-                objects.extend(content.objects.into_iter().map(|(source, quad)| {
-                    crate::LayoutObjectGeometry {
-                        source,
-                        owner,
-                        quad,
-                    }
-                }));
-            }
-        }
-        self.svg_objects = Some(objects);
-        self
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -411,7 +390,7 @@ pub(crate) struct InlineSvgViewport {
     pub(crate) prepared: bool,
 }
 
-fn svg_viewport_size<N: Copy>(layout_box: &crate::LayoutBox<N>) -> crate::LayoutSize {
+pub(crate) fn svg_viewport_size<N: Copy>(layout_box: &crate::LayoutBox<N>) -> crate::LayoutSize {
     let layout = layout_box.final_layout;
     let zoom = layout_box.style.effective_zoom();
     crate::LayoutSize::new(
@@ -503,7 +482,6 @@ where
             numeric_layout_elapsed,
             numeric_metrics,
             overflow_projection,
-            svg_objects: _,
         } = self;
         let PreparedLayoutPass {
             world,
@@ -668,6 +646,7 @@ where
         measure_prepared_layout_pass(prepared, services)?,
         source,
         frames,
+        crate::InlineSvgConsumers::default(),
     )
 }
 
@@ -770,7 +749,6 @@ where
         numeric_layout_elapsed,
         numeric_metrics,
         overflow_projection,
-        svg_objects: None,
     })
 }
 
@@ -778,6 +756,7 @@ pub fn finish_measured_layout_pass<S, F>(
     measured: MeasuredLayoutPass<S::NodeId>,
     source: &S,
     frames: &mut F,
+    svg: crate::InlineSvgConsumers<'_, S::NodeId>,
 ) -> Result<LayoutPassResult<S::NodeId>, LayoutError>
 where
     S: LayoutSource,
@@ -801,11 +780,10 @@ where
         numeric_layout_elapsed,
         numeric_metrics,
         overflow_projection,
-        svg_objects,
     } = measured;
-    let phase_started = Instant::now();
-    let mut embedded_frames = HashMap::new();
+    let mut embedded_viewports = HashMap::new();
     let mut svg_viewports = HashMap::new();
+    let mut frozen_inline_svg = None;
     for (index, layout_box) in world.boxes.iter().enumerate() {
         let Some(kind) = layout_box
             .element_semantics()
@@ -816,14 +794,26 @@ where
         let Some(source) = layout_box.source() else {
             continue;
         };
-        if kind == crate::LayoutReplacedKind::Svg && svg_objects.is_none() {
+        if kind == crate::LayoutReplacedKind::Svg {
             let size = svg_viewport_size(layout_box);
-            if size.width > 0.0 && size.height > 0.0 {
-                svg_viewports.entry(source).or_insert(InlineSvgViewport {
+            if size.width > 0.0
+                && size.height > 0.0
+                && let std::collections::hash_map::Entry::Vacant(entry) =
+                    svg_viewports.entry(source)
+            {
+                entry.insert(InlineSvgViewport {
                     owner: crate::LayoutOutputBoxId::from_index(index),
                     size,
                     prepared: false,
                 });
+                if let Some(input) = svg
+                    .freeze
+                    .and_then(|freeze| freeze(source, &layout_box.style, size))
+                {
+                    frozen_inline_svg
+                        .get_or_insert_with(|| Box::new(FrozenInlineSvgInputs::new()))
+                        .insert(source, input);
+                }
             }
         }
         if kind != crate::LayoutReplacedKind::Frame {
@@ -852,11 +842,8 @@ where
             css_viewport_dimension(height),
             request.viewport.device_pixel_ratio,
         );
-        if let Some(snapshot) = frames.render_embedded_frame(source, viewport)? {
-            embedded_frames.insert(crate::LayoutBoxId::from_index(index), (source, snapshot));
-        }
+        embedded_viewports.insert(crate::LayoutBoxId::from_index(index), (source, viewport));
     }
-    let embedded_frame_elapsed = phase_started.elapsed();
     let mut result = finish_layout_pass(
         world,
         source,
@@ -864,11 +851,14 @@ where
         request.reason,
         started,
         request.paint_capture,
+        request.paint_cull_rect,
         request.retains_scroll_projection(),
         request.retains_screen_paint(),
         request.retains_layout_world(),
-        svg_objects.unwrap_or_default(),
-        embedded_frames,
+        frozen_inline_svg,
+        svg.paint,
+        embedded_viewports,
+        frames,
         overflow_projection,
         crate::projection::LayoutPassPhaseMetrics {
             box_tree_elapsed,
@@ -881,7 +871,6 @@ where
             numeric_followup_passes_elapsed: numeric_metrics.followup_passes_elapsed,
             overflow_detection_elapsed: numeric_metrics.overflow_detection_elapsed,
             scrollbar_feedback_elapsed: numeric_metrics.scrollbar_feedback_elapsed,
-            embedded_frame_elapsed,
             numeric_layout_pass_count: numeric_metrics.pass_count,
             numeric_feedback_invalidated_node_count: numeric_metrics
                 .feedback_invalidated_node_count,

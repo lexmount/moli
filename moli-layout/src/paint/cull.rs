@@ -16,9 +16,9 @@ use super::{
     text::{caret_rect, range_selection_rects},
 };
 use crate::{
-    LayoutBoxId, LayoutFragmentKind, LayoutPoint, LayoutRect, LayoutTransform2D, PaintEdgeSizes,
-    PaintFilter, PaintFragment, inline::InlinePaintBounds, projection::PaintProjection,
-    stacking::PaintOrderEvent,
+    LayoutBoxId, LayoutFragmentKind, LayoutPoint, LayoutRect, LayoutReplacedKind,
+    LayoutTransform2D, PaintEdgeSizes, PaintFilter, PaintFragment, inline::InlinePaintBounds,
+    projection::PaintProjection, stacking::PaintOrderEvent,
 };
 
 const CULL_ANTIALIAS_MARGIN: f32 = 1.0;
@@ -42,7 +42,7 @@ impl PaintCullBounds {
 
     fn misses(self, region: PaintCullRegion) -> bool {
         match (self, region) {
-            (Self::Empty, _) => true,
+            (Self::Empty, _) | (_, PaintCullRegion::Empty) => true,
             (Self::Unbounded, _) | (_, PaintCullRegion::Infinite) => false,
             (Self::Bounded(bounds), PaintCullRegion::Bounded(cull)) => {
                 !rects_intersect(bounds, cull)
@@ -53,6 +53,7 @@ impl PaintCullBounds {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PaintCullRegion {
+    Empty,
     Bounded(LayoutRect),
     Infinite,
 }
@@ -66,6 +67,27 @@ impl PaintCullRegion {
             CULL_ANTIALIAS_MARGIN,
             CULL_ANTIALIAS_MARGIN,
         ))
+    }
+
+    pub(super) fn intersect(self, rect: LayoutRect) -> Self {
+        if !rect_is_finite(rect) {
+            return self;
+        }
+        match self {
+            Self::Empty => Self::Empty,
+            Self::Infinite => Self::Bounded(rect),
+            Self::Bounded(current) => {
+                let left = current.x.max(rect.x);
+                let top = current.y.max(rect.y);
+                let right = current.right().min(rect.right());
+                let bottom = current.bottom().min(rect.bottom());
+                if right < left || bottom < top {
+                    Self::Empty
+                } else {
+                    Self::Bounded(LayoutRect::new(left, top, right - left, bottom - top))
+                }
+            }
+        }
     }
 
     pub(super) fn local_rect(self, local_to_viewport: LayoutTransform2D) -> Option<LayoutRect> {
@@ -286,6 +308,16 @@ where
     if !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
+    if layout_box
+        .element_semantics()
+        .and_then(|element| element.replaced)
+        == Some(LayoutReplacedKind::Svg)
+        && !layout_box.style.clips_overflow()
+    {
+        // Visible SVG overflow can extend beyond the measured box. Its ink
+        // bounds are unavailable until the scene has been decoded.
+        return PaintCullBounds::Unbounded;
+    }
     let mut local = projection.geometry(id.index()).border_box;
     if let Some(context) = layout_box.inline_layout.as_ref() {
         let layout = layout_box.final_layout;
@@ -482,6 +514,24 @@ where
         .paint
         .local_transform();
     map_rect(transform, rect)
+}
+
+pub(super) fn clip_cull_region(
+    region: PaintCullRegion,
+    transform: LayoutTransform2D,
+    rect: LayoutRect,
+) -> PaintCullRegion {
+    match map_rect(transform, rect) {
+        PaintCullBounds::Bounded(mapped) => region.intersect(outset_rect(
+            mapped,
+            CULL_ANTIALIAS_MARGIN,
+            CULL_ANTIALIAS_MARGIN,
+            CULL_ANTIALIAS_MARGIN,
+            CULL_ANTIALIAS_MARGIN,
+        )),
+        PaintCullBounds::Empty => PaintCullRegion::Empty,
+        PaintCullBounds::Unbounded => region,
+    }
 }
 
 fn map_rect(transform: LayoutTransform2D, rect: LayoutRect) -> PaintCullBounds {

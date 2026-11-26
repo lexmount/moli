@@ -1,9 +1,10 @@
-use std::{borrow::Cow, fmt::Debug, hash::Hash, ops::Range};
+use std::{borrow::Cow, cell::RefCell, collections::HashMap, fmt::Debug, hash::Hash, ops::Range};
 
 use crate::{
-    FrozenLayoutBox, FrozenLayoutTree, LayoutBox, LayoutBoxGeometry, LayoutBoxId,
+    FrozenLayoutBox, FrozenLayoutTree, InlineSvgImageLookup, LayoutBoxGeometry, LayoutBoxId,
     LayoutClipChainId, LayoutClipNode, LayoutFragment, LayoutFragmentId, LayoutImageResource,
-    LayoutScrollExtent, LayoutViewport, LayoutWorld, PaintDiagnostic,
+    LayoutReplacedKind, LayoutScrollExtent, LayoutViewport, LayoutWorld, PaintDiagnostic,
+    layout_tree::FrozenInlineSvgInputs,
     source::{CssImageLookup, LiveReplacedImageLookup},
     stacking::PaintOrderEvent,
     style::ResolvedLayoutTransform,
@@ -38,6 +39,13 @@ enum PaintGeometry<'a, N> {
     },
 }
 
+pub(super) struct InlineSvgPaint<'a, N> {
+    pub(super) root: N,
+    pub(super) frozen: Option<&'a FrozenInlineSvgInputs<N>>,
+    pub(super) lookup: &'a InlineSvgImageLookup<'a, N>,
+    pub(super) images: &'a RefCell<HashMap<LayoutBoxId, Option<LayoutImageResource>>>,
+}
+
 pub(crate) struct PaintProjection<'a, N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -51,6 +59,7 @@ where
     pub(crate) metadata: &'a PaintMetadata,
     pub(crate) css_images: &'a CssImageLookup<'a>,
     live_replaced_images: Option<&'a LiveReplacedImageLookup<'a, N>>,
+    inline_svg: Option<InlineSvgPaint<'a, N>>,
     geometry: PaintGeometry<'a, N>,
 }
 
@@ -58,6 +67,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
     pub(super) fn from_layout_pass(
         pass: &'a OutputProjection<'_, N>,
         css_images: &'a CssImageLookup<'a>,
+        inline_svg: Option<InlineSvgPaint<'a, N>>,
     ) -> Self {
         Self {
             world: pass.world,
@@ -69,6 +79,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
             metadata: &pass.paint_metadata,
             css_images,
             live_replaced_images: None,
+            inline_svg,
             geometry: PaintGeometry::LayoutPass {
                 boxes: &pass.boxes,
                 scroll_extents: &pass.scroll_extents,
@@ -85,6 +96,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
         coordinate_spaces: &'a [ProjectedCoordinateSpace],
         css_images: &'a CssImageLookup<'a>,
         live_replaced_images: &'a LiveReplacedImageLookup<'a, N>,
+        inline_svg: InlineSvgPaint<'a, N>,
     ) -> Self {
         Self {
             world,
@@ -96,6 +108,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
             metadata: &paint.paint_metadata,
             css_images,
             live_replaced_images: Some(live_replaced_images),
+            inline_svg: Some(inline_svg),
             geometry: PaintGeometry::Published {
                 boxes: &tree.boxes,
                 scroll,
@@ -103,18 +116,38 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
         }
     }
 
-    pub(crate) fn replaced_image<'box_data>(
-        &self,
-        layout_box: &'box_data LayoutBox<N>,
-    ) -> Option<Cow<'box_data, LayoutImageResource>> {
-        if let Some(lookup) = self.live_replaced_images
-            && let Some(source) = layout_box.source()
+    pub(crate) fn replaced_image(&self, id: LayoutBoxId) -> Option<Cow<'a, LayoutImageResource>> {
+        let layout_box = &self.world.boxes[id.index()];
+        if let Some(source) = layout_box.source()
             && let Some(kind) = layout_box
                 .element_semantics()
                 .and_then(|element| element.replaced)
-            && kind.is_live_paint_image()
         {
-            return lookup(source, kind).map(Cow::Owned);
+            if kind == LayoutReplacedKind::Svg
+                && let Some(svg) = &self.inline_svg
+            {
+                return svg
+                    .images
+                    .borrow_mut()
+                    .entry(id)
+                    .or_insert_with(|| {
+                        (svg.lookup)(
+                            svg.root,
+                            self.viewport,
+                            source,
+                            &layout_box.style,
+                            crate::pass::svg_viewport_size(layout_box),
+                            svg.frozen.and_then(|frozen| frozen.input(source)),
+                        )
+                    })
+                    .clone()
+                    .map(Cow::Owned);
+            }
+            if kind.is_live_paint_image()
+                && let Some(lookup) = self.live_replaced_images
+            {
+                return lookup(source, kind).map(Cow::Owned);
+            }
         }
         layout_box.replaced_image.as_ref().map(Cow::Borrowed)
     }

@@ -33,7 +33,7 @@ use text::{
 };
 
 use crate::{
-    LayoutBox, LayoutBoxId, LayoutClipChainId, LayoutClipKind, LayoutElementCategory,
+    LayoutBoxId, LayoutClipChainId, LayoutClipKind, LayoutElementCategory, LayoutError,
     LayoutFormControlKind, LayoutInputControlKind, LayoutOutputBoxId, LayoutReplacedKind,
     LayoutWorld, PaintColor, PaintDiagnostic, PaintDiagnosticSeverity, PaintEdgeSizes,
     PaintFragment, PaintShape, PaintSnapshot,
@@ -168,8 +168,12 @@ pub(crate) fn project_paint_snapshot<N>(
     capture: ResolvedPaintCapture,
     content_size: crate::LayoutSize,
     links: Option<LinkProjection>,
-    embedded_frames: &mut HashMap<LayoutBoxId, PaintSnapshot>,
-) -> PaintProjectionResult
+    parent_cull_rect: Option<crate::LayoutRect>,
+    paint_frame: &mut dyn FnMut(
+        LayoutBoxId,
+        Option<crate::LayoutRect>,
+    ) -> Result<Option<PaintSnapshot>, LayoutError>,
+) -> Result<PaintProjectionResult, LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -195,7 +199,20 @@ where
         ..PaintProjectionMetrics::default()
     };
     let mut current_cull = PaintCullRegion::for_capture(capture.viewport_rect);
+    if let Some(rect) = parent_cull_rect {
+        current_cull = current_cull.intersect(rect);
+    }
     if capture.clip_to_viewport {
+        if let Some(rect) = PaintCullRegion::for_capture(crate::LayoutRect::new(
+            0.0,
+            0.0,
+            capture.surface.css_width,
+            capture.surface.css_height,
+        ))
+        .local_rect(capture.viewport_to_surface)
+        {
+            current_cull = current_cull.intersect(rect);
+        }
         snapshot.push_fragment(PaintFragment::PushClip {
             shape: PaintShape::Rect(capture.viewport_rect),
             transform: capture.viewport_to_surface,
@@ -230,6 +247,7 @@ where
     let mut active_clips = ActivePaintClipChain::default();
     let mut event_index = 0usize;
     let mut inline_text = HashMap::new();
+    let mut embedded_frames = HashMap::new();
     while event_index < projection.metadata.events.len() {
         let event = projection.metadata.events[event_index];
         if let PaintOrderEvent::PushStackingContext(_) = event {
@@ -258,6 +276,45 @@ where
             metrics.culled_event_count = metrics.culled_event_count.saturating_add(1);
             event_index += 1;
             continue;
+        }
+
+        if let PaintOrderEvent::BoxBackground(id) | PaintOrderEvent::BoxContents(id) = event
+            && let Some(kind @ (LayoutReplacedKind::Frame | LayoutReplacedKind::Svg)) =
+                projection.world.boxes[id.index()]
+                    .element_semantics()
+                    .and_then(|element| element.replaced)
+        {
+            let geometry = projection.geometry(id.index());
+            let clip = match event {
+                PaintOrderEvent::BoxBackground(_) => geometry.clip_chain,
+                _ => projection.metadata.boxes[id.index()].content_clip,
+            };
+            let frame_or_svg_cull = clipped_replaced_cull_region(
+                projection,
+                current_cull,
+                clip,
+                &active_clips.filter_output_clips,
+            );
+            if cull_plan.event_misses(event_index, frame_or_svg_cull) {
+                metrics.culled_event_count = metrics.culled_event_count.saturating_add(1);
+                event_index += 1;
+                continue;
+            }
+            if kind == LayoutReplacedKind::Frame
+                && projection.world.boxes[id.index()].style.is_visible()
+                && let std::collections::hash_map::Entry::Vacant(entry) = embedded_frames.entry(id)
+            {
+                let content = BoxAreas::for_box(projection, id).content_rect;
+                let local_to_viewport = projection.coordinate_spaces
+                    [geometry.coordinate_space.index()]
+                .paint
+                .local_transform()
+                .concatenate(crate::LayoutTransform2D::translation(content.x, content.y));
+                entry.insert(paint_frame(
+                    id,
+                    frame_or_svg_cull.local_rect(local_to_viewport),
+                )?);
+            }
         }
 
         match event {
@@ -441,7 +498,7 @@ where
                     id,
                     &active_clips.filter_output_clips,
                     propagated_background,
-                    embedded_frames.contains_key(&id),
+                    embedded_frames.get(&id).is_some_and(Option::is_some),
                     capture.include_backgrounds,
                     current_cull,
                     &mut metrics,
@@ -461,7 +518,12 @@ where
                         }
                     }
                 }
-                project_box_contents(projection, id, embedded_frames, &mut snapshot);
+                project_box_contents(
+                    projection,
+                    id,
+                    embedded_frames.remove(&id).flatten(),
+                    &mut snapshot,
+                );
             }
             PaintOrderEvent::InlineContents(id) => {
                 active_clips.transition_to(
@@ -661,7 +723,41 @@ where
     if capture.clip_to_viewport {
         snapshot.push_fragment(PaintFragment::PopLayer);
     }
-    PaintProjectionResult { snapshot, metrics }
+    Ok(PaintProjectionResult { snapshot, metrics })
+}
+
+fn clipped_replaced_cull_region<N: Copy + Debug + Eq + Hash>(
+    projection: &PaintProjection<'_, N>,
+    mut region: PaintCullRegion,
+    mut clip: Option<LayoutClipChainId>,
+    filter_output_clips: &[LayoutOutputBoxId],
+) -> PaintCullRegion {
+    // A pixel-moving filter takes its source beyond the capture bounds.
+    if region == PaintCullRegion::Infinite {
+        return region;
+    }
+    while let Some(id) = clip {
+        let node = &projection.clip_chain[id.index()];
+        match node.kind {
+            LayoutClipKind::Viewport => {}
+            LayoutClipKind::CssRect(owner) if filter_output_clips.contains(&owner) => {}
+            _ => {
+                let space = projection.coordinate_spaces[node.coordinate_space.index()].paint;
+                // Match the coordinates used by push_clip_node, including
+                // snapping the overflow edge before the CSS transform.
+                let snapped = matches!(node.kind, LayoutClipKind::Overflow(_))
+                    .then(|| crate::pixel_snap_paint_rect(space.pre_transform_rect(node.rect)))
+                    .flatten();
+                let (rect, transform) = snapped.map_or_else(
+                    || (node.rect, space.local_transform()),
+                    |rect| (rect, space.property_transform()),
+                );
+                region = cull::clip_cull_region(region, transform, rect);
+            }
+        }
+        clip = node.parent;
+    }
+    region
 }
 
 fn paint_clip_chain<N>(
@@ -864,7 +960,7 @@ fn project_box_background<N>(
 
     if include_backgrounds && propagated_background != Some(id) {
         let mut color = layout_box.style.background_color();
-        match unavailable_replaced_content_paint(projection, layout_box, has_embedded_frame) {
+        match unavailable_replaced_content_paint(projection, id, has_embedded_frame) {
             Some(UnavailableReplacedContentPaint::OpaquePlaceholder) => {
                 snapshot.push_diagnostic(PaintDiagnostic::new(
                     "replaced-content-placeholder",
@@ -1115,7 +1211,7 @@ fn project_box_outline<N>(
 fn project_box_contents<N>(
     projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
-    embedded_frames: &mut HashMap<LayoutBoxId, PaintSnapshot>,
+    embedded: Option<PaintSnapshot>,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -1128,7 +1224,7 @@ fn project_box_contents<N>(
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
     let transform = paint_space.local_transform();
-    if let Some(child) = embedded_frames.remove(&id) {
+    if let Some(child) = embedded {
         let content = BoxAreas::for_box(projection, id).content_rect;
         let local_to_surface =
             transform.concatenate(crate::LayoutTransform2D::translation(content.x, content.y));
@@ -1218,12 +1314,13 @@ fn project_box_text<N>(
 
 fn unavailable_replaced_content_paint<N>(
     projection: &PaintProjection<'_, N>,
-    layout_box: &LayoutBox<N>,
+    id: LayoutBoxId,
     has_embedded_frame: bool,
 ) -> Option<UnavailableReplacedContentPaint>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    let layout_box = &projection.world.boxes[id.index()];
     if !layout_box.is_replaced() {
         return None;
     }
@@ -1252,7 +1349,7 @@ where
         },
     }?;
     let ready = projection
-        .replaced_image(layout_box)
+        .replaced_image(id)
         .is_some_and(|resource| resource.pixels.is_some() || resource.svg.is_some());
     (!ready).then_some(fallback)
 }

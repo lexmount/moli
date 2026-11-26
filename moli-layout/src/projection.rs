@@ -20,11 +20,12 @@ mod sticky;
 use coordinates::{BoxPlacement, resolve_coordinate_spaces};
 pub(crate) use paint_space::PaintSpace;
 pub(crate) use paint_view::PaintProjection;
-use paint_view::{BoxPaintMetadata, PaintMetadata};
+use paint_view::{BoxPaintMetadata, InlineSvgPaint, PaintMetadata};
 use scroll::clamp_scroll_offset;
 pub(crate) use scroll::{ScrollProjection, ScrollTranslation};
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     fmt::Debug,
     hash::Hash,
@@ -33,7 +34,7 @@ use std::{
 
 use taffy::ResolveOrZero;
 
-use crate::layout_tree::{CssSizing, CssSizingBox, LayoutCoordinateSpace};
+use crate::layout_tree::{CssSizing, CssSizingBox, FrozenInlineSvgInputs, LayoutCoordinateSpace};
 use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
 use crate::stacking::{PaintOrderEvent, build_paint_order};
 use crate::style::ResolvedLayoutTransform;
@@ -58,7 +59,6 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) numeric_followup_passes_elapsed: std::time::Duration,
     pub(crate) overflow_detection_elapsed: std::time::Duration,
     pub(crate) scrollbar_feedback_elapsed: std::time::Duration,
-    pub(crate) embedded_frame_elapsed: std::time::Duration,
     pub(crate) numeric_layout_pass_count: usize,
     pub(crate) numeric_feedback_invalidated_node_count: usize,
     pub(crate) numeric_feedback_overflow_recomputed_node_count: usize,
@@ -70,23 +70,28 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) reused_overflow_projection: bool,
 }
 
-pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
+pub(crate) fn finish_layout_pass<N, S, F>(
     mut world: LayoutWorld<N>,
     source: &S,
     viewport: LayoutViewport,
     reason: LayoutFlushReason,
     started: Instant,
     paint_capture: Option<PaintCaptureRequest>,
+    paint_cull_rect: Option<LayoutRect>,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
     retain_layout_world: bool,
-    mut object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
-    mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
+    frozen_inline_svg: Option<Box<FrozenInlineSvgInputs<N>>>,
+    svg_image_lookup: Option<&crate::InlineSvgImageLookup<'_, N>>,
+    mut embedded_viewports: HashMap<LayoutBoxId, (N, LayoutViewport)>,
+    frames: &mut F,
     overflow_projection: Option<OverflowProjection>,
     phase_metrics: LayoutPassPhaseMetrics,
 ) -> Result<LayoutPassResult<N>, LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
+    S: crate::LayoutSource<NodeId = N>,
+    F: crate::EmbeddedFrameRenderer<N>,
 {
     let projection_started = Instant::now();
     // The final scrollbar iteration used these exact rounded box dimensions.
@@ -97,45 +102,72 @@ where
     projection.build_scroll_extents(&overflow);
     let scroll_projection =
         projection.build_coordinate_spaces(paint_capture.is_some(), retain_scroll_projection)?;
-    for object in &mut object_geometry {
-        object.place_in_box(&projection.boxes[object.owner.index()]);
-    }
     projection.build_fragments();
     projection.assign_clip_and_paint_order();
 
     let content_size = projection.document_content_size();
-    let mut css_image_references = world.css_image_references.clone();
-    for (_, snapshot) in embedded_frames.values_mut() {
-        css_image_references.append(&mut snapshot.css_image_references);
-    }
-    let mut embedded_paint = embedded_frames
-        .iter_mut()
-        .filter_map(|(id, (_, snapshot))| snapshot.paint.take().map(|paint| (*id, paint)))
-        .collect::<HashMap<_, _>>();
+    let mut embedded_frames = HashMap::new();
+    let mut embedded_frame_elapsed = std::time::Duration::ZERO;
+    let inline_svg_images = RefCell::new(HashMap::new());
     let mut paint_projection_metrics = crate::paint::PaintProjectionMetrics::default();
-    let mut paint_snapshot = paint_capture
-        .map(|request| {
-            request
-                .resolve(viewport, projection.viewport_scroll, content_size)
-                .map(|capture| {
-                    let css_images = |url: &str| source.css_image_state(url);
-                    let paint_projection =
-                        PaintProjection::from_layout_pass(&projection, &css_images);
-                    crate::paint::project_paint_snapshot(
-                        &paint_projection,
-                        capture,
-                        content_size,
-                        (reason == LayoutFlushReason::Print)
-                            .then(|| crate::paint::LinkProjection::new(&paint_projection, source)),
-                        &mut embedded_paint,
-                    )
-                })
-        })
-        .transpose()?
-        .map(|output| {
-            paint_projection_metrics = output.metrics;
-            output.snapshot
+    let mut paint_snapshot = if let Some(request) = paint_capture {
+        let capture = request.resolve(viewport, projection.viewport_scroll, content_size)?;
+        let css_images = |url: &str| source.css_image_state(url);
+        let inline_svg = svg_image_lookup.map(|lookup| InlineSvgPaint {
+            root: source.root(),
+            frozen: frozen_inline_svg.as_deref(),
+            lookup,
+            images: &inline_svg_images,
         });
+        let paint_projection =
+            PaintProjection::from_layout_pass(&projection, &css_images, inline_svg);
+        let mut paint_frame = |id, cull_rect| {
+            let Some((source, child_viewport)) = embedded_viewports.remove(&id) else {
+                return Ok(None);
+            };
+            let started = Instant::now();
+            let child = frames.render_embedded_frame(
+                source,
+                child_viewport,
+                Some(crate::EmbeddedFramePaintRequest {
+                    include_backgrounds: capture.include_backgrounds,
+                    cull_rect,
+                }),
+            )?;
+            embedded_frame_elapsed += started.elapsed();
+            Ok(child.and_then(|mut child| {
+                let paint = child.paint.take();
+                embedded_frames.insert(id, (source, child));
+                paint
+            }))
+        };
+        let output = crate::paint::project_paint_snapshot(
+            &paint_projection,
+            capture,
+            content_size,
+            (reason == LayoutFlushReason::Print)
+                .then(|| crate::paint::LinkProjection::new(&paint_projection, source)),
+            paint_cull_rect,
+            &mut paint_frame,
+        )?;
+        paint_projection_metrics = output.metrics;
+        Some(output.snapshot)
+    } else {
+        None
+    };
+
+    // A clipped frame still publishes its geometry and resource discovery.
+    let frames_started = Instant::now();
+    for (id, (source, viewport)) in embedded_viewports {
+        if let Some(child) = frames.render_embedded_frame(source, viewport, None)? {
+            embedded_frames.insert(id, (source, child));
+        }
+    }
+    embedded_frame_elapsed += frames_started.elapsed();
+    let mut css_image_references = world.css_image_references.clone();
+    for (_, child) in embedded_frames.values_mut() {
+        css_image_references.append(&mut child.css_image_references);
+    }
     let mut diagnostics = paint_snapshot
         .as_ref()
         .map(|snapshot| snapshot.diagnostics.clone())
@@ -165,8 +197,10 @@ where
         numeric_followup_passes_elapsed: phase_metrics.numeric_followup_passes_elapsed,
         overflow_detection_elapsed: phase_metrics.overflow_detection_elapsed,
         scrollbar_feedback_elapsed: phase_metrics.scrollbar_feedback_elapsed,
-        embedded_frame_elapsed: phase_metrics.embedded_frame_elapsed,
-        projection_elapsed: projection_started.elapsed(),
+        embedded_frame_elapsed,
+        projection_elapsed: projection_started
+            .elapsed()
+            .saturating_sub(embedded_frame_elapsed),
         numeric_layout_pass_count: phase_metrics.numeric_layout_pass_count,
         numeric_feedback_invalidated_node_count: phase_metrics
             .numeric_feedback_invalidated_node_count,
@@ -213,15 +247,17 @@ where
         Box::new(RetainedPaintData {
             paint_metadata: std::mem::take(&mut projection.paint_metadata),
             diagnostics: projection.diagnostics.clone(),
+            inline_svg_images,
         })
     });
-    let tree = projection.into_frozen_tree(
+    let mut tree = projection.into_frozen_tree(
         source.root(),
         content_size,
-        object_geometry,
+        Vec::new(),
         embedded_frames,
         scroll_projection,
     );
+    tree.frozen_inline_svg = frozen_inline_svg;
     let reusable_layout = retain_layout_world && crate::builder::can_retain_root(&world);
     let retained_layout = (reusable_layout || paint.is_some()).then(|| {
         world.native_grid_details = HashMap::new();
@@ -272,9 +308,19 @@ where
 pub(crate) struct RetainedPaintData {
     diagnostics: Vec<PaintDiagnostic>,
     paint_metadata: PaintMetadata,
+    inline_svg_images: RefCell<HashMap<LayoutBoxId, Option<crate::LayoutImageResource>>>,
 }
 
 impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
+    pub fn clear_inline_svg_images(&mut self) {
+        if let Some(paint) = &mut self.paint {
+            paint.inline_svg_images.get_mut().clear();
+        }
+        for (_, frame) in self.frames.values_mut() {
+            frame.clear_inline_svg_images();
+        }
+    }
+
     /// Apply canonical REPAINT damage while retaining the published geometry.
     /// Prepare all replacements before changing the world, so an unsupported
     /// box or brush can fall back to the regular pass.
@@ -294,8 +340,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
         styles: Vec<(N, style::servo_arc::Arc<style::properties::ComputedValues>)>,
         scroll_offset: impl Fn(N) -> LayoutPoint,
     ) -> Option<FrozenLayoutTree<N>> {
-        if (!old.object_geometry.is_empty() && old.svg_viewports.is_empty())
-            || old.embedded_frames().next().is_some()
+        if old.embedded_frames().next().is_some()
             || self
                 .world
                 .boxes
@@ -474,8 +519,10 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
         &self,
         tree: &FrozenLayoutTree<N>,
         request: PaintCaptureRequest,
+        cull_rect: Option<LayoutRect>,
         css_images: &dyn Fn(N, &str) -> crate::LayoutCssImageState,
         live_replaced_images: &crate::source::LiveReplacedImageLookup<'_, N>,
+        svg_image_lookup: &crate::InlineSvgImageLookup<'_, N>,
     ) -> Result<PaintSnapshot, LayoutError> {
         let paint = self
             .paint
@@ -511,9 +558,15 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
             &coordinates.spaces,
             &document_images,
             live_replaced_images,
+            InlineSvgPaint {
+                root: tree.source_root(),
+                frozen: tree.frozen_inline_svg.as_deref(),
+                lookup: svg_image_lookup,
+                images: &paint.inline_svg_images,
+            },
         );
 
-        let mut embedded_paint = HashMap::new();
+        let mut frames = HashMap::new();
         for frame in tree.embedded_frames() {
             if frame.tree.viewport.css_width == 0 || frame.tree.viewport.css_height == 0 {
                 continue;
@@ -521,26 +574,39 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
             let (id, retained) = self.frames.get(&frame.source).ok_or_else(|| {
                 LayoutError::source_contract("screen paint", "missing embedded paint inputs")
             })?;
-            let child_request = PaintCaptureRequest {
-                include_backgrounds: request.include_backgrounds,
-                base_background_color: crate::PaintColor::TRANSPARENT,
-                ..PaintCaptureRequest::viewport()
-            };
-            embedded_paint.insert(
-                *id,
-                retained.paint(&frame.tree, child_request, css_images, live_replaced_images)?,
-            );
+            frames.insert(*id, (&frame.tree, retained));
         }
+        let child_request = PaintCaptureRequest {
+            include_backgrounds: request.include_backgrounds,
+            base_background_color: crate::PaintColor::TRANSPARENT,
+            ..PaintCaptureRequest::viewport()
+        };
+        let mut paint_frame = |id, child_cull_rect| {
+            frames
+                .remove(&id)
+                .map(|(tree, world)| {
+                    world.paint(
+                        tree,
+                        child_request,
+                        child_cull_rect,
+                        css_images,
+                        live_replaced_images,
+                        svg_image_lookup,
+                    )
+                })
+                .transpose()
+        };
 
         let capture = request.resolve(tree.viewport, tree.viewport_scroll, tree.content_size)?;
-        Ok(crate::paint::project_paint_snapshot(
+        crate::paint::project_paint_snapshot(
             &projection,
             capture,
             tree.content_size,
             None,
-            &mut embedded_paint,
+            cull_rect,
+            &mut paint_frame,
         )
-        .snapshot)
+        .map(|output| output.snapshot)
     }
 }
 

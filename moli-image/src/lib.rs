@@ -26,7 +26,7 @@ pub use raster::{
 pub use rgba::{GAUSSIAN_BLUR_OUTSET, RgbaImage, RgbaImageError, validate_gaussian_blur};
 pub use svg::{
     MAX_ENCODED_SVG_BYTES, MAX_SVG_ELEMENT_DEPTH, SvgDecodeError, SvgElementStyle, SvgImage,
-    SvgImageMetadata, SvgObjectGeometry, SvgScene, SvgStyleProperty, decode_inline_svg_scene,
-    decode_svg_image, decode_svg_image_with_metadata, probe_svg_image,
+    SvgImageMetadata, SvgObjectGeometry, SvgScene, SvgStyleProperty, decode_inline_svg_image,
+    decode_inline_svg_scene, decode_svg_image, decode_svg_image_with_metadata, probe_svg_image,
     svg_image_metadata_from_root_attributes,
 };
