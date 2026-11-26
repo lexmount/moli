@@ -57,7 +57,7 @@ impl Fixture {
 
     fn invalidate(&mut self, effects: &DomMutationEffects) {
         assert!(effects.did_change());
-        let style_effects = StyleMutationEffect::from_dom_mutation_effects(&self.host, effects);
+        let style_effects = StyleMutationEffect::from_dom_mutation_effects(effects);
         self.engine.invalidate_for_mutations(
             &self.host,
             &style_effects,

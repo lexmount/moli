@@ -616,7 +616,7 @@ fn detached_subtree_invalidation_clears_relative_selector_flags() {
     });
 
     let removal = host.remove_child_effects(document, anchor);
-    let effects = StyleMutationEffect::from_dom_mutation_effects(&host, &removal);
+    let effects = StyleMutationEffect::from_dom_mutation_effects(&removal);
     engine.invalidate_dom_mutations(&host, &effects);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 

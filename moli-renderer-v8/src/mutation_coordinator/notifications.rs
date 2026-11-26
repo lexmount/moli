@@ -121,7 +121,7 @@ pub(crate) fn notify_native_dom_mutation(
 
     let profile = moli_trace::cpu_profile_enabled();
     let started = profile.then(Instant::now);
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(dom_host, effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(effects);
     let style_effect_count = style_effects.len();
     let style_effects_us = started
         .map(|started| started.elapsed().as_micros())

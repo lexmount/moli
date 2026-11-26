@@ -33,7 +33,7 @@ pub(super) fn synthesize_hidden_presentational_hint<V>(
     if element.namespace() != HTML_NAMESPACE {
         return;
     }
-    let Some(hidden) = element.attribute("hidden") else {
+    let Some(hidden) = element.attribute_ns("", "hidden") else {
         return;
     };
     let declaration = if hidden.eq_ignore_ascii_case("until-found") {

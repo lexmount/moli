@@ -92,7 +92,12 @@ impl MoliStyleEngine {
                 StyleMutationEffect::ChildList { parent, .. } => {
                     html_auto_directionality_root(host, *parent)
                 }
-                StyleMutationEffect::Attribute { element, name, .. } if name == "dir" => {
+                StyleMutationEffect::Attribute {
+                    element,
+                    namespace: None,
+                    name,
+                    ..
+                } if name == "dir" => {
                     // The enclosing auto-direction root also covers attr(dir)
                     // dependencies on the element whose boundary changed.
                     let root = host

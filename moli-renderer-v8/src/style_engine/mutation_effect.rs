@@ -61,32 +61,41 @@ impl StyleMutationEffect {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn attribute_for_element_ns(
-        host: &DomHost,
-        element: DomHandle,
-        namespace: Option<&str>,
-        name: &str,
-        old_value: Option<String>,
-        new_value: Option<String>,
-    ) -> Self {
-        Self::Attribute {
+    pub(crate) fn affects_layout_metric(&self, host: &DomHost) -> bool {
+        let Self::Attribute {
             element,
-            namespace: namespace.map(Arc::from),
-            name: if namespace.is_some() {
-                name.to_owned()
-            } else {
-                normalized_style_attribute_name(host, element, name)
-            },
-            old_value,
-            new_value,
-        }
+            namespace,
+            name,
+            ..
+        } = self
+        else {
+            return true;
+        };
+        // Native geometry and commonly changed CSS inputs can affect cached
+        // layout independently of the element's presentational hints.
+        matches!(
+            name.as_str(),
+            "style"
+                | "class"
+                | "id"
+                | "width"
+                | "height"
+                | "cols"
+                | "rows"
+                | "size"
+                | "value"
+                | "border"
+                | "slot"
+                | "type"
+        ) || moli_selector::attribute_affects_presentational_hints(
+            host,
+            *element,
+            namespace.as_deref(),
+            name,
+        )
     }
 
-    pub(crate) fn from_dom_mutation_effects(
-        host: &DomHost,
-        effects: &DomMutationEffects,
-    ) -> SmallVec<[Self; 1]> {
+    pub(crate) fn from_dom_mutation_effects(effects: &DomMutationEffects) -> SmallVec<[Self; 1]> {
         // A single text update needs neither deduplication nor a heap buffer.
         let style = effects.style();
         if let [node] = style.character_data_mutations()
@@ -179,15 +188,10 @@ impl StyleMutationEffect {
             });
         }
         for mutation in effects.style().attribute_mutations() {
-            let normalized_name = if mutation.namespace().is_some() {
-                mutation.local_name().to_owned()
-            } else {
-                normalized_style_attribute_name(host, mutation.target(), mutation.local_name())
-            };
             style_effects.insert(Self::Attribute {
                 element: mutation.target(),
                 namespace: mutation.namespace().map(Arc::from),
-                name: normalized_name,
+                name: mutation.local_name().to_owned(),
                 old_value: mutation.old_value().map(str::to_owned),
                 new_value: mutation.new_value().map(str::to_owned),
             });
@@ -204,55 +208,6 @@ fn shared_tree_roots<'a>(
         .filter_map(|(candidate, shared)| (candidate == roots).then_some(shared))
         .next()
         .unwrap_or_else(|| Arc::from(roots))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StyleAttributeImpact {
-    None,
-    LayoutMetric,
-    ComputedStyle,
-    DescendantComputedStyle,
-    StylesheetLinkage,
-    LayoutMetricAndStylesheetLinkage,
-}
-
-impl StyleAttributeImpact {
-    pub(crate) fn for_attribute_name(name: &str) -> Self {
-        let name = name.to_ascii_lowercase();
-        match name.as_str() {
-            "style" | "class" | "id" | "hidden" | "frameborder" => Self::ComputedStyle,
-            "width" | "height" | "cols" | "rows" | "size" | "value" | "border" | "slot"
-            | "align" => Self::LayoutMetric,
-            "cellpadding" => Self::DescendantComputedStyle,
-            "href" | "rel" | "media" | "blocking" | "disabled" => Self::StylesheetLinkage,
-            "type" => Self::LayoutMetricAndStylesheetLinkage,
-            _ if moli_selector::is_svg_presentation_attribute_name(&name) => Self::LayoutMetric,
-            _ => Self::None,
-        }
-    }
-
-    pub(crate) fn affects_layout_metric(self) -> bool {
-        matches!(
-            self,
-            Self::LayoutMetric
-                | Self::ComputedStyle
-                | Self::DescendantComputedStyle
-                | Self::LayoutMetricAndStylesheetLinkage
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn changes_computed_style(self) -> bool {
-        matches!(self, Self::ComputedStyle | Self::DescendantComputedStyle)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn changes_stylesheet_linkage(self) -> bool {
-        matches!(
-            self,
-            Self::StylesheetLinkage | Self::LayoutMetricAndStylesheetLinkage
-        )
-    }
 }
 
 pub(crate) fn normalized_style_attribute_name(
@@ -315,7 +270,7 @@ mod tests {
             .find(|mutation| mutation.target() == parent)
             .expect("fragment insertion should record one child-list mutation");
         let shared_added_nodes = child_list.shared_added_nodes();
-        let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+        let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
         let connected_batches = style_effects
             .iter()
             .filter_map(|effect| match effect {
@@ -329,15 +284,9 @@ mod tests {
         assert!(Arc::ptr_eq(connected_batches[0], &shared_added_nodes));
     }
 
-    fn collect_native_effects(
-        output: &mut Vec<StyleMutationEffect>,
-        host: &DomHost,
-        effects: &DomMutationEffects,
-    ) {
+    fn collect_native_effects(output: &mut Vec<StyleMutationEffect>, effects: &DomMutationEffects) {
         assert!(effects.did_change());
-        output.extend(StyleMutationEffect::from_dom_mutation_effects(
-            host, effects,
-        ));
+        output.extend(StyleMutationEffect::from_dom_mutation_effects(effects));
     }
 
     #[test]
@@ -352,12 +301,12 @@ mod tests {
         for _ in 0..64 {
             let child = host.create_element("div");
             let text = host.set_text_content_effects(child, "ABCD");
-            collect_native_effects(&mut effects, &host, &text);
+            collect_native_effects(&mut effects, &text);
             let fragment = host.create_document_fragment();
             let staged = host.append_child_effects(fragment, child);
-            collect_native_effects(&mut effects, &host, &staged);
+            collect_native_effects(&mut effects, &staged);
             let consumed = host.append_child_effects(parent, fragment);
-            collect_native_effects(&mut effects, &host, &consumed);
+            collect_native_effects(&mut effects, &consumed);
             fragments.push(fragment);
         }
         let mut normalized = effects.clone();
@@ -399,9 +348,9 @@ mod tests {
             let moved = host.create_element("span");
             let mut effects = Vec::new();
             let staged = host.append_child_effects(old_parent, moved);
-            collect_native_effects(&mut effects, &host, &staged);
+            collect_native_effects(&mut effects, &staged);
             let relocated = host.append_child_effects(destination, moved);
-            collect_native_effects(&mut effects, &host, &relocated);
+            collect_native_effects(&mut effects, &relocated);
             assert!(effects.iter().any(|effect| matches!(
                 effect,
                 StyleMutationEffect::ChildList { parent, removed_nodes, .. }
@@ -431,9 +380,9 @@ mod tests {
         let fragment = host.create_document_fragment();
         let mut effects = Vec::new();
         let staged = host.append_child_effects(fragment, moved);
-        collect_native_effects(&mut effects, &host, &staged);
+        collect_native_effects(&mut effects, &staged);
         let consumed = host.append_child_effects(destination, fragment);
-        collect_native_effects(&mut effects, &host, &consumed);
+        collect_native_effects(&mut effects, &consumed);
         let mut normalized = effects.clone();
         retain_live_structural_mutation_effects(&host, &mut normalized);
         assert!(normalized.iter().any(|effect| matches!(

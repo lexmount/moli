@@ -1,7 +1,8 @@
 use dom::ElementState;
 use indexmap::{IndexMap, IndexSet};
 use moli_selector::{
-    StyleMutationSnapshots, StyloDomHostBinding, StyloElement, html_auto_directionality_root,
+    StyleMutationSnapshots, StyloDomHostBinding, StyloElement,
+    attribute_affects_presentational_hints, html_auto_directionality_root,
 };
 use selectors::{Element, matching::ElementSelectorFlags};
 use style::{
@@ -84,7 +85,7 @@ impl PendingNativeInvalidation {
                         continue;
                     }
                     let style_changes =
-                        namespace.is_none() && attribute_can_change_presentational_style(name);
+                        attribute_needs_subtree_restyle(host, *element, namespace.as_deref(), name);
                     if style_changes {
                         self.subtrees.insert(*element);
                     }
@@ -340,33 +341,25 @@ fn mutation_root(effect: &StyleMutationEffect) -> Option<DomHandle> {
     }
 }
 
-fn attribute_can_change_presentational_style(name: &str) -> bool {
-    // Values read by the style adapter's HTML and SVG presentational hints,
-    // or by inherited HTML language/direction and inline style matching.
-    matches!(
-        name,
-        "align"
-            | "bgcolor"
-            | "border"
-            | "cellpadding"
-            | "cellspacing"
-            | "color"
-            | "cols"
-            | "dir"
-            | "face"
-            | "frameborder"
-            | "height"
-            | "hidden"
-            | "lang"
-            | "nowrap"
-            | "rows"
-            | "size"
-            | "style"
-            | "text"
-            | "type"
-            | "valign"
-            | "width"
-    ) || moli_selector::is_svg_presentation_attribute_name(name)
+fn attribute_needs_subtree_restyle(
+    host: &DomHost,
+    element: DomHandle,
+    namespace: Option<&str>,
+    name: &str,
+) -> bool {
+    match (namespace, name) {
+        // Language matching reads xml:lang and also accepts other namespaces.
+        (_, "lang") | (None, "dir" | "style") => true,
+        // Display size changes which option can act as a select's placeholder.
+        (None, "size") => host.is_html_element_named(element, "select"),
+        // Input type can change direction hints and submit controls' :default
+        // state depends on type without using an attribute selector.
+        (None, "type") => {
+            host.is_html_element_named(element, "input")
+                || host.is_html_element_named(element, "button")
+        }
+        _ => attribute_affects_presentational_hints(host, element, namespace, name),
+    }
 }
 
 fn invalidate_structure(

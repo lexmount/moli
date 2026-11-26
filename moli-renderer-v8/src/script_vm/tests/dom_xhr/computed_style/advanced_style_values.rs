@@ -824,6 +824,73 @@ fn iframe_dimension_attributes_follow_the_cascade_and_update_layout() {
 }
 
 #[test]
+fn html_presentational_hints_read_only_null_namespace_attributes() {
+    let mut vm = new_parsed_test_vm(
+        "https://namespaced-presentation.test/",
+        r#"<!doctype html><table id="table"><tr><td id="cell">Cell</td></tr></table>
+           <div id="target">Visible</div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const namespace = 'urn:example';
+  const table = document.getElementById('table');
+  const cell = document.getElementById('cell');
+  const target = document.getElementById('target');
+  const read = () => [getComputedStyle(cell).paddingTop, getComputedStyle(target).display];
+
+  table.setAttributeNS(namespace, 'cellpadding', '12');
+  target.setAttributeNS(namespace, 'hidden', '');
+  const values = [read()];
+  table.setAttributeNS(null, 'cellpadding', '6');
+  target.setAttributeNS(null, 'hidden', '');
+  values.push(read());
+  table.removeAttributeNS(null, 'cellpadding');
+  target.removeAttributeNS(null, 'hidden');
+  values.push(read());
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("HTML presentation hints should follow the DOM attribute namespace");
+
+    assert_eq!(
+        result,
+        r#"[["1px","block"],["6px","none"],["1px","block"]]"#
+    );
+}
+
+#[test]
+fn xml_lang_changes_restyle_descendants_that_inherit_language() {
+    let mut vm = new_parsed_test_vm(
+        "https://language-style-mutation.test/",
+        r#"<!doctype html><style>span:lang(fr) { color: red }</style>
+           <div id="parent" lang="en"><span id="child">Text</span></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const xml = 'http://www.w3.org/XML/1998/namespace';
+  const parent = document.getElementById('parent');
+  const child = document.getElementById('child');
+  const read = () => getComputedStyle(child).color;
+  const colors = [read()];
+  parent.setAttributeNS(xml, 'xml:lang', 'fr-CA');
+  colors.push(read());
+  parent.removeAttributeNS(xml, 'lang');
+  colors.push(read());
+  return colors.join('|');
+})()
+"#,
+        )
+        .expect("language selectors should track an inherited xml:lang change");
+
+    assert_eq!(result, "rgb(0, 0, 0)|rgb(255, 0, 0)|rgb(0, 0, 0)");
+}
+
+#[test]
 fn svg_generic_presentation_attributes_apply_to_every_svg_element() {
     let mut vm = new_parsed_test_vm(
         "https://svg-generic-presentation-attributes.test/",
@@ -1000,6 +1067,15 @@ fn svg_special_presentation_attributes_follow_element_scopes_and_cascade() {
 
   get('group').setAttribute('transform', 'translate(12, 3)');
   values.push(value('group', 'transform'));
+  for (const [id, attribute] of [['pattern', 'patternTransform'], ['linear', 'gradientTransform']]) {
+    const element = get(id);
+    element.setAttribute(attribute, 'scale(6)');
+    values.push(value(id, 'transform') === 'matrix(6, 0, 0, 6, 0, 0)');
+    element.removeAttribute(attribute);
+    values.push(value(id, 'transform') === 'none');
+  }
+  get('root').setAttribute('width', '80');
+  values.push(value('root', 'width') === '80px');
   return JSON.stringify(values);
 })()
 "#,
@@ -1008,7 +1084,7 @@ fn svg_special_presentation_attributes_follow_element_scopes_and_cascade() {
 
     assert_eq!(
         result,
-        r#"["1px","2px","3px","4px","matrix(1, 0, 0, 1, 200, 0)","matrix(1, 0, 0, 1, 100, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(4, 0, 0, 4, 0, 0)","matrix(5, 0, 0, 5, 0, 0)",true,true,true,true,"matrix(3, 0, 0, 3, 0, 0)","matrix(1, 0, 0, 1, 12, 3)"]"#
+        r#"["1px","2px","3px","4px","matrix(1, 0, 0, 1, 200, 0)","matrix(1, 0, 0, 1, 100, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(4, 0, 0, 4, 0, 0)","matrix(5, 0, 0, 5, 0, 0)",true,true,true,true,"matrix(3, 0, 0, 3, 0, 0)","matrix(1, 0, 0, 1, 12, 3)",true,true,true,true,true]"#
     );
 }
 

@@ -24,7 +24,7 @@ pub use stylo::html_auto_directionality_root;
 pub use stylo::{
     InlineStyleSnapshot, QueryContainerSizes, StyleMutationSnapshots, StyloDocument,
     StyloDomHostBinding, StyloDomStyleAdapter, StyloElement, StyloNode, StyloShadowRoot,
-    is_svg_presentation_attribute_name, stylo_focus_change_handles,
+    attribute_affects_presentational_hints, stylo_focus_change_handles,
     stylo_focus_state_matches_handle, stylo_focus_within_state_matches_handle,
     stylo_shadow_root_host_participates_in_style_scope,
 };

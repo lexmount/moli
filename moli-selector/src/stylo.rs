@@ -24,7 +24,7 @@ pub use invalidation::{
     StyleMutationSnapshots, stylo_focus_change_handles, stylo_focus_state_matches_handle,
     stylo_focus_within_state_matches_handle, stylo_shadow_root_host_participates_in_style_scope,
 };
-pub use presentation::is_svg_presentation_attribute_name;
+pub use presentation::attribute_affects_presentational_hints;
 pub use query::html_auto_directionality_root;
 pub(crate) use query::html_directionality;
 use query::{QueryDocument, QueryElement, QueryNode};
