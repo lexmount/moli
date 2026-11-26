@@ -1,6 +1,80 @@
 use super::*;
 
 #[test]
+fn detached_document_write_continues_inside_adopted_open_elements() {
+    let mut vm = new_storage_html_test_vm("https://detached-document-write.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const source = document.implementation.createHTMLDocument();
+  const mount = document.body.appendChild(document.createElement('main'));
+  source.write('<!doctype html><div id="panel"><section id="slot">');
+  const panel = source.body.firstElementChild;
+  mount.appendChild(panel);
+
+  source.write('<str');
+  source.write('ong id="answer">Streamed answer</strong></section></div>');
+  source.writeln('<p id="following">Following</p>');
+  source.close();
+
+  const answer = document.getElementById('answer');
+  return JSON.stringify([
+    mount.firstElementChild === panel,
+    answer?.parentElement.id,
+    answer?.ownerDocument === document,
+    answer?.textContent,
+    source.body.firstElementChild.id,
+  ]);
+})()
+"#,
+        )
+        .expect("detached document writes should retain the open element stack");
+    assert_eq!(
+        result,
+        r#"[true,"slot",true,"Streamed answer","following"]"#
+    );
+}
+
+#[test]
+fn detached_document_write_open_resets_the_stream_and_scripts_remain_inert() {
+    let mut vm = new_storage_html_test_vm("https://detached-document-write-open.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const source = document.implementation.createHTMLDocument('Original');
+  const originalBody = source.body;
+  const initialState = source.readyState;
+  source.write('<title>Streamed</title><p id="old">Old');
+  const title = source.title;
+  const firstBody = source.body;
+  source.open();
+  const openState = source.readyState;
+  source.write('<p id="new">New</p><script>window.detachedScriptRan = true</script>');
+  source.close();
+  const script = source.body.lastElementChild;
+  document.body.appendChild(script);
+  return JSON.stringify([
+    [initialState, openState, source.readyState],
+    title,
+    firstBody !== originalBody,
+    source.body !== firstBody,
+    source.body.firstElementChild.id,
+    source.getElementById('old') === null,
+    !window.detachedScriptRan,
+  ]);
+})()
+"#,
+        )
+        .expect("a detached document can replace its write stream");
+    assert_eq!(
+        result,
+        r#"[["complete","loading","complete"],"Streamed",true,true,"new",true,true]"#
+    );
+}
+
+#[test]
 fn detached_document_tag_collection_exposes_named_item() {
     let mut vm = new_storage_test_vm("https://detached-document-named-item.test/");
 

@@ -42,12 +42,16 @@ struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
 #[derive(Clone, Copy)]
 enum DocumentWriteParserMutationTarget {
     LiveDocument,
+    DetachedDocument(DomHandle),
     DetachedFragment,
 }
 
 impl DocumentWriteParserMutationOwner<'_, '_, '_> {
-    fn targets_live_document(&self) -> bool {
-        matches!(self.target, DocumentWriteParserMutationTarget::LiveDocument)
+    fn publishes_dom_mutations(&self) -> bool {
+        !matches!(
+            self.target,
+            DocumentWriteParserMutationTarget::DetachedFragment
+        )
     }
 }
 
@@ -55,7 +59,7 @@ impl LiveDocumentParserOwner for DocumentWriteParserMutationOwner<'_, '_, '_> {}
 
 impl ParserMutationEffectConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
     fn consume_parser_mutation_effects(&mut self, effects: DomMutationEffects) {
-        if !self.targets_live_document() {
+        if !self.publishes_dom_mutations() {
             return;
         }
         self.runtime
@@ -66,7 +70,7 @@ impl ParserMutationEffectConsumer for DocumentWriteParserMutationOwner<'_, '_, '
             );
     }
     fn finish_parser_dom_mutations(&mut self) -> std::ops::ControlFlow<()> {
-        if self.targets_live_document() {
+        if matches!(self.target, DocumentWriteParserMutationTarget::LiveDocument) {
             self.runtime
                 .run_pending_parser_post_step_runtime_work(self.scope, self.host_ptr);
         }
@@ -171,7 +175,7 @@ impl ParserDomReadConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
 
 impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation) {
-        if !self.targets_live_document() {
+        if !self.publishes_dom_mutations() {
             let _ = mutation
                 .apply_to_detached_dom_host(self.runtime.dom_host_mut_for_active_parser_step());
             return;
@@ -282,15 +286,21 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
     }
 
     fn push_parse_error(&mut self, error: String) {
-        if self.targets_live_document() {
+        if matches!(self.target, DocumentWriteParserMutationTarget::LiveDocument) {
             self.runtime.push_parse_error_in_live_dom_host(error);
         }
     }
 
     fn set_html_quirks_mode_for_parser(&mut self, quirks_mode: QuirksMode) {
-        if self.targets_live_document() {
-            self.runtime
-                .set_html_quirks_mode_for_parser_in_live_dom_host(quirks_mode);
+        match self.target {
+            DocumentWriteParserMutationTarget::LiveDocument => self
+                .runtime
+                .set_html_quirks_mode_for_parser_in_live_dom_host(quirks_mode),
+            DocumentWriteParserMutationTarget::DetachedDocument(document) => self
+                .runtime
+                .dom_host_mut_for_active_parser_step()
+                .set_html_quirks_mode_for_parser_document(document, quirks_mode),
+            DocumentWriteParserMutationTarget::DetachedFragment => {}
         }
     }
 
@@ -314,6 +324,12 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
         template_id: DomHandle,
         attrs: Vec<crate::dom::native::Attribute>,
     ) -> bool {
+        if matches!(
+            self.target,
+            DocumentWriteParserMutationTarget::DetachedDocument(_)
+        ) {
+            return false;
+        }
         self.runtime
             .attach_declarative_shadow_for_parser_in_live_dom_host(host_id, template_id, attrs)
     }
@@ -364,6 +380,103 @@ impl ParserElementCreationConsumer for DocumentWriteParserMutationOwner<'_, '_, 
 // "HTML string -> parser output -> document.write/fragment effects" rather than mixing two different
 // mutation models in one refactor slice.
 impl DocumentRuntime {
+    pub(crate) fn open_detached_document_write_stream(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        document: DomHandle,
+    ) {
+        let Some(url) = self.dom_host().document_url_for_handle(document).cloned() else {
+            return;
+        };
+        self.detached_document_write_streams.remove(&document);
+        self.remove_all_children_for_document_replacement(scope, host_ptr, document);
+        self.dom_host_mut()
+            .set_document_ready_state_for_handle(document, DocumentReadyState::Loading);
+        let stream =
+            HtmlParser::with_scripting_enabled(false).start_live_document_root(url, document);
+        self.detached_document_write_streams
+            .insert(document, stream);
+    }
+
+    pub(crate) fn write_detached_document(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        document: DomHandle,
+        input: &str,
+    ) {
+        if !self.detached_document_write_streams.contains_key(&document) {
+            self.open_detached_document_write_stream(scope, host_ptr, document);
+        }
+        let Some(stream) = self.detached_document_write_streams.remove(&document) else {
+            return;
+        };
+        self.with_dom_host_parse_step(|runtime| {
+            let mut owner = DocumentWriteParserMutationOwner {
+                runtime,
+                scope,
+                host_ptr,
+                target: DocumentWriteParserMutationTarget::DetachedDocument(document),
+            };
+            // Keep the parser's open elements even if the caller moves its
+            // nodes into another Document between writes.
+            let mut chunk = input;
+            loop {
+                let outcome = stream
+                    .pump_parser_step_with_runtime_dom_consumer_without_element_creation(
+                        chunk, &mut owner,
+                    );
+                if let ParserPumpStep::Yield(ParserYield::Script(ref script)) = outcome.result {
+                    let (node, _, _) = script.start_position();
+                    owner.mark_script_already_started_for_parser(node);
+                }
+                if matches!(outcome.result, ParserPumpStep::InputDrained) {
+                    break;
+                }
+                chunk = "";
+            }
+        });
+        let null_registry_elements =
+            stream.take_parser_stream_null_custom_element_registry_elements();
+        self.detached_document_write_streams
+            .insert(document, stream);
+        custom_elements::apply_parser_created_null_registry_associations(
+            host_ptr,
+            &null_registry_elements,
+        );
+        unsafe { &mut *host_ptr }.resync_child_browsing_contexts(scope);
+        self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
+    }
+
+    pub(crate) fn close_detached_document_write_stream(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        document: DomHandle,
+    ) {
+        let Some(stream) = self.detached_document_write_streams.remove(&document) else {
+            return;
+        };
+        let finish = self.with_dom_host_parse_step(|runtime| {
+            let mut owner = DocumentWriteParserMutationOwner {
+                runtime,
+                scope,
+                host_ptr,
+                target: DocumentWriteParserMutationTarget::DetachedDocument(document),
+            };
+            stream.finish_with_runtime_dom_consumer_without_element_creation(&mut owner)
+        });
+        custom_elements::apply_parser_created_null_registry_associations(
+            host_ptr,
+            &finish.parser_created_null_registry_elements,
+        );
+        self.dom_host_mut()
+            .set_document_ready_state_for_handle(document, DocumentReadyState::Complete);
+        unsafe { &mut *host_ptr }.resync_child_browsing_contexts(scope);
+        self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
+    }
+
     pub(crate) fn start_root_document_parser_stream(&mut self) {
         debug_assert!(
             self.root_document_parser.is_none(),

@@ -168,7 +168,11 @@ pub(in crate::native_bridge) fn bridge_detached_document_ready_state_callback<'a
         rv.set_empty_string();
         return;
     };
-    let value = detached_document_state_string(scope, document, "readyState", "complete");
+    let value = document_receiver_runtime_and_handle(scope, document)
+        .map(|(runtime_ptr, handle)| {
+            unsafe { &*runtime_ptr }.document_ready_state_for_handle(handle)
+        })
+        .unwrap_or_else(|| "complete".to_owned());
     set_string_return_value(scope, &mut rv, &value);
 }
 
