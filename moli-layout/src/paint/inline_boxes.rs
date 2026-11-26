@@ -138,6 +138,8 @@ pub(super) fn project_inline_box_fragments<N>(
         selected_fragment.map_or(0..context.fragments.boxes.len(), |index| index..index + 1);
     let projected_fragments = projection.inline_fragments(owner_id);
     let visible_lines = context.visible_lines(context.fragments.lines.len());
+    let pixel_grid = snapshot.pixel_grid();
+    let paint_cull = local_cull.map(|rect| paint_space.pre_transform_rect(rect));
     for index in fragments {
         let fragment = &context.fragments.boxes[index];
         if fragment.line_index >= visible_lines {
@@ -199,8 +201,12 @@ pub(super) fn project_inline_box_fragments<N>(
             if has_left_edge { border.left } else { 0.0 },
         );
         let border_image = border_images.get(&projected_fragments[index].id).copied();
-        if local_cull.is_some_and(|cull| {
-            let ink = border_image.map_or(rect, |image| image.ink_bounds().union(rect));
+        if paint_cull.is_some_and(|cull| {
+            let snap = |rect| paint_space.pixel_snapped_rect(rect, pixel_grid);
+            let mut ink = snap(rect).unwrap_or_else(|| paint_space.pre_transform_rect(rect));
+            if let Some(border_ink) = border_image.and_then(|image| snap(image.ink_bounds())) {
+                ink = ink.union(border_ink);
+            }
             !super::cull::rects_intersect(ink, cull)
         }) {
             continue;

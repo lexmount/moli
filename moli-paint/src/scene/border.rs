@@ -95,13 +95,15 @@ fn pixel_snapped_border_geometry(
     let widths = sanitize_border_widths(widths, rect.width, rect.height);
     let inner_width = (rect.width - widths.left - widths.right).max(0.0);
     let inner_height = (rect.height - widths.top - widths.bottom).max(0.0);
-    let (inner_x, inner_width) = grid.snap_axis_allowing_zero(rect.x + widths.left, inner_width);
-    let (inner_y, inner_height) = grid.snap_axis_allowing_zero(rect.y + widths.top, inner_height);
+    let (inner_x, inner_width) =
+        grid.snap_axis_allowing_zero(f64::from(rect.x + widths.left), f64::from(inner_width));
+    let (inner_y, inner_height) =
+        grid.snap_axis_allowing_zero(f64::from(rect.y + widths.top), f64::from(inner_height));
     let widths = PaintEdgeSizes::new(
-        (inner_y - outer.y).clamp(0.0, outer.height),
-        (outer.right() - (inner_x + inner_width)).clamp(0.0, outer.width),
-        (outer.bottom() - (inner_y + inner_height)).clamp(0.0, outer.height),
-        (inner_x - outer.x).clamp(0.0, outer.width),
+        (inner_y as f32 - outer.y).clamp(0.0, outer.height),
+        (outer.right() - (inner_x + inner_width) as f32).clamp(0.0, outer.width),
+        (outer.bottom() - (inner_y + inner_height) as f32).clamp(0.0, outer.height),
+        (inner_x as f32 - outer.x).clamp(0.0, outer.width),
     );
     Some((
         to_backend_rect(outer)?,

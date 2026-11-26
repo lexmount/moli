@@ -27,8 +27,8 @@ use super::{
 use crate::{
     LayoutBox, LayoutImageResource, LayoutRect, LayoutSize, LayoutTransform2D, PaintBlendMode,
     PaintBrush, PaintColor, PaintCompositeMode, PaintFragment, PaintImage, PaintImageSampling,
-    PaintShape, PaintSnapshot, PaintSvgImage, PaintTileAxis, PaintTileGrid, PaintTileSource,
-    PaintTiles, gradient::project_gradient,
+    PaintPixelGrid, PaintShape, PaintSnapshot, PaintSvgImage, PaintTileAxis, PaintTileGrid,
+    PaintTileSource, PaintTiles, gradient::project_gradient,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,18 +179,12 @@ pub(super) fn project_background_layers<N>(
                 let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape, grid) else {
                     continue;
                 };
-                // Generated images have no intrinsic size. Compute the tile
-                // geometry on the same pixel grid as the clip. Keep tiles
-                // local so brush coordinates stay relative to the box.
-                let Some(origin) = paint_space.pixel_snapped_rect(areas.rect(layer.origin), grid)
-                else {
-                    continue;
-                };
-
-                let Some(tiles) = background_tiles(
-                    paint_space.local_rect(origin),
-                    paint_space.local_rect(clip_shape.bounds()),
+                let Some(tiles) = gradient_tiles(
+                    areas.rect(layer.origin),
+                    clip_shape.bounds(),
                     &layer,
+                    paint_space,
+                    grid,
                 ) else {
                     push_diagnostic_once(
                         snapshot,
@@ -237,13 +231,15 @@ pub(super) fn project_background_layers<N>(
                 }
             }
             GenericImage::Url(_) => {
+                let clip = paint_space.pixel_snapped_box_clip(areas.shape(layer.clip), grid);
                 let resource = crate::source::css_image_url(layer.image)
                     .map_or_else(crate::LayoutCssImageState::default, css_images);
                 project_url_image_layer(
                     layout_box,
                     &layer,
                     resource.ready(),
-                    areas,
+                    areas.rect(layer.origin),
+                    clip,
                     paint_space,
                     snapshot,
                     CssImageLayerKind::Background,
@@ -310,13 +306,24 @@ fn finish_background_text_clip_layer(
     snapshot.push_fragment(PaintFragment::PopLayer); // isolated background
 }
 
-pub(super) fn background_tiles(
+pub(super) fn gradient_tiles(
     origin: LayoutRect,
     clip: LayoutRect,
     layer: &ImageLayerStyles<'_>,
+    paint_space: PaintSpace,
+    pixel_grid: PaintPixelGrid,
 ) -> Option<Vec<LayoutRect>> {
-    let Some(grid) = background_tile_grid(origin, clip, layer, BackgroundSizeComputeMode::Auto)
-    else {
+    // Gradients have no intrinsic size. Resolve the positioning area on the
+    // clip's pixel grid and keep brush coordinates relative to the box.
+    let Some(origin) = paint_space.pixel_snapped_rect(origin, pixel_grid) else {
+        return Some(Vec::new());
+    };
+    let Some(grid) = background_tile_grid(
+        paint_space.local_rect(origin),
+        paint_space.local_rect(clip),
+        layer,
+        BackgroundSizeComputeMode::Auto,
+    ) else {
         return Some(Vec::new());
     };
     let count = grid.x.count.saturating_mul(grid.y.count);
@@ -408,7 +415,8 @@ pub(super) fn project_url_image_layer<N>(
     layout_box: &LayoutBox<N>,
     layer: &ImageLayerStyles<'_>,
     resource: Option<&LayoutImageResource>,
-    areas: BoxAreas,
+    origin: LayoutRect,
+    clip_shape: PaintShape,
     paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
     kind: CssImageLayerKind,
@@ -429,8 +437,6 @@ pub(super) fn project_url_image_layer<N>(
         );
         return;
     };
-    let origin = areas.rect(layer.origin);
-    let clip_shape = areas.shape(layer.clip);
     let clip = clip_shape.bounds();
     if origin.width <= 0.0 || origin.height <= 0.0 || clip.width <= 0.0 || clip.height <= 0.0 {
         return;
@@ -439,26 +445,16 @@ pub(super) fn project_url_image_layer<N>(
     else {
         return;
     };
-    let background_clip = if kind == CssImageLayerKind::Background {
-        let Some(shape) = paint_space.pixel_snapped_box_shape(clip_shape, snapshot.pixel_grid())
-        else {
-            return;
-        };
-        Some(shape)
-    } else {
-        None
-    };
-    let tile_clip = background_clip
-        .as_ref()
-        .map_or(clip, |shape| paint_space.local_rect(shape.bounds()));
     let mode = BackgroundSizeComputeMode::Size(object_width, object_height);
-    let Some(mut grid) = background_tile_grid(origin, tile_clip, layer, mode) else {
+    let Some(mut grid) = background_tile_grid(origin, paint_space.local_rect(clip), layer, mode)
+    else {
         return;
     };
-    // Keep the existing snapping of SVG and mask tiles. The continuous raster
-    // background path retains fractional tile size and phase.
-    grid.snap_tiles |= kind == CssImageLayerKind::Mask || resource.svg.is_some();
+    // SVG draws individual clipped tiles. A continuous raster pattern keeps
+    // its fractional tile size and phase for both backgrounds and masks.
+    grid.snap_tiles |= resource.svg.is_some();
     let mut grid = paint_space.pre_transform_tile_grid(grid);
+    grid.coverage = clip;
     let transform = paint_space.property_transform();
     let single_tile = (grid.snap_tiles && grid.x.count == 1 && grid.y.count == 1).then(|| {
         LayoutRect::new(
@@ -469,16 +465,11 @@ pub(super) fn project_url_image_layer<N>(
         )
     });
 
-    if let Some(shape) = background_clip {
-        grid.coverage = shape.bounds();
-        snapshot.push_fragment(PaintFragment::PushClip { shape, transform });
-    } else if single_tile.is_none() {
-        // The mask layer supplies its own clip. Preserve the coverage used
-        // for mask tiles when the clip rectangle was snapped by the backend.
-        let Some(coverage) = crate::pixel_snap_paint_rect(grid.coverage) else {
-            return;
-        };
-        grid.coverage = coverage;
+    if kind == CssImageLayerKind::Background {
+        snapshot.push_fragment(PaintFragment::PushClip {
+            shape: clip_shape,
+            transform,
+        });
     }
     if let Some(pixels) = resource.pixels.clone() {
         let source_rect = LayoutRect::new(0.0, 0.0, pixels.width as f32, pixels.height as f32);

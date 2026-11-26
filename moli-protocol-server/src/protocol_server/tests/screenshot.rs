@@ -378,6 +378,20 @@ body { margin: 0; background: white }
     top: 428.25px;
     background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMyOTU1ZmYiLz48L3N2Zz4=);
 }
+.border-image {
+    top: 480.25px; background: #dc2800; border-radius: 0;
+    border-image: linear-gradient(#2955ff, #2955ff) 2 fill / 1.5px stretch;
+}
+.gradient-mask {
+    top: 532.25px; border: 0; border-radius: 0; background: #2955ff;
+    mask-image: linear-gradient(black, black);
+}
+.image-mask {
+    top: 584.25px; border: 0; border-radius: 0; background: #2955ff;
+    mask: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mPQDP0PAAIoAX46fBFaAAAAAElFTkSuQmCC)
+        0 0 / 100% 100% no-repeat border-box;
+}
+.embedded { top: 636.25px; border: 0; border-radius: 0; background: #dc2800 }
 </style>
 <div class="frame"></div><div class="frame border-origin"></div>
 <div class="frame solid"></div><div class="frame image"></div>
@@ -385,6 +399,9 @@ body { margin: 0; background: white }
 <div class="frame bordered"></div><div class="frame overflow"><div></div></div>
 <div class="frame image single-image full-image"></div>
 <div class="frame image single-image full-image full-svg"></div>
+<div class="frame border-image"></div>
+<div class="frame gradient-mask"></div><div class="frame image-mask"></div>
+<iframe class="frame embedded" srcdoc="<style>body { margin: 0; background: #2955ff }</style>"></iframe>
 <img hidden src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mPQDP0PAAIoAX46fBFaAAAAAElFTkSuQmCC">
 <img hidden src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMyOTU1ZmYiLz48L3N2Zz4=">"#;
     let fixture_url = format!(
@@ -438,7 +455,7 @@ body { margin: 0; background: white }
             Some(&target.session_id),
             json!({
                 "width": 160,
-                "height": 480,
+                "height": 704,
                 "deviceScaleFactor": scale,
                 "mobile": false,
             }),
@@ -449,7 +466,7 @@ body { margin: 0; background: white }
         let (width, height, pixels) = decode_png(&png);
         assert_eq!(
             (width, height),
-            ((160.0 * scale) as u32, (480.0 * scale) as u32)
+            ((160.0 * scale) as u32, (704.0 * scale) as u32)
         );
 
         let left = (10.5 * scale).round() as i32;
@@ -467,6 +484,10 @@ body { margin: 0; background: white }
             (324.25, border_width, Some(white), blue),
             (376.25, 0, Some(white), blue),
             (428.25, 0, Some(white), blue),
+            (480.25, 0, Some(white), blue),
+            (532.25, 0, Some(white), blue),
+            (584.25, 0, Some(white), blue),
+            (636.25, 0, Some(white), blue),
         ] {
             let top = (border_top * scale).round() as i32;
             let bottom = ((border_top + 42.0) * scale).round() as i32;

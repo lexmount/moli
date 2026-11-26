@@ -7,7 +7,8 @@ use super::{
 };
 use crate::{
     LayoutBoxId, LayoutCoordinateSpaceId, LayoutError, LayoutOutputBoxId, LayoutPoint,
-    LayoutTransform2D, layout_tree::LayoutCoordinateSpace, style::ResolvedLayoutTransform,
+    LayoutTransform2D, PaintPixelGrid, layout_tree::LayoutCoordinateSpace,
+    style::ResolvedLayoutTransform,
 };
 
 #[derive(Clone, Copy)]
@@ -108,14 +109,14 @@ pub(super) fn resolve_coordinate_spaces(
     root: LayoutBoxId,
     viewport_scroll: LayoutPoint,
     box_count: usize,
-    paint: bool,
+    paint_grid: Option<PaintPixelGrid>,
     placements: impl Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
     scroll_offset: impl Fn(LayoutBoxId) -> Option<LayoutPoint>,
 ) -> Result<ResolvedCoordinates, LayoutError> {
     let mut resolver = CoordinateSpaceResolver {
         root,
         viewport_scroll,
-        paint,
+        paint_grid,
         placements,
         scroll_offset,
         spaces: vec![None; box_count + 1],
@@ -159,7 +160,7 @@ pub(super) fn resolve_coordinate_spaces(
 struct CoordinateSpaceResolver<Placement, Offset> {
     root: LayoutBoxId,
     viewport_scroll: LayoutPoint,
-    paint: bool,
+    paint_grid: Option<PaintPixelGrid>,
     placements: Placement,
     scroll_offset: Offset,
     spaces: Vec<Option<ProjectedCoordinateSpace>>,
@@ -230,11 +231,9 @@ where
         };
         let projected = ProjectedCoordinateSpace {
             layout: compose_layout_space(index, placement, self.viewport_scroll),
-            paint: if self.paint {
-                derive_paint_space(placement, self.viewport_scroll)
-            } else {
-                PaintSpace::ROOT
-            },
+            paint: self.paint_grid.map_or(PaintSpace::ROOT, |grid| {
+                derive_paint_space(placement, self.viewport_scroll, grid)
+            }),
         };
         let inherited = base
             .parent
@@ -277,7 +276,7 @@ mod tests {
     ) -> ProjectedCoordinateSpace {
         ProjectedCoordinateSpace {
             layout: compose_layout_space(index, placement, scroll),
-            paint: derive_paint_space(placement, scroll),
+            paint: derive_paint_space(placement, scroll, PaintPixelGrid::new(1.0)),
         }
     }
 

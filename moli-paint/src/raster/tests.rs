@@ -456,6 +456,44 @@ fn source_rectangle_clamps_linear_sampling_across_a_spaced_tile_grid() {
 }
 
 #[test]
+fn spaced_image_tiles_share_the_fractional_device_grid() {
+    use moli_layout::{PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles};
+
+    let mut snapshot = snapshot(32, 16, 1.25);
+    let image = snapshot.add_image(Arc::new(
+        moli_image::RgbaImage::try_new(1, 1, vec![0, 0, 255, 255]).unwrap(),
+    ));
+    snapshot.push_fragment(PaintFragment::Tiles(Box::new(PaintTiles {
+        source: PaintTileSource::Image(image, PaintImageSampling::Nearest),
+        source_rect: PaintRect::new(0.0, 0.0, 1.0, 1.0),
+        grid: PaintTileGrid {
+            x: PaintTileAxis::new(0.9375, 4.0, 5.625, 3),
+            y: PaintTileAxis::new(3.25, 4.0, 0.0, 1),
+            coverage: PaintRect::new(0.0, 0.0, 32.0, 16.0),
+            snap_tiles: true,
+        },
+        transform: PaintTransform2D::IDENTITY,
+    })));
+    let rendered = raster_snapshot(&snapshot).unwrap();
+    for y in 0..rendered.height {
+        for x in 0..rendered.width {
+            let expected = if (4..9).contains(&y)
+                && ((1..6).contains(&x) || (8..13).contains(&x) || (15..20).contains(&x))
+            {
+                [0, 0, 255, 255]
+            } else {
+                [255; 4]
+            };
+            assert_eq!(
+                pixel(&rendered, x, y),
+                expected,
+                "tile or gap at ({x}, {y})"
+            );
+        }
+    }
+}
+
+#[test]
 fn snapshot_svg_resource_rasterizes_at_its_resolved_destination_size() {
     let svg = Arc::new(
         moli_image::decode_svg_image(
@@ -1169,6 +1207,8 @@ fn html_text_shadow_uses_fill_ink_in_both_paint_orders() {
 #[cfg(feature = "molio")]
 #[test]
 fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
+    use moli_layout::{PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles};
+
     let mut first = snapshot(96, 120, 1.25);
     first.surface.device_scale = 2.0;
     first.push_fragment(PaintFragment::solid_rect(
@@ -1184,6 +1224,17 @@ fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
         sampling: PaintImageSampling::Linear,
         transform: PaintTransform2D::IDENTITY,
     }));
+    first.push_fragment(PaintFragment::Tiles(Box::new(PaintTiles {
+        source: PaintTileSource::Image(image, PaintImageSampling::Linear),
+        source_rect: PaintRect::new(0.0, 0.0, 1.0, 1.0),
+        grid: PaintTileGrid {
+            x: PaintTileAxis::new(5.25, 18.5, 25.0, 3),
+            y: PaintTileAxis::new(81.5, 6.9375, 0.0, 1),
+            coverage: PaintRect::new(0.0, 81.0, 96.0, 10.0),
+            snap_tiles: true,
+        },
+        transform: PaintTransform2D::IDENTITY,
+    })));
     first.push_fragment(PaintFragment::solid_rect(
         PaintRect::new(7.0, 45.0, 6.5, 40.0),
         PaintColor::new(1.0, 1.0, 0.0, 0.3),
@@ -1199,7 +1250,7 @@ fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
         0..layout.height
     );
     let rows = raster_damage_rows(&first, &second, layout);
-    assert_eq!(rows, 58..124);
+    assert_eq!(rows, 58..180);
     let mut actual = vec![0; layout.byte_len];
     raster_snapshot_into(&first, &mut actual, RasterPixelFormat::Bgra8).unwrap();
     let mut expected = vec![0; layout.byte_len];
