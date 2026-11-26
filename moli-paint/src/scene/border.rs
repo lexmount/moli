@@ -10,7 +10,7 @@
 //! Border styles and edge geometry shared by paint backends.
 
 use super::to_backend_color;
-use crate::geometry::{normalize_radii, rounded_rect_path, to_backend_rect};
+use crate::geometry::{normalize_radii, rect_path, rounded_rect_path, to_backend_rect};
 use anyrender::PaintScene;
 use moli_layout::{
     PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintColor, PaintCornerRadii,
@@ -147,14 +147,7 @@ fn paint_border_edge(
     transform: Affine,
 ) {
     let clip = border_edge_clip(rect, widths, radii, edge);
-    let clip_pattern_to_ring =
-        !radii.is_zero() && matches!(style, PaintBorderStyle::Dashed | PaintBorderStyle::Dotted);
-    if clip_pattern_to_ring {
-        // A stroke on the centerline can spill past the actual border where
-        // adjacent edges are thinner, especially near a rounded join.
-        scene.push_clip_layer(transform, &border_ring_path(rect, widths, radii, 0.0, 1.0));
-    }
-    match style {
+    let paint_edge = |scene: &mut _| match style {
         PaintBorderStyle::None | PaintBorderStyle::Hidden => {}
         PaintBorderStyle::Solid => paint_border_ring_slice(
             scene, rect, widths, radii, &clip, 0.0, 1.0, color, transform,
@@ -216,9 +209,26 @@ fn paint_border_edge(
         PaintBorderStyle::Dotted => paint_dotted_border_edge(
             scene, rect, widths, radii, edge, &clip, width, color, transform,
         ),
-    }
-    if clip_pattern_to_ring {
-        scene.pop_layer();
+    };
+    if !radii.is_zero() && matches!(style, PaintBorderStyle::Dashed | PaintBorderStyle::Dotted) {
+        // Centerline strokes and dots can extend beyond the border where
+        // adjacent edges are thinner, especially near a rounded join.
+        with_border_ring(
+            scene,
+            rect,
+            widths,
+            radii,
+            0.0,
+            1.0,
+            transform,
+            |scene, ring| {
+                scene.push_clip_layer(transform, ring);
+                paint_edge(scene);
+                scene.pop_layer();
+            },
+        );
+    } else {
+        paint_edge(scene);
     }
 }
 
@@ -325,7 +335,7 @@ fn paint_dashed_border_edge(
     let (dash_ratio, gap_ratio) = dashed_ratios(thickness);
     let (centerline, dash, gap) = if !radii.is_zero() {
         let center = border_slice(rect, widths, radii, 0.5);
-        let centerline = rounded_rect_path(center.0, center.1, true);
+        let centerline = rounded_rect_path(center.rect, center.radii, true);
         let perimeter = centerline.perimeter(0.1);
         if perimeter <= 0.0 {
             return;
@@ -409,7 +419,7 @@ fn paint_dotted_border_edge(
     let mut path = BezPath::new();
     if !radii.is_zero() {
         let center = border_slice(rect, widths, radii, 0.5);
-        let centerline = rounded_rect_path(center.0, center.1, true);
+        let centerline = rounded_rect_path(center.rect, center.radii, true);
         let perimeter = centerline.perimeter(0.1);
         if perimeter <= 0.0 {
             return;
@@ -471,30 +481,64 @@ fn paint_border_ring_slice(
     color: PaintColor,
     transform: Affine,
 ) {
-    let ring = border_ring_path(rect, widths, radii, outer_fraction, inner_fraction);
     scene.push_clip_layer(transform, clip);
-    scene.fill(
-        Fill::NonZero,
+    with_border_ring(
+        scene,
+        rect,
+        widths,
+        radii,
+        outer_fraction,
+        inner_fraction,
         transform,
-        to_backend_color(color),
-        None,
-        &ring,
+        |scene, ring| {
+            scene.fill(
+                Fill::NonZero,
+                transform,
+                to_backend_color(color),
+                None,
+                ring,
+            )
+        },
     );
     scene.pop_layer();
 }
 
-fn border_ring_path(
+#[allow(clippy::too_many_arguments)]
+fn with_border_ring<S: PaintScene>(
+    scene: &mut S,
     rect: Rect,
     widths: PaintEdgeSizes,
     radii: PaintCornerRadii,
     outer_fraction: f64,
     inner_fraction: f64,
-) -> BezPath {
+    transform: Affine,
+    paint: impl FnOnce(&mut S, &BezPath),
+) {
     let outer = border_slice(rect, widths, radii, outer_fraction);
     let inner = border_slice(rect, widths, radii, inner_fraction);
-    let mut ring = rounded_rect_path(outer.0, outer.1, true);
-    ring.extend(rounded_rect_path(inner.0, inner.1, false));
-    ring
+    let mut outline = rounded_rect_path(outer.rect, outer.radii, true);
+    let inner_outline = rounded_rect_path(inner.rect, inner.radii, false);
+    if inner.radii_scaled_to_fit && !outer.radii.is_zero() {
+        // Scaling the inner radii can move that contour outside the outer
+        // curve. Subtract it with a clip and draw only the outer outline.
+        // The device-pixel margin keeps the clip's rectangle clear of the
+        // outer edges even when the border is transformed.
+        let bounds = transform.transform_rect_bbox(outer.rect).inflate(1.0, 1.0);
+        let mut cutout = rect_path(bounds, transform.determinant() >= 0.0);
+        cutout.extend(transform * inner_outline);
+        scene.push_clip_layer(Affine::IDENTITY, &cutout);
+        paint(scene, &outline);
+        scene.pop_layer();
+    } else {
+        outline.extend(inner_outline);
+        paint(scene, &outline);
+    }
+}
+
+struct BorderSlice {
+    rect: Rect,
+    radii: PaintCornerRadii,
+    radii_scaled_to_fit: bool,
 }
 
 fn border_slice(
@@ -502,7 +546,7 @@ fn border_slice(
     widths: PaintEdgeSizes,
     radii: PaintCornerRadii,
     fraction: f64,
-) -> (Rect, PaintCornerRadii) {
+) -> BorderSlice {
     let top = f64::from(widths.top) * fraction;
     let right = f64::from(widths.right) * fraction;
     let bottom = f64::from(widths.bottom) * fraction;
@@ -519,7 +563,12 @@ fn border_slice(
         bottom_right: inset_radius(radii.bottom_right, right, bottom),
         bottom_left: inset_radius(radii.bottom_left, left, bottom),
     };
-    (inset, normalize_radii(radii, inset.width(), inset.height()))
+    let normalized_radii = normalize_radii(radii, inset.width(), inset.height());
+    BorderSlice {
+        rect: inset,
+        radii: normalized_radii,
+        radii_scaled_to_fit: radii != normalized_radii,
+    }
 }
 
 fn inset_radius(radius: PaintCornerRadius, horizontal: f64, vertical: f64) -> PaintCornerRadius {
@@ -535,7 +584,7 @@ fn border_edge_clip(
     radii: PaintCornerRadii,
     edge: BorderEdge,
 ) -> BezPath {
-    let (inner, inner_radii) = border_slice(rect, widths, radii, 1.0);
+    let inner = border_slice(rect, widths, radii, 1.0);
     let corners = |rect: Rect| {
         [
             Point::new(rect.x0, rect.y0),
@@ -545,13 +594,13 @@ fn border_edge_clip(
         ]
     };
     let outer = corners(rect);
-    let inner = corners(inner);
     let radii = [
-        inner_radii.top_left,
-        inner_radii.top_right,
-        inner_radii.bottom_right,
-        inner_radii.bottom_left,
+        inner.radii.top_left,
+        inner.radii.top_right,
+        inner.radii.bottom_right,
+        inner.radii.bottom_left,
     ];
+    let inner = corners(inner.rect);
     let (start, end) = match edge {
         BorderEdge::Top => (0, 1),
         BorderEdge::Right => (1, 2),
@@ -577,12 +626,12 @@ fn border_corner_clip_end(outer: Point, inner: Point, radius: PaintCornerRadius)
         return inner;
     }
 
-    // Extend the miter from the inner rectangle's corner to the first
-    // radius centerline it crosses. This endpoint lies inside the rounded
-    // inner border, so the clip includes its share of the whole ring.
-    let x_distance = f64::from(radius.x) / direction.x.abs();
-    let y_distance = f64::from(radius.y) / direction.y.abs();
-    inner + direction * x_distance.min(y_distance)
+    // Intersect the miter with the chord between this corner's tangent
+    // points. The chord stays inside the inner contour even when the
+    // diagonally opposite corner is large.
+    let chord_scale =
+        direction.x.abs() / f64::from(radius.x) + direction.y.abs() / f64::from(radius.y);
+    inner + direction / chord_scale
 }
 
 // Border shading and dash/dot distribution are DOM-neutral ports of
