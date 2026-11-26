@@ -960,7 +960,14 @@ impl ScriptVm {
                         &observable_head,
                         started.internal_id,
                     );
-                if !remains_current {
+                if remains_current {
+                    let decoder = crate::network_host::xhr_streaming_text_decoder(
+                        scope, xhr, &observable_head.headers,
+                    );
+                    self._context_host.borrow_mut().set_streaming_xhr_response_decoder(
+                        started.internal_id, decoder,
+                    );
+                } else {
                     // Registering the stream before dispatching state 2 lets abort()
                     // retire the transport synchronously. open() and isolate
                     // termination also invalidate the old XHR generation; retire
