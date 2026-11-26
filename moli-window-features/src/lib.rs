@@ -85,7 +85,8 @@ impl WindowOpenFeatures {
         let mut ui_features_were_disabled = false;
         let mut explicit_popup = None;
         for (name, value) in tokenized.iter() {
-            let value = feature_integer_value(value);
+            let numeric = || parse_integer(value.chars()).unwrap_or(0);
+            let enabled = || parse_boolean_feature_value(value);
             if !ui_features_were_disabled
                 && !matches!(name, "noopener" | "noreferrer" | "attributionsrc")
             {
@@ -97,18 +98,18 @@ impl WindowOpenFeatures {
             }
 
             match name {
-                "left" => features.x = Some(value),
-                "top" => features.y = Some(value),
-                "width" => features.width = Some(value),
-                "height" => features.height = Some(value),
-                "popup" => explicit_popup = Some(value != 0),
-                "menubar" => features.menu_bar = value != 0,
-                "toolbar" | "location" => features.tool_bar |= value != 0,
-                "status" => features.status_bar = value != 0,
-                "scrollbars" => features.scrollbars = value != 0,
-                "resizable" => features.resizable = value != 0,
-                "noopener" => features.noopener = value != 0,
-                "noreferrer" => features.noreferrer = value != 0,
+                "left" => features.x = Some(numeric()),
+                "top" => features.y = Some(numeric()),
+                "width" => features.width = Some(numeric()),
+                "height" => features.height = Some(numeric()),
+                "popup" => explicit_popup = Some(enabled()),
+                "menubar" => features.menu_bar = enabled(),
+                "toolbar" | "location" => features.tool_bar |= enabled(),
+                "status" => features.status_bar = enabled(),
+                "scrollbars" => features.scrollbars = enabled(),
+                "resizable" => features.resizable = enabled(),
+                "noopener" => features.noopener = enabled(),
+                "noreferrer" => features.noreferrer = enabled(),
                 "background" => features.background = true,
                 "persistent" => features.persistent = true,
                 _ => {}
@@ -239,14 +240,9 @@ pub fn tokenize_window_features(features: &str) -> WindowFeatures {
 
 /// Parses the value of a boolean window feature according to the HTML Standard.
 pub fn parse_boolean_feature_value(value: &str) -> bool {
-    feature_integer_value(value) != 0
-}
-
-fn feature_integer_value(value: &str) -> i32 {
-    if value.is_empty() || matches!(value, "yes" | "true") {
-        return 1;
-    }
-    parse_integer(value.chars()).unwrap_or(0)
+    value.is_empty()
+        || matches!(value, "yes" | "true")
+        || parse_integer(value.chars()).is_ok_and(|value| value != 0)
 }
 
 fn is_feature_separator(c: char) -> bool {
@@ -442,6 +438,19 @@ mod tests {
                 "background",
                 "persistent",
             ]
+        );
+    }
+
+    #[test]
+    fn window_dimensions_do_not_coerce_boolean_feature_values() {
+        let features = WindowOpenFeatures::parse(
+            "screenx=yes, screeny=-10px, width=true, height, popup=yes, noopener=yes",
+        );
+        assert!(features.is_popup());
+        assert!(features.suppresses_opener());
+        assert_eq!(
+            &features.enabled_feature_strings()[..4],
+            ["left=0", "top=-10", "width=0", "height=0"]
         );
     }
 
