@@ -12,7 +12,7 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 use moli_layout::{LayoutImageResource, PaintColor, ReplacedMetrics, ResolvedLayoutStyle};
@@ -28,7 +28,10 @@ use crate::{
 };
 
 const SVG_NAMESPACE_ATTRIBUTE: &str = " xmlns=\"http://www.w3.org/2000/svg\"";
+const XLINK_NAMESPACE: &str = "http://www.w3.org/1999/xlink";
 const SERIALIZED_SOURCE_FIXED_INJECTION_RESERVE: usize = 512;
+static DATA_IMAGE_URL: LazyLock<url::Url> =
+    LazyLock::new(|| url::Url::parse("data:,").expect("valid data URL"));
 
 pub(super) fn replaced_metrics(element: &Element) -> ReplacedMetrics {
     let metadata = moli_image::svg_image_metadata_from_root_attributes(
@@ -115,19 +118,25 @@ pub(super) fn layout_content(
         )
         .ok()
         .flatten()?;
-    let source = prepare_source(source)?;
     let mut elements = Vec::new();
     let mut pending = vec![(root, None)];
     let mut referenced_ids = HashSet::new();
+    let mut has_images = false;
+    let mut has_xlink = false;
     while let Some((node, parent)) = pending.pop() {
         let parent = if let Some(element) = host.node(node).and_then(|node| node.as_element()) {
+            has_images |= element.is_svg_element("image");
+            has_xlink |= element
+                .attributes()
+                .iter()
+                .any(|attribute| attribute.namespace() == XLINK_NAMESPACE);
             if element.is_svg_element("use") {
                 let href = element.attribute("href").or_else(|| {
                     element
                         .attributes()
                         .iter()
                         .find(|attribute| {
-                            attribute.namespace() == "http://www.w3.org/1999/xlink"
+                            attribute.namespace() == XLINK_NAMESPACE
                                 && attribute.local_name() == "href"
                         })
                         .map(|attribute| attribute.value())
@@ -148,6 +157,7 @@ pub(super) fn layout_content(
                 .map(|node| (node, parent)),
         );
     }
+    let source = prepare_source(source, has_xlink)?;
     let mut profiles = HashMap::<String, moli_image::SvgElementStyle>::new();
     let mut styles = Vec::with_capacity(elements.len());
     let mut referenced_scope = vec![false; elements.len()];
@@ -214,6 +224,7 @@ pub(super) fn layout_content(
         source.as_bytes(),
         &styles,
         (viewport.width, viewport.height),
+        has_images && runtime.allows_element_image_resource(root, &DATA_IMAGE_URL),
     ) {
         Ok(scene) => scene,
         Err(error) => {
@@ -261,7 +272,7 @@ pub(super) fn layout_content(
     Some(moli_layout::LayoutSvgContent { image, objects })
 }
 
-fn prepare_source(mut source: String) -> Option<String> {
+fn prepare_source(mut source: String, has_xlink: bool) -> Option<String> {
     if !source.starts_with("<svg")
         || !source
             .as_bytes()
@@ -275,7 +286,12 @@ fn prepare_source(mut source: String) -> Option<String> {
     // usvg consumes XML, so mirror Blitz's bridge and make the SVG namespace
     // explicit on the serialized root only.
     let root_end = source.find('>')?;
-    if !source[..root_end].contains(" xmlns=\"") {
+    let has_svg_namespace = source[..root_end].contains(" xmlns=\"");
+    if has_xlink && !source[..root_end].contains(" xmlns:xlink=\"") {
+        // DOM APIs can set XLink attributes without a textual declaration.
+        source.insert_str(4, &format!(" xmlns:xlink=\"{XLINK_NAMESPACE}\""));
+    }
+    if !has_svg_namespace {
         source.insert_str(4, SVG_NAMESPACE_ATTRIBUTE);
     }
 
