@@ -12,7 +12,7 @@ use super::super::node::{
     node_runtime_and_handle_from_object_or_detached,
 };
 use super::super::throw_dom_exception;
-use super::focus::{focus_element, is_focusable, update_focus};
+use super::focus::{focus_element, is_focusable, update_focus, update_top_layer_membership};
 use super::toggle_event::queue_element_toggle_event;
 use super::{
     PageScriptHost, dispatch_public_event, element_attribute, element_has_attribute,
@@ -165,9 +165,9 @@ fn set_popover_open_state(
             .or_else(|| runtime.document_focus_fallback_handle());
         unsafe { &mut *runtime_ptr }.set_popover_focus_restore_target(handle, restore_target);
     }
-    let changed = unsafe { &mut *runtime_ptr }
-        .dom_host_mut()
-        .set_popover_open(handle, open);
+    let changed = update_top_layer_membership(unsafe { &mut *runtime_ptr }, handle, |dom| {
+        dom.set_popover_open(handle, open)
+    });
     if changed {
         let runtime = unsafe { &mut *runtime_ptr };
         runtime.note_element_state_style_activity_with_old_state(

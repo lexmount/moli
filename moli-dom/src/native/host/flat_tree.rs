@@ -11,6 +11,20 @@ impl DomHost {
         Some(self.shadow_root_host(parent).unwrap_or(parent))
     }
 
+    /// A focused node and its flat-tree ancestors through the first top-layer
+    /// element, inclusive.
+    pub fn focus_within_ancestors(&self, focused: DomHandle) -> impl Iterator<Item = DomHandle> {
+        std::iter::successors(Some(focused), |&node| {
+            if self
+                .element(node)
+                .is_some_and(|element| element.dialog_modal() || element.popover_open())
+            {
+                return None;
+            }
+            self.flat_tree_parent(node)
+        })
+    }
+
     /// Includes the ShadowRoot as a transparent link. Unassigned light nodes
     /// and replaced slot fallback have no parent in the composed tree.
     pub fn composed_parent(&self, node: DomHandle) -> Option<DomHandle> {

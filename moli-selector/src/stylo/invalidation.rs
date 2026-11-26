@@ -219,16 +219,18 @@ pub fn stylo_focus_change_handles(
     next: Option<NodeId>,
 ) -> impl Iterator<Item = NodeId> {
     let mut handles = indexmap::IndexSet::new();
-    for root in [previous, next].into_iter().flatten() {
-        let mut current = Some(root);
-        while let Some(handle) = current {
-            if host
-                .node(handle)
-                .is_some_and(|node| node.as_element().is_some())
-            {
-                handles.insert(handle);
-            }
-            current = style_parent_crossing_shadow_root(host, handle);
+    for focused in [previous, next].into_iter().flatten() {
+        handles.extend(
+            host.focus_within_ancestors(focused)
+                .filter(|&handle| host.element(handle).is_some()),
+        );
+        let mut current = focused;
+        while let Some(shadow_host) = host
+            .containing_shadow_root(current)
+            .and_then(|root| host.shadow_root_host(root))
+        {
+            handles.insert(shadow_host);
+            current = shadow_host;
         }
     }
     handles.into_iter()
@@ -251,31 +253,14 @@ pub fn stylo_focus_state_matches_handle(host: &DomHost, focused: NodeId, handle:
     false
 }
 
-/// Return whether the focused element is inside `handle` for Stylo's
-/// `:focus-within` state, crossing shadow-root boundaries.
+/// Match the old `:focus-within` state when reconstructing a Stylo snapshot.
 pub fn stylo_focus_within_state_matches_handle(
     host: &DomHost,
     focused: NodeId,
     handle: NodeId,
 ) -> bool {
-    let mut current = Some(focused);
-    while let Some(candidate) = current {
-        if candidate == handle {
-            return true;
-        }
-        current = style_parent_crossing_shadow_root(host, candidate);
-    }
-    false
-}
-
-fn style_parent_crossing_shadow_root(host: &DomHost, handle: NodeId) -> Option<NodeId> {
-    host.parent_node(handle).or_else(|| {
-        if host.is_shadow_root(handle) {
-            host.shadow_root_host(handle)
-        } else {
-            None
-        }
-    })
+    host.focus_within_ancestors(focused)
+        .any(|ancestor| ancestor == handle)
 }
 
 pub fn stylo_shadow_root_host_participates_in_style_scope(host: &DomHost, root: NodeId) -> bool {

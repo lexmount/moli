@@ -23,25 +23,10 @@ impl DocumentRuntime {
         &self,
         active: DomHandle,
     ) -> Vec<DomHandle> {
-        let mut handles = Vec::new();
-        let mut current = Some(active);
-        while let Some(handle) = current {
-            if self
-                .dom_host
-                .node(handle)
-                .is_some_and(|node| node.is_element())
-            {
-                handles.push(handle);
-            }
-            current = self.dom_host.parent_node(handle).and_then(|parent| {
-                if self.dom_host.is_shadow_root(parent) {
-                    self.dom_host.shadow_root_host(parent)
-                } else {
-                    Some(parent)
-                }
-            });
-        }
-        handles
+        self.dom_host
+            .focus_within_ancestors(active)
+            .filter(|&handle| self.dom_host.element(handle).is_some())
+            .collect()
     }
 
     pub(super) fn reset_focus_for_non_preserving_connected_move_before_insert(

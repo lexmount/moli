@@ -211,3 +211,45 @@ fn focusing_frame_owner_then_input_dispatches_child_window_focus_and_blur() {
         "top-window-blur,frame-focus,child-window-focus,frame-blur,child-window-blur,input-focus,top-window-focus|true"
     );
 }
+
+#[test]
+fn focus_within_tracks_popover_top_layer_membership() {
+    let mut vm = new_parsed_test_vm(
+        "https://focus-within-top-layer.test/",
+        r#"<!doctype html>
+        <style>
+          #menu { display: block }
+          #outer { color: black }
+          #outer:focus-within { color: red }
+        </style>
+        <div id="outer"><div id="menu" popover="manual"><input id="input"></div></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const outer = document.getElementById('outer');
+  const menu = document.getElementById('menu');
+  const input = document.getElementById('input');
+  const style = getComputedStyle(outer);
+  const sample = () => [
+    document.activeElement === input,
+    menu.matches(':focus-within'),
+    outer.matches(':focus-within'),
+    style.color,
+  ];
+  input.focus();
+  const before = sample();
+  menu.showPopover();
+  const during = sample();
+  menu.hidePopover();
+  return JSON.stringify([before, during, sample()]);
+})()
+"#,
+        )
+        .expect("focus state should follow popover membership");
+    assert_eq!(
+        result,
+        r#"[[true,true,true,"rgb(255, 0, 0)"],[true,true,false,"rgb(0, 0, 0)"],[true,true,true,"rgb(255, 0, 0)"]]"#
+    );
+}
