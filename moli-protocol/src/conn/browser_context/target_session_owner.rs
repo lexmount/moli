@@ -2492,6 +2492,21 @@ impl CdpConnection {
         Some(self.target_session_owner_ref_for_owner(owner)?.target_url())
     }
 
+    pub(crate) fn runtime_session_owner_committed_url_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<&str> {
+        let target = self.target_session_owner_ref_for_owner(owner)?.target();
+        // TargetInfo can already advertise an accepted popup destination.
+        // Fragment classification needs the active history entry.
+        target
+            .owner_state
+            .navigation_history_state
+            .current_entry_url()
+            .or_else(|| target.owner_state.initial_empty_document_url_if_current())
+            .or_else(|| target.loaded_page().map(|page| page.final_url().as_str()))
+    }
+
     pub(crate) fn runtime_session_owner_record_initial_empty_document_url_for_owner(
         &self,
         owner: &CommandOwnerScope,
