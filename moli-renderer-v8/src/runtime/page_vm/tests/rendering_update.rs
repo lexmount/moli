@@ -74,6 +74,8 @@ mod realtime_print;
 mod realtime_resize_observer;
 mod scrollbars;
 mod synthetic_wheel;
+#[cfg(feature = "devtools")]
+mod text_control_interaction;
 mod text_stroke;
 mod text_styles;
 mod update_lifecycle;

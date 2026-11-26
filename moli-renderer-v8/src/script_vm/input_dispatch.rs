@@ -13,11 +13,13 @@ mod ace_page_tasks;
 mod cursor;
 mod drag_source;
 mod mouse_boundary;
+mod text_control_selection;
 mod touch_tap;
 mod wheel;
 use crate::native_bridge::element::InputSurfaceHit;
 use drag_source::dispatch_drag_source_event;
 use mouse_boundary::dispatch_mouse_boundary_events;
+pub(super) use text_control_selection::TextControlMouseSelection;
 use touch_tap::dispatch_touch_tap_activation;
 
 use super::input_dispatch_outcome;
@@ -1194,6 +1196,9 @@ impl ScriptVm {
         );
         if is_release {
             self.suppress_compat_mouse_events = false;
+            if prepared.button == 0 || full_release {
+                self.text_control_mouse_selection = None;
+            }
         }
         if full_release {
             self.mouse_routed_frame = None;
@@ -1224,6 +1229,7 @@ impl ScriptVm {
         self.pressed_mouse_buttons = 0;
         self.mouse_routed_frame = None;
         self.pending_drag_gesture = None;
+        self.text_control_mouse_selection = None;
         self.active_scrollbar_drag = None;
 
         let _current_input_event = CurrentInputEventScope::enter(
@@ -1472,8 +1478,12 @@ impl ScriptVm {
             #[cfg(feature = "molio")]
             runtime.set_compat_mouse_press_owner(button, None);
             self.pending_drag_gesture = None;
+            self.text_control_mouse_selection = None;
         } else if event_name == "mouseup" || self.pressed_mouse_buttons & 1 == 0 {
             self.pending_drag_gesture = None;
+        }
+        if event_name == "mousemove" && buttons & 1 == 0 {
+            self.text_control_mouse_selection = None;
         }
         PreparedMouseInputDispatch {
             button,
@@ -1722,6 +1732,7 @@ impl ScriptVm {
         let active_drag_session: *mut Option<ActiveDragSession> = &mut self.active_drag_session;
         let intercepted_drag = Cell::new(None);
         let mouse_down_allows_drag = Cell::new(true);
+        let mut text_control_selection = self.text_control_mouse_selection;
 
         let mut suppress_compat_mouse_events = self.suppress_compat_mouse_events;
 
@@ -1987,11 +1998,32 @@ impl ScriptVm {
                         // their default action was not canceled. Focus the
                         // actual hit target rather than a pointer-capture
                         // target retained from an earlier event.
-                        perform_mouse_focus_default_action(
-                            scope,
-                            runtime_ptr,
-                            routed_target.unwrap_or(initial_target),
-                        );
+                        let target = routed_target.unwrap_or(initial_target);
+                        perform_mouse_focus_default_action(scope, runtime_ptr, target);
+                        if button == 0 {
+                            text_control_selection = TextControlMouseSelection::begin(
+                                scope,
+                                runtime_ptr,
+                                target,
+                                position,
+                                modifiers & 8 != 0,
+                            )?;
+                        }
+                    }
+                    if dispatched.allows_default() {
+                        if event_name == "mousemove"
+                            && buttons & 1 != 0
+                            && let Some(selection) = &mut text_control_selection
+                            && !selection.extend(scope, runtime_ptr, position)?
+                        {
+                            text_control_selection = None;
+                        }
+                        if event_name == "mouseup"
+                            && button == 0
+                            && let Some(selection) = text_control_selection.take()
+                        {
+                            selection.release(scope, runtime_ptr, position);
+                        }
                     }
                 }
             }
@@ -2227,9 +2259,10 @@ impl ScriptVm {
         self.hovered_mouse_handle = next_hover
             .filter(|target| self._context_host.borrow().dom_host().is_connected(*target));
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
-        if !mouse_down_allows_drag.get() {
+        if text_control_selection.is_some() || !mouse_down_allows_drag.get() {
             self.pending_drag_gesture = None;
         }
+        self.text_control_mouse_selection = text_control_selection;
         result.map(|mut outcome| {
             outcome.intercepted_drag = intercepted_drag.take();
             outcome

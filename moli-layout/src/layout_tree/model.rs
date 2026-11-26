@@ -475,6 +475,8 @@ pub enum LayoutFragmentKind {
     Line {
         owner: LayoutOutputBoxId,
         line_index: usize,
+        /// Value offset at the start of a synthesized form editor line.
+        text_control_start: Option<u32>,
     },
     InlineBox {
         box_id: LayoutOutputBoxId,

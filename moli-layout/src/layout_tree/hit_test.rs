@@ -4,7 +4,7 @@ use std::{collections::HashSet, fmt::Debug, hash::Hash};
 
 use super::{
     model::{
-        LayoutBoxModel, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId,
+        LayoutBoxModel, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutFragment,
         LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId, LayoutPoint, LayoutQuad,
         LayoutRect, LayoutTransform2D,
     },
@@ -320,6 +320,64 @@ where
         })
     }
 
+    /// Finds a UTF-16 value boundary using the control's own lines, including
+    /// when a selection gesture has left the control's border box.
+    pub fn text_control_caret_offset(&self, source: N, point: LayoutPoint) -> Option<usize> {
+        let control = self
+            .boxes
+            .iter()
+            .find(|layout_box| layout_box.principal_source == Some(source))?;
+        let (_, owner, line_index, line_start, local_point) = self
+            .boxes
+            .iter()
+            .filter(|layout_box| layout_box.parent == Some(control.id))
+            .flat_map(|editor| &editor.fragments)
+            .filter_map(|id| {
+                let fragment = self.fragment(*id)?;
+                let LayoutFragmentKind::Line {
+                    owner,
+                    line_index,
+                    text_control_start: Some(start),
+                } = fragment.kind
+                else {
+                    return None;
+                };
+                let local_point = self
+                    .local_to_viewport(fragment.coordinate_space)?
+                    .inverse()?
+                    .map_point(point);
+                Some((fragment.rect, owner, line_index, start, local_point))
+            })
+            .min_by(|(a, _, _, _, ap), (b, _, _, _, bp)| {
+                distance_to_interval(ap.y, a.y, a.bottom()).total_cmp(&distance_to_interval(
+                    bp.y,
+                    b.y,
+                    b.bottom(),
+                ))
+            })?;
+        let nearest_cluster = self
+            .boxes
+            .iter()
+            .filter(|layout_box| layout_box.parent == Some(owner))
+            .flat_map(|text| &text.fragments)
+            .filter_map(|id| self.fragment(*id))
+            .filter(|fragment| {
+                fragment.rect.width > 0.0
+                    && matches!(fragment.kind, LayoutFragmentKind::Text { line_index: index, .. }
+                    if index == line_index)
+            })
+            .min_by(|a, b| {
+                distance_to_interval(local_point.x, a.rect.x, a.rect.right()).total_cmp(
+                    &distance_to_interval(local_point.x, b.rect.x, b.rect.right()),
+                )
+            });
+        Some(
+            nearest_cluster
+                .and_then(|fragment| text_fragment_caret(fragment, local_point.x))
+                .map_or(line_start as usize, |(offset, _)| offset),
+        )
+    }
+
     /// Streams candidates directly from canonical geometry, without retaining
     /// an index or duplicating the fragment set into a query-local vector.
     ///
@@ -357,38 +415,22 @@ where
         viewport_point: LayoutPoint,
     ) -> Option<LayoutCaretPosition<N>> {
         let fragment = self.fragment(entry.fragment)?;
-        let LayoutFragmentKind::Text {
-            box_id,
-            source_utf16_range,
-            rtl,
-            ..
-        } = &fragment.kind
-        else {
+        let LayoutFragmentKind::Text { box_id, .. } = fragment.kind else {
             return None;
         };
         let local_to_viewport = self.local_to_viewport(entry.coordinate_space)?;
         let local_point = local_to_viewport.inverse()?.map_point(viewport_point);
-        let source_len = source_utf16_range
-            .end
-            .saturating_sub(source_utf16_range.start);
-        let on_left_half = local_point.x <= fragment.rect.x + fragment.rect.width * 0.5;
-        let at_source_start = if *rtl { !on_left_half } else { on_left_half };
-        let fragment_offset = if at_source_start { 0 } else { source_len };
-        let caret_x = if at_source_start == *rtl {
-            fragment.rect.right()
-        } else {
-            fragment.rect.x
-        };
+        let (offset, caret_x) = text_fragment_caret(fragment, local_point.x)?;
         Some(LayoutCaretPosition {
             source: entry.source,
-            utf16_offset: Some(source_utf16_range.start + fragment_offset),
+            utf16_offset: Some(offset),
             rect: local_to_viewport.map_rect(LayoutRect::new(
                 caret_x,
                 fragment.rect.y,
                 0.0,
                 fragment.rect.height,
             )),
-            ancestor_boxes: self.ancestor_box_models(*box_id),
+            ancestor_boxes: self.ancestor_box_models(box_id),
         })
     }
 
@@ -533,6 +575,33 @@ where
         }
         true
     }
+}
+
+fn distance_to_interval(value: f32, start: f32, end: f32) -> f32 {
+    (value - value.clamp(start, end)).abs()
+}
+
+fn text_fragment_caret(fragment: &LayoutFragment, x: f32) -> Option<(usize, f32)> {
+    let LayoutFragmentKind::Text {
+        source_utf16_range,
+        rtl,
+        ..
+    } = &fragment.kind
+    else {
+        return None;
+    };
+    let on_left_half = x <= fragment.rect.x + fragment.rect.width * 0.5;
+    let offset = if on_left_half != *rtl {
+        source_utf16_range.start
+    } else {
+        source_utf16_range.end
+    };
+    let caret_x = if on_left_half {
+        fragment.rect.x
+    } else {
+        fragment.rect.right()
+    };
+    Some((offset, caret_x))
 }
 
 /// Scratch for exactly one viewport point. Shared clip ancestors are checked
