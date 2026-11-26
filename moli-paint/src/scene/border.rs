@@ -56,7 +56,29 @@ pub(super) fn paint_border(
         ),
         (BorderEdge::Left, widths.left, colors.left, styles.left),
     ];
-    for (edge, width, color, style) in edges {
+    let visible_edges = edges.into_iter().filter(|&(_, width, color, style)| {
+        width > 0.0
+            && color.alpha > 0.0
+            && !matches!(style, PaintBorderStyle::None | PaintBorderStyle::Hidden)
+    });
+    if !radii.is_zero()
+        && let Some((_, _, color, PaintBorderStyle::Solid)) = visible_edges.clone().next()
+        && visible_edges
+            .clone()
+            .all(|(_, _, other, style)| other == color && style == PaintBorderStyle::Solid)
+    {
+        // Fill matching edges together so their rounded joins are not
+        // antialiased as separate, partially transparent clips.
+        let mut clip = BezPath::new();
+        for (edge, _, _, _) in visible_edges {
+            clip.extend(border_edge_clip(rect, widths, radii, edge));
+        }
+        paint_border_ring_slice(
+            scene, rect, widths, radii, &clip, 0.0, 1.0, color, transform,
+        );
+        return;
+    }
+    for (edge, width, color, style) in visible_edges {
         paint_border_edge(
             scene, rect, widths, radii, edge, width, color, style, transform,
         );
@@ -124,25 +146,26 @@ fn paint_border_edge(
     style: PaintBorderStyle,
     transform: Affine,
 ) {
-    if width <= 0.0
-        || color.alpha <= 0.0
-        || matches!(style, PaintBorderStyle::None | PaintBorderStyle::Hidden)
-    {
-        return;
+    let clip = border_edge_clip(rect, widths, radii, edge);
+    let clip_pattern_to_ring =
+        !radii.is_zero() && matches!(style, PaintBorderStyle::Dashed | PaintBorderStyle::Dotted);
+    if clip_pattern_to_ring {
+        // A stroke on the centerline can spill past the actual border where
+        // adjacent edges are thinner, especially near a rounded join.
+        scene.push_clip_layer(transform, &border_ring_path(rect, widths, radii, 0.0, 1.0));
     }
-
     match style {
         PaintBorderStyle::None | PaintBorderStyle::Hidden => {}
-        PaintBorderStyle::Solid => {
-            paint_border_ring_slice(scene, rect, widths, radii, edge, 0.0, 1.0, color, transform)
-        }
+        PaintBorderStyle::Solid => paint_border_ring_slice(
+            scene, rect, widths, radii, &clip, 0.0, 1.0, color, transform,
+        ),
         PaintBorderStyle::Double if width >= 3.0 => {
             paint_border_ring_slice(
                 scene,
                 rect,
                 widths,
                 radii,
-                edge,
+                &clip,
                 0.0,
                 1.0 / 3.0,
                 color,
@@ -153,21 +176,25 @@ fn paint_border_edge(
                 rect,
                 widths,
                 radii,
-                edge,
+                &clip,
                 2.0 / 3.0,
                 1.0,
                 color,
                 transform,
             );
         }
-        PaintBorderStyle::Double => {
-            paint_border_ring_slice(scene, rect, widths, radii, edge, 0.0, 1.0, color, transform)
-        }
+        PaintBorderStyle::Double => paint_border_ring_slice(
+            scene, rect, widths, radii, &clip, 0.0, 1.0, color, transform,
+        ),
         PaintBorderStyle::Groove | PaintBorderStyle::Ridge => {
             let ridge = style == PaintBorderStyle::Ridge;
             let (outer, inner) = grooved_colors(color, edge, ridge);
-            paint_border_ring_slice(scene, rect, widths, radii, edge, 0.0, 0.5, outer, transform);
-            paint_border_ring_slice(scene, rect, widths, radii, edge, 0.5, 1.0, inner, transform);
+            paint_border_ring_slice(
+                scene, rect, widths, radii, &clip, 0.0, 0.5, outer, transform,
+            );
+            paint_border_ring_slice(
+                scene, rect, widths, radii, &clip, 0.5, 1.0, inner, transform,
+            );
         }
         PaintBorderStyle::Inset | PaintBorderStyle::Outset => {
             let inset = style == PaintBorderStyle::Inset;
@@ -176,19 +203,22 @@ fn paint_border_edge(
                 rect,
                 widths,
                 radii,
-                edge,
+                &clip,
                 0.0,
                 1.0,
                 beveled_color(color, edge, inset),
                 transform,
             );
         }
-        PaintBorderStyle::Dashed => {
-            paint_dashed_border_edge(scene, rect, widths, radii, edge, width, color, transform)
-        }
-        PaintBorderStyle::Dotted => {
-            paint_dotted_border_edge(scene, rect, widths, radii, edge, width, color, transform)
-        }
+        PaintBorderStyle::Dashed => paint_dashed_border_edge(
+            scene, rect, widths, radii, edge, &clip, width, color, transform,
+        ),
+        PaintBorderStyle::Dotted => paint_dotted_border_edge(
+            scene, rect, widths, radii, edge, &clip, width, color, transform,
+        ),
+    }
+    if clip_pattern_to_ring {
+        scene.pop_layer();
     }
 }
 
@@ -283,6 +313,7 @@ fn paint_dashed_border_edge(
     widths: PaintEdgeSizes,
     radii: PaintCornerRadii,
     edge: BorderEdge,
+    clip: &BezPath,
     width: f32,
     color: PaintColor,
     transform: Affine,
@@ -347,8 +378,7 @@ fn paint_dashed_border_edge(
     let stroke = Stroke::new(thickness)
         .with_caps(Cap::Butt)
         .with_dashes(0.0, [dash, gap]);
-    let clip = border_edge_clip(rect, widths, edge);
-    scene.push_clip_layer(transform, &clip);
+    scene.push_clip_layer(transform, clip);
     scene.stroke(
         &stroke,
         transform,
@@ -366,6 +396,7 @@ fn paint_dotted_border_edge(
     widths: PaintEdgeSizes,
     radii: PaintCornerRadii,
     edge: BorderEdge,
+    clip: &BezPath,
     width: f32,
     color: PaintColor,
     transform: Affine,
@@ -417,8 +448,7 @@ fn paint_dotted_border_edge(
         }
     }
 
-    let clip = border_edge_clip(rect, widths, edge);
-    scene.push_clip_layer(transform, &clip);
+    scene.push_clip_layer(transform, clip);
     scene.fill(
         Fill::NonZero,
         transform,
@@ -435,26 +465,36 @@ fn paint_border_ring_slice(
     rect: Rect,
     widths: PaintEdgeSizes,
     radii: PaintCornerRadii,
-    edge: BorderEdge,
+    clip: &BezPath,
     outer_fraction: f64,
     inner_fraction: f64,
     color: PaintColor,
     transform: Affine,
 ) {
-    let clip = border_edge_clip(rect, widths, edge);
-    let outer = border_slice(rect, widths, radii, outer_fraction);
-    let inner = border_slice(rect, widths, radii, inner_fraction);
-    let mut ring = rounded_rect_path(outer.0, outer.1, true);
-    ring.extend(rounded_rect_path(inner.0, inner.1, true));
-    scene.push_clip_layer(transform, &clip);
+    let ring = border_ring_path(rect, widths, radii, outer_fraction, inner_fraction);
+    scene.push_clip_layer(transform, clip);
     scene.fill(
-        Fill::EvenOdd,
+        Fill::NonZero,
         transform,
         to_backend_color(color),
         None,
         &ring,
     );
     scene.pop_layer();
+}
+
+fn border_ring_path(
+    rect: Rect,
+    widths: PaintEdgeSizes,
+    radii: PaintCornerRadii,
+    outer_fraction: f64,
+    inner_fraction: f64,
+) -> BezPath {
+    let outer = border_slice(rect, widths, radii, outer_fraction);
+    let inner = border_slice(rect, widths, radii, inner_fraction);
+    let mut ring = rounded_rect_path(outer.0, outer.1, true);
+    ring.extend(rounded_rect_path(inner.0, inner.1, false));
+    ring
 }
 
 fn border_slice(
@@ -489,44 +529,60 @@ fn inset_radius(radius: PaintCornerRadius, horizontal: f64, vertical: f64) -> Pa
     )
 }
 
-fn border_edge_clip(rect: Rect, widths: PaintEdgeSizes, edge: BorderEdge) -> BezPath {
-    let left = f64::from(widths.left);
-    let right = f64::from(widths.right);
-    let top = f64::from(widths.top);
-    let bottom = f64::from(widths.bottom);
-    let points = match edge {
-        BorderEdge::Top => [
-            (rect.x0, rect.y0),
-            (rect.x1, rect.y0),
-            (rect.x1 - right, rect.y0 + top),
-            (rect.x0 + left, rect.y0 + top),
-        ],
-        BorderEdge::Right => [
-            (rect.x1, rect.y0),
-            (rect.x1, rect.y1),
-            (rect.x1 - right, rect.y1 - bottom),
-            (rect.x1 - right, rect.y0 + top),
-        ],
-        BorderEdge::Bottom => [
-            (rect.x1, rect.y1),
-            (rect.x0, rect.y1),
-            (rect.x0 + left, rect.y1 - bottom),
-            (rect.x1 - right, rect.y1 - bottom),
-        ],
-        BorderEdge::Left => [
-            (rect.x0, rect.y1),
-            (rect.x0, rect.y0),
-            (rect.x0 + left, rect.y0 + top),
-            (rect.x0 + left, rect.y1 - bottom),
-        ],
+fn border_edge_clip(
+    rect: Rect,
+    widths: PaintEdgeSizes,
+    radii: PaintCornerRadii,
+    edge: BorderEdge,
+) -> BezPath {
+    let (inner, inner_radii) = border_slice(rect, widths, radii, 1.0);
+    let corners = |rect: Rect| {
+        [
+            Point::new(rect.x0, rect.y0),
+            Point::new(rect.x1, rect.y0),
+            Point::new(rect.x1, rect.y1),
+            Point::new(rect.x0, rect.y1),
+        ]
+    };
+    let outer = corners(rect);
+    let inner = corners(inner);
+    let radii = [
+        inner_radii.top_left,
+        inner_radii.top_right,
+        inner_radii.bottom_right,
+        inner_radii.bottom_left,
+    ];
+    let (start, end) = match edge {
+        BorderEdge::Top => (0, 1),
+        BorderEdge::Right => (1, 2),
+        BorderEdge::Bottom => (2, 3),
+        BorderEdge::Left => (3, 0),
     };
     let mut path = BezPath::new();
-    path.move_to(points[0]);
-    for point in &points[1..] {
-        path.line_to(*point);
-    }
+    path.move_to(outer[start]);
+    path.line_to(outer[end]);
+    path.line_to(border_corner_clip_end(outer[end], inner[end], radii[end]));
+    path.line_to(border_corner_clip_end(
+        outer[start],
+        inner[start],
+        radii[start],
+    ));
     path.close_path();
     path
+}
+
+fn border_corner_clip_end(outer: Point, inner: Point, radius: PaintCornerRadius) -> Point {
+    let direction = inner - outer;
+    if radius.x == 0.0 || radius.y == 0.0 || outer == inner {
+        return inner;
+    }
+
+    // Extend the miter from the inner rectangle's corner to the first
+    // radius centerline it crosses. This endpoint lies inside the rounded
+    // inner border, so the clip includes its share of the whole ring.
+    let x_distance = f64::from(radius.x) / direction.x.abs();
+    let y_distance = f64::from(radius.y) / direction.y.abs();
+    inner + direction * x_distance.min(y_distance)
 }
 
 // Border shading and dash/dot distribution are DOM-neutral ports of
