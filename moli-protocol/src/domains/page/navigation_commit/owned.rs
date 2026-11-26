@@ -172,6 +172,23 @@ impl PreparedNavigationProtocolCompletion {
             prefix_output: None,
         };
         if !conn.accepts_pending_document_navigation_for_owner(&result.state.owner, &result.token) {
+            // Native replacement adoption can precede this finite protocol
+            // completion. Supersession skips installation below, so the Page
+            // still owns this Document's response-gated parser continuation.
+            // Release only that adopted Document; beforeunload for the next
+            // navigation must not wait for an abandoned publication.
+            if let (Some(expected), Some(transaction)) = (expected.as_ref(), transaction.as_ref())
+                && conn
+                    .target_page_residence_identity_for_owner(&result.state.owner)
+                    .as_ref()
+                    == Some(&expected.target_page)
+                && conn.renderer_page_residence_identity_for_owner(&result.state.owner)
+                    == Some(expected.renderer_page)
+                && let Some(page) = conn.loaded_page_mut_for_owner(&result.state.owner)
+                && page.renderer_devtools_agent_token() == transaction.current().agent_token()
+            {
+                drop(page.take_committed_document_post_response_continuation());
+            }
             super::super::push_superseded_navigation_result(&mut output, &result.state);
         } else {
             match navigation {
