@@ -237,6 +237,16 @@ impl PendingNativeInvalidation {
                             };
                             if extra_snapshot_dependencies {
                                 invalidate_snapshot_dependencies(stylist, map, element);
+                                if relative_selectors
+                                    && relative_snapshot_needs_shadow_host_recheck(element)
+                                {
+                                    invalidate_relative_boundaries(
+                                        host,
+                                        adapter,
+                                        handle,
+                                        &mut subtrees,
+                                    );
+                                }
                             }
                             // An unstyled source can still affect a retained sibling.
                             let mut scratch = ElementData::default();
@@ -726,6 +736,23 @@ fn inherited_search_direction(element: StyloElement<'_>) -> ElementSelectorFlags
             & Flags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING;
     }
     direction
+}
+
+fn relative_snapshot_needs_shadow_host_recheck(element: StyloElement<'_>) -> bool {
+    use ElementSelectorFlags as Flags;
+    let anchors = Flags::ANCHORS_RELATIVE_SELECTOR | Flags::ANCHORS_RELATIVE_SELECTOR_NON_SUBJECT;
+    let ancestor_direction = Flags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR;
+    if !element
+        .relative_selector_search_direction()
+        .intersects(ancestor_direction)
+    {
+        return false;
+    }
+    // An inner dependency of :host:has() can lose its host scope
+    // during the native invalidation walk.
+    element
+        .containing_shadow_host()
+        .is_some_and(|host| has_any_flags(host, anchors))
 }
 
 fn invalidate_relative_boundaries(
