@@ -180,3 +180,101 @@ fn text_control_pointer_uses_editor_lines_and_password_value_offsets() {
         assert_eq!(selection(&mut page, "secret"), "3:3:none");
     });
 }
+
+#[test]
+fn text_control_multiclick_selects_words_and_paragraphs() {
+    run_page_vm_large_stack_async_test("text-control-multiclick", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = editor_page(&loader);
+        let beta = character_point(&mut page, "field", 7);
+        let gamma = character_point(&mut page, "field", 13);
+        page.vm_mut()
+            .eval("window.doubleClicks=[];field.addEventListener('dblclick', e => doubleClicks.push(e.detail))")
+            .unwrap();
+        click(&mut page, beta, 1, 0);
+        click(&mut page, beta, 2, 0);
+        assert_eq!(selected_value(&mut page, "field"), "beta");
+        click(&mut page, beta, 3, 0);
+        assert_eq!(selected_value(&mut page, "field"), "alpha beta gamma");
+        assert_eq!(page.vm_mut().eval("doubleClicks.join(':')").unwrap(), "2");
+
+        click(&mut page, beta, 1, 0);
+        mouse(&mut page, "mousedown", beta, 2, 0);
+        mouse(&mut page, "mousemove", gamma, 0, 0);
+        mouse(&mut page, "mouseup", gamma, 2, 0);
+        assert_eq!(selected_value(&mut page, "field"), "beta gamma");
+
+        let short = character_point(&mut page, "area", 2);
+        click(&mut page, short, 3, 0);
+        assert_eq!(selected_value(&mut page, "area"), "short\n");
+        let longer = character_point(&mut page, "area", 9);
+        click(&mut page, longer, 3, 0);
+        assert_eq!(selected_value(&mut page, "area"), "longer words");
+    });
+}
+
+fn selected_value(page: &mut PageVm, control: &str) -> String {
+    page.vm_mut()
+        .eval(&format!(
+            "{control}.value.slice({control}.selectionStart, {control}.selectionEnd)"
+        ))
+        .unwrap()
+}
+
+fn key(page: &mut PageVm, key: &str, modifiers: moli_input::InputModifiers) {
+    page.vm_mut()
+        .dispatch_key_event("keydown", key, key, "", modifiers.bits(), false, false)
+        .unwrap();
+}
+
+#[test]
+fn text_control_keyboard_moves_by_grapheme_word_and_line() {
+    use moli_input::InputModifiers as Modifiers;
+    run_page_vm_large_stack_async_test("text-control-keyboard-selection", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = editor_page(&loader);
+        page.vm_mut()
+            .eval("field.focus();field.setSelectionRange(0,0)")
+            .unwrap();
+        let word_modifier = if cfg!(target_os = "macos") {
+            Modifiers::ALT
+        } else {
+            Modifiers::CONTROL
+        };
+        key(&mut page, "ArrowRight", word_modifier);
+        let first_word_edge = if cfg!(target_os = "windows") {
+            "6:6:none"
+        } else {
+            "5:5:none"
+        };
+        assert_eq!(selection(&mut page, "field"), first_word_edge);
+        key(&mut page, "ArrowRight", word_modifier | Modifiers::SHIFT);
+        let extended_word = if cfg!(target_os = "windows") {
+            "beta "
+        } else {
+            " beta"
+        };
+        assert_eq!(selected_value(&mut page, "field"), extended_word);
+
+        page.vm_mut()
+            .eval("field.value='é😀Z';field.setSelectionRange(0,0)")
+            .unwrap();
+        key(&mut page, "ArrowRight", Modifiers::NONE);
+        assert_eq!(selection(&mut page, "field"), "2:2:none");
+        key(&mut page, "ArrowRight", Modifiers::SHIFT);
+        assert_eq!(selected_value(&mut page, "field"), "😀");
+
+        page.vm_mut()
+            .eval("area.focus();area.setSelectionRange(11,11)")
+            .unwrap();
+        let (key_name, mods) = if cfg!(target_os = "macos") {
+            ("ArrowLeft", Modifiers::META)
+        } else {
+            ("Home", Modifiers::NONE)
+        };
+        key(&mut page, key_name, mods);
+        assert_eq!(selection(&mut page, "area"), "7:7:none");
+        key(&mut page, "End", Modifiers::SHIFT);
+        assert_eq!(selected_value(&mut page, "area"), "longer words");
+    });
+}
