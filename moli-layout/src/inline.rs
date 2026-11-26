@@ -1269,6 +1269,7 @@ fn resolve_inline_lines(
         let raw_top = unadjusted_line_top;
         let raw_bottom = raw_top + metrics.line_height.max(0.0);
         let mut first_in_flow_item_index = None;
+        let mut has_out_of_flow = false;
         let mut geometries = line_items_with_content(context, layout, &line)
             .enumerate()
             .map(|(item_index, (item, contributes_to_line))| match item {
@@ -1338,16 +1339,20 @@ fn resolve_inline_lines(
                     // Border and padding can survive a zero net advance. In
                     // line-height quirks modes, margin alone on a start edge
                     // does not count as content for static positioning.
-                    let in_flow = if context.uses_quirks_line_height
-                        && role == Some(InlineObjectRole::StartEdge)
-                    {
-                        edge.is_some_and(|edge| edge.has_border_or_padding)
-                    } else {
-                        creates_line
-                    };
-                    if track_in_flow_start && in_flow && (rtl || first_in_flow_item_index.is_none())
-                    {
-                        first_in_flow_item_index = Some(item_index);
+                    if track_in_flow_start {
+                        has_out_of_flow |= role == Some(InlineObjectRole::OutOfFlow);
+                        let in_flow = is_atomic
+                            || (role == Some(InlineObjectRole::StartEdge)
+                                && edge.is_some_and(|edge| {
+                                    if context.uses_quirks_line_height {
+                                        edge.has_border_or_padding
+                                    } else {
+                                        edge.creates_line
+                                    }
+                                }));
+                        if in_flow && (rtl || first_in_flow_item_index.is_none()) {
+                            first_in_flow_item_index = Some(item_index);
+                        }
                     }
                     let baseline_ascent = internal_baseline_ascent
                         .or_else(|| is_atomic.then_some(positioned.height))
@@ -1414,14 +1419,35 @@ fn resolve_inline_lines(
                 .parent
                 .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
         }
-        for geometry in &mut geometries {
-            let box_id = geometry
-                .edge(context)
-                .map_or(geometry.structural_parent, |object| object.box_id);
-            geometry.anchor = state_indices
-                .get(&box_id.index())
-                .copied()
-                .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
+        let mut inline_fragments = if has_out_of_flow {
+            vec![InlineStaticPositionFragment::default(); states.len()]
+        } else {
+            Vec::new()
+        };
+        for (item_index, geometry) in geometries.iter_mut().enumerate() {
+            let edge = geometry.edge(context);
+            let box_id = edge.map_or(geometry.structural_parent, |object| object.box_id);
+            let state_index = state_indices.get(&box_id.index()).copied();
+            geometry.anchor =
+                state_index.map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
+            let Some(fragment) = state_index.and_then(|index| inline_fragments.get_mut(index))
+            else {
+                continue;
+            };
+            if let Some(edge) = edge {
+                // A self-contained empty inline creates a fragment even when
+                // its edges have zero advance. A continuation can contribute
+                // through its decorated closing edge.
+                fragment.can_create_empty_fragment |=
+                    edge.role == InlineObjectRole::StartEdge || geometry.creates_line;
+                if edge.role == InlineObjectRole::EndEdge {
+                    fragment.closing_item_index = Some(item_index);
+                }
+            } else if geometry.object_index.is_some() || geometry.contributes_to_line {
+                // Floats and out-of-flow placeholders also defer creation of
+                // their enclosing inline fragments.
+                fragment.has_items = true;
+            }
         }
         let line_break = line_break.map(|(box_id, bounds)| {
             let anchor = state_indices
@@ -1525,6 +1551,26 @@ fn resolve_inline_lines(
             });
 
             let parent = states[state_index].parent;
+            if let Some(fragment) = inline_fragments.get(state_index).copied() {
+                // An empty inline creates a fragment as soon as it closes.
+                let empty_fragment = fragment
+                    .closing_item_index
+                    .filter(|_| fragment.can_create_empty_fragment && !fragment.has_items);
+                if let Some(index) = empty_fragment {
+                    first_in_flow_item_index =
+                        Some(first_in_flow_item_index.map_or(index, |first| {
+                            if rtl {
+                                first.max(index)
+                            } else {
+                                first.min(index)
+                            }
+                        }));
+                }
+                if let Some(parent) = parent {
+                    inline_fragments[parent].has_items |=
+                        fragment.has_items || empty_fragment.is_some();
+                }
+            }
             let vertical_align = states[state_index].vertical_align;
             // Empty boxes still have a position. Text-edge alignments activate
             // a zero-sized participant, as Blink's pending alignment does;
@@ -1738,6 +1784,13 @@ impl InlineItemVerticalGeometry {
         )
         .then_some(object)
     }
+}
+
+#[derive(Clone, Copy, Default)]
+struct InlineStaticPositionFragment {
+    can_create_empty_fragment: bool,
+    closing_item_index: Option<usize>,
+    has_items: bool,
 }
 
 fn line_break_metrics(

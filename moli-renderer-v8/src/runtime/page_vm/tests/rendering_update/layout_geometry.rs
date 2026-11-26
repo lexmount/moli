@@ -23,8 +23,12 @@ body {{ margin:0 }}
 </style>
 <div class=host><span style="padding-left:10px;margin-left:-10px"><i class=abs></i></span><span class=atom></span></div>
 <div class=host dir=rtl><span style="padding-right:10px;margin-right:-10px"><i class=abs></i></span><span class=atom></span></div>
-<div class=host><span style="margin-left:10px"><i class=abs></i></span><span class=atom></span></div>
-<div class=host><span style="margin-right:10px"></span><i class=abs></i><span class=atom></span></div>"#,
+<div class=host><span style="margin-left:10px"><i class=abs></i></span><i class=abs></i><span class=atom></span></div>
+<div class=host><span style="margin-right:10px"><i class=abs></i></span><i class=abs></i><span class=atom></span></div>
+<div class=host><span style="margin-right:10px"></span><i class=abs></i><span class=atom></span></div>
+<div class=host><span style="margin-left:10px"></span><i class=abs></i><span class=atom></span></div>
+<div class=host dir=rtl><span style="margin-right:10px"></span><i class=abs></i><span class=atom></span></div>
+<div class=host><span></span><i class=abs></i><span class=atom></span></div>"#,
             );
             let dom_host = DomHost::from_dom(HtmlParser::SCRIPTING_ENABLED.parse(
                 Url::parse("https://example.com/inline-static-position.html")?,
@@ -33,13 +37,17 @@ body {{ margin:0 }}
             let mut page = test_page_vm_with_loader_and_dom_host(&loader, dom_host);
             page.vm_mut().sync_live_document_style_sources();
             page.vm_mut()
-                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 240, 1.0))?
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 300, 1.0))?
                 .expect("static positioning fixture must publish layout");
             let y_offsets: Vec<f64> = serde_json::from_str(&page.vm_mut().eval(
-                r#"JSON.stringify(Array.from(document.querySelectorAll('.host'), host =>
-  host.querySelector('.abs').getBoundingClientRect().top - host.getBoundingClientRect().top))"#,
+                r#"JSON.stringify(Array.from(document.querySelectorAll('.abs'), abs =>
+  abs.getBoundingClientRect().top - abs.closest('.host').getBoundingClientRect().top))"#,
             )?)?;
-            assert_eq!(y_offsets, [32.0, 32.0, start_margin_y, 32.0], "{doctype:?}");
+            assert_eq!(
+                y_offsets,
+                [32.0, 32.0, start_margin_y, start_margin_y, 0.0, 0.0, 32.0, 32.0, 32.0, 32.0],
+                "{doctype:?}",
+            );
         }
         Ok::<_, anyhow::Error>(())
     })
