@@ -1656,6 +1656,19 @@ impl ResolvedLayoutStyle {
             && old.clone_background_image() == new.clone_background_image()
     }
 
+    pub(crate) fn same_inline_preparation(&self, next: &Self) -> bool {
+        self.direction == next.direction
+            && self.writing_mode == next.writing_mode
+            && self.unicode_bidi == next.unicode_bidi
+            && self.white_space_collapse == next.white_space_collapse
+            && self.text_transform == next.text_transform
+            && self.include_used_font_metrics == next.include_used_font_metrics
+            && self.visible == next.visible
+            && self.vertical_align == next.vertical_align
+            && self.text_projection_deferred == next.text_projection_deferred
+            && self.parley_text_style() == next.parley_text_style()
+    }
+
     pub(crate) fn parley_text_style(
         &self,
     ) -> parley::TextStyle<'static, 'static, crate::stylo_to_parley::TextBrush> {

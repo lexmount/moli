@@ -346,6 +346,7 @@ where
 {
     prepared: PreparedLayoutPass<N>,
     inline_preparation_elapsed: Duration,
+    reused_inline_contexts: usize,
     numeric_layout_elapsed: Duration,
     numeric_metrics: NumericLayoutMetrics,
 }
@@ -415,8 +416,10 @@ where
         let Self {
             prepared,
             inline_preparation_elapsed,
+            reused_inline_contexts,
             numeric_layout_elapsed,
             numeric_metrics,
+            ..
         } = self;
         let PreparedLayoutPass {
             world,
@@ -434,6 +437,7 @@ where
         next.prepared.list_marker_elapsed += list_marker_elapsed;
         next.prepared.form_control_elapsed += form_control_elapsed;
         next.inline_preparation_elapsed += inline_preparation_elapsed;
+        next.reused_inline_contexts += reused_inline_contexts;
         next.numeric_layout_elapsed += numeric_layout_elapsed;
         next.numeric_metrics.accumulate(numeric_metrics);
         Ok(next)
@@ -638,11 +642,12 @@ where
         );
     }
     let phase_started = Instant::now();
-    if retain_inline {
-        crate::inline::prepare_inline_contexts_with_retained_inputs(world, services, true);
+    let reused_inline_contexts = if retain_inline {
+        crate::inline::prepare_inline_contexts_with_retained_inputs(world, services, true)
     } else {
         prepare_inline_contexts(world, services);
-    }
+        0
+    };
     let inline_preparation_elapsed = phase_started.elapsed();
     world.validate_invariants()?;
     let phase_started = Instant::now();
@@ -676,6 +681,7 @@ where
     Ok(MeasuredLayoutPass {
         prepared,
         inline_preparation_elapsed,
+        reused_inline_contexts,
         numeric_layout_elapsed,
         numeric_metrics,
     })
@@ -704,6 +710,7 @@ where
                 ..
             },
         inline_preparation_elapsed,
+        reused_inline_contexts,
         numeric_layout_elapsed,
         numeric_metrics,
     } = measured;
@@ -767,6 +774,7 @@ where
             list_marker_elapsed,
             form_control_elapsed,
             inline_preparation_elapsed,
+            reused_inline_contexts,
             numeric_layout_elapsed,
             numeric_first_pass_elapsed: numeric_metrics.first_pass_elapsed,
             numeric_followup_passes_elapsed: numeric_metrics.followup_passes_elapsed,

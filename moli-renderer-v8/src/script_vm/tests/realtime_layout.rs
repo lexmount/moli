@@ -318,6 +318,54 @@ async fn realtime_projects_transform_damage_until_auto_gutter_changes() {
 }
 
 #[test]
+fn realtime_rebreaks_a_resized_paragraph_and_reshapes_after_a_font_change() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>p{width:240px;font:16px/1 sans-serif}</style>",
+        "<p id=target>One two three four five six seven eight nine ten.</p>",
+    ));
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+    let initial_height = vm
+        .eval("target.offsetHeight")
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+
+    for (edit, reused) in [
+        ("target.style.width='78px'", 1),
+        ("target.style.fontSize='22px'", 0),
+    ] {
+        vm.eval(edit).unwrap();
+        let retained = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+        let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+        assert_eq!(
+            metrics.reused_inline_contexts, reused,
+            "{edit}: {metrics:?}"
+        );
+        let current_height = vm
+            .eval("target.offsetHeight")
+            .unwrap()
+            .parse::<u32>()
+            .unwrap();
+        assert!(current_height > initial_height, "{edit}");
+        let fresh = host
+            .borrow()
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::with_paint(
+                    viewport,
+                    moli_layout::LayoutFlushReason::Screenshot,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(&retained), fresh.paint_snapshot(), "{edit}");
+    }
+}
+
+#[test]
 fn realtime_reuses_numeric_links_until_box_roles_change() {
     let mut vm = realtime_vm(concat!(
         "<!doctype html><style>body{margin:0;overflow:hidden}",

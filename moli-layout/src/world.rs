@@ -821,6 +821,16 @@ where
     }
 
     pub(crate) fn replace_retained_box(&mut self, id: LayoutBoxId, mut replacement: LayoutBox<N>) {
+        let previous = &mut self.boxes[id.index()];
+        if previous.kind == replacement.kind
+            && previous.inline_layout.is_some()
+            && previous.style.same_inline_preparation(&replacement.style)
+        {
+            // New sizing inputs invalidate measurements and line placement.
+            // The shaped runs remain valid when the inline inputs match and
+            // construction retains the children.
+            replacement.inline_layout = previous.inline_layout.take();
+        }
         self.invalidate_retained_inline(id);
         self.clear_layout_caches(id);
         let is_document_element = self.is_document_element(id);

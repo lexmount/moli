@@ -66,6 +66,7 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) pruned_source_count: usize,
     pub(crate) retained_numeric_layout_hits: usize,
     pub(crate) retained_numeric_tree: bool,
+    pub(crate) reused_inline_contexts: usize,
 }
 
 pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
@@ -178,6 +179,7 @@ where
         pruned_source_count: phase_metrics.pruned_source_count,
         retained_numeric_layout_hits: phase_metrics.retained_numeric_layout_hits,
         retained_numeric_tree: phase_metrics.retained_numeric_tree,
+        reused_inline_contexts: phase_metrics.reused_inline_contexts,
         fragment_count: projection.fragments.len(),
         paint_event_count: paint_projection_metrics.event_count,
         paint_culled_event_count: paint_projection_metrics.culled_event_count,
