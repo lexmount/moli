@@ -924,6 +924,10 @@ where
         if reuse_numeric_layout
             && (layout_box.inline_formatting_context
                 || layout_box.inline_context_owner.is_some()
+                // Grid track details and table used geometry belong to this
+                // numeric pass even when box construction was retained.
+                || layout_box.style.display().is_grid_container()
+                || crate::table::is_table_root(layout_box.kind)
                 || SCROLLBAR_AXES
                     .into_iter()
                     .any(|axis| layout_box.style.auto_scrollbar_revealed(axis)))
