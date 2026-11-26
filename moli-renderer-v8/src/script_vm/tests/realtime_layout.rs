@@ -1,6 +1,7 @@
 use super::*;
 use moli_page_types::LayoutPolicy;
 
+mod arena_identity;
 mod inline_compaction;
 
 fn realtime_vm(markup: &str) -> StandaloneScriptVmHarness {

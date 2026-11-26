@@ -490,10 +490,7 @@ where
             .filter_map(|(index, layout_box)| {
                 let source = layout_box.source()?;
                 let axes = layout_box.size_query_axes()?;
-                let size = crate::overflow::query_content_box_size(
-                    world,
-                    crate::LayoutBoxId::from_index(index),
-                );
+                let size = crate::overflow::query_content_box_size(world, world.boxes.id_at(index));
                 Some((
                     source,
                     [
@@ -623,19 +620,17 @@ where
     if retain_inline {
         let fonts = services.font_inputs();
         if world.retained_inline_fonts.as_deref() != Some(&fonts) {
-            for layout_box in &mut world.boxes {
+            for layout_box in world.boxes.iter_mut() {
                 layout_box.inline_layout = None;
             }
             world.inline_numeric_reuse = None;
             world.retained_inline_fonts = Some(Box::new(fonts));
             prepared.reuse_numeric_layout = false;
         }
-        let box_count = world.len();
         if let Some(numeric) = &mut world.inline_numeric_reuse {
-            numeric.begin_pass(box_count);
+            numeric.begin_pass();
         } else {
-            world.inline_numeric_reuse =
-                Some(Box::new(crate::inline::InlineNumericReuse::new(box_count)));
+            world.inline_numeric_reuse = Some(Box::new(crate::inline::InlineNumericReuse::new()));
         }
     }
     let mut invalidated = Vec::new();
@@ -651,7 +646,7 @@ where
                     layout_box
                         .inline_context_owner
                         .is_some()
-                        .then_some(crate::LayoutBoxId::from_index(index))
+                        .then_some(world.boxes.id_at(index))
                 }),
         );
     }
@@ -769,7 +764,7 @@ where
             request.viewport.device_pixel_ratio,
         );
         if let Some(snapshot) = frames.render_embedded_frame(source, viewport)? {
-            embedded_frames.insert(crate::LayoutBoxId::from_index(index), (source, snapshot));
+            embedded_frames.insert(world.boxes.id_at(index), (source, snapshot));
         }
     }
     let embedded_frame_elapsed = phase_started.elapsed();
@@ -817,7 +812,8 @@ fn prepare_svg_content<S: LayoutSource>(
     source: &S,
 ) -> Vec<crate::LayoutObjectGeometry<S::NodeId>> {
     let mut objects = Vec::new();
-    for (index, layout_box) in world.boxes.iter_mut().enumerate() {
+    for index in 0..world.boxes.len() {
+        let layout_box = &mut world.boxes[index];
         if !layout_box
             .element_semantics()
             .is_some_and(|semantics| semantics.replaced == Some(crate::LayoutReplacedKind::Svg))
@@ -931,8 +927,7 @@ where
                 .reveal_auto_scrollbar(axis, true);
         }
     }
-    for (index, layout_box) in world.boxes.iter_mut().enumerate() {
-        let id = crate::LayoutBoxId::from_index(index);
+    for (id, layout_box) in world.boxes.keyed_mut() {
         if reuse_numeric_layout
             && (layout_box.inline_formatting_context
                 || layout_box.inline_context_owner.is_some()
@@ -1028,7 +1023,7 @@ where
         } else {
             let projection = OverflowProjection::new(world, viewport);
             let candidates = (0..projection.len())
-                .map(crate::LayoutBoxId::from_index)
+                .map(|index| world.boxes.id_at(index))
                 .collect();
             overflow_projection = Some(projection);
             candidates
@@ -1057,7 +1052,7 @@ where
             if defining_body == Some(id) {
                 continue;
             }
-            let layout_box = &mut world.boxes[id.index()];
+            let layout_box = &mut world.boxes[id];
             let mut box_changed = layout_box.style.reveal_auto_scrollbar(
                 LayoutScrollbarAxis::Horizontal,
                 false,

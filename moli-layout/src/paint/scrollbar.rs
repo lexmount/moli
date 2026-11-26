@@ -19,7 +19,7 @@ pub(super) fn project_scrollbars<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let index = id.index();
+    let index = projection.world.boxes.index_of(id);
     if !projection.world.boxes[index].style.is_visible() {
         return;
     }

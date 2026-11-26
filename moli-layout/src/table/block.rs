@@ -175,7 +175,7 @@ impl TableContext {
             .iter()
             .map(|row| {
                 let dimension = mode
-                    .to_logical(world.boxes[row.id.index()].style.taffy.size)
+                    .to_logical(world.boxes[row.id].style.taffy.size)
                     .block_size;
                 RowConstraint {
                     size: fixed(dimension).unwrap_or(0.0),
@@ -195,7 +195,7 @@ impl TableContext {
         let mut fallback_descents = vec![None::<f32>; rows.len()];
         for index in 0..self.structure.cells.len() {
             let cell = self.structure.cells[index];
-            let authored_style = &world.boxes[cell.id.index()].style.taffy;
+            let authored_style = &world.boxes[cell.id].style.taffy;
             let dimension = mode.to_logical(authored_style.size).block_size;
             let cell_padding = authored_style
                 .padding
@@ -210,7 +210,7 @@ impl TableContext {
             let css_size = outer_fixed_size(dimension, cell_insets, authored_style.box_sizing);
             let cell_percent = percent(dimension);
             let baseline_aligned = matches!(
-                world.boxes[cell.id.index()].style.vertical_align().kind,
+                world.boxes[cell.id].style.vertical_align().kind,
                 LayoutInlineAlignment::Baseline
             ) && authored_style.align_content.keyword()
                 == taffy::AlignContentKeyword::Normal;
@@ -258,7 +258,7 @@ impl TableContext {
             });
             self.cell_layouts[index].style.padding = final_padding.map(style_helpers::length);
             for (id, style) in restored {
-                world.boxes[id.index()].style.taffy = style;
+                world.boxes[id].style.taffy = style;
                 world.cache_clear(id.to_taffy());
             }
             let natural = mode.to_logical(output.size).block_size;
@@ -277,7 +277,7 @@ impl TableContext {
                     .unwrap_or(f32::INFINITY)
                     .min(end_inset),
             );
-            let baseline = (baseline_aligned && !world.boxes[cell.id.index()].children.is_empty())
+            let baseline = (baseline_aligned && !world.boxes[cell.id].children.is_empty())
                 .then(|| baseline.unwrap_or((natural - end_inset).max(0.0)));
             self.cell_layouts[index].block_layout = Some(CellBlockLayout {
                 size: 0.0,
@@ -286,7 +286,7 @@ impl TableContext {
                 baseline,
             });
             let row = &mut rows[cell.row];
-            if baseline_aligned && !world.boxes[cell.id.index()].children.is_empty() {
+            if baseline_aligned && !world.boxes[cell.id].children.is_empty() {
                 row.ascent = Some(row.ascent.unwrap_or(0.0).max(baseline.unwrap_or(0.0)));
                 if cell.row_span == 1 {
                     row.descent = row.descent.max(natural - baseline.unwrap_or(0.0));
@@ -582,8 +582,8 @@ where
         return Vec::new();
     }
     let mut restored = Vec::new();
-    for id in world.boxes[cell.index()].layout_children.clone() {
-        let child = &world.boxes[id.index()];
+    for id in world.boxes[cell].layout_children.clone() {
+        let child = &world.boxes[id];
         let style = &child.style.taffy;
         if !child.is_replaced()
             && mode
@@ -603,7 +603,7 @@ where
             restored.push((id, style.clone()));
             set_block(
                 mode,
-                &mut world.boxes[id.index()].style.taffy.size,
+                &mut world.boxes[id].style.taffy.size,
                 Dimension::length(minimum),
             );
             world.cache_clear(id.to_taffy());
@@ -616,17 +616,12 @@ fn shift_cell_contents<N>(world: &mut LayoutWorld<N>, cell: LayoutBoxId, offset:
 where
     N: Copy + Debug + Eq + Hash,
 {
-    for child in world.boxes[cell.index()].layout_children.clone() {
-        if !world.boxes[child.index()]
-            .style
-            .taffy
-            .position
-            .is_out_of_flow()
-        {
-            world.boxes[child.index()].unrounded_layout.location.y += offset;
+    for child in world.boxes[cell].layout_children.clone() {
+        if !world.boxes[child].style.taffy.position.is_out_of_flow() {
+            world.boxes[child].unrounded_layout.location.y += offset;
         }
     }
-    if let Some(context) = &mut world.boxes[cell.index()].inline_layout {
+    if let Some(context) = &mut world.boxes[cell].inline_layout {
         for line in &mut context.line_placements {
             line.translate_block_axis(offset);
         }

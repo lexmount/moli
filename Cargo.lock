@@ -5354,6 +5354,7 @@ dependencies = [
  "moli-trace",
  "parley 0.11.0",
  "read-fonts",
+ "slotmap",
  "stylo",
  "stylo_taffy",
  "taffy 0.15.0",

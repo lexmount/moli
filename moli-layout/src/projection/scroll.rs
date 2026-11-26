@@ -1,8 +1,8 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, mem::size_of};
 
 use crate::{
-    FrozenLayoutBox, LayoutBoxGeometry, LayoutBoxId, LayoutError, LayoutPoint, LayoutScrollExtent,
-    LayoutScrollbarGeometry, LayoutWorld, style::ResolvedLayoutTransform,
+    FrozenLayoutBox, LayoutBoxGeometry, LayoutError, LayoutOutputBoxId, LayoutPoint,
+    LayoutScrollExtent, LayoutScrollbarGeometry, LayoutWorld, style::ResolvedLayoutTransform,
 };
 
 use super::{
@@ -13,11 +13,11 @@ use super::{
 /// Stable inputs for reprojecting a single frozen Document. Local box and
 /// fragment geometry, clip chains and scroll ranges stay in the frozen tree.
 pub(crate) struct ScrollProjection<N> {
-    root: LayoutBoxId,
+    root: LayoutOutputBoxId,
     placements: Vec<BoxPlacement>,
     layout_origins: Vec<LayoutPoint>,
     sticky: HashMap<usize, StickyConstraints>,
-    scroll_sources: Vec<(LayoutBoxId, N)>,
+    scroll_sources: Vec<(LayoutOutputBoxId, N)>,
     parents_precede_children: bool,
 }
 
@@ -29,7 +29,7 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
         placement: impl Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
     ) -> Result<Self, LayoutError> {
         let mut projection = Self {
-            root: world.root,
+            root: world.output_id(world.root),
             placements: Vec::with_capacity(boxes.len()),
             layout_origins: Vec::with_capacity(boxes.len()),
             sticky: HashMap::new(),
@@ -52,7 +52,7 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
             {
                 projection
                     .scroll_sources
-                    .push((LayoutBoxId::from_index(index), source));
+                    .push((LayoutOutputBoxId::from_index(index), source));
             }
         }
         Ok(projection)
@@ -71,7 +71,7 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
             + self.placements.capacity() * size_of::<BoxPlacement>()
             + self.layout_origins.capacity() * size_of::<LayoutPoint>()
             + self.sticky.capacity() * size_of::<(usize, StickyConstraints)>()
-            + self.scroll_sources.capacity() * size_of::<(LayoutBoxId, N)>()
+            + self.scroll_sources.capacity() * size_of::<(LayoutOutputBoxId, N)>()
     }
 
     pub(crate) fn refresh(
@@ -142,7 +142,7 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
     fn refresh_local_scroll_coordinates(
         &self,
         boxes: &mut [FrozenLayoutBox<N>],
-        offsets: &HashMap<LayoutBoxId, LayoutPoint>,
+        offsets: &HashMap<LayoutOutputBoxId, LayoutPoint>,
     ) {
         let mut moved = vec![false; boxes.len()];
         for (index, base) in self.placements.iter().enumerate() {

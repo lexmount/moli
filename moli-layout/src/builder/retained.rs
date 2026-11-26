@@ -51,7 +51,7 @@ fn can_refresh_box<N>(layout_box: &crate::LayoutBox<N>) -> bool {
 pub(crate) fn can_retain_root<N: Copy + std::fmt::Debug + Eq + std::hash::Hash>(
     world: &LayoutWorld<N>,
 ) -> bool {
-    let root = &world.boxes[world.root.index()];
+    let root = &world.boxes[world.root];
     root.source.is_some()
         && !matches!(
             root.style.display(),
@@ -159,7 +159,7 @@ where
 {
     let root = world.root;
     let root_source = source.root();
-    let root_box = &world.boxes[root.index()];
+    let root_box = &world.boxes[root];
     if root_box.source != Some(root_source)
         || source.flat_parent(root_source).is_some()
         || source.root_is_document_element() != world.root_is_document_element
@@ -220,7 +220,7 @@ where
         // Clean branches never return to the DOM or style resolver.
         let already_mapped = world.source_mapping.len();
         for &id in &order {
-            if let Some(node) = world.boxes[id.index()].source {
+            if let Some(node) = world.boxes[id].source {
                 world.map_source(node, id);
             }
         }
@@ -239,13 +239,13 @@ where
     // Taffy's cache key does not include its shared block float context.
     // Preserve box construction work even when that context forces a cold
     // numeric pass.
-    let reuse_numeric_layout = !had_floats
-        && !order
-            .iter()
-            .any(|id| world.boxes[id.index()].style.is_floated());
+    let reuse_numeric_layout =
+        !had_floats && !order.iter().any(|id| world.boxes[id].style.is_floated());
     let retained_count = order
         .iter()
-        .filter(|id| id.index() < original_count && !retained.rebuilt_in_place.contains(id))
+        .filter(|id| {
+            world.boxes.index_of(*id) < original_count && !retained.rebuilt_in_place.contains(id)
+        })
         .count();
     world.compact_for_reuse(order);
     Ok(Some((
@@ -271,7 +271,7 @@ where
         parent_children: &mut Vec<LayoutBoxId>,
     ) -> Result<bool, LayoutError> {
         world.map_source(node, id);
-        let layout_box = &mut world.boxes[id.index()];
+        let layout_box = &mut world.boxes[id];
         // Labels are also used in diagnostic output after an ID change.
         layout_box.source_label = self.source.label(node);
         if layout_box.kind == LayoutBoxKind::Text {
@@ -311,9 +311,9 @@ where
                 .sources
                 .get(&child)
                 .copied()
-                .filter(|previous| world.boxes[previous.index()].structural_parent == Some(id));
+                .filter(|previous| world.boxes[previous].structural_parent == Some(id));
             if let Some(previous) = previous {
-                let old = &world.boxes[previous.index()];
+                let old = &world.boxes[previous];
                 // A previously split inline's boxes can extend beyond its
                 // principal subtree. Rebuild its full contribution to the
                 // parent's child stream together.
@@ -344,7 +344,7 @@ where
                         if source_kind == LayoutSourceKind::Text
                             && let Some(style) = &refreshed_text_style
                         {
-                            world.boxes[previous.index()].style = style.clone();
+                            world.boxes[previous].style = style.clone();
                         }
                         changed |= self.refresh_box(
                             world,
@@ -378,16 +378,16 @@ where
                 changed = true;
             }
 
-            let inherited = world.boxes[id.index()].style.clone();
+            let inherited = world.boxes[id].style.clone();
             let first_new = world.boxes.len();
             let mut built = self.build_source_node(world, child, &inherited)?;
             if let Some(previous) = previous
                 && let [new] = built.as_mut_slice()
-                && new.index() == first_new
+                && world.boxes.index_of(*new) == first_new
                 && world.boxes.len() == first_new + 1
-                && world.boxes[new.index()].source == Some(child)
-                && world.boxes[previous.index()].children.is_empty()
-                && world.boxes[new.index()].children.is_empty()
+                && world.boxes[*new].source == Some(child)
+                && world.boxes[previous].children.is_empty()
+                && world.boxes[*new].children.is_empty()
             {
                 world.replace_retained_leaf(previous, child);
                 retained.rebuilt_in_place.insert(previous);
@@ -396,15 +396,15 @@ where
             }
             children.append(&mut built);
         }
-        if reattach || children != world.boxes[id.index()].children {
-            let old_children = std::mem::take(&mut world.boxes[id.index()].children);
-            let style = world.boxes[id.index()].style.clone();
-            let was_ifc = world.boxes[id.index()].inline_formatting_context;
+        if reattach || children != world.boxes[id].children {
+            let old_children = std::mem::take(&mut world.boxes[id].children);
+            let style = world.boxes[id].style.clone();
+            let was_ifc = world.boxes[id].inline_formatting_context;
             let roots =
                 self.attach_children(world, id, node, &style, children, id != world.root)?;
             let structure_changed =
-                roots.as_slice() != [id] || world.boxes[id.index()].children != old_children;
-            if structure_changed || world.boxes[id.index()].inline_formatting_context != was_ifc {
+                roots.as_slice() != [id] || world.boxes[id].children != old_children;
+            if structure_changed || world.boxes[id].inline_formatting_context != was_ifc {
                 world.numeric_tree = None;
             }
             changed |= structure_changed;
@@ -428,7 +428,7 @@ where
         id: LayoutBoxId,
         node: S::NodeId,
     ) -> Result<bool, LayoutError> {
-        let old = &world.boxes[id.index()];
+        let old = &world.boxes[id];
         let Some(semantics) = self.source.element_semantics(node) else {
             return Ok(false);
         };

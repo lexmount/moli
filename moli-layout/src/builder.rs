@@ -261,7 +261,7 @@ where
                     ResolvedLayoutStyle::text_leaf_from(inherited_style),
                     Some(Arc::from(text)),
                 ));
-                world.boxes[id.index()].text_selection = self.source.text_selection(source_node);
+                world.boxes[id].text_selection = self.source.text_selection(source_node);
                 world.map_source(source_node, id);
                 Ok(vec![id])
             }
@@ -330,8 +330,7 @@ where
                         semantics.category,
                         crate::LayoutElementCategory::FormControl(_)
                     ) {
-                        world.boxes[id.index()].text_selection =
-                            self.source.text_selection(source_node);
+                        world.boxes[id].text_selection = self.source.text_selection(source_node);
                     }
                     world.map_source(source_node, id);
 
@@ -380,7 +379,7 @@ where
     /// style is retained by `LayoutWorld`.
     fn finalize_viewport_scroll_policy(&self, world: &mut LayoutWorld<S::NodeId>) {
         let root = world.root;
-        let root_style = &world.boxes[root.index()].style;
+        let root_style = &world.boxes[root].style;
         let body_box = self
             .viewport_body_candidate
             .as_ref()
@@ -813,7 +812,7 @@ where
                 .filter(|id| {
                     !self.is_ignorable_whitespace_text(world, *id)
                         || (preserve_whitespace
-                            && world.boxes[id.index()]
+                            && world.boxes[id]
                                 .text
                                 .as_deref()
                                 .is_some_and(|text| !text.is_empty()))
@@ -1150,9 +1149,7 @@ where
         world.replace_children(parent, children)?;
         world
             .box_by_id_mut(parent)
-            .ok_or(LayoutError::InvalidBoxReference {
-                index: parent.index(),
-            })?
+            .ok_or(LayoutError::InvalidBoxHandle { id: parent })?
             .inline_formatting_context = establishes_inline_context;
         Ok(())
     }
@@ -1164,7 +1161,7 @@ where
     ) -> Result<Option<TableBoxRole>, LayoutError> {
         let layout_box = world
             .box_by_id(id)
-            .ok_or(LayoutError::InvalidBoxReference { index: id.index() })?;
+            .ok_or(LayoutError::InvalidBoxHandle { id })?;
         Ok(TableBoxRole::from_display(layout_box.style.display()))
     }
 

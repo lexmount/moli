@@ -335,10 +335,9 @@ pub(crate) fn position_inline_edges<N: Copy + Debug + Eq + Hash>(
                 InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
             ) {
                 let physical_left = (object.role == InlineObjectRole::StartEdge)
-                    == (world.boxes[object.box_id.index()].style.direction()
-                        == InlineDirection::Ltr);
+                    == (world.boxes[object.box_id].style.direction() == InlineDirection::Ltr);
                 edges
-                    .entry(object.box_id.index())
+                    .entry(world.boxes.index_of(object.box_id))
                     .or_default()
                     .push((slot, physical_left));
             }
@@ -352,7 +351,7 @@ pub(crate) fn position_inline_edges<N: Copy + Debug + Eq + Hash>(
                 .position(|slot| slots.iter().any(|(edge, _)| edge == slot))
                 .expect("edge on this line");
             order.retain(|slot| !slots.iter().any(|(edge, _)| edge == slot));
-            let box_id = LayoutBoxId::from_index(box_index);
+            let box_id = world.boxes.id_at(box_index);
             let first = order
                 .iter()
                 .position(|slot| ancestors[*slot].contains(&box_id));
@@ -540,41 +539,6 @@ impl InlineFormattingContext {
             })
     }
 
-    /// Rebase preparation onto the compacted construction graph. Parley's
-    /// styles and inline objects contain paragraph-local indices, so only
-    /// their external box maps need updating. Accepted numeric output must be
-    /// recomputed after IDs change, even when the shaped text is unchanged.
-    pub(crate) fn remap_construction_ids(&mut self, remap: &[Option<LayoutBoxId>]) -> bool {
-        if !self.references_only(|id| remap.get(id.index()).is_some_and(Option::is_some)) {
-            return false;
-        }
-        self.prepare_for_retention(false);
-        let map = |id: &mut LayoutBoxId| {
-            *id = remap[id.index()].expect("retained inline references were validated");
-        };
-        map(&mut self.root_style);
-        for unit in &mut self.text_units {
-            map(&mut unit.style_box);
-            unit.ancestors.iter_mut().for_each(map);
-            for source in &mut unit.sources {
-                map(&mut source.box_id);
-            }
-        }
-        for source in &mut self.source_map {
-            map(&mut source.box_id);
-        }
-        for object in &mut self.objects {
-            map(&mut object.box_id);
-            object.ancestors.iter_mut().for_each(map);
-        }
-        self.style_parents.iter_mut().for_each(map);
-        for state in &mut self.structural_boxes {
-            map(&mut state.box_id);
-            map(&mut state.parent);
-        }
-        true
-    }
-
     /// Retain one paragraph and its source mapping. A validated final numeric
     /// entry can also keep its accepted lines and local fragments; all other
     /// IFCs retain preparation alone.
@@ -718,6 +682,7 @@ pub(crate) struct InlineBoxFragment {
 }
 
 pub(crate) fn build_inline_fragments(
+    order: &crate::world::BoxOrder,
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
     line_placements: &[InlineLinePlacement],
@@ -767,7 +732,7 @@ pub(crate) fn build_inline_fragments(
         if let Some(placement) = placement {
             for box_placement in &placement.box_block_placements {
                 box_fragments
-                    .entry((box_placement.box_id.index(), line_index))
+                    .entry((order.index_of(box_placement.box_id), line_index))
                     .or_default()
                     .include_block_axis(box_placement.top, box_placement.height);
             }
@@ -818,7 +783,7 @@ pub(crate) fn build_inline_fragments(
             for unit in overlapping_output_ranges(&context.text_units, &range) {
                 for ancestor in &unit.ancestors {
                     box_fragments
-                        .entry((ancestor.index(), line_index))
+                        .entry((order.index_of(ancestor), line_index))
                         .or_default()
                         .include_inline_axis(rect.x, rect.width);
                 }
@@ -826,7 +791,7 @@ pub(crate) fn build_inline_fragments(
             for source in overlapping_output_ranges(&context.source_map, &range) {
                 let accumulator = source_fragments
                     .entry(SourceFragmentKey {
-                        box_index: source.box_id.index(),
+                        box_index: order.index_of(source.box_id),
                         source_byte_start: source.source_byte_range.start,
                         source_byte_end: source.source_byte_range.end,
                         source_utf16_start: source.source_utf16_range.start,
@@ -864,7 +829,7 @@ pub(crate) fn build_inline_fragments(
             });
             for ancestor in &object.ancestors {
                 let accumulator = box_fragments
-                    .entry((ancestor.index(), line_index))
+                    .entry((order.index_of(ancestor), line_index))
                     .or_default();
                 if let Some(rect) = rect {
                     accumulator.include_inline_axis(rect.x, rect.width);
@@ -878,7 +843,7 @@ pub(crate) fn build_inline_fragments(
             match object.role {
                 InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => {
                     let accumulator = box_fragments
-                        .entry((object.box_id.index(), line_index))
+                        .entry((order.index_of(object.box_id), line_index))
                         .or_default();
                     accumulator.include_inline_axis(positioned.x, positioned.width);
                     accumulator.has_start_edge |= object.role == InlineObjectRole::StartEdge;
@@ -919,7 +884,7 @@ pub(crate) fn build_inline_fragments(
             let line_rect = fragments.lines.get(line_index)?.rect;
             Some(InlineBoxFragment {
                 line_index,
-                box_id: LayoutBoxId::from_index(box_index),
+                box_id: order.id_at(box_index),
                 rect: accumulator.rect(line_rect)?,
                 has_start_edge: accumulator.has_start_edge,
                 has_end_edge: accumulator.has_end_edge,
@@ -938,7 +903,7 @@ pub(crate) fn build_inline_fragments(
                     start..end
                 },
                 line_index: key.line_index,
-                box_id: LayoutBoxId::from_index(key.box_index),
+                box_id: order.id_at(key.box_index),
                 source_byte_range: key.source_byte_start..key.source_byte_end,
                 source_utf16_range: key.source_utf16_start..key.source_utf16_end,
                 rtl: key.rtl,
@@ -1367,7 +1332,7 @@ fn resolve_inline_lines(
         );
         let mut state_indices = BTreeMap::new();
         for (index, state) in states.iter().enumerate() {
-            state_indices.insert(state.box_id.index(), index);
+            state_indices.insert(state.box_id, index);
         }
         let empty_caret = context.text.is_empty()
             && matches!(context.selection, Some(InlineSelection::Caret { .. }));
@@ -1376,7 +1341,7 @@ fn resolve_inline_lines(
             geometries.iter().any(|geometry| geometry.creates_line),
         ) && !empty_caret;
         for state in &mut states {
-            state.parent = state_indices.get(&state.parent_box.index()).copied();
+            state.parent = state_indices.get(&state.parent_box).copied();
             state.alignment.anchor = state
                 .parent
                 .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
@@ -1386,13 +1351,13 @@ fn resolve_inline_lines(
                 .edge(context)
                 .map_or(geometry.structural_parent, |object| object.box_id);
             geometry.anchor = state_indices
-                .get(&box_id.index())
+                .get(&box_id)
                 .copied()
                 .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
         }
         let line_break = line_break.map(|(box_id, bounds)| {
             let anchor = state_indices
-                .get(&box_id.index())
+                .get(&box_id)
                 .copied()
                 .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
             (anchor, bounds)
@@ -1894,7 +1859,7 @@ fn build_line_inline_box_states(
     context
         .structural_boxes
         .iter()
-        .filter(|state| present.contains(&state.box_id.index()))
+        .filter(|state| present.contains(&state.box_id))
         .map(|state| LineInlineBoxState {
             box_id: state.box_id,
             parent_box: state.parent,
@@ -1902,7 +1867,7 @@ fn build_line_inline_box_states(
             depth: structural_box_depth(context, state.box_id),
             vertical_align: state.vertical_align,
             strut: state.strut,
-            has_strut_content: strut_boxes.contains(&state.box_id.index()),
+            has_strut_content: strut_boxes.contains(&state.box_id),
             line_contribution: None,
             alignment: InlineBoxAlignment {
                 anchor: LineVerticalAnchor::Root,
@@ -1916,13 +1881,13 @@ fn build_line_inline_box_states(
 fn mark_structural_path(
     context: &InlineFormattingContext,
     mut box_id: LayoutBoxId,
-    present: &mut std::collections::BTreeSet<usize>,
+    present: &mut std::collections::BTreeSet<LayoutBoxId>,
 ) {
     while box_id != context.root_style {
         let Some(state) = context.structural_box(box_id) else {
             break;
         };
-        if !present.insert(box_id.index()) {
+        if !present.insert(box_id) {
             break;
         }
         box_id = state.parent;
@@ -2208,14 +2173,14 @@ where
         .numeric_tree
         .as_ref()
         .is_some_and(|tree| tree.covers(world.boxes.len()));
-    for (index, layout_box) in world.boxes.iter_mut().enumerate() {
+    for (id, layout_box) in world.boxes.keyed_mut() {
         if layout_box
             .inline_layout
             .as_ref()
             .is_some_and(|context| context.repaint_brushes.is_some())
         {
             if let Some(numeric) = &mut world.inline_numeric_reuse {
-                numeric.discard_owner(LayoutBoxId::from_index(index));
+                numeric.discard_owner(id);
             }
             layout_box.inline_layout = None;
         }
@@ -2224,7 +2189,7 @@ where
                 let preserve_numeric = world
                     .inline_numeric_reuse
                     .as_ref()
-                    .is_some_and(|reuse| reuse.contains(LayoutBoxId::from_index(index)));
+                    .is_some_and(|reuse| reuse.contains(id));
                 context.prepare_for_retention(preserve_numeric);
             }
         } else {
@@ -2237,18 +2202,19 @@ where
         layout_box.inline_static_position = None;
     }
 
-    let owners = (0..world.boxes.len())
-        .map(LayoutBoxId::from_index)
-        .filter(|id| world.boxes[id.index()].inline_formatting_context)
+    let owners = world
+        .boxes
+        .keys()
+        .filter(|id| world.boxes[id].inline_formatting_context)
         .collect::<Vec<_>>();
     let mut initialized = false;
     for owner in owners {
         // A normal inline descendant is already flattened into the ancestor's
         // Parley tree. Atomic inline boxes still establish their own inner IFC.
-        if world.boxes[owner.index()].inline_flattened {
+        if world.boxes[owner].inline_flattened {
             continue;
         }
-        if world.boxes[owner.index()].inline_layout.is_some() {
+        if world.boxes[owner].inline_layout.is_some() {
             // Restoration already checked graph/inline inputs and the
             // document font collection. The old collection only rebuilt
             // normalization which was discarded, plus these mutable roles.
@@ -2273,7 +2239,7 @@ where
         }
         if input.units.is_empty()
             && input.objects.is_empty()
-            && world.boxes[owner.index()].text_selection.is_none()
+            && world.boxes[owner].text_selection.is_none()
         {
             continue;
         }
@@ -2284,7 +2250,7 @@ where
             preparation_elapsed += started.elapsed();
             prepared_context_count += 1;
         }
-        world.boxes[owner.index()].inline_layout = Some(Box::new(context));
+        world.boxes[owner].inline_layout = Some(Box::new(context));
         initialized = true;
     }
     if initialized {
@@ -2294,7 +2260,7 @@ where
         tracing::info!(
             target: "moli_cpu_profile",
             stage = "layout_inline_preparation",
-            root = ?world.boxes[world.root().index()].source(),
+            root = ?world.boxes[world.root()].source(),
             total_us = started.elapsed().as_micros(),
             collection_us = collection_elapsed.as_micros(),
             role_update_us = role_update_elapsed.as_micros(),
@@ -2401,17 +2367,15 @@ impl InlineBuildInput {
         N: Copy + Debug + Eq + Hash,
     {
         let selection = project_inline_selection(world, &self.source_map).or_else(|| {
-            world.boxes[self.root_style.index()]
+            world.boxes[self.root_style]
                 .text_selection
                 .filter(|selection| selection.is_caret())
                 .map(|_| InlineSelection::Caret {
                     offset: 0,
-                    color: world.boxes[self.root_style.index()].style.caret_color(),
+                    color: world.boxes[self.root_style].style.caret_color(),
                 })
         });
-        let mut root_text_style = world.boxes[self.root_style.index()]
-            .style
-            .parley_text_style();
+        let mut root_text_style = world.boxes[self.root_style].style.parley_text_style();
         parley.resolve_font_families(&mut root_text_style, None);
         let quantize = true;
         let mut styles = Vec::new();
@@ -2435,9 +2399,7 @@ impl InlineBuildInput {
                     .expect("style chunks are nonempty")
                     .output_range
                     .end;
-            let mut base_style = world.boxes[unit.style_box.index()]
-                .style
-                .parley_text_style();
+            let mut base_style = world.boxes[unit.style_box].style.parley_text_style();
             // `vertical-align` belongs to the structural inline box, not to
             // each descendant glyph. Keep glyphs baseline-aligned within their
             // direct box state; closing that state moves the complete subtree.
@@ -2481,7 +2443,7 @@ impl InlineBuildInput {
             1.0,
             quantize,
         );
-        let root_style = &world.boxes[self.root_style.index()].style;
+        let root_style = &world.boxes[self.root_style].style;
         builder.set_base_direction(match (root_style.unicode_bidi(), root_style.direction()) {
             (InlineUnicodeBidi::Plaintext, _) => parley::BaseDirection::Auto,
             (_, InlineDirection::Ltr) => parley::BaseDirection::Ltr,
@@ -2530,14 +2492,14 @@ impl InlineBuildInput {
             {
                 continue;
             }
-            let mut style = world.boxes[object.box_id.index()].style.parley_text_style();
+            let mut style = world.boxes[object.box_id].style.parley_text_style();
             parley.resolve_font_families(&mut style, None);
             structural_boxes.push(InlineStructuralBox {
                 box_id: object.box_id,
                 parent: object.ancestors.last().copied().unwrap_or(self.root_style),
                 vertical_align: object.vertical_align,
                 strut: measure_inline_strut(parley, style, quantize),
-                include_used_font_metrics: world.boxes[object.box_id.index()]
+                include_used_font_metrics: world.boxes[object.box_id]
                     .style
                     .includes_used_font_metrics(),
             });
@@ -2573,7 +2535,7 @@ impl InlineBuildInput {
             font_metrics,
             parent_strut,
             uses_quirks_line_height: world.quirks_mode != style::context::QuirksMode::NoQuirks,
-            root_includes_used_font_metrics: world.boxes[self.root_style.index()]
+            root_includes_used_font_metrics: world.boxes[self.root_style]
                 .style
                 .includes_used_font_metrics(),
             style_parents,
@@ -2627,18 +2589,13 @@ where
     let mut caret = None::<(usize, PaintColor)>;
 
     for entry in source_map {
-        let Some(selection) = world.boxes[entry.box_id.index()].text_selection else {
+        let Some(selection) = world.boxes[entry.box_id].text_selection else {
             continue;
         };
         if selection.is_caret() {
             if caret.is_none() {
-                caret =
-                    caret_output_offset(source_map, entry.box_id, selection.start).map(|offset| {
-                        (
-                            offset,
-                            world.boxes[entry.box_id.index()].style.caret_color(),
-                        )
-                    });
+                caret = caret_output_offset(source_map, entry.box_id, selection.start)
+                    .map(|offset| (offset, world.boxes[entry.box_id].style.caret_color()));
             }
             continue;
         }
@@ -2689,7 +2646,7 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let mut normalizer = InlineNormalizer::new(owner);
-    let children = world.boxes[owner.index()].children.clone();
+    let children = world.boxes[owner].children.clone();
     for child in children {
         collect_box(world, owner, child, &mut Vec::new(), &mut normalizer);
     }
@@ -2736,20 +2693,20 @@ where
     // Visit the current graph, including collapsed-away text which has no
     // retained glyph/source-map entry. Objects establish their own inner IFC;
     // do not overwrite that inner subtree with the outer object's owner.
-    let mut pending = world.boxes[owner.index()].children.clone();
+    let mut pending = world.boxes[owner].children.clone();
     while let Some(id) = pending.pop() {
-        let kind = inline_child_kind(&world.boxes[id.index()]);
+        let kind = inline_child_kind(&world.boxes[id]);
         if matches!(kind, InlineChildKind::OutsideMarker) {
             continue;
         }
-        world.boxes[id.index()].inline_context_owner = Some(owner);
+        world.boxes[id].inline_context_owner = Some(owner);
         match kind {
             InlineChildKind::Text | InlineChildKind::Break => {
-                world.boxes[id.index()].inline_flattened = true;
+                world.boxes[id].inline_flattened = true;
             }
             InlineChildKind::Structural => {
-                world.boxes[id.index()].inline_flattened = true;
-                pending.extend_from_slice(&world.boxes[id.index()].children);
+                world.boxes[id].inline_flattened = true;
+                pending.extend_from_slice(&world.boxes[id].children);
             }
             InlineChildKind::Object(..) | InlineChildKind::OutsideMarker => {}
         }
@@ -2765,26 +2722,26 @@ fn collect_box<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let kind = inline_child_kind(&world.boxes[id.index()]);
+    let kind = inline_child_kind(&world.boxes[id]);
     if matches!(kind, InlineChildKind::OutsideMarker) {
         return;
     }
-    world.boxes[id.index()].inline_context_owner = Some(owner);
+    world.boxes[id].inline_context_owner = Some(owner);
 
     if matches!(kind, InlineChildKind::Text) {
-        world.boxes[id.index()].inline_flattened = true;
-        let text = world.boxes[id.index()].text.clone().unwrap_or_default();
+        world.boxes[id].inline_flattened = true;
+        let text = world.boxes[id].text.clone().unwrap_or_default();
         normalizer.push_text(
             id,
             &text,
-            world.boxes[id.index()].style.white_space_collapse(),
-            world.boxes[id.index()].style.text_transform(),
+            world.boxes[id].style.white_space_collapse(),
+            world.boxes[id].style.text_transform(),
             ancestors,
         );
         return;
     }
     if matches!(kind, InlineChildKind::Break) {
-        world.boxes[id.index()].inline_flattened = true;
+        world.boxes[id].inline_flattened = true;
         normalizer.hard_break(id, ancestors);
         return;
     }
@@ -2795,22 +2752,22 @@ fn collect_box<N>(
             role,
             kind,
             ancestors,
-            world.boxes[id.index()].style.vertical_align(),
+            world.boxes[id].style.vertical_align(),
         );
         return;
     }
 
-    world.boxes[id.index()].inline_flattened = true;
-    let vertical_align = world.boxes[id.index()].style.vertical_align();
+    world.boxes[id].inline_flattened = true;
+    let vertical_align = world.boxes[id].style.vertical_align();
     normalizer.open_inline(
         id,
-        world.boxes[id.index()].style.unicode_bidi(),
-        world.boxes[id.index()].style.direction(),
+        world.boxes[id].style.unicode_bidi(),
+        world.boxes[id].style.direction(),
         ancestors,
         vertical_align,
     );
     ancestors.push(id);
-    let children = world.boxes[id.index()].children.clone();
+    let children = world.boxes[id].children.clone();
     for child in children {
         collect_box(world, owner, child, ancestors, normalizer);
     }
@@ -3942,7 +3899,12 @@ mod tests {
                     line_placements: Vec::new(),
                     fragments: InlineFragments::default(),
                 };
-                let fragments = build_inline_fragments(&context, &layout, &[]);
+                let fragments = build_inline_fragments(
+                    &crate::world::BoxOrder::new(vec![root]),
+                    &context,
+                    &layout,
+                    &[],
+                );
                 assert!(!fragments.text.is_empty());
                 for fragment in fragments.text {
                     let line = layout.lines().nth(fragment.line_index).unwrap();

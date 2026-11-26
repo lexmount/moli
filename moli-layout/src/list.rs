@@ -45,10 +45,10 @@ where
 {
     let mut handled = vec![false; world.boxes.len()];
     let containers = (0..world.boxes.len())
-        .map(LayoutBoxId::from_index)
+        .map(|index| world.boxes.id_at(index))
         .filter(|id| {
             matches!(
-                world.boxes[id.index()]
+                world.boxes[id]
                     .element_semantics
                     .as_ref()
                     .map(|semantics| semantics.category),
@@ -60,20 +60,20 @@ where
     for container in containers {
         let mut items = Vec::new();
         collect_container_items(world, container, container, &mut items);
-        let data = world.boxes[container.index()]
+        let data = world.boxes[container]
             .element_semantics
             .as_ref()
             .and_then(|semantics| semantics.metadata.list)
             .unwrap_or_default();
         let mut counter = ListCounter::new(data, items.len());
         for item in items {
-            let value = world.boxes[item.index()]
+            let value = world.boxes[item]
                 .element_semantics
                 .as_ref()
                 .and_then(|semantics| semantics.metadata.list)
                 .and_then(|item| item.value);
             prepare_item_marker(world, item, counter.next_value(value))?;
-            handled[item.index()] = true;
+            handled[world.boxes.index_of(item)] = true;
         }
     }
 
@@ -81,8 +81,10 @@ where
     // deterministic marker; full CSS counter scopes remain an explicit local
     // fallback rather than requiring a live DOM callback.
     let standalone = (0..handled.len())
-        .map(LayoutBoxId::from_index)
-        .filter(|id| !handled[id.index()] && world.boxes[id.index()].style.display().is_list_item())
+        .map(|index| world.boxes.id_at(index))
+        .filter(|id| {
+            !handled[world.boxes.index_of(id)] && world.boxes[id].style.display().is_list_item()
+        })
         .collect::<Vec<_>>();
     for item in standalone {
         prepare_item_marker(world, item, 1)?;
@@ -98,10 +100,10 @@ fn collect_container_items<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    for child in world.boxes[current.index()].children.iter().copied() {
+    for child in world.boxes[current].children.iter().copied() {
         let is_nested_container = child != container
             && matches!(
-                world.boxes[child.index()]
+                world.boxes[child]
                     .element_semantics
                     .as_ref()
                     .map(|semantics| semantics.category),
@@ -110,7 +112,7 @@ fn collect_container_items<N>(
         if is_nested_container {
             continue;
         }
-        if world.boxes[child.index()].style.display().is_list_item() {
+        if world.boxes[child].style.display().is_list_item() {
             output.push(child);
             continue;
         }
@@ -129,19 +131,16 @@ where
     let Some(marker) = find_marker(world, item) else {
         return Ok(());
     };
-    world.boxes[marker.index()].outside_list_marker =
-        world.boxes[item.index()].style.list_marker_position() == LayoutListMarkerPosition::Outside;
+    world.boxes[marker].outside_list_marker =
+        world.boxes[item].style.list_marker_position() == LayoutListMarkerPosition::Outside;
 
-    if !world.boxes[marker.index()]
-        .style
-        .has_normal_generated_content()
-    {
+    if !world.boxes[marker].style.has_normal_generated_content() {
         return Ok(());
     }
-    let marker_type = world.boxes[item.index()].style.list_marker_type().clone();
+    let marker_type = world.boxes[item].style.list_marker_type().clone();
     if marker_type == LayoutListMarkerType::Fallback {
         push_diagnostic(
-            &mut world.boxes[marker.index()].capability_diagnostics,
+            &mut world.boxes[marker].capability_diagnostics,
             LayoutCapabilityDiagnostic::ListMarkerStyleFallback,
         );
     }
@@ -149,10 +148,10 @@ where
         return Ok(());
     };
 
-    let owner = world.boxes[marker.index()].owner;
-    let owner_label = world.boxes[marker.index()].owner_label.clone();
-    let marker_label = world.boxes[marker.index()].source_label.clone();
-    let text_style = ResolvedLayoutStyle::text_leaf_from(&world.boxes[marker.index()].style);
+    let owner = world.boxes[marker].owner;
+    let owner_label = world.boxes[marker].owner_label.clone();
+    let marker_label = world.boxes[marker].source_label.clone();
+    let text_style = ResolvedLayoutStyle::text_leaf_from(&world.boxes[marker].style);
     let text_box = LayoutWorld::new_box(
         None,
         owner,
@@ -167,7 +166,7 @@ where
     );
     let text_id = world.allocate(text_box);
     world.append_synthesized_child(marker, text_id)?;
-    world.boxes[marker.index()].inline_formatting_context = true;
+    world.boxes[marker].inline_formatting_context = true;
     Ok(())
 }
 
@@ -175,20 +174,20 @@ fn find_marker<N>(world: &LayoutWorld<N>, item: LayoutBoxId) -> Option<LayoutBox
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let mut stack = world.boxes[item.index()]
+    let mut stack = world.boxes[item]
         .children
         .iter()
         .rev()
         .copied()
         .collect::<Vec<_>>();
     while let Some(id) = stack.pop() {
-        if world.boxes[id.index()].kind == LayoutBoxKind::PseudoMarker {
+        if world.boxes[id].kind == LayoutBoxKind::PseudoMarker {
             return Some(id);
         }
-        if world.boxes[id.index()].style.display().is_list_item() {
+        if world.boxes[id].style.display().is_list_item() {
             continue;
         }
-        stack.extend(world.boxes[id.index()].children.iter().rev().copied());
+        stack.extend(world.boxes[id].children.iter().rev().copied());
     }
     None
 }
