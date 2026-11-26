@@ -283,6 +283,22 @@ fn document_event_handler_setter_function<'s>(
     rv.set_undefined();
 }
 
+fn popup_body_window_handler_owner(
+    runtime: &crate::native_bridge::PageScriptHost,
+    handle: crate::document_runtime::DomHandle,
+    name: &str,
+) -> Option<u64> {
+    if !super::is_body_window_event_handler_attribute(name)
+        || !super::is_body_or_frameset_element(runtime, handle)
+    {
+        return None;
+    }
+    match runtime.owner_dispatch_scope_for_node(handle)? {
+        OwnerDispatchScope::LightweightPopup(id) => Some(id),
+        _ => None,
+    }
+}
+
 pub(crate) fn node_event_handler_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -300,6 +316,14 @@ pub(crate) fn node_event_handler_getter_function<'s>(
     };
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
+        return;
+    }
+    let runtime = unsafe { &*runtime_ptr };
+    if let Some(popup_id) = popup_body_window_handler_owner(runtime, handle, &handler_name) {
+        let value = runtime
+            .lightweight_popup_event_handler_property_value(scope, popup_id, &handler_name)
+            .unwrap_or_else(|| v8::null(scope).into());
+        rv.set(value);
         return;
     }
     let target = unsafe { &*runtime_ptr }.event_handler_attribute_target(handle, &handler_name);
@@ -508,6 +532,17 @@ pub(crate) fn node_event_handler_setter_function<'s>(
     };
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
+        return;
+    }
+    let runtime = unsafe { &mut *runtime_ptr };
+    if let Some(popup_id) = popup_body_window_handler_owner(runtime, handle, &handler_name) {
+        runtime.set_lightweight_popup_event_handler_property(
+            scope,
+            popup_id,
+            &handler_name,
+            v8::Local::<v8::Object>::try_from(value).ok(),
+        );
+        rv.set_undefined();
         return;
     }
     let target = unsafe { &*runtime_ptr }.event_handler_attribute_target(handle, &handler_name);
