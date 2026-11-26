@@ -21,8 +21,8 @@ use coordinates::{BoxPlacement, resolve_coordinate_spaces};
 pub(crate) use paint_space::PaintSpace;
 pub(crate) use paint_view::PaintProjection;
 use paint_view::{BoxPaintMetadata, PaintMetadata};
-pub(crate) use scroll::ScrollProjection;
 use scroll::clamp_scroll_offset;
+pub(crate) use scroll::{ScrollProjection, ScrollTranslation};
 
 use std::{
     collections::{HashMap, HashSet},

@@ -1174,23 +1174,36 @@ fn realtime_layout_native_state_and_scroll_commit_before_geometry_reads() {
 #[test]
 fn realtime_nested_local_scroll_matches_full_coordinate_projection() {
     let mut vm = realtime_vm(concat!(
-        "<!doctype html><style>body{margin:0;overflow:hidden}",
+        "<!doctype html><style>body{margin:0;height:1800px}",
         "#outer{width:110px;height:80px;overflow:scroll;transform:scale(2);transform-origin:0 0}",
-        "#inner{width:80px;height:50px;overflow:scroll}#mark{margin-top:30px;height:5px}",
-        "#stable{position:absolute;top:120px;left:240px}</style>",
+        "#inner{width:80px;height:50px;overflow:scroll}#mark{margin-top:30px;height:5px;background:red}",
+        "#stable{position:fixed;top:120px;left:240px}</style>",
         "<div id=outer><div id=inner><div id=mark></div>",
         "<div style='height:200px'></div></div><div style='height:200px'></div></div>",
         "<div id=stable>Outside</div>",
     ));
-    let read =
-        "JSON.stringify([mark.getBoundingClientRect().top, stable.getBoundingClientRect().top])";
-    assert_eq!(vm.eval(read).unwrap(), "[60,120]");
+    let read = "(() => {const rect=mark.getBoundingClientRect();return JSON.stringify([rect.top,\
+                stable.getBoundingClientRect().top,document.elementFromPoint(rect.left+2,rect.top+2).id])})()";
+    assert_eq!(vm.eval(read).unwrap(), "[60,120,\"mark\"]");
     let publishes = vm.layout_pass_observability_for_test().1;
-
-    vm.eval("outer.scrollTop=4; inner.scrollTop=7").unwrap();
-    assert_eq!(vm.eval(read).unwrap(), "[38,120]");
-    assert_eq!(vm.layout_pass_observability_for_test().1, publishes);
-
+    for (edit, top) in [
+        ("outer.scrollTop=4;inner.scrollTop=7", 38),
+        ("window.scrollTo(0,9)", 29),
+        ("window.scrollTo(0,0)", 38),
+        ("outer.scrollTop=0;inner.scrollTop=0", 60),
+        ("outer.scrollTop=1;inner.scrollTop=2", 54),
+    ] {
+        assert_eq!(
+            vm.eval(&format!("{edit};{read}")).unwrap(),
+            format!("[{top},120,\"mark\"]"),
+            "{edit}"
+        );
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            publishes,
+            "{edit}"
+        );
+    }
     let host = vm.context_host_weak_for_test().upgrade().unwrap();
     let host = host.borrow();
     let document = host.document_handle();

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug, hash::Hash, mem::size_of};
+use std::{collections::HashMap, fmt::Debug, hash::Hash, mem::size_of, num::NonZeroU32};
 
 use crate::{
     FrozenLayoutBox, LayoutBoxGeometry, LayoutBoxId, LayoutError, LayoutPoint, LayoutScrollExtent,
@@ -18,7 +18,118 @@ pub(crate) struct ScrollProjection<N> {
     layout_origins: Vec<LayoutPoint>,
     sticky: HashMap<usize, StickyConstraints>,
     scroll_sources: Vec<(LayoutBoxId, N)>,
-    parents_precede_children: bool,
+    local: Option<LocalScrollSpaces>,
+}
+
+/// A local scroll moves a whole coordinate branch by the same viewport
+/// translation. Box matrices stay at their published offsets.
+struct LocalScrollSpaces {
+    box_spaces: Vec<Option<NonZeroU32>>,
+    spaces: Vec<LocalScrollSpace>,
+    has_translation: bool,
+}
+
+struct LocalScrollSpace {
+    box_id: LayoutBoxId,
+    parent: Option<NonZeroU32>,
+    published_offset: LayoutPoint,
+    translation: ScrollTranslation,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ScrollTranslation {
+    pub(crate) visual: [f64; 2],
+    pub(crate) untransformed: [f64; 2],
+}
+
+impl LocalScrollSpaces {
+    fn new<N>(
+        root: LayoutBoxId,
+        placements: &[BoxPlacement],
+        extents: &[LayoutScrollExtent],
+        scroll_sources: &[(LayoutBoxId, N)],
+    ) -> Option<Self> {
+        let mut sources = scroll_sources
+            .iter()
+            .map(|&(id, _)| id)
+            .filter(|&id| id != root)
+            .peekable();
+        sources.peek()?;
+        let mut child_spaces = Vec::with_capacity(placements.len());
+        let mut spaces = Vec::new();
+        for (index, placement) in placements.iter().enumerate() {
+            let parent = placement.parent.and_then(|id| child_spaces[id.index()]);
+            let own = sources
+                .next_if(|id| id.index() == index)
+                .map(|box_id| {
+                    spaces.push(LocalScrollSpace {
+                        box_id,
+                        parent,
+                        published_offset: extents[index].applied_offset,
+                        translation: ScrollTranslation::default(),
+                    });
+                    let index = u32::try_from(spaces.len()).expect("scroll space fits box ID");
+                    NonZeroU32::new(index).expect("one-based scroll space")
+                })
+                .or(parent);
+            child_spaces.push(own);
+        }
+        // For a box's own coordinates use its parent's space. Descending
+        // order keeps each parent's child space available until its own turn.
+        for (index, placement) in placements.iter().enumerate().rev() {
+            child_spaces[index] = placement.parent.and_then(|id| child_spaces[id.index()]);
+        }
+        Some(Self {
+            box_spaces: child_spaces,
+            spaces,
+            has_translation: false,
+        })
+    }
+
+    fn refresh<N>(
+        &mut self,
+        boxes: &[FrozenLayoutBox<N>],
+        offsets: &HashMap<LayoutBoxId, LayoutPoint>,
+    ) {
+        self.has_translation = false;
+        for index in 0..self.spaces.len() {
+            let space = &self.spaces[index];
+            let mut translation = space.parent.map_or_else(ScrollTranslation::default, |id| {
+                self.spaces[id.get() as usize - 1].translation
+            });
+            let layout_box = &boxes[space.box_id.index()];
+            let offset = offsets
+                .get(&space.box_id)
+                .copied()
+                .unwrap_or(layout_box.scroll_extent.applied_offset);
+            let dx = f64::from(space.published_offset.x) - f64::from(offset.x);
+            let dy = f64::from(space.published_offset.y) - f64::from(offset.y);
+            if dx != 0.0 || dy != 0.0 {
+                self.has_translation = true;
+                let [a, b, c, d, _, _] = layout_box.coordinate_space.local_to_viewport.coefficients;
+                translation.visual[0] += a * dx + c * dy;
+                translation.visual[1] += b * dx + d * dy;
+                translation.untransformed[0] += dx;
+                translation.untransformed[1] += dy;
+            }
+            self.spaces[index].translation = translation;
+        }
+    }
+
+    fn reset<N>(
+        &mut self,
+        boxes: &[FrozenLayoutBox<N>],
+        offsets: &HashMap<LayoutBoxId, LayoutPoint>,
+    ) {
+        self.has_translation = false;
+        for space in &mut self.spaces {
+            space.published_offset = offsets
+                .get(&space.box_id)
+                .copied()
+                .unwrap_or(boxes[space.box_id.index()].scroll_extent.applied_offset);
+            space.translation = ScrollTranslation::default();
+        }
+    }
 }
 
 impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
@@ -31,19 +142,16 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
         let mut projection = Self {
             root: world.root,
             placements: Vec::with_capacity(boxes.len()),
-            layout_origins: Vec::with_capacity(boxes.len()),
+            layout_origins: Vec::new(),
             sticky: HashMap::new(),
             scroll_sources: Vec::new(),
-            parents_precede_children: true,
+            local: None,
         };
-        for (index, geometry) in boxes.iter().enumerate() {
+        let mut parents_precede_children = true;
+        for index in 0..boxes.len() {
             let (base, constraints) = placement(index)?;
-            projection.parents_precede_children &=
-                base.parent.is_none_or(|parent| parent.index() < index);
+            parents_precede_children &= base.parent.is_none_or(|parent| parent.index() < index);
             projection.placements.push(base);
-            projection
-                .layout_origins
-                .push(geometry.layout_origin_in_document);
             if let Some(constraints) = constraints {
                 projection.sticky.insert(index, constraints);
             }
@@ -54,6 +162,20 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
                     .scroll_sources
                     .push((LayoutBoxId::from_index(index), source));
             }
+        }
+        if !projection.sticky.is_empty() {
+            projection.layout_origins = boxes
+                .iter()
+                .map(|geometry| geometry.layout_origin_in_document)
+                .collect();
+        }
+        if parents_precede_children && projection.sticky.is_empty() {
+            projection.local = LocalScrollSpaces::new(
+                world.root,
+                &projection.placements,
+                extents,
+                &projection.scroll_sources,
+            );
         }
         Ok(projection)
     }
@@ -72,10 +194,24 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
             + self.layout_origins.capacity() * size_of::<LayoutPoint>()
             + self.sticky.capacity() * size_of::<(usize, StickyConstraints)>()
             + self.scroll_sources.capacity() * size_of::<(LayoutBoxId, N)>()
+            + self.local.as_ref().map_or(0, |local| {
+                local.box_spaces.capacity() * size_of::<Option<NonZeroU32>>()
+                    + local.spaces.capacity() * size_of::<LocalScrollSpace>()
+            })
+    }
+
+    #[inline]
+    pub(crate) fn local_translation(&self, box_index: usize) -> Option<&ScrollTranslation> {
+        let local = self.local.as_ref()?;
+        if !local.has_translation {
+            return None;
+        }
+        let id = local.box_spaces[box_index]?;
+        Some(&local.spaces[id.get() as usize - 1].translation)
     }
 
     pub(crate) fn refresh(
-        &self,
+        &mut self,
         boxes: &mut [FrozenLayoutBox<N>],
         viewport_scroll: &mut LayoutPoint,
         scroll_offset: &impl Fn(N) -> LayoutPoint,
@@ -97,12 +233,11 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
             return Ok(false);
         }
         let new_viewport_scroll = offsets.get(&self.root).copied().unwrap_or(*viewport_scroll);
-        if self.parents_precede_children
-            && self.sticky.is_empty()
+        if let Some(local) = &mut self.local
             && *viewport_scroll == LayoutPoint::ZERO
             && new_viewport_scroll == LayoutPoint::ZERO
         {
-            self.refresh_local_scroll_coordinates(boxes, &offsets);
+            local.refresh(boxes, &offsets);
         } else {
             let coordinates = resolve_coordinate_spaces(
                 self.root,
@@ -124,9 +259,13 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
                 .enumerate()
             {
                 layout_box.coordinate_space = coordinate.layout.into();
-                let origin = self.layout_origins[index];
-                layout_box.geometry.layout_origin_in_document =
-                    LayoutPoint::new(origin.x + adjustment.x, origin.y + adjustment.y);
+                if let Some(origin) = self.layout_origins.get(index) {
+                    layout_box.geometry.layout_origin_in_document =
+                        LayoutPoint::new(origin.x + adjustment.x, origin.y + adjustment.y);
+                }
+            }
+            if let Some(local) = &mut self.local {
+                local.reset(boxes, &offsets);
             }
         }
         for (id, offset) in offsets {
@@ -134,50 +273,6 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
         }
         *viewport_scroll = new_viewport_scroll;
         Ok(true)
-    }
-
-    /// Numeric parent order lets a local scroll project each affected branch
-    /// once. The viewport space and the previously published clean boxes
-    /// remain valid throughout this update.
-    fn refresh_local_scroll_coordinates(
-        &self,
-        boxes: &mut [FrozenLayoutBox<N>],
-        offsets: &HashMap<LayoutBoxId, LayoutPoint>,
-    ) {
-        let mut moved = vec![false; boxes.len()];
-        for (index, base) in self.placements.iter().enumerate() {
-            let Some(parent) = base.parent else {
-                continue;
-            };
-            if !moved[parent.index()] && !offsets.contains_key(&parent) {
-                continue;
-            }
-            let parent_box = &boxes[parent.index()];
-            let scroll = if parent_box.scroll_extent.is_scroll_container {
-                offsets
-                    .get(&parent)
-                    .copied()
-                    .unwrap_or(parent_box.scroll_extent.applied_offset)
-            } else {
-                LayoutPoint::ZERO
-            };
-            let translation = crate::LayoutTransform2D::translation(
-                base.location.x - scroll.x,
-                base.location.y - scroll.y,
-            );
-            let projected = parent_box
-                .coordinate_space
-                .local_to_viewport
-                .concatenate(translation.concatenate(base.transform.transform));
-            let transform_free = parent_box
-                .coordinate_space
-                .local_to_viewport_ignoring_css_transforms
-                .concatenate(translation);
-            let space = &mut boxes[index].coordinate_space;
-            space.local_to_viewport = projected;
-            space.local_to_viewport_ignoring_css_transforms = transform_free;
-            moved[index] = true;
-        }
     }
 }
 

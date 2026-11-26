@@ -63,7 +63,16 @@ pub(super) fn compose_layout_space(
     };
     let location = placement.positioned_location();
     let scroll = placement.parent_scroll.unwrap_or(LayoutPoint::ZERO);
-    let translation = LayoutTransform2D::translation(location.x - scroll.x, location.y - scroll.y);
+    // Keep the subtraction in matrix precision. Local scroll translations
+    // can then be composed separately from the published box location.
+    let translation = LayoutTransform2D::new([
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        f64::from(location.x) - f64::from(scroll.x),
+        f64::from(location.y) - f64::from(scroll.y),
+    ]);
     let local_to_parent = translation.concatenate(placement.transform.transform);
     let local_to_document = parent_transform.concatenate(local_to_parent);
     let local_to_document_ignoring_css_transforms = parent_without_css.concatenate(translation);

@@ -419,7 +419,8 @@ where
     ) -> impl Iterator<Item = LayoutQuad> + 'a {
         output.object_geometry.iter().filter_map(|index| {
             let object = self.object_geometry.get(*index)?;
-            let space = &self.boxes.get(object.owner.index())?.coordinate_space;
+            let geometry = self.box_geometry(object.owner)?;
+            let space = self.coordinate_space(geometry.coordinate_space)?;
             Some(LayoutQuad {
                 points: object
                     .quad

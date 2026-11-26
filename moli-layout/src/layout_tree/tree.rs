@@ -53,7 +53,9 @@ pub struct FrozenLayoutBox<N> {
     pub list_marker_position: LayoutListMarkerPosition,
     pub geometry: LayoutBoxGeometry,
     pub scroll_extent: LayoutScrollExtent,
-    pub coordinate_space: FrozenCoordinateSpace,
+    /// Base mapping at the last geometry publication. Use the tree's
+    /// coordinate query to include subsequent scrolling.
+    pub(crate) coordinate_space: FrozenCoordinateSpace,
     pub geometry_source: Option<N>,
     pub principal_source: Option<N>,
     pub hit_source: Option<N>,
@@ -127,8 +129,8 @@ pub enum ScrollProjectionRefresh {
 /// they preserve results that cannot be reconstructed after the working tree,
 /// Taffy caches, Parley state, and computed styles are dropped. Source and
 /// hit-test indexes are derived from the box provenance and fragments.
-/// A scroll refresh updates derived geometry in place while retaining the
-/// box structure, local sizes, and fragments.
+/// A scroll refresh updates the coordinate mappings and scroll extents for
+/// the existing box structure, local sizes, and fragments.
 pub struct FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -282,14 +284,43 @@ where
         self.fragments.get(id.index())
     }
 
-    pub fn coordinate_space(&self, id: LayoutCoordinateSpaceId) -> Option<&FrozenCoordinateSpace> {
-        match id.index() {
-            0 => Some(&self.viewport_coordinate_space),
-            index => self
-                .boxes
-                .get(index - 1)
-                .map(|layout_box| &layout_box.coordinate_space),
+    pub fn coordinate_space(&self, id: LayoutCoordinateSpaceId) -> Option<FrozenCoordinateSpace> {
+        let Some(index) = id.index().checked_sub(1) else {
+            return Some(self.viewport_coordinate_space);
+        };
+        let mut space = self.boxes.get(index)?.coordinate_space;
+        if let Some(offset) = self.local_scroll_translation(index) {
+            space.local_to_viewport = space
+                .local_to_viewport
+                .translated_in_viewport(offset.visual);
+            space.local_to_viewport_ignoring_css_transforms = space
+                .local_to_viewport_ignoring_css_transforms
+                .translated_in_viewport(offset.untransformed);
         }
+        Some(space)
+    }
+
+    #[inline]
+    fn local_scroll_translation(
+        &self,
+        index: usize,
+    ) -> Option<&crate::projection::ScrollTranslation> {
+        self.scroll_projection.as_ref()?.local_translation(index)
+    }
+
+    #[inline]
+    pub(super) fn local_to_viewport(
+        &self,
+        id: LayoutCoordinateSpaceId,
+    ) -> Option<LayoutTransform2D> {
+        let Some(index) = id.index().checked_sub(1) else {
+            return Some(self.viewport_coordinate_space.local_to_viewport);
+        };
+        let base = self.boxes.get(index)?.coordinate_space.local_to_viewport;
+        Some(
+            self.local_scroll_translation(index)
+                .map_or(base, |offset| base.translated_in_viewport(offset.visual)),
+        )
     }
 
     pub fn scroll_extent(&self, id: LayoutOutputBoxId) -> Option<&LayoutScrollExtent> {
@@ -342,7 +373,7 @@ where
     ) -> Result<bool, LayoutError> {
         let projection = self
             .scroll_projection
-            .as_ref()
+            .as_mut()
             .expect("validated scroll inputs");
         let mut changed = projection.refresh(&mut self.boxes, &mut self.viewport_scroll, offset)?;
         for child in &mut self.embedded_frames {
