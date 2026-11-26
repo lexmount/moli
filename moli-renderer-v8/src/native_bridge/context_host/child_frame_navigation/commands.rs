@@ -225,4 +225,49 @@ impl PageScriptHost {
         let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url);
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
+
+    pub(crate) fn child_browsing_context_has_pending_cross_document_traversal(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        let Some(entry) = self.child_browsing_contexts.get(&handle) else {
+            return false;
+        };
+        if !entry.has_pending_navigation_or_document_load() {
+            return false;
+        }
+        let pending = entry.navigation_entry_seed();
+        // The pending activation describes the destination, not the active
+        // Document's last navigation. A traversal must also change position.
+        pending.current_index != entry.committed_navigation_entry_seed().current_index
+            && pending
+                .activation
+                .as_ref()
+                .and_then(|activation| activation.navigation_type.as_deref())
+                == Some("traverse")
+    }
+
+    pub(crate) fn cancel_pending_child_browsing_context_navigation(&mut self, handle: DomHandle) {
+        let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
+            return;
+        };
+        if !entry.has_pending_navigation_or_document_load() {
+            return;
+        }
+        entry.clear_pending_navigation();
+        entry.restore_navigation_entry_seed_from_committed();
+        self.retire_current_child_navigation_commit_task(handle);
+        self.clear_pending_form_submission_child_target(handle);
+        self.reject_replaced_service_worker_child_client_navigation(
+            handle,
+            "The navigation was canceled.".to_owned(),
+        );
+        if let Some(navigation_load) = self.current_child_navigation_load(handle) {
+            let _ =
+                self.finish_child_frame_navigation_without_load_dispatch(handle, navigation_load);
+        }
+        // Removing the request's owner also makes an already-arriving network
+        // completion stale; it must never install a Document after cancellation.
+        self.clear_pending_child_document_loads_for_handle(handle);
+    }
 }

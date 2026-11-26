@@ -10,7 +10,8 @@ use super::{
         cancel_pending_same_document_navigation_finishes_including_reentrant,
     },
     navigation_window::{
-        runtime_window_is_global, runtime_window_owner, window_navigation_for_holder,
+        runtime_window_dispatch_scope, runtime_window_is_global, runtime_window_owner,
+        window_navigation_for_holder,
     },
 };
 use crate::util::context_host_ptr_from_global_bridge;
@@ -39,9 +40,17 @@ pub(crate) fn inform_about_canceled_navigation_for_window<'s>(
     }
     cancel_pending_precommit_same_document_navigation_for_window_stop(scope, navigation);
     cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
-    if runtime_window_is_global(scope, owner)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let host = unsafe { &mut *host_ptr };
+    if runtime_window_is_global(scope, owner) {
+        host.clear_pending_location_navigation();
+    } else if matches!(reason, NavigationCancellationReason::WindowStop)
+        && let Some(crate::native_bridge::OwnerDispatchScope::Child(child)) =
+            runtime_window_dispatch_scope(scope, owner)
+        && !host.child_browsing_context_has_pending_cross_document_traversal(child)
     {
-        unsafe { &mut *host_ptr }.clear_pending_location_navigation();
+        host.cancel_pending_child_browsing_context_navigation(child);
     }
 }
