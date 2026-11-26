@@ -234,9 +234,7 @@ where
         }
         if !reusable_layout {
             world.release_numeric_cache_storage();
-        } else if let Some(tree) = &mut world.numeric_tree
-            && (phase_metrics.reused_overflow_projection || overflow.fits_in_retained_budget())
-        {
+        } else if let Some(tree) = &mut world.numeric_tree {
             tree.overflow = Some(Box::new(overflow));
         }
         if paint.is_none() {
