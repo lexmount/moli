@@ -421,6 +421,9 @@ pub(crate) struct InlineLinePlacement {
     pub(crate) line_index: usize,
     pub(crate) rect: PaintRect,
     pub(crate) baseline: f32,
+    /// Index in Parley's visual items of the first in-flow content in the
+    /// line's reading direction, for block static positions.
+    pub(crate) first_in_flow_item_index: Option<usize>,
     /// CSS phantom line boxes retain positions for their inline descendants,
     /// but do not contribute height, baselines, or block margin-collapse
     /// barriers.
@@ -1185,39 +1188,6 @@ fn line_items_with_content<'a>(
     })
 }
 
-/// Returns the first in-flow item in the line's reading direction.
-pub(crate) fn first_in_flow_item_index(
-    context: &InlineFormattingContext,
-    layout: &Layout<TextBrush>,
-    line: &parley::Line<'_, TextBrush>,
-) -> Option<usize> {
-    let mut items = line_items_with_content(context, layout, line)
-        .enumerate()
-        .filter_map(|(index, (item, contributes))| {
-            let in_flow = match item {
-                PositionedLayoutItem::GlyphRun(run) => {
-                    contributes && !glyph_run_is_collapsible_whitespace(context, &run)
-                }
-                PositionedLayoutItem::InlineBox(positioned) => {
-                    contributes
-                        || (positioned.width > 0.0
-                            && context.object(positioned.id).is_some_and(|object| {
-                                matches!(
-                                    object.role,
-                                    InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
-                                )
-                            }))
-                }
-            };
-            in_flow.then_some(index)
-        });
-    if layout.is_rtl() {
-        items.last()
-    } else {
-        items.next()
-    }
-}
-
 fn glyph_run_is_collapsible_whitespace(
     context: &InlineFormattingContext,
     glyph_run: &parley::GlyphRun<'_, TextBrush>,
@@ -1287,14 +1257,29 @@ fn resolve_inline_lines(
     let mut preceding_adjustment = 0.0;
     let mut unadjusted_line_top = 0.0;
     let visible_lines = context.visible_lines(layout.len());
+    let track_in_flow_start = placements.is_some()
+        && context
+            .objects
+            .iter()
+            .any(|object| object.role == InlineObjectRole::OutOfFlow);
+    let rtl = layout.is_rtl();
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
         let raw_top = unadjusted_line_top;
         let raw_bottom = raw_top + metrics.line_height.max(0.0);
+        let mut first_in_flow_item_index = None;
         let mut geometries = line_items_with_content(context, layout, &line)
-            .map(|(item, contributes_to_line)| match item {
+            .enumerate()
+            .map(|(item_index, (item, contributes_to_line))| match item {
                 PositionedLayoutItem::GlyphRun(glyph_run) => {
+                    if track_in_flow_start
+                        && (rtl || first_in_flow_item_index.is_none())
+                        && contributes_to_line
+                        && !glyph_run_is_collapsible_whitespace(context, &glyph_run)
+                    {
+                        first_in_flow_item_index = Some(item_index);
+                    }
                     let run = glyph_run.run();
                     let run_metrics = run.font_metrics();
                     let paint = glyph_run.style().brush.paint;
@@ -1336,13 +1321,34 @@ fn resolve_inline_lines(
                 }
                 PositionedLayoutItem::InlineBox(positioned) => {
                     let object = context.object(positioned.id);
+                    let role = object.map(|object| object.role);
                     let object_index = usize::try_from(positioned.id).ok();
                     let internal_baseline_ascent = object
                         .filter(|object| object.role == InlineObjectRole::Atomic)
                         .and(object_index)
                         .and_then(|index| atomic_baseline_ascents.get(index).copied().flatten());
-                    let is_atomic =
-                        object.is_some_and(|object| object.role == InlineObjectRole::Atomic);
+                    let is_atomic = role == Some(InlineObjectRole::Atomic);
+                    let edge = match role {
+                        Some(InlineObjectRole::StartEdge | InlineObjectRole::EndEdge) => {
+                            object_index.and_then(|index| structural_edge_contributions.get(index))
+                        }
+                        _ => None,
+                    };
+                    let creates_line = is_atomic || edge.is_some_and(|edge| edge.creates_line);
+                    // Border and padding can survive a zero net advance. In
+                    // line-height quirks modes, margin alone on a start edge
+                    // does not count as content for static positioning.
+                    let in_flow = if context.uses_quirks_line_height
+                        && role == Some(InlineObjectRole::StartEdge)
+                    {
+                        edge.is_some_and(|edge| edge.has_border_or_padding)
+                    } else {
+                        creates_line
+                    };
+                    if track_in_flow_start && in_flow && (rtl || first_in_flow_item_index.is_none())
+                    {
+                        first_in_flow_item_index = Some(item_index);
+                    }
                     let baseline_ascent = internal_baseline_ascent
                         .or_else(|| is_atomic.then_some(positioned.height))
                         .unwrap_or_default();
@@ -1368,13 +1374,7 @@ fn resolve_inline_lines(
                             InlineVerticalAlign::default()
                         },
                         contributes_to_line,
-                        creates_line: object.is_some_and(|object| match object.role {
-                            InlineObjectRole::Atomic => true,
-                            InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => object_index
-                                .and_then(|index| structural_edge_contributions.get(index))
-                                .is_some_and(|edge| edge.creates_line),
-                            InlineObjectRole::Float | InlineObjectRole::OutOfFlow => false,
-                        }),
+                        creates_line,
                         glyph_key: None,
                         anchor: LineVerticalAnchor::Root,
                         relative_offset: 0.0,
@@ -1681,6 +1681,7 @@ fn resolve_inline_lines(
                     line_height,
                 ),
                 baseline: root_baseline,
+                first_in_flow_item_index,
                 phantom,
                 content_offset: root_baseline - metrics.baseline,
                 item_offsets,
