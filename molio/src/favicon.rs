@@ -103,3 +103,32 @@ fn rasterize_svg(bytes: &[u8]) -> Option<RgbaImage> {
         .collect();
     RgbaImage::from_raw(width, height, rgba)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deep_svg_favicon_renders_on_the_blocking_worker_stack() {
+        tokio::runtime::Builder::new_current_thread()
+            .thread_stack_size(2 * 1024 * 1024)
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::task::spawn_blocking(|| {
+                    // Opacity keeps the groups nested in the converted scene.
+                    let source = format!(
+                        "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>{}<rect width='10' height='10' fill='red'/>{}</svg>",
+                        "<g opacity='0.999'>".repeat(1023),
+                        "</g>".repeat(1023),
+                    );
+                    let image = rasterize_svg(source.as_bytes()).expect("deep SVG favicon");
+                    assert_eq!(image.dimensions(), (ICON_PIXELS, ICON_PIXELS));
+                    let pixel = image.get_pixel(ICON_PIXELS / 2, ICON_PIXELS / 2);
+                    assert!(pixel[0] > 0 && pixel[3] > 0, "{pixel:?}");
+                })
+                .await
+                .unwrap();
+            });
+    }
+}
