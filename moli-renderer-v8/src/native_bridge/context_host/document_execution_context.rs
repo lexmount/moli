@@ -152,7 +152,20 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_>,
         node: DomHandle,
     ) -> Option<v8::Local<'s, v8::Context>> {
-        let source = self.document_execution_context_for_node(node)?;
+        let Some(source) = self.document_execution_context_for_node(node) else {
+            // Media in a windowless Document uses the exact relevant Window
+            // captured for its current load sequence.
+            let target = self.pending_media_load_sequence(node)?.task_target()?;
+            let dispatch = target.dispatch_scope();
+            if self.current_window_document_task_target_for_dispatch_scope(dispatch) != Some(target)
+            {
+                return None;
+            }
+            let owner = self.current_window_execution_context_owner(dispatch)?;
+            return self
+                .window_execution_context(scope, owner, dispatch)
+                .map(|(_, context)| context);
+        };
         if !self.window_execution_context_owner_is_current(source.owner, source.dispatch_scope) {
             return None;
         }
