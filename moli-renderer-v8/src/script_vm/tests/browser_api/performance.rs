@@ -425,3 +425,6 @@ fn resource_timing_initiator_url_is_a_native_readonly_attribute_and_json_snapsho
 })()
 "#).unwrap(), r#"["get initiatorUrl",0,true,true,true,false,"","",true,3,true]"#);
 }
+
+#[path = "../performance_measurement_interfaces.rs"]
+mod performance_measurement_interfaces;
