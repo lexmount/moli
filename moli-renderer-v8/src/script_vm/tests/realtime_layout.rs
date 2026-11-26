@@ -1170,6 +1170,48 @@ fn realtime_layout_native_state_and_scroll_commit_before_geometry_reads() {
 }
 
 #[test]
+fn realtime_nested_local_scroll_matches_full_coordinate_projection() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;overflow:hidden}",
+        "#outer{width:110px;height:80px;overflow:scroll;transform:scale(2);transform-origin:0 0}",
+        "#inner{width:80px;height:50px;overflow:scroll}#mark{margin-top:30px;height:5px}",
+        "#stable{position:absolute;top:120px;left:240px}</style>",
+        "<div id=outer><div id=inner><div id=mark></div>",
+        "<div style='height:200px'></div></div><div style='height:200px'></div></div>",
+        "<div id=stable>Outside</div>",
+    ));
+    let read =
+        "JSON.stringify([mark.getBoundingClientRect().top, stable.getBoundingClientRect().top])";
+    assert_eq!(vm.eval(read).unwrap(), "[60,120]");
+    let publishes = vm.layout_pass_observability_for_test().1;
+
+    vm.eval("outer.scrollTop=4; inner.scrollTop=7").unwrap();
+    assert_eq!(vm.eval(read).unwrap(), "[38,120]");
+    assert_eq!(vm.layout_pass_observability_for_test().1, publishes);
+
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let host = host.borrow();
+    let document = host.document_handle();
+    let viewport = host.layout_viewport_for_document(document);
+    let fresh = host
+        .build_layout_pass_for_document(
+            document,
+            moli_layout::LayoutPassRequest::new(viewport, moli_layout::LayoutFlushReason::Test),
+        )
+        .unwrap()
+        .unwrap();
+    for source in ["outer", "inner", "mark", "stable"] {
+        let node = vm.document_runtime.get_element_by_id(source).unwrap();
+        let current = host
+            .with_latest_layout_tree_for_document(document, |tree| {
+                tree.client_rects_for_source(node)
+            })
+            .unwrap();
+        assert_eq!(current, fresh.client_rects_for_source(node), "{source}");
+    }
+}
+
+#[test]
 fn realtime_plain_scroll_matches_a_fresh_layout_without_rebuilding() {
     let mut vm = realtime_vm(
         r#"<!doctype html>
