@@ -110,6 +110,42 @@ pub fn pixel_snap_paint_rect(rect: PaintRect) -> Option<PaintRect> {
     (width > 0.0 && height > 0.0).then(|| PaintRect::new(x, y, width, height))
 }
 
+/// The device-pixel grid for CSS geometry before property transforms.
+#[derive(Clone, Copy)]
+pub struct PaintPixelGrid(f32);
+
+impl PaintPixelGrid {
+    pub fn new(device_scale: f32) -> Self {
+        Self(if device_scale.is_finite() && device_scale > 0.0 {
+            device_scale
+        } else {
+            1.0
+        })
+    }
+
+    pub fn snap_rect(self, rect: PaintRect) -> Option<PaintRect> {
+        let scale = self.0;
+        let snapped = pixel_snap_paint_rect(PaintRect::new(
+            rect.x * scale,
+            rect.y * scale,
+            rect.width * scale,
+            rect.height * scale,
+        ))?;
+        Some(PaintRect::new(
+            snapped.x / scale,
+            snapped.y / scale,
+            snapped.width / scale,
+            snapped.height / scale,
+        ))
+    }
+
+    pub fn snap_axis_allowing_zero(self, location: f32, size: f32) -> (f32, f32) {
+        let scale = self.0;
+        let (location, size) = pixel_snap_paint_axis_allowing_zero(location * scale, size * scale);
+        (location / scale, size / scale)
+    }
+}
+
 /// Paint-facing compatibility name for a canonical CSS-pixel point.
 pub type PaintPoint = crate::LayoutPoint;
 
@@ -609,8 +645,9 @@ impl PaintTileAxis {
     }
 }
 
-/// A tile grid clipped to `coverage`, in the same coordinate space as the
-/// undisplaced tiles. Pixel snapping never accumulates into the grid phase.
+/// A tile grid in the same coordinate space as its projected `coverage`.
+/// Backends use the supplied coverage without rounding it again. Tile edge
+/// snapping never accumulates into the grid phase.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaintTileGrid {
     pub x: PaintTileAxis,

@@ -144,7 +144,6 @@ pub(super) fn project_css_mask<N>(
                     paint_space,
                     snapshot,
                     CssImageLayerKind::Mask,
-                    false,
                 );
             }
             GenericImage::LightDark(_)

@@ -36,7 +36,7 @@ use crate::{
     LayoutBoxId, LayoutClipChainId, LayoutClipKind, LayoutElementCategory, LayoutError,
     LayoutFormControlKind, LayoutInputControlKind, LayoutOutputBoxId, LayoutRect, LayoutReplacedKind,
     LayoutWorld, PaintColor, PaintDiagnostic, PaintDiagnosticSeverity, PaintEdgeSizes, PaintFragment,
-    PaintShape, PaintSnapshot,
+    PaintPixelGrid, PaintShape, PaintSnapshot,
     capture::ResolvedPaintCapture,
     projection::{PaintProjection, PaintSpace},
     stacking::PaintOrderEvent,
@@ -137,24 +137,7 @@ impl PaintSpace {
     /// Snap to the device pixel grid before applying property transforms.
     /// The result is still in CSS pixels and includes the paint offset.
     fn pixel_snapped_rect(self, rect: LayoutRect, device_scale: f32) -> Option<LayoutRect> {
-        let scale = if device_scale.is_finite() && device_scale > 0.0 {
-            device_scale
-        } else {
-            1.0
-        };
-        let rect = self.pre_transform_rect(rect);
-        let snapped = crate::pixel_snap_paint_rect(LayoutRect::new(
-            rect.x * scale,
-            rect.y * scale,
-            rect.width * scale,
-            rect.height * scale,
-        ))?;
-        Some(LayoutRect::new(
-            snapped.x / scale,
-            snapped.y / scale,
-            snapped.width / scale,
-            snapped.height / scale,
-        ))
+        PaintPixelGrid::new(device_scale).snap_rect(self.pre_transform_rect(rect))
     }
 
     fn local_rect(self, rect: LayoutRect) -> LayoutRect {
@@ -835,8 +818,9 @@ fn push_clip_node<N>(
     // Overflow edges share the box's snapped paint geometry. Fractional clips
     // otherwise blend an edge differently when atomic paint ordering keeps a
     // background and its text in one clip layer instead of reopening it.
-    let snapped =
-        overflow_owner.and_then(|_| paint_space.pixel_snapped_box_shape(shape.clone(), 1.0));
+    let snapped = overflow_owner.and_then(|_| {
+        paint_space.pixel_snapped_box_shape(shape.clone(), snapshot.viewport.device_pixel_ratio)
+    });
     let (shape, transform) = match snapped {
         Some(shape) => (shape, paint_space.property_transform()),
         None => (shape, paint_space.local_transform()),

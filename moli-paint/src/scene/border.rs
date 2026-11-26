@@ -14,8 +14,7 @@ use crate::geometry::{normalize_radii, rect_path, rounded_rect_path, to_backend_
 use anyrender::PaintScene;
 use moli_layout::{
     PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintColor, PaintCornerRadii,
-    PaintCornerRadius, PaintEdgeSizes, PaintRect, pixel_snap_paint_axis,
-    pixel_snap_paint_axis_allowing_zero,
+    PaintCornerRadius, PaintEdgeSizes, PaintPixelGrid, PaintRect,
 };
 use peniko::Fill;
 use peniko::kurbo::Shape as _;
@@ -32,13 +31,11 @@ pub(super) fn paint_border(
     styles: PaintBorderStyles,
     radii: PaintCornerRadii,
     transform: Affine,
-    _device_scale: f64,
+    device_scale: f32,
 ) {
-    let Some(rect) = sanitize_border_rect(rect) else {
-        return;
-    };
-    let widths = sanitize_border_widths(widths, rect.width() as f32, rect.height() as f32);
-    let Some((rect, widths)) = pixel_snapped_border_geometry(rect, widths) else {
+    let Some((rect, widths)) =
+        pixel_snapped_border_geometry(rect, widths, PaintPixelGrid::new(device_scale))
+    else {
         return;
     };
     let radii = normalize_radii(radii, rect.width(), rect.height());
@@ -85,44 +82,32 @@ pub(super) fn paint_border(
     }
 }
 
-/// Resolve the outer and inner border edges onto the layout-pixel grid.
+/// Resolve the outer and inner border edges onto the device-pixel grid.
 ///
 /// Blink independently snaps `PixelSnappedContouredBorder` and
 /// `PixelSnappedContouredInnerBorder`. Reconstructing the four used widths
 /// from those two rectangles preserves that contract for asymmetric and
 /// fractional borders instead of merely rounding the outer origin.
 fn pixel_snapped_border_geometry(
-    rect: Rect,
+    rect: PaintRect,
     widths: PaintEdgeSizes,
+    grid: PaintPixelGrid,
 ) -> Option<(Rect, PaintEdgeSizes)> {
-    let (outer_x, outer_width) = pixel_snap_paint_axis(rect.x0 as f32, rect.width() as f32);
-    let (outer_y, outer_height) = pixel_snap_paint_axis(rect.y0 as f32, rect.height() as f32);
-    if outer_width <= 0.0 || outer_height <= 0.0 {
-        return None;
-    }
-
-    let inner_x = rect.x0 as f32 + widths.left;
-    let inner_y = rect.y0 as f32 + widths.top;
-    let inner_width = (rect.width() as f32 - widths.left - widths.right).max(0.0);
-    let inner_height = (rect.height() as f32 - widths.top - widths.bottom).max(0.0);
-    let (inner_x, inner_width) = pixel_snap_paint_axis_allowing_zero(inner_x, inner_width);
-    let (inner_y, inner_height) = pixel_snap_paint_axis_allowing_zero(inner_y, inner_height);
-
-    let outer = Rect::new(
-        f64::from(outer_x),
-        f64::from(outer_y),
-        f64::from(outer_x + outer_width),
-        f64::from(outer_y + outer_height),
-    );
+    let outer = grid.snap_rect(rect)?;
+    let widths = sanitize_border_widths(widths, rect.width, rect.height);
+    let inner_width = (rect.width - widths.left - widths.right).max(0.0);
+    let inner_height = (rect.height - widths.top - widths.bottom).max(0.0);
+    let (inner_x, inner_width) = grid.snap_axis_allowing_zero(rect.x + widths.left, inner_width);
+    let (inner_y, inner_height) = grid.snap_axis_allowing_zero(rect.y + widths.top, inner_height);
     let widths = PaintEdgeSizes::new(
-        (inner_y - outer_y).clamp(0.0, outer_height),
-        (outer.x1 as f32 - (inner_x + inner_width)).clamp(0.0, outer_width),
-        (outer.y1 as f32 - (inner_y + inner_height)).clamp(0.0, outer_height),
-        (inner_x - outer_x).clamp(0.0, outer_width),
+        (inner_y - outer.y).clamp(0.0, outer.height),
+        (outer.right() - (inner_x + inner_width)).clamp(0.0, outer.width),
+        (outer.bottom() - (inner_y + inner_height)).clamp(0.0, outer.height),
+        (inner_x - outer.x).clamp(0.0, outer.width),
     );
     Some((
-        outer,
-        sanitize_border_widths(widths, outer_width, outer_height),
+        to_backend_rect(outer)?,
+        sanitize_border_widths(widths, outer.width, outer.height),
     ))
 }
 
@@ -754,10 +739,6 @@ fn sample_points_along_path(path: &BezPath, spacing: f64, count: usize) -> Vec<P
         points.push(polyline[segment].lerp(polyline[segment + 1], progress));
     }
     points
-}
-
-fn sanitize_border_rect(rect: PaintRect) -> Option<Rect> {
-    to_backend_rect(rect)
 }
 
 fn sanitize_border_widths(
