@@ -10,10 +10,10 @@
 //! Raster output and resource-budget regressions.
 
 use moli_layout::{
-    PaintBlendMode, PaintBorderColors, PaintBrush, PaintCaptureSurface, PaintColor,
-    PaintCompositeMode, PaintCornerRadii, PaintCornerRadius, PaintEdgeSizes, PaintFilter,
-    PaintFragment, PaintImage, PaintImageSampling, PaintRect, PaintShape, PaintSnapshot,
-    PaintSvgImage, PaintTransform2D, PaintViewport,
+    PaintBlendMode, PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintBrush,
+    PaintCaptureSurface, PaintColor, PaintCompositeMode, PaintCornerRadii, PaintCornerRadius,
+    PaintEdgeSizes, PaintFilter, PaintFragment, PaintImage, PaintImageSampling, PaintRect,
+    PaintShape, PaintSnapshot, PaintSvgImage, PaintTransform2D, PaintViewport,
 };
 use peniko::Blob;
 use std::sync::Arc;
@@ -71,6 +71,109 @@ fn maximum_corner_radii_leave_pill_corners_unpainted() {
     }
     assert_eq!(pixel(&image, 60, 0), [0, 0, 255, 255]);
     assert_eq!(pixel(&image, 60, 20), [0, 0, 255, 255]);
+}
+
+#[test]
+fn rounded_border_keeps_top_arcs_when_the_bottom_edge_is_transparent() {
+    let radius = PaintCornerRadius::new(26.0, 26.0);
+    for bottom_width in [0.0, 1.0] {
+        let mut snapshot = snapshot(128, 60, 2.0);
+        snapshot.push_fragment(PaintFragment::Border {
+            rect: PaintRect::new(4.0, 4.0, 120.0, 52.0),
+            widths: PaintEdgeSizes::new(1.0, 1.0, bottom_width, 1.0),
+            colors: PaintBorderColors {
+                bottom: PaintColor::TRANSPARENT,
+                ..PaintBorderColors::all(PaintColor::new(0.0, 0.0, 0.0, 1.0))
+            },
+            styles: PaintBorderStyles::default(),
+            radii: PaintCornerRadii {
+                top_left: radius,
+                top_right: radius,
+                ..PaintCornerRadii::default()
+            },
+            transform: PaintTransform2D::IDENTITY,
+        });
+        let image = raster_snapshot(&snapshot).expect("rounded border should rasterize");
+        for (x, y) in [(23, 23), (232, 23)] {
+            assert!(
+                pixel(&image, x, y)[0] < 100,
+                "rounded join at ({x}, {y}) should be painted with bottom width {bottom_width}"
+            );
+        }
+        assert_eq!(pixel(&image, 8, 8), [255; 4]);
+        assert_eq!(pixel(&image, 128, 111), [255; 4]);
+    }
+}
+
+#[test]
+fn rounded_border_miter_preserves_adjacent_edge_colors() {
+    let mut snapshot = snapshot(128, 60, 2.0);
+    snapshot.push_fragment(PaintFragment::Border {
+        rect: PaintRect::new(4.0, 4.0, 120.0, 52.0),
+        widths: PaintEdgeSizes::new(1.0, 1.0, 1.0, 1.0),
+        colors: PaintBorderColors {
+            top: PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            left: PaintColor::new(0.0, 0.0, 1.0, 1.0),
+            ..PaintBorderColors::all(PaintColor::TRANSPARENT)
+        },
+        styles: PaintBorderStyles::default(),
+        radii: PaintCornerRadii {
+            top_left: PaintCornerRadius::new(26.0, 26.0),
+            ..PaintCornerRadii::default()
+        },
+        transform: PaintTransform2D::IDENTITY,
+    });
+    let image = raster_snapshot(&snapshot).expect("two-color rounded border should rasterize");
+    let top_arc = pixel(&image, 34, 15);
+    let left_arc = pixel(&image, 15, 34);
+    assert!(top_arc[0] == 255 && top_arc[2] < 100, "{top_arc:?}");
+    assert!(left_arc[2] == 255 && left_arc[0] < 100, "{left_arc:?}");
+}
+
+#[test]
+fn rounded_border_patterns_stay_inside_the_outer_contour() {
+    let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let transparent = PaintBorderColors::all(PaintColor::TRANSPARENT);
+    for (style, widths, colors, outside_pixel) in [
+        (
+            PaintBorderStyle::Dashed,
+            PaintEdgeSizes::new(12.0, 1.0, 1.0, 1.0),
+            PaintBorderColors {
+                top: red,
+                ..transparent
+            },
+            (300, 58),
+        ),
+        (
+            PaintBorderStyle::Dotted,
+            PaintEdgeSizes::new(1.0, 1.0, 1.0, 12.0),
+            PaintBorderColors {
+                left: red,
+                ..transparent
+            },
+            (64, 30),
+        ),
+    ] {
+        let mut snapshot = snapshot(168, 116, 2.0);
+        snapshot.push_fragment(PaintFragment::Border {
+            rect: PaintRect::new(12.0, 12.0, 144.0, 92.0),
+            widths,
+            colors,
+            styles: PaintBorderStyles::all(style),
+            radii: PaintCornerRadii::all(PaintCornerRadius::new(48.0, 48.0)),
+            transform: PaintTransform2D::IDENTITY,
+        });
+        let image = raster_snapshot(&snapshot).expect("rounded pattern should rasterize");
+        assert!(
+            image
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[1] < 100)
+        );
+        assert_eq!(pixel(&image, outside_pixel.0, outside_pixel.1), [255; 4]);
+    }
 }
 
 #[test]
