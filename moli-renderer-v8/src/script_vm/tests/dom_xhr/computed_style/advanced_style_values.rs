@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn part_names_and_forwarding_changes_invalidate_elements_and_pseudos() {
+    let mut vm = new_parsed_test_vm(
+        "https://shadow-parts.test/",
+        r#"<!doctype html><style>
+          #host::part(label) { color: red; }
+          #host::part(label)::before { color: blue; }
+        </style><div id="host"></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+              const outer = document.getElementById('host').attachShadow({mode: 'open'});
+              outer.innerHTML = '<div exportparts="private: label"></div>';
+              const forwarder = outer.firstElementChild;
+              const inner = forwarder.attachShadow({mode: 'open'});
+              inner.innerHTML = '<style>span::before { content: "Label"; }</style>' +
+                                '<span part="private">Text</span>';
+              const part = inner.querySelector('span');
+              const read = () => [getComputedStyle(part).color, getComputedStyle(part, '::before').color];
+              const initial = read();
+              part.setAttribute('part', 'other');
+              const renamed = read();
+              part.setAttribute('part', 'private');
+              const restored = read();
+              forwarder.setAttribute('exportparts', 'private: other');
+              return JSON.stringify([initial, renamed, restored, read()]);
+            })()"#,
+        )
+        .expect("shadow part style reads should succeed");
+    assert_eq!(
+        result,
+        r#"[["rgb(255, 0, 0)","rgb(0, 0, 255)"],["rgb(0, 0, 0)","rgb(0, 0, 0)"],["rgb(255, 0, 0)","rgb(0, 0, 255)"],["rgb(0, 0, 0)","rgb(0, 0, 0)"]]"#,
+    );
+}
+
+#[test]
 fn computed_style_blockifies_legacy_webkit_box_items_until_clamped() {
     let mut vm = new_parsed_test_vm(
         "https://webkit-box-blockification.test/",
