@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::v8_string_from_utf16_units;
 use crate::webidl;
 
 #[derive(webidl::WebIdlArgs)]
@@ -40,7 +41,7 @@ pub(super) fn range_to_string_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let value = range_string_contents(scope, args.this()).unwrap_or_default();
-    let Some(text) = v8_string(scope, &value) else {
+    let Some(text) = v8_string_from_utf16_units(scope, &value) else {
         rv.set(v8::undefined(scope).into());
         return;
     };

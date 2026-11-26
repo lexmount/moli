@@ -1,5 +1,6 @@
 use super::ordering::point_order_handles;
 use super::*;
+use crate::dom::native::DomHost;
 use crate::native_bridge::document::XHTML_NS;
 use crate::native_bridge::element::{
     StyleMode, observable_sources_with_fragments, style_property_value,
@@ -10,7 +11,7 @@ use std::{cmp::Ordering, collections::HashSet};
 pub(in crate::context_bootstrap) fn range_string_contents<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: v8::Local<'s, v8::Object>,
-) -> Option<String> {
+) -> Option<Vec<u16>> {
     if let Some(boundaries) = native_range_boundary_handles(scope, range) {
         return range_string_contents_handle(
             scope,
@@ -145,62 +146,57 @@ fn range_string_contents_handle(
     start_offset: u32,
     end: DomHandle,
     end_offset: u32,
-) -> Option<String> {
-    if start == end {
-        let node_type = node_type_for_handle(scope, start)?;
-        return match node_type {
-            NodeType::Text | NodeType::CDataSection => {
-                slice_character_data_handle(scope, start, start_offset, end_offset)
-            }
-            NodeType::Comment | NodeType::ProcessingInstruction => Some(String::new()),
-            _ => {
-                let mut out = String::new();
-                for child in child_handles_between_offsets(scope, start, start_offset, end_offset)?
-                {
-                    append_text_content_handle(scope, child, &mut out)?;
-                }
-                Some(out)
-            }
-        };
-    }
-
-    let mut out = String::new();
-    for handle in text_nodes_in_tree_order_between(scope, start, end) {
-        let data = character_data_string_handle(scope, handle)?;
-        let slice = if handle == start {
-            range_slice_utf16_string(
-                &data,
-                start_offset as usize,
-                character_data_utf16_units_handle(scope, handle)?.len(),
-            )
-        } else if handle == end {
-            range_slice_utf16_string(&data, 0, end_offset as usize)
-        } else {
-            data
-        };
-        out.push_str(&slice);
+) -> Option<Vec<u16>> {
+    let host = unsafe { &*context_host_ptr_from_global_bridge(scope)? };
+    let dom = host.dom_host();
+    // An element boundary falls before the child at its offset, or after
+    // the entire subtree when the offset is at the end of the child list.
+    let mut current = match dom.node(start)?.node_type() {
+        NodeType::Text | NodeType::CDataSection => Some(start),
+        _ => node_after_child_boundary(dom, start, start_offset),
+    };
+    let stop = match dom.node(end)?.node_type() {
+        NodeType::Text | NodeType::CDataSection => node_after_subtree(dom, end),
+        _ => node_after_child_boundary(dom, end, end_offset),
+    };
+    let mut out = Vec::new();
+    while current != stop {
+        let handle = current?;
+        let node = dom.node(handle)?;
+        if matches!(node.node_type(), NodeType::Text | NodeType::CDataSection) {
+            let units = host.character_data_utf16_units(handle)?;
+            let from = if handle == start {
+                start_offset as usize
+            } else {
+                0
+            };
+            let to = if handle == end {
+                end_offset as usize
+            } else {
+                units.len()
+            };
+            out.extend_from_slice(units.get(from..to)?);
+        }
+        current = dom
+            .first_child(handle)
+            .or_else(|| node_after_subtree(dom, handle));
     }
     Some(out)
 }
 
-fn append_text_content_handle(
-    scope: &mut v8::PinScope<'_, '_>,
-    node: DomHandle,
-    out: &mut String,
-) -> Option<()> {
-    match node_type_for_handle(scope, node)? {
-        NodeType::Text | NodeType::CDataSection => {
-            out.push_str(&character_data_string_handle(scope, node)?);
-        }
-        NodeType::Comment | NodeType::ProcessingInstruction => {}
-        _ => {
-            let length = range_node_length_handle(scope, node)?;
-            for child in child_handles_between_offsets(scope, node, 0, length)? {
-                append_text_content_handle(scope, child, out)?;
-            }
-        }
-    }
-    Some(())
+fn node_after_child_boundary(
+    dom: &DomHost,
+    container: DomHandle,
+    offset: u32,
+) -> Option<DomHandle> {
+    dom.child_handles(container)
+        .nth(offset as usize)
+        .or_else(|| node_after_subtree(dom, container))
+}
+
+fn node_after_subtree(dom: &DomHost, root: DomHandle) -> Option<DomHandle> {
+    std::iter::successors(Some(root), |&node| dom.parent_node(node))
+        .find_map(|node| dom.next_sibling(node))
 }
 
 #[derive(Clone, Copy, Default)]
@@ -591,43 +587,4 @@ fn character_data_string_handle(
 ) -> Option<String> {
     let units = character_data_utf16_units_handle(scope, handle)?;
     Some(string_from_utf16_units_lossy(&units))
-}
-
-fn text_nodes_in_tree_order_between(
-    scope: &mut v8::PinScope<'_, '_>,
-    start: DomHandle,
-    end: DomHandle,
-) -> Vec<DomHandle> {
-    let mut out = Vec::new();
-    let mut current = Some(start);
-    while let Some(handle) = current {
-        if matches!(
-            node_type_for_handle(scope, handle),
-            Some(NodeType::Text | NodeType::CDataSection)
-        ) {
-            out.push(handle);
-        }
-        if handle == end {
-            break;
-        }
-        current = next_node_in_tree_order(scope, handle);
-    }
-    out
-}
-
-fn next_node_in_tree_order(
-    scope: &mut v8::PinScope<'_, '_>,
-    handle: DomHandle,
-) -> Option<DomHandle> {
-    if let Some(first_child) = child_handle_at_offset_optional(scope, handle, 0)? {
-        return Some(first_child);
-    }
-
-    let mut current = handle;
-    loop {
-        if let Some(next_sibling) = next_sibling_handle(scope, current) {
-            return Some(next_sibling);
-        }
-        current = parent_handle(scope, current)?;
-    }
 }
