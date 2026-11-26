@@ -9,15 +9,31 @@ use url::Url;
 #[derive(Clone)]
 pub(crate) struct FetchResourceTiming {
     start_unix_millis: f64,
+    initiator_type: &'static str,
     initiator_url: String,
 }
 
 impl FetchResourceTiming {
     pub(crate) fn capture(scope: &mut v8::PinScope<'_, '_>, origin: &WebOrigin) -> Self {
+        Self::from_captured_initiator(
+            "fetch",
+            crate::resource_initiator::current_url(scope, origin),
+        )
+    }
+
+    pub(crate) fn from_captured_initiator(
+        initiator_type: &'static str,
+        initiator_url: String,
+    ) -> Self {
         Self {
             start_unix_millis: crate::context_bootstrap::unix_epoch_millis(),
-            initiator_url: crate::resource_initiator::current_url(scope, origin),
+            initiator_type,
+            initiator_url,
         }
+    }
+
+    pub(crate) fn clear_initiator(&mut self) {
+        self.initiator_url.clear();
     }
 
     pub(crate) fn completed(
@@ -31,7 +47,7 @@ impl FetchResourceTiming {
         let readable = metadata.response_type.is_readable();
         let mut entry = ResourcePerformanceEntry::from_streaming_network_response(
             url.as_str(),
-            "fetch",
+            self.initiator_type,
             Some(self.start_unix_millis),
             head,
             body_size,
@@ -61,7 +77,7 @@ impl FetchResourceTiming {
     pub(crate) fn failed(&self, url: &Url) -> ResourcePerformanceEntry {
         ResourcePerformanceEntry::from_network_failure(
             url.as_str(),
-            "fetch",
+            self.initiator_type,
             Some(self.start_unix_millis),
         )
     }
@@ -76,6 +92,7 @@ mod tests {
     fn completed_uses_the_response_snapshot_and_keeps_delivery_separate() {
         let timing = FetchResourceTiming {
             start_unix_millis: 42.0,
+            initiator_type: "fetch",
             initiator_url: "https://page.test/script.js".to_owned(),
         };
         let url = Url::parse("https://cross.test/body").unwrap();

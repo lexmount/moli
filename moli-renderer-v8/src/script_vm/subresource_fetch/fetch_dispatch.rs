@@ -888,7 +888,21 @@ impl ScriptVm {
                         PendingSubresourceContinuation::StylesheetSubresource {
                             binding,
                             target,
+                            timing,
                         } => {
+                            if let Some(mut timing) = timing {
+                                if skip_fetch_security_validation {
+                                    timing.clear_initiator();
+                                }
+                                let entry = timing.completed(
+                                    &pending.info.url,
+                                    &response_head,
+                                    observable_response.body_bytes().len(),
+                                    &metadata,
+                                    response_filter.as_ref(),
+                                );
+                                crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                            }
                             completed_web_font = match target {
                                 StylesheetSubresourceTarget::Image(identity) => {
                                     if let Some(identity) = identity {
@@ -1039,7 +1053,12 @@ impl ScriptVm {
                         PendingSubresourceContinuation::StylesheetSubresource {
                             binding,
                             target,
+                            timing,
                         } => {
+                            if let Some(timing) = timing {
+                                let entry = timing.failed(&pending.info.url);
+                                crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                            }
                             completed_web_font = match target {
                                 StylesheetSubresourceTarget::Image(identity) => {
                                     if let Some(identity) = identity {

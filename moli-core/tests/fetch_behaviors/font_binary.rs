@@ -27,3 +27,55 @@ async fn font_face_binary_sources_validate_payloads_and_buffer_conversion_order(
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stylesheet_web_font_timing_uses_its_document_url() -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let origin = format!("http://{}", listener.local_addr()?);
+    let server = tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let Ok(byte) = socket.read_u8().await else {
+                    break;
+                };
+                request.push(byte);
+            }
+            let (kind, body): (&str, &[u8]) = if request.starts_with(b"GET /style-font.woff2 ") {
+                (
+                    "font/woff2",
+                    include_bytes!("../../../moli-layout/tests/fixtures/moli-ahem.woff2"),
+                )
+            } else {
+                ("text/html", br#"<!doctype html><style>@font-face { font-family: Probe; src: url('/style-font.woff2') } body { font-family: Probe }</style><body>probe"#)
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            if socket.write_all(head.as_bytes()).await.is_ok() {
+                let _ = socket.write_all(body).await;
+            }
+        }
+    });
+    let mut config = AppConfig::default();
+    config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
+    let browser = Browser::new(config)?;
+    let document_url = format!("{origin}/page");
+    let elapsed = async {
+        let mut page = browser.fetch(&document_url).await?;
+        let font_url = format!("{origin}/style-font.woff2");
+        let expression = format!(
+            "performance.getEntriesByName({font_url:?}).some(e => e.initiatorType === 'css')"
+        );
+        browser
+            .wait_for_script_truthy(&mut page, &expression, Duration::from_secs(5))
+            .await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    server.abort();
+    elapsed
+}
