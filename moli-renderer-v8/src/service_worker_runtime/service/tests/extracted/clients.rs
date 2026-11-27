@@ -3182,3 +3182,78 @@ fn notification_action_navigate_routes_to_page_owner_without_click_event() {
     let version = state.versions.get(&version_id).unwrap();
     assert_eq!(version.in_flight_event_count, 0);
 }
+
+#[test]
+fn clients_get_waits_for_reserved_window_commit_or_discard() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/worker.js"),
+        url("https://example.test/app/"),
+        [],
+    );
+    let run = RendererServiceWorkerRunIdentity::fresh();
+    {
+        let mut state = service.inner.state.lock();
+        let version = state.versions.get_mut(&version_id).unwrap();
+        version.run = run.clone();
+        version.running_state = ServiceWorkerVersionRunningState::Running {
+            host: new_running_test_host(version_id, &run),
+        };
+    }
+    let document_url = url("https://example.test/app/reserved.html");
+    let reserve = || {
+        register_reserved_window_client_for_test(
+            &service,
+            document_url.clone(),
+            ServiceWorkerClientFrameType::TopLevel,
+        )
+    };
+    let committed = reserve();
+    let discarded = reserve();
+    for (index, client_id) in [committed, discarded].into_iter().enumerate() {
+        let query = ServiceWorkerClientQuery {
+            request_id: index as u64,
+            registration_id,
+            version_id,
+            kind: ServiceWorkerClientQueryKind::Get {
+                exposed_client_id: service_worker_exposed_client_id(client_id),
+            },
+        };
+        assert!(service.defer_client_get_until_execution_ready(&query, &run));
+        assert_eq!(
+            service.inner.state.lock().pending_client_gets[&client_id].len(),
+            1
+        );
+    }
+
+    let page_tasks = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    assert!(
+        service.update_client_document_with_storage_key_and_completion_sender(
+            committed,
+            document_url.clone(),
+            ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&document_url),
+            ServiceWorkerClientFrameType::TopLevel,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(3)),
+            page_tasks.sender(),
+        )
+    );
+    service.unregister_client(discarded);
+    service.drain_service_lane();
+    assert!(service.inner.state.lock().pending_client_gets.is_empty());
+    for (client_id, expected) in [(committed, 1), (discarded, 0)] {
+        let result = service.query_clients(&ServiceWorkerClientQuery {
+            request_id: 9,
+            registration_id,
+            version_id,
+            kind: ServiceWorkerClientQueryKind::Get {
+                exposed_client_id: service_worker_exposed_client_id(client_id),
+            },
+        });
+        assert_eq!(result.clients.len(), expected);
+    }
+}

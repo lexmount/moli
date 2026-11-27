@@ -127,6 +127,9 @@ impl ServiceWorkerRuntimeService {
         query: ServiceWorkerClientQuery,
         run: RendererServiceWorkerRunIdentity,
     ) {
+        if self.defer_client_get_until_execution_ready(&query, &run) {
+            return;
+        }
         let version_id = query.version_id;
         let result = self.query_clients(&query);
         self.finish_client_query(version_id, run, result);

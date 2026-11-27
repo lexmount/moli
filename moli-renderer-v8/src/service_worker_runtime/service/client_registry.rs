@@ -1,3 +1,4 @@
+use super::super::state::PendingServiceWorkerClientGet;
 use super::*;
 
 impl ServiceWorkerRuntimeService {
@@ -321,15 +322,18 @@ impl ServiceWorkerRuntimeService {
         client_id: ServiceWorkerClientId,
         worker_tx: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerMessage>,
     ) -> bool {
-        let mut state = self.inner.state.lock();
-        let Some(client) = state.live_clients.get_mut(&client_id) else {
-            return false;
+        let pending_gets = {
+            let mut state = self.inner.state.lock();
+            let Some(client) = state.live_clients.get_mut(&client_id) else {
+                return false;
+            };
+            if !matches!(client.endpoint, ServiceWorkerClientEndpoint::PendingWorker) {
+                return false;
+            }
+            client.endpoint = ServiceWorkerClientEndpoint::Worker(worker_tx);
+            state.mark_client_execution_ready(client_id)
         };
-        if !matches!(client.endpoint, ServiceWorkerClientEndpoint::PendingWorker) {
-            return false;
-        }
-        client.execution_ready = true;
-        client.endpoint = ServiceWorkerClientEndpoint::Worker(worker_tx);
+        self.resume_client_gets(pending_gets);
         true
     }
 
@@ -393,15 +397,30 @@ impl ServiceWorkerRuntimeService {
     }
 
     fn mark_client_execution_ready(&self, client_id: ServiceWorkerClientId) {
-        if let Some(client) = self.inner.state.lock().live_clients.get_mut(&client_id) {
-            client.execution_ready = true;
+        let pending_gets = self
+            .inner
+            .state
+            .lock()
+            .mark_client_execution_ready(client_id);
+        self.resume_client_gets(pending_gets);
+    }
+
+    fn resume_client_gets(&self, pending_gets: Vec<PendingServiceWorkerClientGet>) {
+        for get in pending_gets {
+            // Revalidate the exposed id, storage key and exact requesting run
+            // after the client commits or is discarded.
+            self.enqueue_client_query(get.query, get.owner);
         }
     }
 
     pub(crate) fn unregister_client(&self, client_id: ServiceWorkerClientId) {
-        let progress = {
+        let (progress, pending_gets) = {
             let mut state = self.inner.state.lock();
             state.live_clients.remove(&client_id);
+            let pending_gets = state
+                .pending_client_gets
+                .remove(&client_id)
+                .unwrap_or_default();
             let mut registration_ids = Vec::new();
             for registration in state.registrations.values_mut() {
                 if registration.controlled_client_ids.remove(&client_id) {
@@ -412,7 +431,7 @@ impl ServiceWorkerRuntimeService {
                 &mut state,
                 registration_ids.iter().copied(),
             );
-            registration_ids
+            let progress = registration_ids
                 .into_iter()
                 .flat_map(|registration_id| {
                     if state
@@ -431,11 +450,13 @@ impl ServiceWorkerRuntimeService {
                         )
                     }
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (progress, pending_gets)
         };
         for progress in progress {
             self.run_lifecycle_progress(progress);
         }
+        self.resume_client_gets(pending_gets);
     }
 
     pub(crate) fn update_client_document_with_storage_key(
@@ -485,7 +506,7 @@ impl ServiceWorkerRuntimeService {
         completion_tx: Option<RendererPageServiceWorkerTaskSender>,
     ) -> bool {
         let current_document_url = service_worker_current_url_for_creation_url(&document_url);
-        let progress = {
+        let (progress, pending_gets) = {
             let mut state = self.inner.state.lock();
             if !state.live_clients.contains_key(&client_id) {
                 return false;
@@ -516,12 +537,12 @@ impl ServiceWorkerRuntimeService {
                 client.document_url = current_document_url.clone();
                 client.frame_type = frame_type;
                 client.storage_key = storage_key.clone();
-                client.execution_ready = true;
                 client.document_owner = document_owner;
                 if let Some(completion_tx) = completion_tx {
                     client.endpoint = ServiceWorkerClientEndpoint::Page(completion_tx);
                 }
             }
+            let pending_gets = state.mark_client_execution_ready(client_id);
             self.restore_stored_registrations_for_document_url_locked(
                 &mut state,
                 &current_document_url,
@@ -537,7 +558,7 @@ impl ServiceWorkerRuntimeService {
             {
                 state.record_target_version_updated(version_id);
             }
-            registration_ids
+            let progress = registration_ids
                 .into_iter()
                 .flat_map(|registration_id| {
                     if state
@@ -556,11 +577,13 @@ impl ServiceWorkerRuntimeService {
                         )
                     }
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (progress, pending_gets)
         };
         for progress in progress {
             self.run_lifecycle_progress(progress);
         }
+        self.resume_client_gets(pending_gets);
         true
     }
 
@@ -614,6 +637,53 @@ impl ServiceWorkerRuntimeService {
         client_ids.sort_unstable();
         client_ids.dedup();
         client_ids
+    }
+
+    pub(super) fn defer_client_get_until_execution_ready(
+        &self,
+        query: &ServiceWorkerClientQuery,
+        run: &RendererServiceWorkerRunIdentity,
+    ) -> bool {
+        let ServiceWorkerClientQueryKind::Get { exposed_client_id } = &query.kind else {
+            return false;
+        };
+        let mut state = self.inner.state.lock();
+        let Some(version) = state.versions.get(&query.version_id) else {
+            return false;
+        };
+        if version.run != *run
+            || matches!(
+                version.running_state,
+                ServiceWorkerVersionRunningState::Stopped
+            )
+        {
+            return false;
+        }
+        let Some(registration) = service_worker_query_registration_locked(
+            &state,
+            query.registration_id,
+            query.version_id,
+        ) else {
+            return false;
+        };
+        let Some(client_id) = state.live_clients.values().find_map(|client| {
+            (client.exposed_id == *exposed_client_id
+                && !client.execution_ready
+                && !client.discarded_or_frozen
+                && service_worker_registration_can_see_client(registration, client))
+            .then_some(client.id)
+        }) else {
+            return false;
+        };
+        state
+            .pending_client_gets
+            .entry(client_id)
+            .or_default()
+            .push(PendingServiceWorkerClientGet {
+                query: query.clone(),
+                owner: ServiceWorkerRunOwner::new(query.version_id, run.clone()),
+            });
+        true
     }
 
     pub(crate) fn query_clients(
