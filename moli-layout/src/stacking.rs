@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, ops::Range};
+use std::{borrow::Cow, fmt::Debug, hash::Hash, ops::Range};
 
 use parley::PositionedLayoutItem;
 
@@ -341,7 +341,7 @@ fn assign_tree_order<N>(
 {
     sequence[world.boxes.index_of(id)] = *next;
     *next += 1;
-    for child in ordered_children(world, id) {
+    for &child in ordered_children(world, id).iter() {
         assign_tree_order(world, child, sequence, next);
     }
 }
@@ -360,7 +360,7 @@ fn emit_context<N>(
     let mut flow = FlowCollection::default();
     let mut stacking = StackingDescendants::default();
     collect_contents(world, root, sequence, inline, &mut flow);
-    for child in ordered_children(world, root) {
+    for &child in ordered_children(world, root).iter() {
         collect_subtree(world, child, sequence, inline, &mut flow, &mut stacking);
     }
     stacking
@@ -418,7 +418,7 @@ fn collect_subtree<N>(
     if positioned || floated || atomic {
         let mut local = FlowCollection::default();
         collect_contents(world, id, sequence, inline, &mut local);
-        for child in ordered_children(world, id) {
+        for &child in ordered_children(world, id).iter() {
             collect_subtree(world, child, sequence, inline, &mut local, stacking);
         }
         let entry = PaintEntry {
@@ -451,7 +451,7 @@ fn collect_subtree<N>(
     }
     collect_contents(world, id, sequence, inline, flow);
     flow.outlines.push(id);
-    for child in ordered_children(world, id) {
+    for &child in ordered_children(world, id).iter() {
         collect_subtree(world, child, sequence, inline, flow, stacking);
     }
 }
@@ -588,32 +588,26 @@ where
     })
 }
 
-fn ordered_children<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> Vec<LayoutBoxId>
+fn ordered_children<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> Cow<'_, [LayoutBoxId]>
 where
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &world.boxes[id];
     let display = layout_box.style.display();
     if !display.is_flex_container() && !display.is_grid_container() {
-        return layout_box.children.clone();
+        return Cow::Borrowed(&layout_box.children);
     }
-    let mut children = layout_box
-        .children
-        .iter()
-        .copied()
-        .enumerate()
-        .collect::<Vec<_>>();
-    children.sort_by_key(|(document_order, child)| {
+    let mut children = layout_box.children.clone();
+    children.sort_by_key(|child| {
         let child = &world.boxes[child];
-        let order = if matches!(
+        if matches!(
             child.style.position(),
             LayoutPosition::Absolute | LayoutPosition::Fixed
         ) {
             0
         } else {
             child.style.order()
-        };
-        (order, *document_order)
+        }
     });
-    children.into_iter().map(|(_, child)| child).collect()
+    Cow::Owned(children)
 }
