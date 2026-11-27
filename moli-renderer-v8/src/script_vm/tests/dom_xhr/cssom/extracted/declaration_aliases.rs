@@ -1,13 +1,14 @@
 use super::*;
 
 #[test]
-fn css_property_shells_keep_supports_and_declarations_consistent() {
+fn unsupported_css_properties_are_not_exposed_as_declarations() {
     let mut vm = new_parsed_test_vm(
-        "https://css-property-shells.test/",
+        "https://unsupported-css-properties.test/",
         "<!doctype html><body></body>",
     );
     assert_eq!(
-        vm.eval(include_str!("css_property_shells.js")).unwrap(),
+        vm.eval(include_str!("unsupported_style_properties.js"))
+            .unwrap(),
         "true"
     );
 }

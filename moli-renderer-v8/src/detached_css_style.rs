@@ -15,7 +15,7 @@ use super::{
         CssStyleDeclarationSetPropertyArgs, CssStyleEntry as StyleEntry,
         camel_case_style_property_name, canonical_style_property_identifier,
         canonical_style_property_name, mask_compat_property_name, mask_compat_value_is_supported,
-        parse_css_declaration_list, parse_css_style_shell_keyword, serialize_css_style_entries,
+        parse_css_declaration_list, serialize_css_style_entries,
         serialize_css_style_entries_with_pdb_block, stylo_declaration_block_property_names,
         stylo_mask_property_name, top_level_comma_separated_component_values,
         webkit_transform_origin_compat_property_name,
@@ -515,79 +515,6 @@ const CSS_STYLE_DECLARATION_WEBKIT_ALIASES: &[&str] = &[
     "webkitUserSelect",
 ];
 
-// CSSOM shells accept CSS-wide keywords through the shared token parser.
-// Property-specific value grammars and layout behavior remain pending.
-const CSS_STYLE_DECLARATION_SHELL_PROPERTIES: &[&str] = &[
-    "-webkit-app-region",
-    "-webkit-border-before",
-    "-webkit-border-horizontal-spacing",
-    "-webkit-border-vertical-spacing",
-    "-webkit-box-reflect",
-    "-webkit-column-break-after",
-    "-webkit-column-break-before",
-    "-webkit-column-break-inside",
-    "-webkit-locale",
-    "-webkit-logical-height",
-    "-webkit-logical-width",
-    "-webkit-max-logical-height",
-    "-webkit-max-logical-width",
-    "-webkit-min-logical-height",
-    "-webkit-min-logical-width",
-    "-webkit-perspective-origin-x",
-    "-webkit-perspective-origin-y",
-    "-webkit-rtl-ordering",
-    "-webkit-tap-highlight-color",
-    "-webkit-text-combine",
-    "-webkit-text-decorations-in-effect",
-    "-webkit-transform-origin-x",
-    "-webkit-transform-origin-y",
-    "-webkit-transform-origin-z",
-    "-webkit-user-drag",
-    "animation-trigger",
-    "buffered-rendering",
-    "caret-shape",
-    "column-rule-break",
-    "column-rule-inset",
-    "column-rule-inset-cap-end",
-    "column-rule-inset-cap-start",
-    "column-rule-inset-junction",
-    "column-rule-inset-junction-end",
-    "column-rule-inset-start",
-    "column-wrap",
-    "dynamic-range-limit",
-    "interactivity",
-    "interest-delay-end",
-    "interest-delay-start",
-    "object-view-box",
-    "row-rule-break",
-    "row-rule-color",
-    "row-rule-inset-cap",
-    "row-rule-inset-cap-start",
-    "row-rule-inset-end",
-    "row-rule-inset-junction-end",
-    "row-rule-inset-junction-start",
-    "row-rule-style",
-    "row-rule-width",
-    "rule",
-    "rule-color",
-    "rule-inset-cap",
-    "rule-inset-end",
-    "rule-inset-start",
-    "rule-overlap",
-    "rule-visibility-items",
-    "rule-width",
-    "scroll-marker-group",
-    "speak",
-    "text-fit",
-    "text-spacing-trim",
-    "timeline-trigger",
-    "timeline-trigger-activation-range-end",
-    "timeline-trigger-active-range",
-    "timeline-trigger-active-range-end",
-    "timeline-trigger-name",
-    "timeline-trigger-source",
-];
-
 static CSS_STYLE_DECLARATION_EXPOSED_PROPERTY_NAMES: LazyLock<HashSet<String>> =
     LazyLock::new(|| {
         let mut names = HashSet::new();
@@ -619,18 +546,6 @@ pub(crate) fn css_style_declaration_standard_property_names() -> &'static [&'sta
 }
 
 fn for_each_css_style_declaration_exposed_property_name(visit: &mut impl FnMut(&str)) {
-    for_each_css_style_declaration_implemented_property_name(visit);
-    for property in CSS_STYLE_DECLARATION_SHELL_PROPERTIES {
-        for_each_css_property_accessor_name(property, visit);
-    }
-}
-
-pub(crate) fn css_style_declaration_is_shell_property(property: &str) -> bool {
-    CSS_STYLE_DECLARATION_SHELL_PROPERTIES.contains(&property)
-        && !css_style_declaration_standard_property_names().contains(&property)
-}
-
-fn for_each_css_style_declaration_implemented_property_name(visit: &mut impl FnMut(&str)) {
     let mut seen = HashSet::new();
     for name in css_style_declaration_standard_property_names() {
         for_each_css_property_accessor_name(name, &mut |name| {
@@ -725,8 +640,7 @@ use moli_css_parse::decapitalize_ascii_head as lowercase_ascii_head;
 fn all_shorthand_applies_to(property: &str) -> bool {
     !property.starts_with("--")
         && !matches!(property, "all" | "direction" | "unicode-bidi")
-        && (css_style_declaration_standard_property_names().contains(&property)
-            || css_style_declaration_is_shell_property(property))
+        && css_style_declaration_standard_property_names().contains(&property)
 }
 
 use crate::css_style::css_wide_keyword;
@@ -769,13 +683,6 @@ pub(crate) fn install_css_style_declaration_template_bindings<'s>(
         }
         "CSSStyleProperties" => {
             install_lightweight_css_style_prototype_template(scope, prototype, true);
-            for property in CSS_STYLE_DECLARATION_SHELL_PROPERTIES {
-                for_each_css_property_accessor_name(property, &mut |name| {
-                    install_lightweight_style_named_property_template_accessor(
-                        scope, prototype, name,
-                    );
-                });
-            }
         }
         "CSSFontFaceDescriptors" => {
             install_lightweight_css_style_prototype_template(scope, prototype, true);
@@ -1005,7 +912,7 @@ fn install_lightweight_style_property_template_accessors<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     target: v8::Local<'s, v8::ObjectTemplate>,
 ) {
-    for_each_css_style_declaration_implemented_property_name(&mut |name| {
+    for_each_css_style_declaration_exposed_property_name(&mut |name| {
         install_lightweight_style_named_property_template_accessor(scope, target, name);
     });
 }
@@ -2096,6 +2003,13 @@ fn set_style_entry<'s>(
         set_page_descriptor_style_entry(scope, style, &name, value, priority);
         return;
     }
+    if !value.is_empty()
+        && lightweight_style_interface_uses_standard_declarations(scope, style)
+        && !css_style_declaration_exposes_property_name(&name)
+        && !moli_css_parse::is_cssom_custom_property_name(&name)
+    {
+        return;
+    }
     if keyframe_style_property_write_is_ignored(scope, style, &name) {
         if value.is_empty() {
             let mut names = style_names(scope, style);
@@ -2342,9 +2256,6 @@ fn normalize_style_entry_value<'s>(
     if style_interface(scope, style) != "CSSPageDescriptors" || value.is_empty() {
         if keyframe_style_property_write_is_ignored(scope, style, name) {
             return None;
-        }
-        if css_style_declaration_is_shell_property(name) && !value.is_empty() {
-            return parse_css_style_shell_keyword(value).map(str::to_owned);
         }
         // Empty text removes the declaration; it is not a keyword to parse.
         if name == "all" && !value.is_empty() {
@@ -2994,7 +2905,6 @@ mod tests {
     fn scanned_css_style_declaration_exposes_property_name(property: &str) -> bool {
         css_style_declaration_standard_property_names()
             .iter()
-            .chain(CSS_STYLE_DECLARATION_SHELL_PROPERTIES)
             .any(|name| scanned_css_property_accessor_exposes_name(name, property))
             || CSS_STYLE_DECLARATION_PROPERTY_ALIASES
                 .iter()
@@ -3028,7 +2938,6 @@ mod tests {
         let mut probes = HashSet::new();
         for property in css_style_declaration_standard_property_names()
             .iter()
-            .chain(CSS_STYLE_DECLARATION_SHELL_PROPERTIES)
             .chain(CSS_STYLE_DECLARATION_PROPERTY_ALIASES)
         {
             add_accessor_name_probes(&mut probes, property);
