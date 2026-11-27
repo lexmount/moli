@@ -300,6 +300,7 @@ impl ViewportOutput {
 /// Editor state associated with the subscribed viewport's painted document.
 pub struct ViewportState {
     pub document: RendererDocumentLifecycleIdentity,
+    pub sequence: u64,
     pub editor: Option<RendererViewportEditor>,
 }
 
@@ -343,6 +344,7 @@ impl BufferedViewportFrames {
             .as_ref()
             .map(|frame| ViewportState {
                 document: frame.document,
+                sequence: frame.sequence,
                 editor: frame.editor.clone(),
             })
     }
