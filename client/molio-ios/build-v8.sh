@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 work=${MOLI_IOS_BUILD_DIR:-"${TMPDIR:-/tmp}/moli-ios"}
-repo=$(cd "$(dirname "$0")/../.." && pwd)
+ios=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$ios/../.." && pwd)
 rusty_commit=2768994f664e8a6e3aba27503606c58339136e2a
 v8_commit=c4ca1eccb90c5464d826b7713dc27178a53b0cfe
 target=aarch64-apple-ios
@@ -17,11 +18,11 @@ cd "$source"
 [[ $(git rev-parse HEAD) == "$rusty_commit" ]]
 git submodule update --init --recursive --depth 1 --jobs 8
 [[ $(git -C v8 rev-parse HEAD) == "$v8_commit" ]]
-linker_patch="$repo/molio/ios/xcode27-host-linker.patch"
+linker_patch="$ios/xcode27-host-linker.patch"
 if ! git -C build apply --reverse --check "$linker_patch" 2>/dev/null; then
     git -C build apply "$linker_patch"
 fi
-cage_patch="$repo/molio/ios/ios-cage-reservation.patch"
+cage_patch="$ios/ios-cage-reservation.patch"
 if ! git -C v8 apply --reverse --check "$cage_patch" 2>/dev/null; then
     git -C v8 apply "$cage_patch"
 fi

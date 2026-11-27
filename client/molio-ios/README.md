@@ -11,9 +11,9 @@ On Apple Silicon with Xcode, Git, Python 3, and curl, run from the Moli root:
 ```sh
 rustup target add aarch64-apple-ios
 export MOLI_IOS_BUILD_DIR="$PWD/target/iphoneos"
-molio/ios/build-v8.sh
-molio/ios/build-engine.sh smoke
-molio/ios/build-engine.sh browser
+client/molio-ios/build-v8.sh
+client/molio-ios/build-engine.sh smoke
+client/molio-ios/build-engine.sh browser
 ```
 
 The V8 script builds a pinned device archive with JIT disabled, pointer

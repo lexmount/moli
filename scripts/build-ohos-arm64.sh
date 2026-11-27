@@ -66,14 +66,7 @@ export RUSTY_V8_SRC_BINDING_PATH="$repo_root/vendor/v8-$v8_version/gen/src_bindi
 export V8_FROM_SOURCE=0 V8_FORCE_DEBUG=0 RUSTY_V8_SKIP_DOWNLOAD=0
 
 if [[ "${1:-}" == "--manifest-path" ]]; then
-    manifest_path="${2:?missing --manifest-path value}"
-    shift 2
-    cd "$(dirname "$manifest_path")"
-    if [[ ! -e Cargo.lock ]]; then
-        cp "$repo_root/Cargo.lock" "$scratch/Cargo.lock"
-        mv -n "$scratch/Cargo.lock" Cargo.lock
-    fi
-    cargo build --release --target "$target" --manifest-path "$(basename "$manifest_path")" "$@"
+    cargo build --locked --release --target "$target" "$@"
 else
     cargo build --locked --release -p moli --target "$target" "$@"
 fi

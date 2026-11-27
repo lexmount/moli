@@ -1287,7 +1287,7 @@ mod tests {
                 let (mime, body): (&str, &[u8]) = if path == "/clip.mp4" {
                     (
                         "video/mp4",
-                        include_bytes!("../../moli-video/tests/fixtures/primary-colors.mp4"),
+                        include_bytes!("../../../moli-video/tests/fixtures/primary-colors.mp4"),
                     )
                 } else {
                     (
