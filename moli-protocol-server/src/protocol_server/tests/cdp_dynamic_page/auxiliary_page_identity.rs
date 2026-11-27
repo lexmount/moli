@@ -18,6 +18,18 @@ pub(super) async fn open_auxiliary_with_url(
     url: &str,
     synchronous_script: &str,
 ) -> (String, TestCdpSocket) {
+    let id = open_auxiliary_target(addr, opener, url, synchronous_script).await;
+    let mut page = connect_dynamic_page(addr, &id).await;
+    send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
+    (id, page)
+}
+
+pub(super) async fn open_auxiliary_target(
+    addr: std::net::SocketAddr,
+    opener: &mut TestCdpSocket,
+    url: &str,
+    synchronous_script: &str,
+) -> String {
     let baseline = fetch_server_json(addr, "/json/list").await;
     let ids: Vec<_> = baseline
         .as_array()
@@ -41,13 +53,10 @@ pub(super) async fn open_auxiliary_with_url(
         targets.len() == ids.len() + 1
     })
     .await;
-    let id = targets.iter().find(|t| !ids.contains(&t["id"])).unwrap()["id"]
+    targets.iter().find(|t| !ids.contains(&t["id"])).unwrap()["id"]
         .as_str()
         .unwrap()
-        .to_owned();
-    let mut page = connect_dynamic_page(addr, &id).await;
-    send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
-    (id, page)
+        .to_owned()
 }
 
 async fn wait_for_value(page: &mut TestCdpSocket, expression: &str, expected: serde_json::Value) {
