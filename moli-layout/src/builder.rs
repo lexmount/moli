@@ -252,31 +252,43 @@ where
                 Ok(Vec::new())
             }
             LayoutSourceKind::Text => {
-                self.validate_non_element_semantics(source_node, source_kind)?;
-                let Some(text) = self.source.text(source_node) else {
+                let Some(text_box) = self.text_box(source_node, inherited_style)? else {
                     return Ok(Vec::new());
                 };
                 if !may_replace_leaf {
                     world.numeric_tree = None;
                 }
-                let id = world.allocate(LayoutWorld::new_box(
-                    Some(source_node),
-                    None,
-                    None,
-                    self.source.label(source_node),
-                    None,
-                    None,
-                    None,
-                    LayoutBoxKind::Text,
-                    ResolvedLayoutStyle::text_leaf_from(inherited_style),
-                    Some(Arc::from(text)),
-                ));
-                world.boxes[id].text_selection = self.source.text_selection(source_node);
+                let id = world.allocate(text_box);
                 world.map_source(source_node, id);
                 Ok(vec![id])
             }
             LayoutSourceKind::Element => self.build_element(world, source_node, may_replace_leaf),
         }
+    }
+
+    fn text_box(
+        &self,
+        source_node: S::NodeId,
+        inherited_style: &ResolvedLayoutStyle,
+    ) -> Result<Option<crate::LayoutBox<S::NodeId>>, LayoutError> {
+        self.validate_non_element_semantics(source_node, LayoutSourceKind::Text)?;
+        let Some(text) = self.source.text(source_node) else {
+            return Ok(None);
+        };
+        let mut layout_box = LayoutWorld::new_box(
+            Some(source_node),
+            None,
+            None,
+            self.source.label(source_node),
+            None,
+            None,
+            None,
+            LayoutBoxKind::Text,
+            ResolvedLayoutStyle::text_leaf_from(inherited_style),
+            Some(Arc::from(text)),
+        );
+        layout_box.text_selection = self.source.text_selection(source_node);
+        Ok(Some(layout_box))
     }
 
     fn build_element(

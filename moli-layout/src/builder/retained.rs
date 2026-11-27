@@ -1,6 +1,9 @@
 use super::*;
 use crate::{LayoutNamespace, LayoutSourceChange};
 
+#[cfg(test)]
+mod tests;
+
 fn can_refresh_style(style: &ResolvedLayoutStyle) -> bool {
     style.uses_horizontal_writing_mode()
         && !style.is_out_of_flow()
@@ -445,6 +448,20 @@ where
                     }
                 }
                 changed = true;
+                let previous_box = &world.boxes[previous];
+                if previous_box.kind.is_text()
+                    && previous_box.children.is_empty()
+                    && self.source.node_kind(child) == LayoutSourceKind::Text
+                {
+                    if let Some(replacement) = self.text_box(child, &world.boxes[id].style)? {
+                        world.replace_retained_box(previous, replacement);
+                        world.map_source(child, previous);
+                        retained.rebuilt_in_place.insert(previous);
+                        children.push(previous);
+                        reattach = true;
+                    }
+                    continue;
+                }
             }
 
             let inherited = world.boxes[id].style.clone();
