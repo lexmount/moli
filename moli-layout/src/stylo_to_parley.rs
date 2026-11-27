@@ -126,13 +126,7 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
     // platform symbol family so common arrows and marks resolve, which a face
     // such as SF Pro or Helvetica does not cover: U+21B5 (↵), U+21E7 (⇧), and
     // U+2713/U+2717 otherwise render as a box.
-    for fallback in symbol_fallback_families() {
-        if !families.iter().any(|family| {
-            matches!(family, FontFamilyName::Named(name) if name.eq_ignore_ascii_case(fallback))
-        }) {
-            families.push(FontFamilyName::Named(Cow::Borrowed(fallback)));
-        }
-    }
+    append_symbol_fallbacks(&mut families);
     let optical_size =
         (computed.clone_font_optical_sizing() == FontOpticalSizing::Auto).then_some(font_size);
     let variations = font_variations(&font.font_variation_settings, optical_size);
@@ -249,6 +243,21 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
         strikethrough_offset: None,
         strikethrough_size: decoration_thickness,
         strikethrough_brush: None,
+    }
+}
+
+/// Append the platform symbol families a declared family list does not already
+/// name, preserving the declared order and comparing family names without case.
+///
+/// Shared with the test so the deduplication under test is the one production
+/// runs, not a copy of it.
+fn append_symbol_fallbacks(families: &mut Vec<FontFamilyName<'static>>) {
+    for fallback in symbol_fallback_families() {
+        if !families.iter().any(|family| {
+            matches!(family, FontFamilyName::Named(name) if name.eq_ignore_ascii_case(fallback))
+        }) {
+            families.push(FontFamilyName::Named(Cow::Borrowed(fallback)));
+        }
     }
 }
 
@@ -497,6 +506,10 @@ fn text_stroke(
 mod tests {
     use super::*;
 
+    fn declared(name: &'static str) -> FontFamilyName<'static> {
+        FontFamilyName::Named(Cow::Borrowed(name))
+    }
+
     /// A text face such as SF Pro or Helvetica has no glyph for U+21B5 (↵) or
     /// U+2713 (✓), and CSS `font-family` names families rather than glyph
     /// coverage, so the fallback list must reach a symbol family or those
@@ -514,28 +527,54 @@ mod tests {
         );
     }
 
-    /// Appending a family that the CSS already names would shape it twice and
-    /// change nothing, so the append step must be a no-op for a list that
-    /// already ends in the platform symbol family.
+    /// The append runs through the production helper, so breaking the
+    /// deduplication there fails this test instead of leaving a copy passing.
     #[test]
-    fn symbol_fallback_skips_a_family_already_named() {
-        let mut families = vec![FontFamilyName::Named(Cow::Borrowed("Apple Symbols"))];
-        for fallback in symbol_fallback_families() {
-            if !families.iter().any(|family| {
-                matches!(family, FontFamilyName::Named(name) if name.eq_ignore_ascii_case(fallback))
-            }) {
-                families.push(FontFamilyName::Named(Cow::Borrowed(fallback)));
-            }
-        }
+    fn append_adds_symbol_family_after_declared_families() {
+        let mut families = vec![declared("Helvetica")];
+        append_symbol_fallbacks(&mut families);
+
+        assert!(
+            matches!(&families[0], FontFamilyName::Named(name) if name.as_ref() == "Helvetica"),
+            "a declared family must stay first"
+        );
+        assert_eq!(
+            families.len(),
+            1 + symbol_fallback_families().len(),
+            "every platform symbol family must be appended"
+        );
+        assert!(
+            matches!(&families[1], FontFamilyName::Named(name)
+                if name.as_ref().eq_ignore_ascii_case(symbol_fallback_families()[0])),
+            "the first appended family must be the platform symbol family"
+        );
+    }
+
+    /// Appending a family the CSS already names would shape it twice and change
+    /// nothing, so the append must skip it. ANSI and Unicode case folding both
+    /// apply, so a differently-cased name still deduplicates.
+    #[test]
+    fn append_skips_an_already_named_family_without_case_sensitivity() {
+        let symbol = symbol_fallback_families()[0];
+        let upper = symbol.to_uppercase();
+        let mut families = vec![declared(Box::leak(upper.into_boxed_str()))];
+        append_symbol_fallbacks(&mut families);
+
         let named = families
             .iter()
             .filter(|family| {
-                matches!(family, FontFamilyName::Named(name) if name.eq_ignore_ascii_case("Apple Symbols"))
+                matches!(family, FontFamilyName::Named(name)
+                    if name.as_ref().eq_ignore_ascii_case(symbol))
             })
             .count();
         assert_eq!(
             named, 1,
             "an already-named symbol family must not be added twice"
+        );
+        assert_eq!(
+            families.len(),
+            symbol_fallback_families().len(),
+            "only the remaining symbol families may be appended"
         );
     }
 }
