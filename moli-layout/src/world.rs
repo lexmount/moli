@@ -1118,42 +1118,40 @@ where
         // handles and their independently validated measurements survive.
         self.numeric_tree = None;
         self.boxes.retain_in_order(order);
-        let live = self.boxes.order_snapshot();
-        if let Some(numeric) = &mut self.inline_numeric_reuse {
-            numeric.retain_owners(|id| {
-                self.boxes.get(id).is_some_and(|b| {
-                    b.inline_layout
-                        .as_ref()
-                        .is_some_and(|context| context.references_only(|id| live.contains(id)))
-                })
-            });
-        }
-        for layout_box in self.boxes.iter_mut() {
-            if live.len() != previous_len {
-                // Retired construction wrappers must not remain as ancestry.
-                // Surviving handles are kept verbatim, without reindexing.
+        if self.boxes.len() != previous_len {
+            let live = self.boxes.order_snapshot();
+            for layout_box in self.boxes.iter_mut() {
                 layout_box.structural_parent =
                     layout_box.structural_parent.filter(|id| live.contains(*id));
                 layout_box.parent = layout_box.parent.filter(|id| live.contains(*id));
                 layout_box.children.retain(|id| live.contains(*id));
+                if layout_box
+                    .inline_layout
+                    .as_ref()
+                    .is_some_and(|context| !context.references_only(|id| live.contains(id)))
+                {
+                    layout_box.inline_layout = None;
+                }
             }
-            if layout_box
-                .inline_layout
-                .as_ref()
-                .is_some_and(|context| !context.references_only(|id| live.contains(id)))
-            {
-                layout_box.inline_layout = None;
+            // Both numeric owner maps can use the outcomes of the IFC check
+            // above. Reordering living boxes cannot retire a reference.
+            if let Some(numeric) = &mut self.inline_numeric_reuse {
+                numeric.retain_owners(|id| {
+                    self.boxes
+                        .get(id)
+                        .is_some_and(|b| b.inline_layout.is_some())
+                });
             }
+            self.source_mapping.retain(|_, id| live.contains(*id));
+            self.display_contents_mapping.retain(|_, ids| {
+                ids.retain(|id| live.contains(*id));
+                !ids.is_empty()
+            });
+            self.compact_cache_slots();
         }
-        self.source_mapping.retain(|_, id| live.contains(*id));
-        self.display_contents_mapping.retain(|_, ids| {
-            ids.retain(|id| live.contains(*id));
-            !ids.is_empty()
-        });
         self.numeric_layout_touched_marks.clear();
         self.numeric_layout_touched_marks
             .resize(self.boxes.len(), false);
-        self.compact_cache_slots();
         if let Some(started) = started {
             tracing::info!(target: "moli_cpu_profile", stage="layout_box_retention",
                 total_us=started.elapsed().as_micros(), previous_len, live_count=self.boxes.len());
