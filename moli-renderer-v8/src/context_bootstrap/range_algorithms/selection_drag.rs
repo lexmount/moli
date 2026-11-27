@@ -1,29 +1,30 @@
 use super::*;
 
+pub(crate) struct NativeSelectionDragSnapshot {
+    pub(crate) document: DomHandle,
+    pub(crate) start: DomHandle,
+    pub(crate) start_offset: u32,
+    pub(crate) end: DomHandle,
+    pub(crate) end_offset: u32,
+    pub(crate) text: String,
+}
+
 /// Resolve browser-initiated selection drags through the same native Range
 /// geometry and visible-text serializer used by the Selection Web API.
-fn document_selection_drag_text_at_point(
+pub(crate) fn document_selection_drag_snapshot_at_point(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     x: f64,
     y: f64,
-) -> Option<String> {
+) -> Option<NativeSelectionDragSnapshot> {
     let runtime = unsafe { &*runtime_ptr };
     let host = runtime.dom_host();
     let document = host.owner_document_handle(handle)?;
     let selection = runtime.document_selection_snapshot(document)?;
-    let (mut start, mut end) = (selection.start, selection.end);
-    match crate::range_boundary::point_order_in_dom(
-        host,
-        start.container,
-        start.offset,
-        end.container,
-        end.offset,
-    )? {
-        std::cmp::Ordering::Equal => return None,
-        std::cmp::Ordering::Greater => std::mem::swap(&mut start, &mut end),
-        std::cmp::Ordering::Less => {}
+    let (start, end) = selection.ordered_in_dom(host)?;
+    if start == end {
+        return None;
     }
     let boundaries = RangeBoundaryHandles {
         start: RangeBoundaryHandle {
@@ -46,42 +47,8 @@ fn document_selection_drag_text_at_point(
     }) {
         return None;
     }
-    text::range_selection_string_contents_for_boundaries(scope, boundaries)
-        .filter(|text| !text.is_empty())
-}
-
-pub(crate) struct NativeSelectionDragSnapshot {
-    pub(crate) document: DomHandle,
-    pub(crate) start: DomHandle,
-    pub(crate) start_offset: u32,
-    pub(crate) end: DomHandle,
-    pub(crate) end_offset: u32,
-    pub(crate) text: String,
-}
-
-pub(crate) fn document_selection_drag_snapshot_at_point(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
-    handle: DomHandle,
-    x: f64,
-    y: f64,
-) -> Option<NativeSelectionDragSnapshot> {
-    let text = document_selection_drag_text_at_point(scope, runtime_ptr, handle, x, y)?;
-    let runtime = unsafe { &*runtime_ptr };
-    let host = runtime.dom_host();
-    let document = host.owner_document_handle(handle)?;
-    let selection = runtime.document_selection_snapshot(document)?;
-    let (mut start, mut end) = (selection.start, selection.end);
-    if crate::range_boundary::point_order_in_dom(
-        host,
-        start.container,
-        start.offset,
-        end.container,
-        end.offset,
-    )? == std::cmp::Ordering::Greater
-    {
-        std::mem::swap(&mut start, &mut end);
-    }
+    let text = text::range_selection_string_contents_for_boundaries(scope, boundaries)
+        .filter(|text| !text.is_empty())?;
     Some(NativeSelectionDragSnapshot {
         document,
         start: start.container,

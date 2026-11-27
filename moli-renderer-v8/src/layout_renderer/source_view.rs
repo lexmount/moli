@@ -348,18 +348,9 @@ fn document_text_selections(
         return HashMap::new();
     };
 
-    let mut start = selection.start;
-    let mut end = selection.end;
-    if crate::range_boundary::point_order_in_dom(
-        host,
-        start.container,
-        start.offset,
-        end.container,
-        end.offset,
-    ) == Some(std::cmp::Ordering::Greater)
-    {
-        std::mem::swap(&mut start, &mut end);
-    }
+    let (start, end) = selection
+        .ordered_in_dom(host)
+        .unwrap_or((selection.start, selection.end));
 
     let mut text_nodes = Vec::new();
     let mut stack = vec![root];

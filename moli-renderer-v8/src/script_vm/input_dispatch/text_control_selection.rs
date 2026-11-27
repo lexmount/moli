@@ -22,8 +22,7 @@ pub(in crate::script_vm) struct TextControlMouseSelection {
     document: InputDocument,
     anchor: (u32, u32),
     granularity: SelectionGranularity,
-    press_point: LayoutPoint,
-    collapse_on_release: bool,
+    pending_collapse: Option<LayoutPoint>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -34,21 +33,12 @@ enum SelectionGranularity {
 }
 
 impl SelectionGranularity {
-    fn at_point(
-        self,
-        host: &PageScriptHost,
-        control: DomHandle,
-        caret: LayoutTextControlCaret,
-    ) -> (u32, u32) {
-        if self == Self::Character {
-            return (caret.offset as u32, caret.offset as u32);
-        }
-        let value = text_control_value(host, control);
+    fn at_point(self, value: &str, caret: LayoutTextControlCaret) -> (u32, u32) {
         let offset = caret.source_start as u32;
         match self {
             Self::Word => text_segment_at(value.split_word_bounds(), offset),
             Self::Paragraph => text_segment_at(value.split_inclusive('\n'), offset),
-            Self::Character => unreachable!("character selection is a caret"),
+            Self::Character => (caret.offset as u32, caret.offset as u32),
         }
     }
 }
@@ -81,7 +71,7 @@ impl TextControlMouseSelection {
         let Some(document) = InputDocument::for_target(runtime, control) else {
             return Ok(None);
         };
-        let Some(caret) = caret_hit(runtime, control, document, position)? else {
+        let Some((value, caret)) = caret_hit(runtime, control, document, position)? else {
             return Ok(None);
         };
         let (start, end, direction) = current_selection_state(runtime, control);
@@ -117,15 +107,16 @@ impl TextControlMouseSelection {
                 (anchor, anchor)
             }
             SelectionGranularity::Word if start < end => (start, end),
-            _ => granularity.at_point(runtime, control, caret),
+            _ => granularity.at_point(&value, caret),
         };
         // A press on an existing selection keeps the range until the gesture
         // becomes a click or starts extending the selection.
-        let collapse_on_release = granularity == SelectionGranularity::Character
+        let pending_collapse = (granularity == SelectionGranularity::Character
             && !extend
             && start < end
-            && (start..=end).contains(&offset);
-        if !collapse_on_release {
+            && (start..=end).contains(&offset))
+        .then(|| position.layout_point());
+        if pending_collapse.is_none() {
             let focus = if granularity == SelectionGranularity::Character {
                 offset
             } else {
@@ -138,8 +129,7 @@ impl TextControlMouseSelection {
             document,
             anchor,
             granularity,
-            press_point: position.layout_point(),
-            collapse_on_release,
+            pending_collapse,
         }))
     }
 
@@ -153,17 +143,18 @@ impl TextControlMouseSelection {
         if !self.is_active(runtime) {
             return Ok(false);
         }
-        let Some(caret) = caret_hit(runtime, self.control, self.document, position)? else {
+        let Some((value, caret)) = caret_hit(runtime, self.control, self.document, position)?
+        else {
             return Ok(false);
         };
-        let range = self.granularity.at_point(runtime, self.control, caret);
+        let range = self.granularity.at_point(&value, caret);
         let (anchor, focus) = if range.0 < self.anchor.0 {
             (self.anchor.1, range.0)
         } else {
             (self.anchor.0, self.anchor.1.max(range.1))
         };
-        if !self.collapse_on_release || focus != anchor {
-            self.collapse_on_release = false;
+        if self.pending_collapse.is_none() || focus != anchor {
+            self.pending_collapse = None;
             set_mouse_selection(scope, host, self.control, anchor, focus);
         }
         Ok(true)
@@ -175,10 +166,12 @@ impl TextControlMouseSelection {
         host: *mut PageScriptHost,
         position: InputPosition,
     ) {
+        let Some(press_point) = self.pending_collapse else {
+            return;
+        };
         let point = position.layout_point();
-        if self.collapse_on_release
-            && point.x.floor() == self.press_point.x.floor()
-            && point.y.floor() == self.press_point.y.floor()
+        if point.x.floor() == press_point.x.floor()
+            && point.y.floor() == press_point.y.floor()
             && self.is_active(unsafe { &*host })
         {
             set_mouse_selection(scope, host, self.control, self.anchor.0, self.anchor.0);
@@ -213,17 +206,20 @@ fn caret_hit(
     control: DomHandle,
     document: InputDocument,
     position: InputPosition,
-) -> Result<Option<LayoutTextControlCaret>, LayoutError> {
+) -> Result<Option<(String, LayoutTextControlCaret)>, LayoutError> {
     if !host.layout_policy().uses_real_layout() {
         return Ok(None);
     }
     let value = text_control_value(host, control);
     if value.is_empty() {
-        return Ok(Some(LayoutTextControlCaret {
-            offset: 0,
-            source_start: 0,
-            at_source_start: true,
-        }));
+        return Ok(Some((
+            value,
+            LayoutTextControlCaret {
+                offset: 0,
+                source_start: 0,
+                at_source_start: true,
+            },
+        )));
     }
     host.ensure_observable_layout()?;
     let Some(transform) = host.input_frame_transform(document.handle, None) else {
@@ -235,7 +231,10 @@ fn caret_hit(
             tree.text_control_caret(control, point)
         })
         .flatten()
-        .map(|caret| snap_caret_to_grapheme(&value, caret)))
+        .map(|caret| {
+            let caret = snap_caret_to_grapheme(&value, caret);
+            (value, caret)
+        }))
 }
 
 fn snap_caret_to_grapheme(
@@ -302,7 +301,7 @@ pub(super) fn move_text_control_selection(
     control: DomHandle,
     key: &str,
     modifiers: InputModifiers,
-) -> bool {
+) {
     let mac = cfg!(target_os = "macos");
     let control_key = modifiers.contains(InputModifiers::CONTROL);
     let command = mac && modifiers.contains(InputModifiers::META);
@@ -330,7 +329,7 @@ pub(super) fn move_text_control_selection(
         "end" => (true, edge_unit),
         "arrowup" | "up" if command => (false, KeyboardMovementUnit::Value),
         "arrowdown" | "down" if command => (true, KeyboardMovementUnit::Value),
-        _ => return false,
+        _ => return,
     };
     let runtime = unsafe { &*host };
     let value = text_control_value(runtime, control);
@@ -364,7 +363,7 @@ pub(super) fn move_text_control_selection(
         }
     };
     if unit == KeyboardMovementUnit::Grapheme && !collapse_range && next == focus {
-        return true;
+        return;
     }
     let crosses_anchor = (focus < anchor && next > anchor) || (focus > anchor && next < anchor);
     // Reversing a word extension on macOS first returns to the original caret.
@@ -387,7 +386,6 @@ pub(super) fn move_text_control_selection(
         anchor.max(next),
         direction,
     );
-    true
 }
 
 fn grapheme_boundary(value: &str, offset: u32, forward: bool) -> u32 {
