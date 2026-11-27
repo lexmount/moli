@@ -641,7 +641,7 @@ pub(super) fn cssom_border_property_write_uses_pdb(name: &str) -> bool {
 pub(super) fn cssom_outline_property_write_uses_pdb(name: &str) -> bool {
     matches!(
         name,
-        "outline" | "outline-width" | "outline-style" | "outline-color"
+        "outline" | "outline-width" | "outline-style" | "outline-color" | "outline-offset"
     )
 }
 
