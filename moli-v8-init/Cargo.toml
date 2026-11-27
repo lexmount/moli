@@ -10,5 +10,8 @@ v8 = "152.2.0"
 [target.aarch64-apple-ios.dependencies]
 v8 = { version = "152.2.0", features = ["v8_enable_pointer_compression"] }
 
+[target.'cfg(target_env = "ohos")'.dependencies]
+v8 = { version = "152.2.0", features = ["v8_enable_pointer_compression"] }
+
 [lints]
 workspace = true
