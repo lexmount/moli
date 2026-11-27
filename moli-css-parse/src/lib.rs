@@ -4,6 +4,7 @@
 //! the small set of string helpers around them.
 
 mod color;
+mod counter_style;
 mod cssom_block;
 mod cssom_property;
 mod declaration;
@@ -24,6 +25,7 @@ pub use color::{
     css_system_color_srgb, parse_absolute_css_color, parse_css_color_scheme_flags,
     parse_css_color_to_opaque_srgb_hex, parse_css_color_to_srgb_bytes,
 };
+pub use counter_style::CssCounterStyleProperty;
 pub use cssom_block::{CssDeclarationBlock, parse_declaration_block};
 pub use cssom_property::{parse_cssom_property, parse_cssom_property_without_document};
 pub use declaration::{

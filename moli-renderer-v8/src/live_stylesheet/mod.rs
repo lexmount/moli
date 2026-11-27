@@ -35,7 +35,7 @@ use style_traits::{CssStringWriter, ParsingMode, ToCss};
 
 use moli_crypto::Sha256Context;
 use moli_css_parse::{
-    CssContainerConditionView, CssRuleInsertError, CssRuleSnapshot,
+    CssContainerConditionView, CssCounterStyleProperty, CssRuleInsertError, CssRuleSnapshot,
     StylesheetImportPlaceholderLoader, css_rule_snapshot_from_native_with_stylo,
     keyframe_rule_snapshot_from_native_with_stylo, parse_font_face_cssom_rule_with_stylo_context,
     parse_page_selectors_with_stylo_context,
@@ -532,6 +532,17 @@ impl StylesheetRuleWrapperBinding {
             return None;
         };
         Some(property.read(rule))
+    }
+
+    pub(crate) fn counter_style_property(
+        &self,
+        property: CssCounterStyleProperty,
+    ) -> Option<String> {
+        let NativeStylesheetRule::Css(CssRule::CounterStyle(rule)) = &self.rule else {
+            return None;
+        };
+        let guard = self.shared_lock.read();
+        Some(property.read(rule.read_with(&guard)))
     }
 
     pub(crate) fn keyframes_name(&self) -> Option<String> {

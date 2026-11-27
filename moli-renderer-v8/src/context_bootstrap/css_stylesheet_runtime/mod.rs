@@ -1,4 +1,5 @@
 mod constructor;
+mod counter_style_rule;
 mod detached_mutations;
 mod detached_snapshot;
 mod font_palette_values;
@@ -19,6 +20,7 @@ mod types;
 
 // Re-export everything from submodules so siblings can cross-reference via `use super::*`
 pub(crate) use constructor::*;
+pub(crate) use counter_style_rule::CssCounterStyleRulePrototypeDeclaration;
 pub(crate) use detached_mutations::*;
 pub(crate) use detached_snapshot::*;
 pub(crate) use grouping_rule::*;
@@ -69,13 +71,12 @@ use crate::{
 };
 use cssparser::{serialize_identifier, serialize_string};
 use moli_css_parse::{
-    CssCounterStyleRuleView, CssDetachedRuleListMutation, CssFontFaceRuleView,
-    CssFontFeatureValueEntryView, CssFontFeatureValuesRuleView, CssImportRuleView,
-    CssKeyframesRuleView, CssMarginRuleView, CssNamespaceRuleView, CssNativeStylesheet,
-    CssPageRuleView, CssPropertyRuleView, CssRuleInsertError, CssRuleSnapshot,
-    delete_detached_keyframe_rule_with_stylo, delete_detached_nested_rule_with_stylo,
-    insert_detached_keyframe_rule_with_stylo, insert_detached_nested_rule_with_stylo,
-    keyframe_selector_texts_match_with_stylo, native_stylesheet_counter_style_rule_read_with_stylo,
+    CssDetachedRuleListMutation, CssFontFaceRuleView, CssFontFeatureValueEntryView,
+    CssFontFeatureValuesRuleView, CssImportRuleView, CssKeyframesRuleView, CssMarginRuleView,
+    CssNamespaceRuleView, CssNativeStylesheet, CssPageRuleView, CssPropertyRuleView,
+    CssRuleInsertError, CssRuleSnapshot, delete_detached_keyframe_rule_with_stylo,
+    delete_detached_nested_rule_with_stylo, insert_detached_keyframe_rule_with_stylo,
+    insert_detached_nested_rule_with_stylo, keyframe_selector_texts_match_with_stylo,
     native_stylesheet_font_face_rule_read_with_stylo,
     native_stylesheet_font_feature_values_rule_read_with_stylo,
     native_stylesheet_import_rule_read_with_stylo, native_stylesheet_margin_rule_read_with_stylo,
@@ -83,14 +84,13 @@ use moli_css_parse::{
     native_stylesheet_property_rule_read_with_stylo, normalize_keyframe_selector_text_with_stylo,
     normalize_page_selector_text_with_stylo, parse_condition_rule_view_with_stylo,
     parse_constructed_stylesheet_rule_snapshots_with_stylo,
-    parse_counter_style_rule_view_with_stylo, parse_font_face_descriptor_block_with_stylo,
-    parse_font_face_rule_view_with_stylo, parse_font_feature_values_rule_view_with_stylo,
-    parse_import_rule_view_with_stylo, parse_keyframes_rule_view_with_stylo,
-    parse_layer_rule_view_with_stylo, parse_namespace_rule_view_with_stylo,
-    parse_nested_rule_block_snapshots_with_stylo, parse_page_descriptor_block_with_stylo,
-    parse_page_margin_descriptor_block_with_stylo, parse_page_margin_rule_view_with_stylo,
-    parse_page_rule_view_with_stylo, parse_property_rule_view_with_stylo,
-    parse_stylesheet_rule_snapshot_for_insert_with_stylo,
+    parse_font_face_descriptor_block_with_stylo, parse_font_face_rule_view_with_stylo,
+    parse_font_feature_values_rule_view_with_stylo, parse_import_rule_view_with_stylo,
+    parse_keyframes_rule_view_with_stylo, parse_layer_rule_view_with_stylo,
+    parse_namespace_rule_view_with_stylo, parse_nested_rule_block_snapshots_with_stylo,
+    parse_page_descriptor_block_with_stylo, parse_page_margin_descriptor_block_with_stylo,
+    parse_page_margin_rule_view_with_stylo, parse_page_rule_view_with_stylo,
+    parse_property_rule_view_with_stylo, parse_stylesheet_rule_snapshot_for_insert_with_stylo,
     parse_stylesheet_rule_snapshots_with_stylo, serialize_component_values_single_line,
 };
 #[allow(unused_imports)]

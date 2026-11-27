@@ -520,13 +520,6 @@ pub struct CssNamespaceRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSCounterStyleRule, enumerable)]
-pub struct CssCounterStyleRulePrototypeDeclaration {
-    #[webapi(accessor_property, getter = css_counter_style_rule_name_getter_callback)]
-    pub name: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CSSStyleRule, enumerable)]
 pub struct CssStyleRulePrototypeDeclaration {
     #[webapi(
