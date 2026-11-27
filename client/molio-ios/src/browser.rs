@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::VecDeque,
     ffi::{CStr, CString, c_char, c_void},
     future::pending,
@@ -28,16 +29,18 @@ use tokio::{
 };
 
 use super::downloads::{DownloadClient, DownloadCommand, DownloadState, Downloads};
+use super::viewport_edit_sequence::ViewportEditSequence;
 
 enum Command {
     Navigate(Option<String>),
     History(i64),
     Stop,
     Activity(bool),
-    Edit {
+    Edit(RendererViewportEdit),
+    EditorKey {
         document: RendererDocumentLifecycleIdentity,
         target: u32,
-        action: EditorAction,
+        key: EditorKey,
     },
     Resize {
         width: u32,
@@ -48,11 +51,6 @@ enum Command {
     },
     Tap(InputPosition),
     Scroll(InputPosition, (f64, f64)),
-}
-
-enum EditorAction {
-    Edit(RendererViewportEditAction),
-    Key(EditorKey),
 }
 
 enum EditorKey {
@@ -72,9 +70,15 @@ struct InputPosition {
 type PopupQueue = Arc<Mutex<VecDeque<Box<RendererPopupActivationParts>>>>;
 type EditorState = Option<(RendererDocumentLifecycleIdentity, RendererViewportEditor)>;
 
+#[derive(Default)]
+struct EditorUpdate {
+    state: EditorState,
+    ack: Option<u64>,
+}
+
 struct OpenTab {
     popup: Option<Box<RendererPopupActivationParts>>,
-    editor: watch::Sender<EditorState>,
+    editor: watch::Sender<EditorUpdate>,
     commands: mpsc::UnboundedReceiver<Command>,
     output: Arc<ViewportOutput>,
     status: watch::Sender<String>,
@@ -86,8 +90,9 @@ pub struct Molio {
     popups: PopupQueue,
     downloads: DownloadClient,
     auxiliary: Option<RendererAuxiliaryWindow>,
-    editor: watch::Receiver<EditorState>,
+    editor: watch::Receiver<EditorUpdate>,
     displayed_editor: EditorState,
+    edits: RefCell<ViewportEditSequence>,
     commands: mpsc::UnboundedSender<Command>,
     viewport: Arc<ViewportOutput>,
     frames: watch::Receiver<()>,
@@ -170,7 +175,7 @@ async fn run_tab(
     mut commands: mpsc::UnboundedReceiver<Command>,
     output: Arc<ViewportOutput>,
     navigation_state: watch::Sender<Option<RendererPageNavigationState>>,
-    editor_state: watch::Sender<EditorState>,
+    editor_state: watch::Sender<EditorUpdate>,
     popup: Option<Box<RendererPopupActivationParts>>,
     downloads: Rc<Downloads>,
 ) -> Result<()> {
@@ -179,13 +184,13 @@ async fn run_tab(
     } else {
         browser.create_viewport_page(Default::default()).await?
     };
-    let mut edit_sequence = 0;
     let mut page_state = page.subscribe_navigation_state().await?;
     page_state.mark_changed();
     status.send_replace(String::new());
     let mut active = page.document_activity().visible;
     let mut viewport = None;
     let mut capture: Option<BufferedViewportFrames> = None;
+    let mut last_edit_frame_sequence = 0;
     let mut navigation: Option<
         tokio::task::JoinHandle<Result<moli_core::page::CompletedPageCommand>>,
     > = None;
@@ -219,11 +224,14 @@ async fn run_tab(
             } => match update {
                 Ok(ViewportUpdate::ResourceChanged) => page.wake_viewport_frames().await?,
                 Ok(ViewportUpdate::StateChanged) => {
-                    let editor = capture.as_mut().and_then(BufferedViewportFrames::latest_state)
-                        .and_then(|frame| frame.editor.map(|editor| (frame.document, editor)));
+                    let frame = capture.as_mut().and_then(BufferedViewportFrames::latest_state);
+                    if frame.as_ref().is_some_and(|frame| frame.sequence <= last_edit_frame_sequence) {
+                        continue;
+                    }
+                    let editor = frame.and_then(|frame| frame.editor.map(|editor| (frame.document, editor)));
                     editor_state.send_if_modified(|current| {
-                        if *current == editor { return false; }
-                        *current = editor;
+                        if current.state == editor { return false; }
+                        current.state = editor;
                         true
                     });
                 }
@@ -263,48 +271,52 @@ async fn run_tab(
                     active = next;
                     if !active {
                         capture = None;
-                        editor_state.send_if_modified(|current| current.take().is_some());
+                        editor_state.send_if_modified(|current| current.state.take().is_some());
                     }
                     page.set_document_activity_async(DocumentActivity::new(active, active)).await?;
                     if active && capture.is_none()
                         && let Some((surface, revision)) = viewport
                     {
                         capture = Some(subscribe_viewport(&mut page, surface, revision, &output).await?);
+                        last_edit_frame_sequence = 0;
                     }
                 }
-                Some(Command::Edit { document, target, action }) if active => {
+                Some(Command::Edit(edit)) => {
+                    let document = edit.document;
+                    let sequence = edit.sequence;
+                    if active && page_state.borrow().as_ref().is_some_and(|state| state.document == document) {
+                        let reply = page.edit_viewport(edit).await?;
+                        last_edit_frame_sequence = reply.last_frame_sequence;
+                        editor_state.send_replace(EditorUpdate {
+                            state: reply.editor.map(|editor| (document, editor)),
+                            ack: Some(sequence),
+                        });
+                    } else {
+                        editor_state.send_modify(|current| current.ack = Some(sequence));
+                    }
+                }
+                Some(Command::EditorKey { document, target, key }) if active => {
                     if !page_state.borrow().as_ref().is_some_and(|state| state.document == document) {
                         continue;
                     }
-                    let Some(editor) = page.viewport_editor().await?.filter(|editor| editor.target == target) else {
+                    if !page.viewport_editor().await?.is_some_and(|editor| editor.target == target) {
                         continue;
+                    }
+                    let (key, code, text, modifiers) = match key {
+                        EditorKey::Backspace => ("Backspace", "Backspace", "", 0),
+                        EditorKey::Enter => ("Enter", "Enter", "\r", 0),
+                        EditorKey::SelectAll => ("a", "KeyA", "", 2),
                     };
-                    let editor = match action {
-                        EditorAction::Edit(action) => {
-                            edit_sequence += 1;
-                            page.edit_viewport(RendererViewportEdit {
-                                document, target, revision: editor.revision, sequence: edit_sequence,
-                                previous: None, action,
-                            }).await?.editor
+                    for (event, text) in [("keydown", text), ("keyup", "")] {
+                        let outcome = page.dispatch_key_event_with_outcome_async(
+                            event, key, code, text, modifiers, false, !text.is_empty(),
+                        ).await?;
+                        if let Some(download) = outcome.pending_download {
+                            downloads.start(download);
                         }
-                        EditorAction::Key(key) => {
-                            let (key, code, text, modifiers) = match key {
-                                EditorKey::Backspace => ("Backspace", "Backspace", "", 0),
-                                EditorKey::Enter => ("Enter", "Enter", "\r", 0),
-                                EditorKey::SelectAll => ("a", "KeyA", "", 2),
-                            };
-                            for (event, text) in [("keydown", text), ("keyup", "")] {
-                                let outcome = page.dispatch_key_event_with_outcome_async(
-                                    event, key, code, text, modifiers, false, !text.is_empty(),
-                                ).await?;
-                                if let Some(download) = outcome.pending_download {
-                                    downloads.start(download);
-                                }
-                            }
-                            page.viewport_editor().await?
-                        }
-                    };
-                    editor_state.send_replace(editor.map(|editor| (document, editor)));
+                    }
+                    let editor = page.viewport_editor().await?;
+                    editor_state.send_modify(|current| current.state = editor.map(|editor| (document, editor)));
                 }
                 Some(Command::Resize { width, height, scale, screen, revision }) => {
                     let surface = ViewportSurface {
@@ -326,6 +338,7 @@ async fn run_tab(
                     viewport = Some((surface, revision));
                     if active {
                         capture = Some(subscribe_viewport(&mut page, surface, revision, &output).await?);
+                        last_edit_frame_sequence = 0;
                     }
                 }
                 Some(Command::Tap(input)) if active => {
@@ -345,7 +358,7 @@ async fn run_tab(
                         }
                     }
                     let editor = page.viewport_editor().await?;
-                    editor_state.send_replace(editor.map(|editor| (input.document, editor)));
+                    editor_state.send_modify(|current| current.state = editor.map(|editor| (input.document, editor)));
                 }
                 Some(Command::Scroll(input, delta)) if active => {
                     page.enqueue_viewport_wheel(RendererViewportWheelInput {
@@ -440,7 +453,7 @@ fn open_tab(
     let (commands, receiver) = mpsc::unbounded_channel();
     let (status, status_rx) = watch::channel("Starting…".into());
     let (navigation, navigation_rx) = watch::channel(None);
-    let (editor, editor_rx) = watch::channel(None);
+    let (editor, editor_rx) = watch::channel(EditorUpdate::default());
     let auxiliary = popup
         .as_ref()
         .and_then(|popup| popup.auxiliary_window.clone());
@@ -465,6 +478,7 @@ fn open_tab(
         auxiliary,
         editor: editor_rx,
         displayed_editor: None,
+        edits: RefCell::default(),
         commands,
         frames: viewport.subscribe(),
         viewport,
@@ -549,6 +563,9 @@ extern "C" fn molio_list_downloads(handle: &Molio, context: *mut c_void, show: S
 
 #[unsafe(no_mangle)]
 extern "C" fn molio_set_active(handle: &Molio, active: bool) {
+    if !active {
+        handle.edits.borrow_mut().clear();
+    }
     let _ = handle.commands.send(Command::Activity(active));
 }
 
@@ -642,14 +659,29 @@ extern "C" fn molio_scroll(handle: &Molio, x: f64, y: f64, delta_x: f64, delta_y
 }
 
 impl Molio {
-    fn edit(&self, action: EditorAction) {
+    fn edit(&self, action: RendererViewportEditAction) {
         if let Some((document, editor)) = &self.displayed_editor {
-            let _ = self.commands.send(Command::Edit {
-                document: *document,
-                target: editor.target,
-                action,
-            });
+            let edit = self.edits.borrow_mut().submit(*document, editor, action);
+            let _ = self.commands.send(Command::Edit(edit));
         }
+    }
+
+    fn refresh_displayed_editor(&mut self) -> bool {
+        if !self.editor.has_changed().unwrap_or(false) {
+            return false;
+        }
+        let update = self.editor.borrow_and_update();
+        let target = |state: &EditorState| {
+            state
+                .as_ref()
+                .map(|(document, editor)| (*document, editor.target))
+        };
+        let same_target = target(&self.displayed_editor) == target(&update.state);
+        if !self.edits.get_mut().accept_editor(same_target, update.ack) {
+            return false;
+        }
+        self.displayed_editor.clone_from(&update.state);
+        true
     }
 }
 
@@ -682,12 +714,12 @@ unsafe extern "C" fn molio_insert_text(
     } else {
         RendererViewportEditAction::Commit { range: None, text }
     };
-    handle.edit(EditorAction::Edit(action));
+    handle.edit(action);
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn molio_finish_composition(handle: &Molio) {
-    handle.edit(EditorAction::Edit(RendererViewportEditAction::Finish));
+    handle.edit(RendererViewportEditAction::Finish);
 }
 
 #[unsafe(no_mangle)]
@@ -698,7 +730,13 @@ extern "C" fn molio_editor_key(handle: &Molio, key: u8) {
         2 => EditorKey::SelectAll,
         _ => return,
     };
-    handle.edit(EditorAction::Key(key));
+    if let Some((document, editor)) = &handle.displayed_editor {
+        let _ = handle.commands.send(Command::EditorKey {
+            document: *document,
+            target: editor.target,
+            key,
+        });
+    }
 }
 
 type Present = extern "C" fn(*mut c_void, *const u8, usize, u32, u32, usize);
@@ -735,8 +773,7 @@ extern "C" fn molio_poll(
             metadata.can_go_forward,
         );
     }
-    if handle.editor.has_changed().unwrap_or(false) {
-        handle.displayed_editor = handle.editor.borrow_and_update().clone();
+    if handle.refresh_displayed_editor() {
         if let Some((_, current)) = &handle.displayed_editor {
             let text = CString::new(current.text.replace('\0', "�")).expect("NULs replaced");
             editor(
@@ -862,6 +899,84 @@ mod tests {
             wait_for_frame(&mut tab, [255, 0, 0, 255]).await?,
             initial_document
         );
+        Ok(())
+    }
+
+    fn insert_text(tab: &Molio, text: &str, marked: bool) {
+        let caret = text.encode_utf16().count();
+        unsafe { molio_insert_text(tab, text.as_ptr().cast(), text.len(), marked, caret, caret) };
+    }
+
+    async fn wait_for_edit_ack(
+        updates: &mut watch::Receiver<EditorUpdate>,
+        sequence: u64,
+    ) -> Result<RendererViewportEditor> {
+        let update = tokio::time::timeout(
+            TIMEOUT,
+            updates.wait_for(|update| update.ack == Some(sequence)),
+        )
+        .await
+        .with_context(|| format!("waiting for edit {sequence}"))??;
+        update
+            .state
+            .as_ref()
+            .map(|(_, editor)| editor.clone())
+            .context("the input should still be focused")
+    }
+
+    #[tokio::test]
+    async fn ime_chains_queued_edits_and_rejects_a_stale_editor_revision() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut tab = open_test_tab(
+            &root,
+            concat!(
+                "<input id='field' value='abc'><script>",
+                "const field = document.getElementById('field');",
+                "field.focus(); field.setSelectionRange(3, 3);",
+                "field.addEventListener('keydown', event => {",
+                "  if (event.key !== 'a') return;",
+                "  event.preventDefault();",
+                "  field.value = 'script'; field.setSelectionRange(0, 0);",
+                "});</script>",
+            ),
+        )?;
+        let mut updates = tab.editor.clone();
+        tokio::time::timeout(TIMEOUT, updates.wait_for(|update| update.state.is_some()))
+            .await
+            .context("waiting for the focused input")??;
+        assert!(tab.refresh_displayed_editor());
+
+        insert_text(&tab, "n", true);
+        insert_text(&tab, "ni", true);
+        insert_text(&tab, "你", false);
+        let editor = wait_for_edit_ack(&mut updates, 3).await?;
+        assert_eq!(editor.text, "abc你");
+        assert_eq!(editor.selection, 4..4);
+        assert!(editor.marked.is_none());
+        assert!(tab.refresh_displayed_editor());
+
+        molio_editor_key(&tab, 2);
+        tokio::time::timeout(
+            TIMEOUT,
+            updates.wait_for(|update| {
+                update.state.as_ref().is_some_and(|(_, editor)| {
+                    editor.text == "script" && editor.selection == (0..0)
+                })
+            }),
+        )
+        .await
+        .context("waiting for the script to change the input and caret")??;
+
+        // UIKit still has the snapshot from before the key event.
+        insert_text(&tab, "wrong", true);
+        let editor = wait_for_edit_ack(&mut updates, 4).await?;
+        assert_eq!(editor.text, "script");
+        assert_eq!(editor.selection, 0..0);
+        assert!(editor.marked.is_none());
+        assert!(tab.refresh_displayed_editor());
+
+        insert_text(&tab, "new ", false);
+        assert_eq!(wait_for_edit_ack(&mut updates, 5).await?.text, "new script");
         Ok(())
     }
 }

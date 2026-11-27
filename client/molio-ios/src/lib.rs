@@ -17,3 +17,6 @@ mod downloads;
     target_abi = ""
 ))]
 mod smoke;
+#[cfg(feature = "browser")]
+#[path = "../../molio/src/viewport_edit_sequence.rs"]
+mod viewport_edit_sequence;
