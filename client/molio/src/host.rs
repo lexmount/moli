@@ -100,7 +100,10 @@ pub enum TabCommand {
 
 pub enum ClipboardAction {
     Copy(oneshot::Sender<Option<String>>),
-    Cut(oneshot::Sender<Option<String>>),
+    Cut {
+        reply: oneshot::Sender<Option<String>>,
+        sequence: Option<u64>,
+    },
     Paste {
         text: Option<String>,
         sequence: Option<u64>,
@@ -374,6 +377,7 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
     };
     let mut surface = None;
     let mut capture = None;
+    let mut last_edit_frame_sequence = 0;
     let mut navigation = None;
     let mut favicon_task: Option<JoinHandle<Option<Arc<gpui::RenderImage>>>> = None;
     let mut queued = None;
@@ -408,6 +412,7 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                         }
                     }
                     if document_changed {
+                        last_edit_frame_sequence = 0;
                         state.editor = capture
                             .as_mut()
                             .and_then(BufferedViewportFrames::latest_state)
@@ -455,6 +460,10 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
             event = next_viewport_update(&mut capture) => match event {
                 Some(ViewportUpdate::StateChanged) => {
                     let Some(frame) = capture.as_mut().and_then(BufferedViewportFrames::latest_state) else { continue };
+                    // A previously published frame may arrive after an editor acknowledgement.
+                    if frame.sequence <= last_edit_frame_sequence {
+                        continue;
+                    }
                     let editor = frame.editor.filter(|_| activity.focused);
                     tab.state.send_if_modified(|state| {
                         if state.document != Some(frame.document) || state.editor == editor {
@@ -507,7 +516,11 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                     TabCommand::Viewport { surface: viewport, revision, pointer_position } => {
                         surface = Some((viewport, revision));
                         if activity.visible {
-                            refresh_capture(&mut page, &mut capture, surface, pointer_position, &tab.viewport).await
+                            let result = refresh_capture(&mut page, &mut capture, surface, pointer_position, &tab.viewport).await;
+                            if result.is_ok() {
+                                last_edit_frame_sequence = 0;
+                            }
+                            result
                         } else {
                             Ok(())
                         }
@@ -532,7 +545,11 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                                     });
                                 }
                             }
-                            refresh_capture(&mut page, &mut capture, surface, None, &tab.viewport).await
+                            let result = refresh_capture(&mut page, &mut capture, surface, None, &tab.viewport).await;
+                            if result.is_ok() {
+                                last_edit_frame_sequence = 0;
+                            }
+                            result
                         } else if next.focused {
                             refresh_editor(&mut page, &tab.state).await
                         } else {
@@ -583,7 +600,10 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                     }
                     TabCommand::Edit(edit) => {
                         let sequence = edit.sequence;
-                        let editor = page.edit_viewport(edit).await.map(|reply| reply.editor);
+                        let editor = page.edit_viewport(edit).await.map(|reply| {
+                            last_edit_frame_sequence = reply.last_frame_sequence;
+                            reply.editor
+                        });
                         publish_editor_ack(&tab.state, sequence, editor)
                     }
                     TabCommand::Clipboard { document, key, action } => {
@@ -600,8 +620,9 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                             Ok(false)
                         };
                         let sequence = match &action {
-                            ClipboardAction::Paste { sequence, .. } => *sequence,
-                            _ => None,
+                            ClipboardAction::Cut { sequence, .. }
+                            | ClipboardAction::Paste { sequence, .. } => *sequence,
+                            ClipboardAction::Copy(_) => None,
                         };
                         let result = match (allowed, action) {
                             (Ok(true), ClipboardAction::Copy(reply)) => {
@@ -609,23 +630,26 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                                     let _ = reply.send(text);
                                 })
                             }
-                            (Ok(true), ClipboardAction::Cut(reply)) => {
-                                page.cut_viewport_selection(document).await.map(|text| {
+                            (Ok(true), ClipboardAction::Cut { reply, sequence }) => {
+                                page.cut_viewport_selection_with_sequence(document, sequence).await.map(|text| {
                                     let _ = reply.send(text);
                                 })
                             }
                             (Ok(true), ClipboardAction::Paste { text, sequence }) => {
                                 page.paste_viewport_text(document, text, sequence).await.map(|_| ())
                             }
-                            (Ok(false), ClipboardAction::Paste { sequence: Some(sequence), .. }) => {
-                                page.acknowledge_canceled_viewport_paste(document, sequence).await
-                            }
-                            (Ok(false), _) => Ok(()),
+                            (Ok(false), _) => match sequence {
+                                Some(sequence) => page.acknowledge_canceled_viewport_clipboard_edit(document, sequence).await,
+                                None => Ok(()),
+                            },
                             (Err(error), _) => Err(error),
                         };
                         if let Some(sequence) = sequence {
                             let editor = match result {
-                                Ok(()) => page.viewport_editor().await,
+                                Ok(()) => page.viewport_editor_with_frame_sequence().await.map(|(editor, frame_sequence)| {
+                                    last_edit_frame_sequence = frame_sequence;
+                                    editor
+                                }),
                                 Err(error) => Err(error),
                             };
                             publish_editor_ack(&tab.state, sequence, editor)
@@ -1321,6 +1345,126 @@ mod tests {
             } else {
                 assert!(text.is_err());
             }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cut_shortcut_keeps_the_next_edit() -> Result<()> {
+        use crate::text_input::MoliTextInputBridge;
+        use moli_core::RendererViewportEditAction;
+
+        let (host, _events) = BrowserHost::start(None, None)?;
+        for (case, handlers, clipboard_text, final_value) in [
+            ("default cut", "", Some("B"), "A!C"),
+            (
+                "keydown canceled",
+                "editor.addEventListener('keydown', event => { event.preventDefault(); reselect() });
+                 editor.addEventListener('cut', () => editor.value = 'unexpected');",
+                None,
+                "AB!D",
+            ),
+            (
+                "cut canceled",
+                "editor.addEventListener('cut', event => {
+                   event.clipboardData.setData('text/plain', 'custom');
+                   event.preventDefault(); reselect();
+                 });",
+                Some("custom"),
+                "AB!D",
+            ),
+            (
+                "deleteByCut canceled",
+                "editor.addEventListener('beforeinput', event => {
+                   if (event.inputType === 'deleteByCut') { event.preventDefault(); reselect() }
+                 });",
+                Some("B"),
+                "AB!D",
+            ),
+            (
+                "input listener microtask",
+                "editor.addEventListener('input', reselect, { once: true });",
+                Some("B"),
+                "AB!D",
+            ),
+        ] {
+            let mut tab = host.open_tab()?;
+            navigate(
+                &tab,
+                format!(
+                    "data:text/html,<title>Cut</title><input id=editor value=ABC><script>
+                     editor.focus(); editor.setSelectionRange(1,2);
+                     function reselect() {{
+                       queueMicrotask(() => {{ editor.value = 'ABCD'; editor.setSelectionRange(2,3) }});
+                     }}
+                     {handlers}</script>",
+                ),
+            )?;
+            let document = show_tab(&mut tab, "Cut", 1, [255; 4]).await?;
+            let editor = tokio::time::timeout(
+                Duration::from_secs(5),
+                tab.state.wait_for(|state| {
+                    state
+                        .editor
+                        .as_ref()
+                        .is_some_and(|editor| editor.selection == (1..2))
+                }),
+            )
+            .await??
+            .editor
+            .clone();
+            let mut input = MoliTextInputBridge::default();
+            input.refresh(Some(document), editor, None);
+            let cut_sequence = input.cut().context("editor before cut")?;
+            let predicted = input.editor().context("predicted cut")?;
+            assert_eq!(predicted.text, "AC", "{case}");
+            assert_eq!(predicted.selection, 1..1, "{case}");
+            let edit = input
+                .edit(RendererViewportEditAction::Commit {
+                    range: None,
+                    text: "!".into(),
+                })
+                .context("editor before typing")?;
+            assert_eq!(edit.previous, Some(cut_sequence));
+            let sequence = edit.sequence;
+            let (reply, clipboard) = oneshot::channel();
+            for command in [
+                TabCommand::Clipboard {
+                    document,
+                    key: KeyInput {
+                        event: "keydown",
+                        key: "x".into(),
+                        code: "KeyX".into(),
+                        modifiers: if cfg!(target_os = "macos") { 4 } else { 2 },
+                        repeat: false,
+                    },
+                    action: ClipboardAction::Cut {
+                        reply,
+                        sequence: Some(cut_sequence),
+                    },
+                },
+                TabCommand::Edit(edit),
+            ] {
+                tab.commands
+                    .send(command)
+                    .map_err(|_| anyhow::anyhow!("queue cut followed by typing"))?;
+            }
+            let text = tokio::time::timeout(Duration::from_secs(5), clipboard).await?;
+            if let Some(expected) = clipboard_text {
+                assert_eq!(text?.as_deref(), Some(expected), "{case}");
+            } else {
+                assert!(text.is_err(), "{case}");
+            }
+            let state = tokio::time::timeout(
+                Duration::from_secs(5),
+                tab.state.wait_for(|state| state.editor_ack == Some(sequence)),
+            )
+            .await??;
+            assert_eq!(
+                state.editor.as_ref().context("editor after typing")?.text,
+                final_value,
+                "{case}",
+            );
         }
         Ok(())
     }

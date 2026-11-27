@@ -97,8 +97,9 @@ impl RendererPageCommand {
             | Self::ReadViewportEditor
             | Self::ReadViewportSelection(..)
             | Self::CopyViewportSelection(..)
-            | Self::CutViewportSelection(..)
+            | Self::CutViewportSelection { .. }
             | Self::PasteViewportText { .. }
+            | Self::CompleteCanceledClipboardEdit { .. }
             | Self::ApplyViewportEdit(..)
             | Self::DropViewportFiles { .. }
             | Self::WakeViewportFrames => OwnerOnly,

@@ -63,6 +63,17 @@ impl MoliTextInputBridge {
         Some(editor.text[bytes].to_owned())
     }
 
+    pub fn cut(&mut self) -> Option<u64> {
+        self.document?;
+        let editor = self.editor.as_mut()?;
+        let (sequence, _) = self.edits.reserve();
+        if !editor.password && !editor.selection.is_empty() {
+            let selection = editor.selection.clone();
+            commit_text(editor, &selection, "");
+        }
+        Some(sequence)
+    }
+
     pub fn edit(&mut self, action: RendererViewportEditAction) -> Option<RendererViewportEdit> {
         let document = self.document?;
         let editor = self.editor.as_mut()?;
@@ -85,19 +96,11 @@ impl MoliTextInputBridge {
             }
             RendererViewportEditAction::Commit { range, text } => {
                 let replacement = replacement_range(editor, range);
-                update_text(editor, &replacement, text);
-                let caret = replacement.start + text.encode_utf16().count();
-                editor.selection = caret..caret;
-                editor.reversed = false;
-                editor.marked = None;
+                commit_text(editor, &replacement, text);
             }
             RendererViewportEditAction::Paste { text } => {
                 let replacement = replacement_range(editor, &None);
-                update_text(editor, &replacement, text);
-                let caret = replacement.start + text.encode_utf16().count();
-                editor.selection = caret..caret;
-                editor.reversed = false;
-                editor.marked = None;
+                commit_text(editor, &replacement, text);
             }
             RendererViewportEditAction::Finish | RendererViewportEditAction::Cancel => {
                 editor.marked = None
@@ -125,4 +128,12 @@ fn update_text(editor: &mut RendererViewportEditor, range: &Range<usize>, text: 
         editor.text.replace_range(bytes, text);
     }
     editor.mark_rects.clear();
+}
+
+fn commit_text(editor: &mut RendererViewportEditor, range: &Range<usize>, text: &str) {
+    update_text(editor, range, text);
+    let caret = range.start + text.encode_utf16().count();
+    editor.selection = caret..caret;
+    editor.reversed = false;
+    editor.marked = None;
 }

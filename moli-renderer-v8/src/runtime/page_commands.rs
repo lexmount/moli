@@ -379,23 +379,30 @@ impl PageVm {
                 .navigate_top_level_from_browser(target)
                 .map(RendererPageReply::ViewportNavigation),
             #[cfg(feature = "molio")]
-            RendererPageCommand::ReadViewportEditor => Ok(RendererPageReply::ViewportEditor(self.read_viewport_editor())),
+            RendererPageCommand::ReadViewportEditor => Ok(RendererPageReply::ViewportEditor {
+                editor: self.read_viewport_editor(),
+                last_frame_sequence: self.viewport_frame_sequence(),
+            }),
             #[cfg(feature = "molio")]
             RendererPageCommand::ReadViewportSelection(document) => self
                 .read_viewport_selection(document)
                 .map(RendererPageReply::OptionalString),
             #[cfg(feature = "molio")]
             RendererPageCommand::CopyViewportSelection(document) => self
-                .copy_or_cut_viewport_selection(document, false)
+                .copy_or_cut_viewport_selection(document, false, None)
                 .map(RendererPageReply::OptionalString),
             #[cfg(feature = "molio")]
-            RendererPageCommand::CutViewportSelection(document) => self
-                .copy_or_cut_viewport_selection(document, true)
+            RendererPageCommand::CutViewportSelection { document, sequence } => self
+                .copy_or_cut_viewport_selection(document, true, sequence)
                 .map(RendererPageReply::OptionalString),
             #[cfg(feature = "molio")]
-            RendererPageCommand::PasteViewportText { document, paste, sequence } => self
-                .paste_viewport_text(document, &paste, sequence)
+            RendererPageCommand::PasteViewportText { document, text, sequence } => self
+                .paste_viewport_text(document, text.as_deref(), sequence)
                 .map(RendererPageReply::Bool),
+            #[cfg(feature = "molio")]
+            RendererPageCommand::CompleteCanceledClipboardEdit { document, sequence } => self
+                .complete_canceled_clipboard_edit(document, sequence)
+                .map(|()| RendererPageReply::Unit),
             #[cfg(feature = "molio")]
             RendererPageCommand::ApplyViewportEdit(edit) => self.apply_viewport_edit(edit).map(RendererPageReply::ViewportEdit),
             #[cfg(feature = "molio")]

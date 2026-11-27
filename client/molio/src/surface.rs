@@ -725,7 +725,10 @@ impl MoliSurface {
                 })
                 .detach();
                 if shortcut == "x" {
-                    ClipboardAction::Cut(reply)
+                    ClipboardAction::Cut {
+                        reply,
+                        sequence: self.text_input.cut(),
+                    }
                 } else {
                     ClipboardAction::Copy(reply)
                 }

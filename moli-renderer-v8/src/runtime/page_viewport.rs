@@ -72,11 +72,6 @@ pub enum RendererViewportEditAction {
     Cancel,
 }
 
-pub enum RendererViewportPaste {
-    Text(Option<String>),
-    CanceledByKeydown,
-}
-
 pub struct RendererViewportEditReply {
     pub applied: bool,
     pub editor: Option<RendererViewportEditor>,
@@ -476,13 +471,22 @@ impl PageVm {
         &mut self,
         document: RendererDocumentLifecycleIdentity,
         cut: bool,
+        sequence: Option<u64>,
     ) -> anyhow::Result<Option<String>> {
         if document != self.document_lifecycle.identity()
             || !self.document_settings.document_activity.focused
         {
             return Ok(None);
         }
-        let text = self.vm_mut().copy_or_cut_viewport_selection(cut)?;
+        let mut transient_editing = Default::default();
+        let editing = self
+            .viewport_frames
+            .as_mut()
+            .map_or(&mut transient_editing, |state| &mut state.editing);
+        let Some(vm) = self.vm.as_mut() else {
+            return Ok(None);
+        };
+        let text = vm.copy_or_cut_viewport_selection(editing, cut, sequence)?;
         self.wake_viewport_frames();
         Ok(text)
     }
@@ -490,7 +494,7 @@ impl PageVm {
     pub(super) fn paste_viewport_text(
         &mut self,
         document: RendererDocumentLifecycleIdentity,
-        paste: &RendererViewportPaste,
+        text: Option<&str>,
         sequence: Option<u64>,
     ) -> anyhow::Result<bool> {
         if document != self.document_lifecycle.identity()
@@ -501,9 +505,24 @@ impl PageVm {
         let (Some(state), Some(vm)) = (self.viewport_frames.as_mut(), self.vm.as_mut()) else {
             return Ok(false);
         };
-        let applied = vm.paste_viewport_text(&mut state.editing, paste, sequence)?;
+        let applied = vm.paste_viewport_text(&mut state.editing, text, sequence)?;
         self.wake_viewport_frames();
         Ok(applied)
+    }
+
+    pub(super) fn complete_canceled_clipboard_edit(
+        &mut self,
+        document: RendererDocumentLifecycleIdentity,
+        sequence: u64,
+    ) -> anyhow::Result<()> {
+        if document == self.document_lifecycle.identity()
+            && self.document_settings.document_activity.focused
+            && let (Some(state), Some(vm)) = (self.viewport_frames.as_mut(), self.vm.as_mut())
+        {
+            vm.complete_canceled_clipboard_edit(&mut state.editing, sequence)?;
+            self.wake_viewport_frames();
+        }
+        Ok(())
     }
 
     pub(super) fn drop_viewport_files(
@@ -550,14 +569,17 @@ impl PageVm {
         self.vm.as_mut()?.viewport_editor_snapshot(editing)
     }
 
+    pub(super) fn viewport_frame_sequence(&self) -> u64 {
+        self.viewport_frames
+            .as_ref()
+            .map_or(0, |state| state.sequence)
+    }
+
     pub(super) fn apply_viewport_edit(
         &mut self,
         edit: RendererViewportEdit,
     ) -> anyhow::Result<RendererViewportEditReply> {
-        let last_frame_sequence = self
-            .viewport_frames
-            .as_ref()
-            .map_or(0, |state| state.sequence);
+        let last_frame_sequence = self.viewport_frame_sequence();
         if edit.document != self.document_lifecycle.identity()
             || !self.document_settings.document_activity.focused
         {

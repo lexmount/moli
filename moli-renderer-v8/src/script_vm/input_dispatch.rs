@@ -65,7 +65,10 @@ use crate::runtime::{
 use crate::util::{node_wrapper_from_handle, utf16_len};
 #[cfg(feature = "molio")]
 use crate::{
-    host::EventTargetHandle, native_bridge::OwnerDispatchScope, runtime::RendererViewportEditAction,
+    context_bootstrap::viewport_edit::{self, ViewportEditing},
+    host::EventTargetHandle,
+    native_bridge::OwnerDispatchScope,
+    runtime::RendererViewportEditAction,
 };
 
 fn related_target_value<'s>(
@@ -949,36 +952,65 @@ fn prepare_touch_point<'s>(
 impl ScriptVm {
     pub(crate) fn viewport_selected_text(&mut self) -> Result<Option<String>> {
         self.with_default_context_scope(|scope, host| {
-            Ok(crate::context_bootstrap::viewport_edit::selected_viewport_text(scope, host))
+            Ok(viewport_edit::selected_viewport_text(scope, host))
         })
     }
 
-    pub(crate) fn copy_or_cut_viewport_selection(&mut self, cut: bool) -> Result<Option<String>> {
-        let result = self.with_native_input_event_scope(|scope, host| {
-            Ok(
-                crate::context_bootstrap::viewport_edit::copy_or_cut_viewport_selection(
-                    scope, host, cut,
-                ),
-            )
-        });
-        self.finish_input_event_dispatch_turn(result)
+    pub(crate) fn copy_or_cut_viewport_selection(
+        &mut self,
+        editing: &mut ViewportEditing,
+        cut: bool,
+        sequence: Option<u64>,
+    ) -> Result<Option<String>> {
+        self.with_viewport_clipboard_edit(editing, sequence, |scope, host, _| {
+            viewport_edit::copy_or_cut_viewport_selection(scope, host, cut)
+        })
     }
 
     pub(crate) fn paste_viewport_text(
         &mut self,
-        editing: &mut crate::context_bootstrap::viewport_edit::ViewportEditing,
-        paste: &crate::runtime::RendererViewportPaste,
+        editing: &mut ViewportEditing,
+        text: Option<&str>,
         sequence: Option<u64>,
     ) -> Result<bool> {
+        self.with_viewport_clipboard_edit(editing, sequence, |scope, host, editing| {
+            editing.paste_from_clipboard(scope, host, text)
+        })
+    }
+
+    pub(crate) fn complete_canceled_clipboard_edit(
+        &mut self,
+        editing: &mut ViewportEditing,
+        sequence: u64,
+    ) -> Result<()> {
+        self.with_viewport_clipboard_edit(editing, Some(sequence), |_, _, _| ())
+    }
+
+    fn with_viewport_clipboard_edit<T>(
+        &mut self,
+        editing: &mut ViewportEditing,
+        sequence: Option<u64>,
+        dispatch: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost, &mut ViewportEditing) -> T,
+    ) -> Result<T> {
         let result = self.with_native_input_event_scope(|scope, host| {
-            Ok(editing.paste_from_clipboard(scope, host, paste, sequence))
+            let document =
+                sequence.and_then(|_| viewport_edit::clipboard_document(unsafe { &*host }));
+            Ok((dispatch(scope, host, editing), document))
         });
-        self.finish_input_event_dispatch_turn(result)
+        let (outcome, document) = self.finish_input_event_dispatch_turn(result)?;
+        // The next queued edit depends on the live editor even when this edit was canceled.
+        if let (Some(sequence), Some(document)) = (sequence, document) {
+            self.with_default_context_scope(|scope, host| {
+                editing.complete_clipboard_edit(scope, host, document, sequence);
+                Ok(())
+            })?;
+        }
+        Ok(outcome)
     }
 
     pub(crate) fn viewport_editor_snapshot(
         &mut self,
-        editing: &crate::context_bootstrap::viewport_edit::ViewportEditing,
+        editing: &ViewportEditing,
     ) -> Option<crate::runtime::RendererViewportEditor> {
         self.with_current_main_world_scope(|scope, host| {
             unsafe { &*host }.ensure_observable_layout()?;
@@ -991,7 +1023,7 @@ impl ScriptVm {
 
     pub(crate) fn apply_viewport_editor_input(
         &mut self,
-        editing: &mut crate::context_bootstrap::viewport_edit::ViewportEditing,
+        editing: &mut ViewportEditing,
         edit: crate::runtime::RendererViewportEdit,
     ) -> Result<bool> {
         let result = if matches!(edit.action, RendererViewportEditAction::Paste { .. }) {

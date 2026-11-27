@@ -2,8 +2,8 @@ use anyhow::Result;
 use moli_page_types::ViewportSurface;
 use moli_renderer_v8::{
     RendererDevToolsPageReply, RendererPageNavigationState, RendererViewportCursor,
-    RendererViewportFrame, RendererViewportPaste, RendererViewportPointerInput,
-    RendererViewportSubscription, RendererViewportWheelInput,
+    RendererViewportFrame, RendererViewportPointerInput, RendererViewportSubscription,
+    RendererViewportWheelInput,
 };
 use std::sync::Arc;
 use tokio::sync::{Notify, watch};
@@ -91,8 +91,21 @@ impl Page {
         &mut self,
         document: crate::RendererDocumentLifecycleIdentity,
     ) -> Result<Option<String>> {
-        self.write_viewport_clipboard(RendererPageCommand::CutViewportSelection(document))
+        self.cut_viewport_selection_with_sequence(document, None)
             .await
+    }
+
+    /// Dispatches a native cut and completes the optional platform editor sequence.
+    pub async fn cut_viewport_selection_with_sequence(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+        sequence: Option<u64>,
+    ) -> Result<Option<String>> {
+        self.write_viewport_clipboard(RendererPageCommand::CutViewportSelection {
+            document,
+            sequence,
+        })
+        .await
     }
 
     async fn write_viewport_clipboard(
@@ -113,39 +126,27 @@ impl Page {
         text: Option<String>,
         sequence: Option<u64>,
     ) -> Result<bool> {
-        self.complete_viewport_paste(document, RendererViewportPaste::Text(text), sequence)
-            .await
-    }
-
-    /// Completes the editor sequence when a keydown handler cancels the paste shortcut.
-    pub async fn acknowledge_canceled_viewport_paste(
-        &mut self,
-        document: crate::RendererDocumentLifecycleIdentity,
-        sequence: u64,
-    ) -> Result<()> {
-        self.complete_viewport_paste(
-            document,
-            RendererViewportPaste::CanceledByKeydown,
-            Some(sequence),
-        )
-        .await
-        .map(|_| ())
-    }
-
-    async fn complete_viewport_paste(
-        &mut self,
-        document: crate::RendererDocumentLifecycleIdentity,
-        paste: RendererViewportPaste,
-        sequence: Option<u64>,
-    ) -> Result<bool> {
         let reply = self
             .dispatch_page_command_async(RendererPageCommand::PasteViewportText {
                 document,
-                paste,
+                text,
                 sequence,
             })
             .await?;
         Self::decode_bool_page_reply(reply, "paste viewport text")
+    }
+
+    /// Completes the editor sequence when keydown cancels a clipboard shortcut.
+    pub async fn acknowledge_canceled_viewport_clipboard_edit(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+        sequence: u64,
+    ) -> Result<()> {
+        self.dispatch_unit_page_command_async(
+            RendererPageCommand::CompleteCanceledClipboardEdit { document, sequence },
+            "complete canceled clipboard edit",
+        )
+        .await
     }
 
     pub async fn drop_viewport_files(
@@ -168,11 +169,23 @@ impl Page {
     }
 
     pub async fn viewport_editor(&mut self) -> Result<Option<crate::RendererViewportEditor>> {
+        self.viewport_editor_with_frame_sequence()
+            .await
+            .map(|(editor, _)| editor)
+    }
+
+    /// Reads the editor with the last published frame sequence on this subscription.
+    pub async fn viewport_editor_with_frame_sequence(
+        &mut self,
+    ) -> Result<(Option<crate::RendererViewportEditor>, u64)> {
         match self
             .dispatch_page_command_async(RendererPageCommand::ReadViewportEditor)
             .await?
         {
-            RendererPageReply::ViewportEditor(editor) => Ok(editor),
+            RendererPageReply::ViewportEditor {
+                editor,
+                last_frame_sequence,
+            } => Ok((editor, last_frame_sequence)),
             _ => anyhow::bail!("unexpected viewport editor reply"),
         }
     }
