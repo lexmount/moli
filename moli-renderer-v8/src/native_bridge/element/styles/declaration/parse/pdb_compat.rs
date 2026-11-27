@@ -181,9 +181,6 @@ pub(crate) fn set_pdb_block_property_collecting_entries(
 
 pub(super) fn cssom_style_property_write_uses_pdb(name: &str, value: &str) -> bool {
     let name = canonical_style_property_name(name);
-    if crate::detached_css_style::css_style_declaration_is_shell_property(&name) {
-        return false;
-    }
     if moli_css_parse::is_cssom_custom_property_name(&name) {
         return !value.is_empty() && stylo_pdb_entries_for_property(&name, value, false).is_some();
     }
@@ -235,9 +232,6 @@ pub(crate) fn cssom_style_property_write_can_use_pdb_storage(name: &str, value: 
         return true;
     }
     let name = canonical_style_property_name(name);
-    if crate::detached_css_style::css_style_declaration_is_shell_property(&name) {
-        return false;
-    }
     if cssom_border_image_reset_value_uses_pdb_storage(&name, value) {
         return true;
     }
@@ -396,9 +390,6 @@ pub(super) fn cssom_style_shorthand_query_uses_pdb(name: &str) -> bool {
 
 pub(super) fn cssom_style_property_write_requires_legacy_parser(name: &str, value: &str) -> bool {
     let canonical_name = canonical_style_property_name(name);
-    if crate::detached_css_style::css_style_declaration_is_shell_property(&canonical_name) {
-        return true;
-    }
     // Stylo's typed transform-origin value cannot preserve whether an authored
     // zero depth was omitted. Chromium serializes `20px 30px` and
     // `20px 30px 0px` differently. The prefixed mask aliases likewise project
