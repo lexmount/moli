@@ -258,7 +258,7 @@ async fn websocket_cdp_capture_screenshot_tracks_paint_and_layout_mutations() {
         spawn_dedicated_fixture_server(screenshot_fixture_app(), "layout-screenshot");
     let fixture_url = format!("http://{fixture_addr}/layout-screenshot-poc");
     let (cdp_addr, protocol_server) =
-        spawn_test_protocol_server_with_layout_policy(LayoutPolicy::OnDemand).await;
+        spawn_test_protocol_server_with_layout_policy(LayoutPolicy::Lazy).await;
     let (mut browser, _) = connect_async(
         discover_browser_websocket_url(cdp_addr)
             .await
@@ -345,12 +345,196 @@ async fn websocket_cdp_capture_screenshot_tracks_paint_and_layout_mutations() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_cdp_box_edges_share_the_device_pixel_grid() {
+    let html = r#"<!doctype html>
+<style>
+body { margin: 0; background: white }
+.frame {
+    position: absolute; left: 10.5px; top: 12.25px;
+    box-sizing: border-box; width: 120px; height: 42px;
+    border: 1.5px solid transparent; border-radius: 12px;
+    background: linear-gradient(white, white) padding-box,
+                linear-gradient(160deg, #2955ff, #ab50ff) border-box;
+}
+.border-origin { top: 64.25px; background-origin: border-box }
+.solid { top: 116.25px; background: #2955ff padding-box }
+.image {
+    top: 168.25px;
+    background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mPQDP0PAAIoAX46fBFaAAAAAElFTkSuQmCC)
+        0.5px 1.25px / 7.25px 6.5px border-box padding-box;
+}
+.single-image {
+    top: 220.25px; background-repeat: no-repeat;
+    background-size: 100% 100%; background-position: 0 0;
+}
+.bordered { top: 272.25px; background: #2955ff; border-color: #dc2800 }
+.overflow { top: 324.25px; background: none; overflow: hidden }
+.overflow > div { position: absolute; inset: -4px; background: #2955ff }
+.full-image {
+    top: 376.25px; border: 0; border-radius: 0;
+    background-color: #dc2800; background-clip: border-box;
+}
+.full-svg {
+    top: 428.25px;
+    background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMyOTU1ZmYiLz48L3N2Zz4=);
+}
+.border-image {
+    top: 480.25px; background: #dc2800; border-radius: 0;
+    border-image: linear-gradient(#2955ff, #2955ff) 2 fill / 1.5px stretch;
+}
+.gradient-mask {
+    top: 532.25px; border: 0; border-radius: 0; background: #2955ff;
+    mask-image: linear-gradient(black, black);
+}
+.image-mask {
+    top: 584.25px; border: 0; border-radius: 0; background: #2955ff;
+    mask: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mPQDP0PAAIoAX46fBFaAAAAAElFTkSuQmCC)
+        0 0 / 100% 100% no-repeat border-box;
+}
+.embedded { top: 636.25px; border: 0; border-radius: 0; background: #dc2800 }
+</style>
+<div class="frame"></div><div class="frame border-origin"></div>
+<div class="frame solid"></div><div class="frame image"></div>
+<div class="frame image single-image"></div>
+<div class="frame bordered"></div><div class="frame overflow"><div></div></div>
+<div class="frame image single-image full-image"></div>
+<div class="frame image single-image full-image full-svg"></div>
+<div class="frame border-image"></div>
+<div class="frame gradient-mask"></div><div class="frame image-mask"></div>
+<iframe class="frame embedded" srcdoc="<style>body { margin: 0; background: #2955ff }</style>"></iframe>
+<img hidden src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mPQDP0PAAIoAX46fBFaAAAAAElFTkSuQmCC">
+<img hidden src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMyOTU1ZmYiLz48L3N2Zz4=">"#;
+    let fixture_url = format!(
+        "data:text/html;charset=utf-8,{}",
+        url::form_urlencoded::byte_serialize(html.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20")
+    );
+    let (cdp_addr, protocol_server) =
+        spawn_test_protocol_server_with_runtime_config(NavigationRuntimeConfig::new(
+            protocol_server_test_fetch_config(FetchConfig::default()),
+            OptionalResourceFetchMask::IMAGE,
+            true,
+            LayoutPolicy::Realtime,
+        ))
+        .await;
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect screenshot CDP websocket");
+    let target = open_screenshot_target(&mut browser, &fixture_url).await;
+    let decoded = send_cdp_command(
+        &mut browser,
+        7,
+        "Runtime.evaluate",
+        Some(&target.session_id),
+        json!({
+            "expression": "Promise.all(Array.from(document.images, image => image.decode())).then(() => true)",
+            "awaitPromise": true,
+            "returnByValue": true,
+        }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&decoded, 7)["result"]["result"]["value"],
+        true
+    );
+
+    for (index, (scale, border_width)) in [(1.0_f32, 1), (1.25, 1), (2.0, 3), (1.0, 1)]
+        .into_iter()
+        .enumerate()
+    {
+        let id = 8 + 2 * index as u64;
+        let metrics = send_cdp_command(
+            &mut browser,
+            id,
+            "Emulation.setDeviceMetricsOverride",
+            Some(&target.session_id),
+            json!({
+                "width": 160,
+                "height": 704,
+                "deviceScaleFactor": scale,
+                "mobile": false,
+            }),
+        )
+        .await;
+        assert_cdp_success(&metrics, id);
+        let png = capture_png(&mut browser, &target.session_id, id + 1).await;
+        let (width, height, pixels) = decode_png(&png);
+        assert_eq!(
+            (width, height),
+            ((160.0 * scale) as u32, (704.0 * scale) as u32)
+        );
+
+        let left = (10.5 * scale).round() as i32;
+        let right = (130.5 * scale).round() as i32;
+        let center_x = (left + right) / 2;
+        let white = [255; 4];
+        let blue = [41, 85, 255, 255];
+        for (border_top, border_width, border_color, inside_color) in [
+            (12.25, border_width, None, white),
+            (64.25, border_width, None, white),
+            (116.25, border_width, Some(white), blue),
+            (168.25, border_width, Some(white), blue),
+            (220.25, border_width, Some(white), blue),
+            (272.25, border_width, Some([220, 40, 0, 255]), blue),
+            (324.25, border_width, Some(white), blue),
+            (376.25, 0, Some(white), blue),
+            (428.25, 0, Some(white), blue),
+            (480.25, 0, Some(white), blue),
+            (532.25, 0, Some(white), blue),
+            (584.25, 0, Some(white), blue),
+            (636.25, 0, Some(white), blue),
+        ] {
+            let top = (border_top * scale).round() as i32;
+            let bottom = ((border_top + 42.0) * scale).round() as i32;
+            let center_y = (top + bottom) / 2;
+            for (x, y, dx, dy) in [
+                (left, center_y, 1, 0),
+                (right - 1, center_y, -1, 0),
+                (center_x, top, 0, 1),
+                (center_x, bottom - 1, 0, -1),
+            ] {
+                for inset in -1..=border_width {
+                    let color = pixel(
+                        &pixels,
+                        width,
+                        (x + dx * inset) as u32,
+                        (y + dy * inset) as u32,
+                    );
+                    let expected = if inset < 0 {
+                        Some(white)
+                    } else if inset < border_width {
+                        border_color
+                    } else {
+                        Some(inside_color)
+                    };
+                    if let Some(expected) = expected {
+                        assert_eq!(color, expected, "({x}, {y}) at inset {inset}, DPR {scale}");
+                    } else {
+                        assert!(
+                            color[1] < 100 && color[2] >= 254,
+                            "gradient border ({x}, {y}) at inset {inset}, DPR {scale}: {color:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_capture_screenshot_paints_fresh_canvas_pixels() {
     let (fixture_addr, _fixture_server) =
         spawn_dedicated_fixture_server(screenshot_fixture_app(), "canvas-screenshot");
     let fixture_url = format!("http://{fixture_addr}/canvas-screenshot");
     let (cdp_addr, protocol_server) =
-        spawn_test_protocol_server_with_layout_policy(LayoutPolicy::OnDemand).await;
+        spawn_test_protocol_server_with_layout_policy(LayoutPolicy::Lazy).await;
     let (mut browser, _) = connect_async(
         discover_browser_websocket_url(cdp_addr)
             .await
@@ -442,7 +626,7 @@ async fn websocket_cdp_capture_screenshot_preserves_default_mock_boundary() {
     assert_eq!(
         response["error"]["message"],
         json!(
-            "Page.captureScreenshot is not supported: renderer layout is disabled; start Moli with --layout."
+            "Page.captureScreenshot is not supported: renderer layout is disabled; start Moli with --lazy or --realtime."
         )
     );
     assert!(response.get("result").is_none());
@@ -473,7 +657,7 @@ async fn websocket_mobile_root_scrolls_using_frame_size() {
         "data:text/html,{}",
         percent_encoding::utf8_percent_encode(html, percent_encoding::NON_ALPHANUMERIC),
     );
-    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+    for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
         let (addr, server) = spawn_test_protocol_server_with_layout_policy(policy).await;
         let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
             .await
@@ -490,7 +674,7 @@ async fn websocket_mobile_root_scrolls_using_frame_size() {
         .await;
         assert_cdp_success(&applied, 7);
 
-        // OnDemand getters and setters consume the last published layout.
+        // Lazy getters and setters consume the last published layout.
         let before = capture_png(&mut socket, session, 8).await;
         let (width, height, pixels) = decode_png(&before);
         assert_eq!((width, height), (375, 667), "{policy:?}");
@@ -621,7 +805,7 @@ async fn websocket_mobile_fixed_layout_and_intersection_use_the_frame() {
         "data:text/html,{}",
         percent_encoding::utf8_percent_encode(html, percent_encoding::NON_ALPHANUMERIC),
     );
-    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+    for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
         let (addr, server) = spawn_test_protocol_server_with_layout_policy(policy).await;
         let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
             .await

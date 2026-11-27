@@ -12,11 +12,27 @@ fi
 sdk="$(cd "$sdk" && pwd)"
 
 v8_version=152.2.0
-v8_archive_name=librusty_v8_release_aarch64-unknown-linux-musl.a.gz
-v8_archive_sha256=419a242557833151cf9dde82c12c8272c3c00015bfe7e340e48164a600d34039
 v8_crate_sha256=a10fe1a92da5c32c7c7f838ce36c0ccfcfd5edf0865b58bdde820aa64cea9888
-cache_dir="$repo_root/target/ohos-v8"
+v8_work="${MOLI_OHOS_V8_BUILD_DIR:-$repo_root/target/ohos-v8}"
+v8_artifacts="${MOLI_OHOS_V8_ARTIFACTS:-$v8_work/artifacts}"
+if [[ ! -f "$v8_artifacts/SHA256SUMS" ]]; then
+    echo 'Build the ARM64 DrumBrake archive with scripts/build-ohos-v8-arm64.sh first.' >&2
+    exit 1
+fi
+v8_artifacts="$(cd "$v8_artifacts" && pwd)"
+(cd "$v8_artifacts" && shasum -a 256 --check SHA256SUMS)
+(cd "$repo_root/vendor/v8-$v8_version/src" && shasum -a 256 --check "$v8_artifacts/binding-source.sha256")
+grep -Fxq 'v8_enable_pointer_compression = true' "$v8_artifacts/args.gn"
+grep -Fxq 'v8_drumbrake_bounds_checks = true' "$v8_artifacts/args.gn"
+if ! "$sdk/llvm/bin/llvm-ar" t "$v8_artifacts/librusty_v8.a" |
+    awk '/wasm-interpreter-runtime\.o$/ { found = 1 } END { exit !found }'; then
+    echo 'The ARM64 V8 archive must contain the DrumBrake interpreter.' >&2
+    exit 1
+fi
+
+cache_dir="$v8_work"
 mkdir -p "$cache_dir"
+cache_dir="$(cd "$cache_dir" && pwd)"
 scratch="$(mktemp -d "$cache_dir/.download.XXXXXX")"
 trap 'rm -rf -- "$scratch"' EXIT
 
@@ -37,9 +53,6 @@ download_pinned() {
     mv -f "$scratch/$file" "$cache_dir/$file"
 }
 
-# The release archive and vendored ARM64 bindings come from the same musl build.
-download_pinned "$v8_archive_name" "$v8_archive_sha256" \
-    "https://github.com/denoland/rusty_v8/releases/download/v$v8_version/$v8_archive_name"
 download_pinned "v8-$v8_version.crate" "$v8_crate_sha256" \
     "https://static.crates.io/crates/v8/v8-$v8_version.crate"
 v8_source="$cache_dir/v8-$v8_version"
@@ -60,20 +73,13 @@ export BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos="--sysroot=\"$sdk/sys
 
 # The V8 bridges use a recent host Clang with the OHOS sysroot and Chromium's libc++.
 export MOLI_OHOS_V8_SOURCE="$v8_source"
-export RUSTY_V8_ARCHIVE="$cache_dir/$v8_archive_name"
-export RUSTY_V8_ARCHIVE_SHA256="$v8_archive_sha256"
-export RUSTY_V8_SRC_BINDING_PATH="$repo_root/vendor/v8-$v8_version/gen/src_binding_release_aarch64-unknown-linux-musl.rs"
+export RUSTY_V8_ARCHIVE="$v8_artifacts/librusty_v8.a"
+export RUSTY_V8_ARCHIVE_SHA256="$(awk '$2 == "librusty_v8.a" { print $1 }' "$v8_artifacts/SHA256SUMS")"
+export RUSTY_V8_SRC_BINDING_PATH="$v8_artifacts/src_binding.rs"
 export V8_FROM_SOURCE=0 V8_FORCE_DEBUG=0 RUSTY_V8_SKIP_DOWNLOAD=0
 
 if [[ "${1:-}" == "--manifest-path" ]]; then
-    manifest_path="${2:?missing --manifest-path value}"
-    shift 2
-    cd "$(dirname "$manifest_path")"
-    if [[ ! -e Cargo.lock ]]; then
-        cp "$repo_root/Cargo.lock" "$scratch/Cargo.lock"
-        mv -n "$scratch/Cargo.lock" Cargo.lock
-    fi
-    cargo build --release --target "$target" --manifest-path "$(basename "$manifest_path")" "$@"
+    cargo build --locked --release --target "$target" "$@"
 else
     cargo build --locked --release -p moli --target "$target" "$@"
 fi

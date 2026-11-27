@@ -1,4 +1,5 @@
 mod address;
+mod address_target;
 mod browser;
 mod download_page;
 mod downloads;
@@ -8,6 +9,7 @@ mod icons;
 mod palette;
 mod surface;
 mod text_input;
+mod viewport_edit_sequence;
 
 use std::{future, path::PathBuf, rc::Rc};
 

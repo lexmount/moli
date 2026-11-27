@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths: &build_paths
-      - molio/**
+      - client/**
       - moli-*/**
       - '!moli-benchmark/**'
       - '!moli-*-smoke/**'
@@ -49,7 +49,7 @@ jobs:
         run: rustup component add rustfmt clippy
 
       - name: Check formatting
-        run: cargo fmt -p molio --check
+        run: cargo fmt -p molio -p molio-ios -p molio-ohos --check
 
       - name: Install desktop build dependencies
         run: |

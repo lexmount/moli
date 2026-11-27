@@ -81,7 +81,7 @@ fn realtime_input_wheels_finish_individually_and_honor_canceled_default_actions(
 #[test]
 fn legacy_input_modes_keep_the_wheel_window_and_batch_checkpoint() {
     run_page_vm_large_stack_async_test("legacy-input-window", || async move {
-        for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+        for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
             let loader =
                 crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
             let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(

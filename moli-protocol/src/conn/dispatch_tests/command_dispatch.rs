@@ -810,7 +810,7 @@ fn command_dispatch_preserves_page_screenshot_unsupported_for_mock_layout() {
             "id": 42,
             "error": {
                 "code": -32000,
-                "message": "Page.captureScreenshot is not supported: renderer layout is disabled; start Moli with --layout."
+                "message": "Page.captureScreenshot is not supported: renderer layout is disabled; start Moli with --lazy or --realtime."
             }
         })]
     );
@@ -863,7 +863,7 @@ fn command_dispatch_completes_additional_page_sync_commands_without_legacy_fallb
             "id": 413,
             "error": {
                 "code": -32000,
-                "message": "Page.printToPDF is not supported: renderer layout is disabled; start Moli with --layout."
+                "message": "Page.printToPDF is not supported: renderer layout is disabled; start Moli with --lazy or --realtime."
             }
         })]
     );

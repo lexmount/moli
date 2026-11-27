@@ -229,7 +229,7 @@ fn on_demand_cssom_size_container_query_keeps_live_inline_sizes() {
         </style><div id=box style='container-type:inline-size;width:200px'>
         <div id=target></div></div>"#,
     );
-    vm.set_layout_policy(LayoutPolicy::OnDemand);
+    vm.set_layout_policy(LayoutPolicy::Lazy);
     assert_eq!(vm.eval("box.offsetWidth").unwrap(), "200");
     let builds = vm.layout_pass_observability_for_test().1;
     assert_eq!(

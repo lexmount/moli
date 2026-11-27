@@ -73,7 +73,7 @@ fn file_input_validity_style_vm(policy: LayoutPolicy) -> StandaloneScriptVmHarne
 fn input_files_web_assignment_refreshes_held_validity_style_in_the_same_call() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = file_input_validity_style_vm(policy);
@@ -131,7 +131,7 @@ fn input_files_web_assignment_refreshes_held_validity_style_in_the_same_call() {
 fn input_files_native_commit_refreshes_style_before_input_and_change_callbacks() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = file_input_validity_style_vm(policy);

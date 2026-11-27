@@ -423,7 +423,7 @@ fn shadow_slot_insertion_uses_retargeted_assignment_snapshots() {
     );
 
     let effects = host.insert_before_effects(shadow_root, new_slot, Some(old_slot));
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
     assert!(style_effects.iter().all(|effect| {
         matches!(
             effect,

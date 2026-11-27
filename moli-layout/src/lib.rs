@@ -94,12 +94,11 @@ pub use snapshot::{
     PaintGradientColorSpace, PaintGradientExtend, PaintGradientHueDirection,
     PaintGradientInterpolation, PaintGradientStop, PaintImage, PaintImageId, PaintImageResource,
     PaintImageSampling, PaintLineCap, PaintLineJoin, PaintLinearGradient, PaintLink,
-    PaintLinkTarget, PaintPath, PaintPathElement, PaintPoint, PaintRadialGradient, PaintRect,
-    PaintShape, PaintSize, PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId,
+    PaintLinkTarget, PaintPath, PaintPathElement, PaintPixelGrid, PaintPoint, PaintRadialGradient,
+    PaintRect, PaintShape, PaintSize, PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId,
     PaintSvgImageResource, PaintTextDecoration, PaintTextDecorationStyle, PaintTextSemantics,
     PaintTextShadow, PaintTextStroke, PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles,
-    PaintTransform2D, PaintViewport, pixel_snap_paint_axis, pixel_snap_paint_axis_allowing_zero,
-    pixel_snap_paint_rect,
+    PaintTransform2D, PaintViewport,
 };
 pub use source::{
     ChildBoxPolicy, InlineSvgConsumers, InlineSvgImageLookup, InlineSvgInput, InlineSvgInputLookup,

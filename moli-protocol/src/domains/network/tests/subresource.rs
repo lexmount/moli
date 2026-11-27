@@ -3073,10 +3073,13 @@ fetch('/api-start')
     async fn api_start() -> impl IntoResponse {
         (
             StatusCode::TEMPORARY_REDIRECT,
-            [
+            axum::response::AppendHeaders([
                 (LOCATION.as_str(), "/api-final"),
                 ("set-cookie", "redir=1; Path=/"),
-            ],
+                ("set-cookie", "session=abc; Path=/"),
+                ("x-fetch-redirect", ""),
+                ("x-fetch-redirect", "second"),
+            ]),
         )
     }
 
@@ -3181,8 +3184,21 @@ fetch('/api-start')
         .find(|message| message["params"]["statusCode"] == json!(307))
         .expect("fetch redirect hop should emit responseReceivedExtraInfo");
     assert_eq!(
-        redirect_extra_info["params"]["cookieReports"][0]["status"]["kind"],
-        json!("Accepted")
+        redirect_extra_info["params"]["headers"]["set-cookie"],
+        "redir=1; Path=/\nsession=abc; Path=/"
+    );
+    assert_eq!(
+        redirect_extra_info["params"]["headers"]["x-fetch-redirect"],
+        "\nsecond"
+    );
+    let cookie_reports = redirect_extra_info["params"]["cookieReports"]
+        .as_array()
+        .expect("redirect should report both cookies");
+    assert_eq!(cookie_reports.len(), 2);
+    assert!(
+        cookie_reports
+            .iter()
+            .all(|report| report["status"]["kind"] == "Accepted")
     );
 
     let fetch_response = messages

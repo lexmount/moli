@@ -323,7 +323,7 @@ async fn instance(
             FetchConfig::default(),
             OptionalResourceFetchMask::NONE,
             true,
-            LayoutPolicy::OnDemand,
+            LayoutPolicy::Lazy,
         )
         .with_debugger_enabled(true),
         crate::config::DEFAULT_SCREENCAST_INTERVAL_MS,

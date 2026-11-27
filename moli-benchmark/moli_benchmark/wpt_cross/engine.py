@@ -110,6 +110,15 @@ class EngineDriver:
     # leave this as None and fall back to CDP.
     cli_fetch_command: Callable[[Path, str, float], list[str]] | None = None
 
+    def with_ephemeral_http_cache(self) -> "EngineDriver":
+        original_command = self.build_command
+
+        def command(binary: Path, port: int, profile: Path | None) -> list[str]:
+            assert profile is not None
+            return [*original_command(binary, port, profile), "--http-cache-dir", str(profile / "http-cache")]
+
+        return replace(self, build_command=command, needs_profile_dir=True)
+
     def with_fixture_tls(self, authority: Any) -> "EngineDriver":
         """Trust only this run's local fixture authority/public key.
 

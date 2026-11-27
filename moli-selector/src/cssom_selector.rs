@@ -478,49 +478,6 @@ fn collect_selector_namespace_prefixes(input: &mut Parser<'_>, prefixes: &mut Ve
     }
 }
 
-pub(crate) fn dom_api_selector_text_with_trailing_attribute_recovery(
-    selector_text: &str,
-) -> String {
-    if !selector_text.contains('[') {
-        return selector_text.to_owned();
-    }
-    if let Some(open_index) = trailing_unclosed_attribute_selector_index(selector_text)
-        && selector_text[open_index + 1..].contains('=')
-    {
-        let mut recovered = String::with_capacity(selector_text.len() + 1);
-        recovered.push_str(selector_text);
-        recovered.push(']');
-        return recovered;
-    }
-    selector_text.to_owned()
-}
-
-fn trailing_unclosed_attribute_selector_index(selector_text: &str) -> Option<usize> {
-    let mut quote = None;
-    let mut bracket_stack = Vec::new();
-    for (index, ch) in selector_text.char_indices() {
-        match ch {
-            '"' | '\'' => {
-                if quote == Some(ch) {
-                    quote = None;
-                } else if quote.is_none() {
-                    quote = Some(ch);
-                }
-            }
-            '[' if quote.is_none() => bracket_stack.push(index),
-            ']' if quote.is_none() => {
-                bracket_stack.pop()?;
-            }
-            _ => {}
-        }
-    }
-    if quote.is_none() && bracket_stack.len() == 1 {
-        bracket_stack.pop()
-    } else {
-        None
-    }
-}
-
 pub(crate) fn dom_api_selector_list_uses_defined_pseudo_class(selector_text: &str) -> bool {
     let input = selector_text;
     let mut parser = Parser::new(input);
@@ -597,7 +554,16 @@ pub(crate) fn dom_api_selector_list_has_only_known_pseudo_elements(selector_text
                     parse_known_pseudo_element_after_colon(&mut parser).is_some();
             }
             token => {
-                if token.is_parse_error() {
+                if token.is_parse_error()
+                    || matches!(
+                        token,
+                        Token::Delim('#')
+                            | Token::Hash(_)
+                            | Token::Number { .. }
+                            | Token::Percentage { .. }
+                            | Token::Dimension { .. }
+                    )
+                {
                     return false;
                 }
                 current_has_tokens = true;
@@ -1218,21 +1184,5 @@ mod tests {
         assert!(!dom_api_selector_list_uses_defined_pseudo_class(
             "div::defined"
         ));
-    }
-
-    #[test]
-    fn recovers_trailing_unclosed_attribute_selector_text() {
-        assert_eq!(
-            dom_api_selector_text_with_trailing_attribute_recovery(r#"#x [align="center""#),
-            r#"#x [align="center"]"#
-        );
-        assert_eq!(
-            dom_api_selector_text_with_trailing_attribute_recovery("#x [align]"),
-            "#x [align]"
-        );
-        assert_eq!(
-            dom_api_selector_text_with_trailing_attribute_recovery("[class=space unquoted]"),
-            "[class=space unquoted]"
-        );
     }
 }

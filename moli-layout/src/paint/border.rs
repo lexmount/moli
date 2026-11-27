@@ -14,7 +14,6 @@ use crate::{
     PaintFragment, PaintImageSampling, PaintSnapshot, PaintTileAxis, PaintTileGrid,
     PaintTileSource, PaintTiles, ResolvedLayoutStyle,
     gradient::project_gradient,
-    pixel_snap_paint_rect,
     source::{CssImageLookup, css_image_url},
 };
 
@@ -292,16 +291,18 @@ where
     let scale_x = scales(width_left / left, width_right / right);
     let scale_y = scales(width_top / top, width_bottom / bottom);
     let repeat = border.border_image_repeat;
-    let local_cull = local_cull();
-    let fragment_coverage = match fragment_clip {
-        Some(clip) => {
-            let Some(clip) = pixel_snap_paint_rect(paint_space.pre_transform_rect(clip)) else {
-                return true;
-            };
-            Some(clip)
-        }
-        None => None,
+    let pixel_grid = snapshot.pixel_grid();
+    let Some(image_coverage) = paint_space.pixel_snapped_rect(area, pixel_grid) else {
+        return true;
     };
+    let Some(fragment_coverage) = fragment_clip.map_or(Some(image_coverage), |clip| {
+        paint_space
+            .pixel_snapped_rect(clip, pixel_grid)
+            .and_then(|clip| intersect(image_coverage, clip))
+    }) else {
+        return true;
+    };
+    let cull = local_cull().map(|rect| paint_space.pre_transform_rect(rect));
     for (row, (src_row, dst_row)) in src_y.into_iter().zip(dst_y).enumerate() {
         for (column, (src_column, dst_column)) in src_x.into_iter().zip(dst_x).enumerate() {
             if row == 1 && column == 1 && !slice.fill {
@@ -322,23 +323,20 @@ where
             } else {
                 (dst.height, Repeat::Stretch)
             };
-            if intersect(dst, fragment_clip.unwrap_or(dst))
-                .and_then(|visible| intersect(visible, local_cull.unwrap_or(visible)))
-                .is_none()
-            {
+            let Some(coverage) = paint_space
+                .pixel_snapped_rect(dst, pixel_grid)
+                .and_then(|coverage| intersect(coverage, fragment_coverage))
+            else {
                 continue;
             };
+            if cull.is_some_and(|cull| intersect(coverage, cull).is_none()) {
+                continue;
+            }
             let x = border_tile_axis(dst.x, dst.width, tile_width, repeat_x);
             let y = border_tile_axis(dst.y, dst.height, tile_height, repeat_y);
             if x.count == 0 || y.count == 0 {
                 continue;
             }
-            let Some(coverage) = pixel_snap_paint_rect(paint_space.pre_transform_rect(dst)) else {
-                continue;
-            };
-            let Some(coverage) = intersect(coverage, fragment_coverage.unwrap_or(coverage)) else {
-                continue;
-            };
             let grid = paint_space.pre_transform_tile_grid(PaintTileGrid {
                 x,
                 y,

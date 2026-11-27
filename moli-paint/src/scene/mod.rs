@@ -96,7 +96,7 @@ pub(crate) fn paint_fragment(
             *styles,
             *radii,
             device_transform(*transform, scale),
-            scale,
+            snapshot.pixel_grid(),
         ),
         PaintFragment::BoxShadow(shadow) => paint_box_shadow(scene, shadow, scale),
         PaintFragment::TextDecoration(decoration) => {

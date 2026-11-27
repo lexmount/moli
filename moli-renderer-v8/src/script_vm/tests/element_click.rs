@@ -10,7 +10,7 @@ const REALTIME_CLICK_FIXTURE: &str = r#"<!doctype html><style>body{margin:0}</st
 
 #[test]
 fn native_element_click_uses_the_visible_mobile_frame() {
-    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+    for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
         let mut vm = new_parsed_test_vm(
             "https://mobile-native-click.test/",
             r#"<!doctype html><meta name="viewport" content="width=980, minimum-scale=1">
@@ -155,7 +155,7 @@ fn realtime_native_click_rehits_each_phase_at_the_prepared_point() {
 fn dom_click_activates_obscured_controls_without_pointer_input_or_layout() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = new_parsed_test_vm(

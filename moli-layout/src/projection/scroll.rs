@@ -243,7 +243,7 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
                 self.root,
                 new_viewport_scroll,
                 boxes.len(),
-                false,
+                None,
                 |index| Ok(self.placement(index)),
                 |id| {
                     let extent = &boxes[id.index()].scroll_extent;

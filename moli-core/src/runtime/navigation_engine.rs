@@ -2309,7 +2309,7 @@ mod tests {
                 FetchConfig::default(),
                 OptionalResourceFetchMask::NONE,
                 true,
-                LayoutPolicy::OnDemand,
+                LayoutPolicy::Lazy,
             ),
             &source,
         )
@@ -2333,7 +2333,7 @@ mod tests {
     #[test]
     fn hidden_scrollbars_follow_browser_and_shared_navigation_configuration() {
         let browser_config = BrowserConfig::default()
-            .with_layout_policy(LayoutPolicy::OnDemand)
+            .with_layout_policy(LayoutPolicy::Lazy)
             .with_scrollbars_hidden(true);
         let browser = Browser::new(browser_config.clone()).expect("hidden scrollbar browser");
         assert!(

@@ -611,7 +611,7 @@ async fn classic_alert_timeout_does_not_wait_for_a_blocked_native_stop() {
                             moli_fetch::FetchConfig::default(),
                             moli_core::OptionalResourceFetchMask::NONE,
                             true,
-                            moli_core::LayoutPolicy::OnDemand,
+                            moli_core::LayoutPolicy::Lazy,
                         ),
                     );
                 let context = AutomationContext {
@@ -2393,7 +2393,7 @@ async fn external_load_wait_cannot_publish_post_load_before_held_load_output() {
                 moli_protocol::CdpInitialStoragePartition::memory(),
                 moli_core::runtime::NavigationRuntimeConfig::new(
                     moli_fetch::FetchConfig::default(), moli_core::OptionalResourceFetchMask::NONE,
-                    true, moli_core::LayoutPolicy::OnDemand,
+                    true, moli_core::LayoutPolicy::Lazy,
                 ),
             );
             command(&mut scheduler, &mut receivers, json!({"id": 1, "method": "Page.enable"})).await;
@@ -3212,7 +3212,7 @@ async fn target_a_navigation_does_not_defer_target_b_network_events() {
                         moli_fetch::FetchConfig::default(),
                         moli_core::OptionalResourceFetchMask::NONE,
                         true,
-                        moli_core::LayoutPolicy::OnDemand,
+                        moli_core::LayoutPolicy::Lazy,
                     ),
                 );
             let context = AutomationContext {
@@ -3548,7 +3548,7 @@ async fn attachment_churn_needs_no_browser_readiness_waiter_and_reclaims_native_
                         moli_fetch::FetchConfig::default(),
                         moli_core::OptionalResourceFetchMask::NONE,
                         true,
-                        moli_core::LayoutPolicy::OnDemand,
+                        moli_core::LayoutPolicy::Lazy,
                     ),
                 );
             let context = AutomationContext {

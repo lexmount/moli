@@ -27,8 +27,8 @@ use super::{
 use crate::{
     LayoutBox, LayoutImageResource, LayoutRect, LayoutSize, LayoutTransform2D, PaintBlendMode,
     PaintBrush, PaintColor, PaintCompositeMode, PaintFragment, PaintImage, PaintImageSampling,
-    PaintShape, PaintSnapshot, PaintSvgImage, PaintTileAxis, PaintTileGrid, PaintTileSource,
-    PaintTiles, gradient::project_gradient,
+    PaintPixelGrid, PaintShape, PaintSnapshot, PaintSvgImage, PaintTileAxis, PaintTileGrid,
+    PaintTileSource, PaintTiles, gradient::project_gradient,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,37 +113,30 @@ pub(super) fn project_background_color<N>(
         .and_then(|computed| computed.get_background().background_clip.0.last().copied())
         .map(BoxModelBox::from)
         .unwrap_or(BoxModelBox::Border);
-    if clip == BoxModelBox::Text {
-        let Some(shape) = begin_background_text_clip_layer(areas, paint_space, snapshot) else {
-            return;
-        };
-        snapshot.push_fragment(PaintFragment::Fill {
-            fill_rule: crate::PaintFillRule::NonZero,
-            shape: shape.clone(),
-            brush: PaintBrush::Solid(color),
-            transform: paint_space.property_transform(),
-        });
-        finish_background_text_clip_layer(
-            shape,
-            paint_space.property_transform(),
-            snapshot,
-            text_clip_mask,
-        );
-        return;
-    }
     diagnose_background_clip_fallback(layout_box, clip, snapshot);
-    let Some(shape) = paint_space.pixel_snapped_box_shape(areas.shape(clip)) else {
+    let clips_to_text = clip == BoxModelBox::Text;
+    let clip = areas.shape(if clips_to_text {
+        BoxModelBox::Border
+    } else {
+        clip
+    });
+    let Some(shape) = paint_space.pixel_snapped_box_shape(clip, snapshot.pixel_grid()) else {
         return;
     };
-    if shape.bounds().width <= 0.0 || shape.bounds().height <= 0.0 {
-        return;
-    }
+    let transform = paint_space.property_transform();
+    let text_clip = clips_to_text.then(|| {
+        begin_background_text_clip_layer(&shape, transform, snapshot);
+        shape.clone()
+    });
     snapshot.push_fragment(PaintFragment::Fill {
         fill_rule: crate::PaintFillRule::NonZero,
         shape,
         brush: PaintBrush::Solid(color),
-        transform: paint_space.property_transform(),
+        transform,
     });
+    if let Some(clip) = text_clip {
+        finish_background_text_clip_layer(clip, transform, snapshot, text_clip_mask);
+    }
 }
 
 pub(super) fn project_background_layers<N>(
@@ -156,7 +149,9 @@ pub(super) fn project_background_layers<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let transform = paint_space.local_transform();
+    let tile_transform = paint_space.local_transform();
+    let clip_transform = paint_space.property_transform();
+    let grid = snapshot.pixel_grid();
     let Some(computed) = layout_box.style.stylo_computed_values() else {
         return;
     };
@@ -176,22 +171,21 @@ pub(super) fn project_background_layers<N>(
                 if !clips_to_text {
                     diagnose_background_clip_fallback(layout_box, layer.clip, snapshot);
                 }
-                let origin_rect = areas.rect(layer.origin);
                 let clip_shape = areas.shape(if clips_to_text {
                     BoxModelBox::Border
                 } else {
                     layer.clip
                 });
-                let clip_rect = clip_shape.bounds();
-                if origin_rect.width <= 0.0
-                    || origin_rect.height <= 0.0
-                    || clip_rect.width <= 0.0
-                    || clip_rect.height <= 0.0
-                {
+                let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape, grid) else {
                     continue;
-                }
-
-                let Some(tiles) = background_tiles(areas, &layer) else {
+                };
+                let Some(tiles) = gradient_tiles(
+                    areas.rect(layer.origin),
+                    clip_shape.bounds(),
+                    &layer,
+                    paint_space,
+                    grid,
+                ) else {
                     push_diagnostic_once(
                         snapshot,
                         "background-repeat-budget-exceeded",
@@ -206,19 +200,12 @@ pub(super) fn project_background_layers<N>(
                     continue;
                 }
                 let text_clip_shape = if clips_to_text {
-                    let Some(shape) =
-                        begin_background_text_clip_layer(areas, paint_space, snapshot)
-                    else {
-                        continue;
-                    };
-                    Some(shape)
+                    begin_background_text_clip_layer(&clip_shape, clip_transform, snapshot);
+                    Some(clip_shape)
                 } else {
-                    let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape) else {
-                        continue;
-                    };
                     snapshot.push_fragment(PaintFragment::PushClip {
                         shape: clip_shape,
-                        transform: paint_space.property_transform(),
+                        transform: clip_transform,
                     });
                     None
                 };
@@ -228,14 +215,14 @@ pub(super) fn project_background_layers<N>(
                             fill_rule: crate::PaintFillRule::NonZero,
                             shape: PaintShape::Rect(tile),
                             brush,
-                            transform,
+                            transform: tile_transform,
                         });
                     }
                 }
                 if let Some(shape) = text_clip_shape {
                     finish_background_text_clip_layer(
                         shape,
-                        paint_space.property_transform(),
+                        clip_transform,
                         snapshot,
                         text_clip_mask,
                     );
@@ -244,17 +231,18 @@ pub(super) fn project_background_layers<N>(
                 }
             }
             GenericImage::Url(_) => {
+                let clip = paint_space.pixel_snapped_box_clip(areas.shape(layer.clip), grid);
                 let resource = crate::source::css_image_url(layer.image)
                     .map_or_else(crate::LayoutCssImageState::default, css_images);
                 project_url_image_layer(
                     layout_box,
                     &layer,
                     resource.ready(),
-                    areas,
+                    areas.rect(layer.origin),
+                    clip,
                     paint_space,
                     snapshot,
                     CssImageLayerKind::Background,
-                    true,
                 );
             }
             GenericImage::LightDark(_)
@@ -282,20 +270,18 @@ pub(super) fn project_background_layers<N>(
 /// the same epsilon isolation guard used by CSS masks so the following
 /// `DestIn` operation cannot consume the page backdrop.
 fn begin_background_text_clip_layer(
-    areas: BoxAreas,
-    paint_space: PaintSpace,
+    clip: &PaintShape,
+    transform: LayoutTransform2D,
     snapshot: &mut PaintSnapshot,
-) -> Option<PaintShape> {
-    let clip = paint_space.pixel_snapped_box_shape(areas.shape(BoxModelBox::Border))?;
+) {
     snapshot.push_fragment(PaintFragment::PushLayer {
         opacity: 1.0 - f32::EPSILON,
         blend_mode: PaintBlendMode::Normal,
         composite: PaintCompositeMode::SrcOver,
         clip: clip.clone(),
-        transform: paint_space.property_transform(),
+        transform,
         filter: None,
     });
-    Some(clip)
 }
 
 /// Applies opaque glyph ink to the isolated background with `DestIn` and
@@ -320,11 +306,24 @@ fn finish_background_text_clip_layer(
     snapshot.push_fragment(PaintFragment::PopLayer); // isolated background
 }
 
-pub(super) fn background_tiles(
-    areas: BoxAreas,
+pub(super) fn gradient_tiles(
+    origin: LayoutRect,
+    clip: LayoutRect,
     layer: &ImageLayerStyles<'_>,
+    paint_space: PaintSpace,
+    pixel_grid: PaintPixelGrid,
 ) -> Option<Vec<LayoutRect>> {
-    let Some(grid) = background_tile_grid(areas, layer, BackgroundSizeComputeMode::Auto) else {
+    // Gradients have no intrinsic size. Resolve the positioning area on the
+    // clip's pixel grid and keep brush coordinates relative to the box.
+    let Some(origin) = paint_space.pixel_snapped_rect(origin, pixel_grid) else {
+        return Some(Vec::new());
+    };
+    let Some(grid) = background_tile_grid(
+        paint_space.local_rect(origin),
+        paint_space.local_rect(clip),
+        layer,
+        BackgroundSizeComputeMode::Auto,
+    ) else {
         return Some(Vec::new());
     };
     let count = grid.x.count.saturating_mul(grid.y.count);
@@ -346,13 +345,13 @@ pub(super) fn background_tiles(
 }
 
 fn background_tile_grid(
-    areas: BoxAreas,
+    origin: LayoutRect,
+    clip: LayoutRect,
     layer: &ImageLayerStyles<'_>,
     mode: BackgroundSizeComputeMode,
 ) -> Option<PaintTileGrid> {
     use BackgroundRepeatKeyword::{NoRepeat, Repeat, Round, Space};
 
-    let origin = areas.rect(layer.origin);
     let (position, size) =
         compute_layer_position_and_size(layer, origin.width, origin.height, mode);
     let width = size.width;
@@ -363,12 +362,14 @@ fn background_tile_grid(
     }
     let BackgroundRepeat(repeat_x, repeat_y) = *layer.repeat;
 
-    let repeat_area = larger_clip_area(areas, layer.clip, layer.origin).unwrap_or(origin);
+    // A snapped clip can extend beyond the unsnapped positioning area.
+    // Count enough repeats to cover both while keeping their original phase.
+    let repeat_area = origin.union(clip);
     let axis =
         |repeat, tile_size: f32, position, (origin, extent), (clip, clip_extent): (f32, f32)| {
             let (start, count, step) = match repeat {
                 Repeat | Round => {
-                    let leading_inset = f32::max(origin - clip, 0.0);
+                    let leading_inset = origin - clip;
                     let extension = extend(leading_inset + position, tile_size);
                     let count = ((clip_extent + extension) / tile_size).ceil().max(1.0) as u32;
                     (clip - extension, count, tile_size)
@@ -405,7 +406,7 @@ fn background_tile_grid(
             (origin.y, origin.height),
             (repeat_area.y, repeat_area.height),
         ),
-        coverage: areas.rect(layer.clip),
+        coverage: clip,
         snap_tiles: !(matches!(repeat_x, Repeat | Round) && matches!(repeat_y, Repeat | Round)),
     })
 }
@@ -414,11 +415,11 @@ pub(super) fn project_url_image_layer<N>(
     layout_box: &LayoutBox<N>,
     layer: &ImageLayerStyles<'_>,
     resource: Option<&LayoutImageResource>,
-    areas: BoxAreas,
+    origin: LayoutRect,
+    clip_shape: PaintShape,
     paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
     kind: CssImageLayerKind,
-    push_clip: bool,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
@@ -436,8 +437,6 @@ pub(super) fn project_url_image_layer<N>(
         );
         return;
     };
-    let origin = areas.rect(layer.origin);
-    let clip_shape = areas.shape(layer.clip);
     let clip = clip_shape.bounds();
     if origin.width <= 0.0 || origin.height <= 0.0 || clip.width <= 0.0 || clip.height <= 0.0 {
         return;
@@ -447,13 +446,15 @@ pub(super) fn project_url_image_layer<N>(
         return;
     };
     let mode = BackgroundSizeComputeMode::Size(object_width, object_height);
-    let Some(mut grid) = background_tile_grid(areas, layer, mode) else {
+    let Some(mut grid) = background_tile_grid(origin, paint_space.local_rect(clip), layer, mode)
+    else {
         return;
     };
-    // Keep the existing snapping of SVG and mask tiles. The continuous raster
-    // background path retains fractional tile size and phase.
-    grid.snap_tiles |= kind == CssImageLayerKind::Mask || resource.svg.is_some();
-    let grid = paint_space.pre_transform_tile_grid(grid);
+    // SVG draws individual clipped tiles. A continuous raster pattern keeps
+    // its fractional tile size and phase for both backgrounds and masks.
+    grid.snap_tiles |= resource.svg.is_some();
+    let mut grid = paint_space.pre_transform_tile_grid(grid);
+    grid.coverage = clip;
     let transform = paint_space.property_transform();
     let single_tile = (grid.snap_tiles && grid.x.count == 1 && grid.y.count == 1).then(|| {
         LayoutRect::new(
@@ -464,13 +465,10 @@ pub(super) fn project_url_image_layer<N>(
         )
     });
 
-    if push_clip {
-        let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape) else {
-            return;
-        };
+    if kind == CssImageLayerKind::Background {
         snapshot.push_fragment(PaintFragment::PushClip {
             shape: clip_shape,
-            transform: paint_space.property_transform(),
+            transform,
         });
     }
     if let Some(pixels) = resource.pixels.clone() {
@@ -517,7 +515,7 @@ pub(super) fn project_url_image_layer<N>(
             })));
         }
     }
-    if push_clip {
+    if kind == CssImageLayerKind::Background {
         snapshot.push_fragment(PaintFragment::PopLayer);
     }
 }
@@ -549,20 +547,6 @@ pub(super) fn css_image_concrete_object_size(
     };
     (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
         .then_some((width, height))
-}
-
-fn larger_clip_area(areas: BoxAreas, clip: BoxModelBox, origin: BoxModelBox) -> Option<LayoutRect> {
-    match (clip, origin) {
-        (BoxModelBox::Border | BoxModelBox::BorderArea, BoxModelBox::Padding)
-        | (
-            BoxModelBox::Border | BoxModelBox::BorderArea,
-            BoxModelBox::Content | BoxModelBox::Text,
-        ) => Some(areas.border_rect),
-        (BoxModelBox::Padding, BoxModelBox::Content | BoxModelBox::Text) => {
-            Some(areas.padding_rect)
-        }
-        _ => None,
-    }
 }
 
 fn compute_layer_position_and_size(

@@ -23,7 +23,7 @@ pub(super) fn native_range_client_rects_for_boundaries(
     if !host.layout_policy().uses_real_layout() {
         // Preserve the explicit Mock policy's pre-layout Range contract: one
         // synthetic box for the common element, or for a text node's parent.
-        // Fragment-accurate text ranges belong exclusively to OnDemand.
+        // Fragment-accurate text ranges belong exclusively to Lazy.
         let common =
             common_ancestor_handle(scope, boundaries.start.container, boundaries.end.container)?;
         let target = if node_type_for_handle(scope, common) == Some(NodeType::Element) {

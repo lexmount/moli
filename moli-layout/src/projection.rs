@@ -45,8 +45,8 @@ use crate::{
     LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId,
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutRect, LayoutScrollExtent,
     LayoutScrollbarAxis, LayoutScrollbarGeometry, LayoutSize, LayoutTransform2D, LayoutViewport,
-    LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity, PaintSnapshot,
-    RetainedLayoutWorld,
+    LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity, PaintPixelGrid,
+    PaintSnapshot, RetainedLayoutWorld,
 };
 
 pub(crate) struct LayoutPassPhaseMetrics {
@@ -535,7 +535,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
             world.root,
             tree.viewport_scroll,
             tree.boxes.len(),
-            true,
+            Some(PaintPixelGrid::new(tree.viewport.device_pixel_ratio)),
             |index| Ok(scroll.placement(index)),
             |id| {
                 let extent = &tree.boxes[id.index()].scroll_extent;
@@ -1069,7 +1069,7 @@ where
             world.root,
             self.viewport_scroll,
             world.boxes.len(),
-            paint,
+            paint.then(|| PaintPixelGrid::new(self.viewport.device_pixel_ratio)),
             |index| match &retained {
                 Some(retained) => Ok(retained.placement(index)),
                 None => placements(index),

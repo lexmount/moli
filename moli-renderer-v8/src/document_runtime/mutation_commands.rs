@@ -4,7 +4,7 @@ use dom::ElementState as StyloElementState;
 use tracing::debug;
 
 use crate::{
-    style_engine::{self, StyleAttributeImpact},
+    style_engine,
     util::{utf16_split_units_lossy, utf16_units},
 };
 use moli_dom::native::{Element, Node, NodeType};
@@ -661,7 +661,7 @@ impl DocumentRuntime {
         style_input_changed: bool,
     ) -> bool {
         if style_input_changed {
-            self.note_attribute_layout_activity(host_ptr, handle, "style");
+            self.note_inline_style_attribute_activity(host_ptr, handle, "style");
             // An iframe's inline style can change the viewport used by its child
             // document, including the result of its media queries.
             if effects.style().attribute_mutations().is_empty()
@@ -698,7 +698,6 @@ impl DocumentRuntime {
             Some(name),
             Some(value),
         );
-        let style_impact = StyleAttributeImpact::for_attribute_name(name);
         let state = style_state_impact_for_attribute_mutation(&self.dom_host, handle, None, name);
         let old_style_state = self.retained_old_style_state_for_impact(host_ptr, handle, state);
         let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
@@ -708,8 +707,8 @@ impl DocumentRuntime {
             .dom_host
             .set_attribute_mutation_outcome(handle, name, value)
             .into_parts();
-        if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
-            self.note_attribute_layout_activity(host_ptr, handle, name);
+        if old_value.as_deref() != Some(value) {
+            self.note_inline_style_attribute_activity(host_ptr, handle, name);
         }
         let changed =
             self.apply_runtime_mutation_effects(scope, host_ptr, effects, mutation_options);
@@ -865,7 +864,6 @@ impl DocumentRuntime {
         {
             unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
         }
-        let style_impact = StyleAttributeImpact::for_attribute_name(name);
         let state = style_state_impact_for_attribute_mutation(&self.dom_host, handle, None, name);
         let old_style_state = self.retained_old_style_state_for_impact(host_ptr, handle, state);
         let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
@@ -905,8 +903,8 @@ impl DocumentRuntime {
             .dom_host
             .remove_attribute_mutation_outcome(handle, name)
             .into_parts();
-        if old_value.is_some() && style_impact.affects_layout_metric() {
-            self.note_attribute_layout_activity(host_ptr, handle, name);
+        if old_value.is_some() {
+            self.note_inline_style_attribute_activity(host_ptr, handle, name);
         }
         let changed = self.apply_runtime_mutation_effects(
             scope,
@@ -1024,7 +1022,6 @@ impl DocumentRuntime {
         {
             unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
         }
-        let style_impact = StyleAttributeImpact::for_attribute_name(local_name);
         let state = style_state_impact_for_attribute_mutation(
             &self.dom_host,
             handle,
@@ -1042,8 +1039,8 @@ impl DocumentRuntime {
             .dom_host
             .remove_attribute_ns_mutation_outcome(handle, namespace, local_name)
             .into_parts();
-        if old_value.is_some() && style_impact.affects_layout_metric() {
-            self.note_attribute_layout_activity(host_ptr, handle, local_name);
+        if old_value.is_some() {
+            self.note_inline_style_attribute_activity(host_ptr, handle, local_name);
         }
         let changed = self.apply_runtime_mutation_effects(
             scope,
@@ -1166,7 +1163,6 @@ impl DocumentRuntime {
             Some(qualified_name),
             Some(value),
         );
-        let style_impact = StyleAttributeImpact::for_attribute_name(local_name);
         let state = style_state_impact_for_attribute_mutation(
             &self.dom_host,
             handle,
@@ -1181,8 +1177,8 @@ impl DocumentRuntime {
             .dom_host
             .set_attribute_ns_mutation_outcome(handle, namespace, prefix, local_name, value)
             .into_parts();
-        if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
-            self.note_attribute_layout_activity(host_ptr, handle, local_name);
+        if old_value.as_deref() != Some(value) {
+            self.note_inline_style_attribute_activity(host_ptr, handle, local_name);
         }
         let changed = self.apply_runtime_mutation_effects(
             scope,
@@ -2385,7 +2381,7 @@ fn is_disableable_descendant_for_optgroup(element: &Element) -> bool {
 }
 
 impl DocumentRuntime {
-    fn note_attribute_layout_activity(
+    fn note_inline_style_attribute_activity(
         &self,
         host_ptr: *mut PageScriptHost,
         handle: DomHandle,

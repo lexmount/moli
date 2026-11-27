@@ -102,9 +102,14 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let mut page = fixture(&loader).await;
         #[cfg(feature = "devtools")]
+        let paint_session = crate::runtime::RendererScreencastPaintSession::default();
+        #[cfg(feature = "devtools")]
         let first = {
             let CastReply::Captured(first) = page
-                .capture_screencast_frame(viewport_screencast_request(None))
+                .capture_screencast_frame(crate::runtime::RendererCaptureScreencastFrameRequest {
+                    paint_session: Some(paint_session.clone()),
+                    ..viewport_screencast_request(None)
+                })
                 .unwrap()
             else {
                 panic!("screen capture");
@@ -121,11 +126,14 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
         let builds = page.vm().layout_pass_observability_for_test().1;
         let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;
         #[cfg(feature = "devtools")]
-        assert_eq!(
-            screen_token(&page),
-            first.visual_state,
-            "clean frame and reads preserve the captured token"
-        );
+        {
+            assert!(page.vm().has_screencast_paint_for_test());
+            assert_eq!(
+                screen_token(&page),
+                first.visual_state,
+                "clean frame and reads preserve the captured token"
+            );
+        }
 
         let RendererCaptureScreenshotReply::Captured(print) =
             page.capture_screenshot(print_request()).unwrap()
@@ -177,6 +185,7 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
         }
         #[cfg(feature = "devtools")]
         {
+            assert!(page.vm().has_screencast_paint_for_test());
             assert!(matches!(
                 page.capture_screencast_frame(viewport_screencast_request(Some(
                     first.visual_state

@@ -2,7 +2,7 @@ use super::*;
 
 async fn captured_child_vm(nested: bool, scaled: bool) -> StandaloneScriptVmHarness {
     let mut vm = new_storage_html_test_vm("https://captured-pointer-coordinates.test/");
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(r#"
         document.body.style.margin='0';
         document.body.innerHTML='<div id=outside style="position:absolute;left:0;top:0;width:50px;height:50px"></div>';
@@ -115,7 +115,7 @@ async fn assert_removed_pointer_target_preserves_frame_coordinates(
     scaled: bool,
 ) {
     let mut vm = new_storage_html_test_vm("https://removed-pointer-coordinates.test/");
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(r#"
         document.body.style.margin='0';
         globalThis.frame=document.createElement('iframe');
@@ -214,7 +214,7 @@ async fn captured_child_pointer_uses_published_frame_coordinates_outside_its_bou
     assert_eq!(
         vm.layout_pass_observability_for_test().1,
         builds + 1,
-        "OnDemand input must rebuild an invalidated iframe snapshot exactly once"
+        "Lazy input must rebuild an invalidated iframe snapshot exactly once"
     );
     vm.publish_layout_for_test().unwrap();
     let builds = vm.layout_pass_observability_for_test().1;

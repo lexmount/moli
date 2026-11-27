@@ -19,7 +19,9 @@ pub(super) async fn render_pdf(page: &mut Page) -> Result<Vec<u8>> {
         RendererPrintToPdfReply::Printed(bytes) => Ok(bytes),
         RendererPrintToPdfReply::Failed(error) => bail!("{error}"),
         RendererPrintToPdfReply::LayoutDisabled => {
-            bail!("--dump pdf requires --layout or MOLI_LAYOUT=true")
+            bail!(
+                "--dump pdf requires --lazy or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
+            )
         }
         RendererPrintToPdfReply::NoDocument => {
             bail!("--dump pdf requires a loaded HTML document")

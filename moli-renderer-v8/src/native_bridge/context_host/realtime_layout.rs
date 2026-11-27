@@ -56,9 +56,7 @@ impl PreparedLayoutPublication {
         use crate::layout_renderer::LayoutInputRetention;
         match self.0 {
             LayoutPublication::CurrentScreen { .. } => LayoutInputRetention::Realtime,
-            LayoutPublication::LegacyLatest(_)
-                if policy == moli_page_types::LayoutPolicy::OnDemand =>
-            {
+            LayoutPublication::LegacyLatest(_) if policy == moli_page_types::LayoutPolicy::Lazy => {
                 LayoutInputRetention::Frozen
             }
             _ => LayoutInputRetention::Transient,
@@ -324,7 +322,7 @@ impl PageScriptHost {
     #[cfg(feature = "devtools")]
     pub(crate) fn paint_current_screen_layout(
         &self,
-        session: &RendererScreencastPaintSession,
+        session: Option<&RendererScreencastPaintSession>,
         viewport: LayoutViewport,
         capture: moli_layout::PaintCaptureRequest,
         reason: LayoutFlushReason,
@@ -336,9 +334,20 @@ impl PageScriptHost {
         if viewport != self.layout_viewport_for_document(document) {
             return Ok(None);
         }
-        state
-            .screen_paint_consumers
-            .attach(session, &self.document_layout_state);
+        if let Some(session) = session {
+            state
+                .screen_paint_consumers
+                .attach(session, &self.document_layout_state);
+        } else if !state.has_screen_paint_consumers()
+            || self
+                .document_layout_state
+                .borrow()
+                .retained_screen_paint(document)
+                .is_none()
+        {
+            // An explicit screenshot only borrows paint already kept by a consumer.
+            return Ok(None);
+        }
         self.ensure_current_screen_layout(reason)?;
         let paint_geometry =
             RefCell::new(HashMap::<DomHandle, crate::layout_renderer::SvgGeometry>::new());
@@ -475,7 +484,7 @@ impl PageScriptHost {
     /// Explicitly sampled geometry continues to use the snapshot-only APIs.
     pub(crate) fn ensure_observable_layout(&self) -> Result<(), LayoutError> {
         match self.layout_policy {
-            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::OnDemand => {
+            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::Lazy => {
                 self.ensure_initial_layout()
             }
             moli_page_types::LayoutPolicy::Realtime => {

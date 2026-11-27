@@ -196,7 +196,7 @@ async fn ondemand_inline_svg_decodes_the_frozen_scene_after_a_live_move() {
             Vec::new(),
             Url::parse("https://example.com/frozen-svg-input.html")?,
         );
-        page_vm.vm_mut().set_layout_policy(LayoutPolicy::OnDemand);
+        page_vm.vm_mut().set_layout_policy(LayoutPolicy::Lazy);
         let vm = page_vm.vm_mut();
         vm.eval(
             r#"
@@ -230,14 +230,14 @@ async fn ondemand_inline_svg_decodes_the_frozen_scene_after_a_live_move() {
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("OnDemand geometry decodes the input and source identities from its snapshot");
+    .expect("Lazy geometry decodes the input and source identities from its snapshot");
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn inline_svg_capture_decodes_only_the_effective_paint_region() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
-        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
             let mut page_vm = test_page_vm_with_loader_and_document_url(
                 &loader,
                 Vec::new(),
@@ -360,7 +360,7 @@ async fn inline_svg_and_iframe_borders_paint_without_preparing_contents() {
 
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
-        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
             let mut page_vm = test_page_vm_with_loader_and_document_url(
                 &loader, Vec::new(), Url::parse("https://example.com/replaced-border.html")?,
             );
@@ -444,7 +444,7 @@ async fn realtime_screencast_decodes_new_svg_content_as_it_scrolls_into_view() {
         let session = crate::runtime::RendererScreencastPaintSession::default();
         let capture = |vm: &mut crate::script_vm::ScriptVm| -> anyhow::Result<_> {
             let frame = vm.paint_current_screen_layout(
-                &session,
+                Some(&session),
                 viewport,
                 PaintCaptureRequest::viewport(),
                 LayoutFlushReason::Screencast,

@@ -225,7 +225,7 @@ async fn scroll_into_view_during_image_update_starts_lazy_request() -> Result<()
         "",
     )
     .await?;
-    let (_browser, mut page) = server.open_page(moli_core::LayoutPolicy::OnDemand).await?;
+    let (_browser, mut page) = server.open_page(moli_core::LayoutPolicy::Lazy).await?;
     page.publish_layout_async().await?;
 
     assert_eq!(

@@ -157,7 +157,7 @@ fn real_layout_test_runtime_config(
         FetchConfig::default(),
         optional_resource_fetch_mask,
         true,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
     )
     // Debugger tests exercise actual pauses; production defaults are tested separately.
     .with_debugger_enabled(true)

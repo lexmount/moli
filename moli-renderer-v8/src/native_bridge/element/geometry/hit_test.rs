@@ -120,7 +120,7 @@ pub(crate) fn observable_scrollbar_hit_test(
 }
 
 /// Coordinate input shares the public geometry policy and recursive snapshot.
-/// Realtime refreshes stale inputs; OnDemand only initializes a cold page.
+/// Realtime refreshes stale inputs; Lazy only initializes a cold page.
 pub(crate) fn input_surface_hit_test(
     runtime: &PageScriptHost,
     document: DomHandle,

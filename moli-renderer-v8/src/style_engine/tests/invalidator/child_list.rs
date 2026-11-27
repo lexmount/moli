@@ -303,6 +303,66 @@ fn retained_stylo_invalidator_narrows_child_list_inserted_sibling_invalidation()
 }
 
 #[test]
+fn ordinary_sibling_selectors_do_not_invalidate_an_unrelated_relative_anchor() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let body = host.create_element("body");
+    let list = host.create_element("div");
+    let first = host.create_element("span");
+    let second = host.create_element("span");
+    let inserted = host.create_element("span");
+    let unrelated = host.create_element("section");
+    assert!(host.append_child(document, body));
+    assert!(host.append_child(body, list));
+    assert!(host.append_child(body, unrelated));
+    for item in [first, second, inserted] {
+        assert!(host.set_attribute(item, "class", "item"));
+    }
+    assert!(host.append_child(list, first));
+    assert!(host.append_child(list, second));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(
+        ".item + .item { color: blue; } body:has(.never) { color: red; }".into(),
+        document_url.clone(),
+    );
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
+    for (element, color) in [(second, "rgb(0, 0, 255)"), (unrelated, "rgb(0, 0, 0)")] {
+        assert_eq!(
+            engine.computed_style_property_value(
+                &host,
+                &document_url,
+                element,
+                "color",
+                None,
+                &inputs,
+                None,
+            ),
+            Some(color.into()),
+        );
+    }
+
+    assert!(host.append_child(list, inserted));
+    engine.invalidate_for_mutations(
+        &host,
+        &[StyleMutationEffect::ChildList {
+            parent: list,
+            added_nodes: vec![inserted],
+            removed_nodes: Vec::new(),
+            previous_sibling: Some(second),
+            next_sibling: None,
+        }],
+        &crate::protocol_types::EmulatedMediaOverrides::default(),
+    );
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+}
+
+#[test]
 fn reordered_summary_invalidates_ua_styles_when_author_source_has_no_target() {
     let mut host = test_host();
     let document = host.document_handle();

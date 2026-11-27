@@ -7,7 +7,6 @@ mod cssom_selector;
 mod detached_stylo;
 mod error;
 mod stylo;
-mod validation;
 
 pub use cssom_selector::{
     CssDirection, GetComputedStylePseudoElement, first_strong_text_direction,
@@ -24,7 +23,7 @@ pub use stylo::html_auto_directionality_root;
 pub use stylo::{
     InlineStyleSnapshot, QueryContainerSizes, StyleMutationSnapshots, StyloDocument,
     StyloDomHostBinding, StyloDomStyleAdapter, StyloElement, StyloNode, StyloShadowRoot,
-    is_svg_presentation_attribute_name, stylo_focus_change_handles,
+    attribute_affects_presentational_hints, stylo_focus_change_handles,
     stylo_focus_state_matches_handle, stylo_focus_within_state_matches_handle,
     stylo_shadow_root_host_participates_in_style_scope,
 };
@@ -37,10 +36,6 @@ use std::sync::OnceLock;
 // `moli` keeps its historical `crate::selector::*` references.
 mod selector {
     pub(crate) use crate::SelectorError;
-
-    pub(crate) mod validation {
-        pub(crate) use crate::validation::*;
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1198,7 +1193,7 @@ mod tests {
     }
 
     #[test]
-    fn dom_api_selectors_recover_trailing_unclosed_attribute_selector() {
+    fn dom_api_selectors_recover_at_end_of_input() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
         host.reset_html_document_shell();
@@ -1208,17 +1203,30 @@ mod tests {
         assert!(host.append_child(body, target));
 
         let engine = QueryEngine;
-        assert_eq!(
-            engine
-                .query_selector_host(&host, r#"[align="center""#)
-                .unwrap(),
-            Some(target)
-        );
-        assert!(
-            engine
-                .matches_host(&host, target, r#"[align="center""#)
-                .unwrap()
-        );
+        for selector in [
+            r#"[align="center""#,
+            r#"[align="center"#,
+            "[align",
+            "div:not([class]",
+            "div:not([class",
+            "/* ] ) */ [align",
+        ] {
+            assert_eq!(
+                engine.query_selector_host(&host, selector).unwrap(),
+                Some(target),
+                "{selector}"
+            );
+            assert!(
+                engine.matches_host(&host, target, selector).unwrap(),
+                "{selector}"
+            );
+        }
+        for selector in ["[align=", "div]", "div)", "div:not(["] {
+            assert!(
+                engine.query_selector_host(&host, selector).is_err(),
+                "{selector}"
+            );
+        }
     }
 
     #[test]

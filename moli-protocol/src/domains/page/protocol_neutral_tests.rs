@@ -447,7 +447,7 @@ fn devtools_page_entry_reports_layout_disabled_without_placeholder_payload() {
     assert_eq!(
         out[0]["error"]["message"],
         json!(
-            "Page.printToPDF is not supported: renderer layout is disabled; start Moli with --layout."
+            "Page.printToPDF is not supported: renderer layout is disabled; start Moli with --lazy or --realtime."
         )
     );
 }

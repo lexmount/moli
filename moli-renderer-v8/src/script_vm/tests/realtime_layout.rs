@@ -118,10 +118,51 @@ fn realtime_layout_writes_and_reads_in_one_call_share_only_current_inputs() {
 }
 
 #[test]
+fn realtime_html_attribute_changes_reuse_native_inputs_and_respect_css_selectors() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html><style>
+           #target { width:100px }
+           #target[state="wide"] { width:240px }
+           </style><div id=target></div>"#,
+    );
+    assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "100");
+    let builds = vm.layout_pass_observability_for_test().1;
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let native_revision = || {
+        let host = host.borrow();
+        host.dom_host()
+            .document_layout_version(host.document_handle())
+    };
+    let revision = native_revision();
+
+    assert_eq!(
+        vm.eval("target.setAttribute('x','123'); target.setAttribute('width','9'); String(target.offsetWidth)")
+            .unwrap(),
+        "100"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    assert_eq!(native_revision(), revision);
+    assert_eq!(
+        vm.eval("target.setAttribute('state','wide'); String(target.offsetWidth)")
+            .unwrap(),
+        "240"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    assert_eq!(native_revision(), revision);
+    assert_eq!(
+        vm.eval("target.removeAttribute('state'); String(target.offsetWidth)")
+            .unwrap(),
+        "100"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+    assert_eq!(native_revision(), revision);
+}
+
+#[test]
 fn retained_layout_world_belongs_to_realtime_screen_publication() {
     for mode in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = new_parsed_test_vm(
@@ -163,7 +204,7 @@ async fn realtime_canvas_pixels_update_without_replacing_geometry() {
             let session = crate::runtime::RendererScreencastPaintSession::default();
             let paint = |vm: &mut StandaloneScriptVmHarness| {
                 vm.paint_current_screen_layout(
-                    &session,
+                    Some(&session),
                     viewport,
                     moli_layout::PaintCaptureRequest::viewport(),
                     moli_layout::LayoutFlushReason::Screenshot,
@@ -345,7 +386,7 @@ async fn realtime_repaints_native_color_damage_without_rebuilding_geometry() {
             let session = crate::runtime::RendererScreencastPaintSession::default();
             let paint = |vm: &mut StandaloneScriptVmHarness| {
                 vm.paint_current_screen_layout(
-                    &session,
+                    Some(&session),
                     viewport,
                     moli_layout::PaintCaptureRequest::viewport(),
                     moli_layout::LayoutFlushReason::Screenshot,
@@ -414,7 +455,7 @@ async fn realtime_projects_transform_damage_until_auto_gutter_changes() {
             let session = crate::runtime::RendererScreencastPaintSession::default();
             let paint = |vm: &mut StandaloneScriptVmHarness| {
                 vm.paint_current_screen_layout(
-                    &session,
+                    Some(&session),
                     viewport,
                     moli_layout::PaintCaptureRequest::viewport(),
                     moli_layout::LayoutFlushReason::Screenshot,
@@ -1369,7 +1410,7 @@ async fn realtime_scroll_reuses_layout_for_paint_only_hover_damage() {
             let session = crate::runtime::RendererScreencastPaintSession::default();
             let paint = |vm: &mut StandaloneScriptVmHarness| {
                 vm.paint_current_screen_layout(
-                    &session,
+                    Some(&session),
                     viewport,
                     moli_layout::PaintCaptureRequest::viewport(),
                     moli_layout::LayoutFlushReason::RenderingOpportunity,
@@ -1452,7 +1493,7 @@ fn realtime_zoomed_rtl_scroll_matches_a_fresh_layout_without_rebuilding() {
 
 #[test]
 fn legacy_layout_modes_do_not_allocate_realtime_state_or_refresh_after_writes() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
         let mut vm = new_parsed_test_vm(
             "https://legacy-layout.test/",
             "<!doctype html><div id=target style='width:100px'></div><input id=field type=button value=A>",
@@ -1470,7 +1511,7 @@ fn legacy_layout_modes_do_not_allocate_realtime_state_or_refresh_after_writes() 
             .unwrap();
         assert_eq!(vm.eval("field.value").unwrap(), "ABCDEFGHIJKLMNOPQRST");
         assert_eq!(vm.layout_pass_observability_for_test().1, before);
-        if policy == LayoutPolicy::OnDemand {
+        if policy == LayoutPolicy::Lazy {
             assert_eq!(width, "100");
         }
         assert!(
@@ -1485,7 +1526,7 @@ fn legacy_layout_modes_do_not_allocate_realtime_state_or_refresh_after_writes() 
 fn select_value_refreshes_selected_peer_and_has_styles_in_every_layout_policy() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         for (case, change, same_before, same_after) in [

@@ -4,7 +4,7 @@ use moli_page_types::LayoutPolicy;
 
 const POLICIES: [LayoutPolicy; 3] = [
     LayoutPolicy::Mock,
-    LayoutPolicy::OnDemand,
+    LayoutPolicy::Lazy,
     LayoutPolicy::Realtime,
 ];
 
@@ -127,7 +127,7 @@ fn media_queries_resize_listener_replacement_preserves_pending_work_in_all_polic
 fn media_queries_deferred_round_trip_reclaims_unsubscribed_lists_without_events() {
     run_page_vm_large_stack_async_test("media-query-deferred-retirement", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
-        for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+        for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
             let mut page = media_page(&loader, policy).await;
             page.vm_mut().eval("globalThis.events=[];let query=matchMedia('(min-width:800px)');globalThis.weak=new WeakRef(query);query.onchange=()=>events.push('change')").unwrap();
             page.vm_mut()

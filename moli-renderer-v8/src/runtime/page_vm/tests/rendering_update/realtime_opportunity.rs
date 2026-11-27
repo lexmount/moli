@@ -698,7 +698,7 @@ fn cssom_equivalent_parent_style_reuses_cached_descendant_styles_in_all_layout_m
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         for policy in [
             LayoutPolicy::Mock,
-            LayoutPolicy::OnDemand,
+            LayoutPolicy::Lazy,
             LayoutPolicy::Realtime,
         ] {
             let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
@@ -1169,7 +1169,7 @@ fn realtime_empty_document_waits_for_new_input_without_retrying() {
 #[test]
 fn legacy_layout_modes_do_not_schedule_rendering_opportunities() {
     run_page_vm_large_stack_async_test("legacy-without-opportunity", || async move {
-        for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+        for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
             let loader =
                 crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
             let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(

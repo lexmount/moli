@@ -25,8 +25,8 @@ fn paused_screencast_repaints_after_a_scanned_preload_decodes() {
         let url = Url::parse("https://example.test/").unwrap();
         let image_url = url.join("held.png").unwrap();
         let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), url);
-        page.layout_configuration.policy = LayoutPolicy::OnDemand;
-        page.vm_mut().set_layout_policy(LayoutPolicy::OnDemand);
+        page.layout_configuration.policy = LayoutPolicy::Lazy;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Lazy);
         page.set_viewport_surface(Some(ViewportSurface {
             inner_width: 32,
             inner_height: 32,
@@ -424,13 +424,13 @@ fn realtime_screencast_refreshes_document_selection_and_live_range_paint() {
             )
         };
         let fresh_pixels = |page: &mut PageVm| {
-            let RendererCaptureScreenshotReply::Captured(image) = page
-                .capture_screenshot(RendererCaptureScreenshotRequest::viewport_png())
+            let viewport = moli_layout::LayoutViewport::new(240, 120, 1.0);
+            let snapshot = page
+                .vm_mut()
+                .screenshot_layout_snapshot(viewport)
                 .unwrap()
-            else {
-                panic!("fresh screenshot");
-            };
-            moli_image::decode_png(&image.bytes).unwrap().rgba
+                .expect("fresh screenshot");
+            moli_paint::raster_snapshot(&snapshot).unwrap().rgba
         };
         let (unselected, mut known) = capture(&mut page, None);
         for document in ["document", "child.contentDocument"] {
@@ -562,6 +562,206 @@ fn realtime_screencast_releases_paint_when_the_document_becomes_empty() {
 }
 
 #[test]
+fn realtime_screenshot_reuses_active_screen_paint_and_svg_scenes() {
+    use crate::runtime::{RendererScreenshotClip, RendererScreenshotRegion};
+
+    run_page_vm_large_stack_async_test("realtime-screenshot-screen-paint", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime-screenshot-screen-paint").unwrap(),
+        );
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.set_scrollbars_hidden(true).unwrap();
+        page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 96,
+            inner_height: 64,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))
+        .unwrap();
+        page.vm_mut().eval(r#"
+            document.body.style.cssText = 'margin:0;height:260px;background:white';
+            document.body.innerHTML = `
+                <svg style="display:block" width="20" height="20">
+                    <rect id="shape" width="20" height="20" fill="red"/>
+                </svg>
+                <iframe id="distant" style="position:absolute;left:0;top:120px;width:32px;height:32px;border:0"></iframe>
+                <div style="position:fixed;top:5px;left:60px;width:10px;height:10px;background:yellow"></div>
+            `;
+            const child = document.getElementById('distant').contentDocument;
+            child.body.style.margin = '0';
+            child.body.innerHTML =
+                '<svg style="display:block" width="20" height="20"><rect width="20" height="20" fill="blue"/></svg>';
+        "#).unwrap();
+
+        let session = RendererScreencastPaintSession::default();
+        let screencast = |page: &mut PageVm| {
+            let Reply::Captured(frame) = page
+                .capture_screencast_frame(crate::runtime::RendererCaptureScreencastFrameRequest {
+                    paint_session: Some(session.clone()),
+                    ..viewport_screencast_request(None)
+                })
+                .unwrap()
+            else {
+                panic!("expected a screencast frame");
+            };
+            moli_image::decode_png(&frame.image.bytes).unwrap()
+        };
+        let screenshot = |page: &mut PageVm, region| {
+            let RendererCaptureScreenshotReply::Captured(image) = page
+                .capture_screenshot(RendererCaptureScreenshotRequest {
+                    region,
+                    ..RendererCaptureScreenshotRequest::viewport_png()
+                })
+                .unwrap()
+            else {
+                panic!("expected an explicit screenshot");
+            };
+            moli_image::decode_png(&image.bytes).unwrap()
+        };
+        let before = crate::layout_renderer::svg_parse_count();
+        let initial = screencast(&mut page);
+        assert_eq!(&initial.rgba[..4], [255, 0, 0, 255]);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), before + 1);
+        let builds = page.vm().layout_pass_observability_for_test().1;
+
+        let viewport = screenshot(&mut page, RendererScreenshotRegion::Viewport);
+        assert_eq!(viewport.rgba, initial.rgba);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), before + 1);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+
+        let clip = RendererScreenshotRegion::PageClip(RendererScreenshotClip {
+            x: 0.0,
+            y: 120.0,
+            width: 20.0,
+            height: 20.0,
+            scale: 2.0,
+        });
+        let clipped = screenshot(&mut page, clip);
+        assert_eq!((clipped.width, clipped.height), (40, 40));
+        assert_eq!(&clipped.rgba[..4], [0, 0, 255, 255]);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), before + 2);
+        assert_eq!(screencast(&mut page).rgba, initial.rgba);
+        assert_eq!(crate::layout_renderer::svg_parse_count(), before + 2);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+
+        page.vm_mut()
+            .eval("document.getElementById('shape').setAttribute('fill','lime')")
+            .unwrap();
+        let updated = screenshot(&mut page, RendererScreenshotRegion::Viewport);
+        assert_eq!(&updated.rgba[..4], [0, 255, 0, 255]);
+        // Settle the pending style work from the mutation before measuring scroll.
+        run_opportunity(&mut page, &loader).await.unwrap();
+        let changed_builds = page.vm().layout_pass_observability_for_test().1;
+        page.vm_mut().eval("scrollTo(0,100)").unwrap();
+        let full = screenshot(&mut page, RendererScreenshotRegion::FullDocument);
+        assert_eq!(
+            page.vm().layout_pass_observability_for_test().1,
+            changed_builds
+        );
+
+        drop(session);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while page.vm().has_screencast_paint_for_test() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the last consumer releases paint after explicit screenshots");
+
+        let fresh = screenshot(&mut page, RendererScreenshotRegion::FullDocument);
+        assert_eq!((full.width, full.height), (fresh.width, fresh.height));
+        assert_eq!(full.rgba, fresh.rgba);
+        assert_eq!(
+            page.vm().layout_pass_observability_for_test().1,
+            changed_builds + 1
+        );
+        assert!(!page.vm().has_screencast_paint_for_test());
+    });
+}
+
+#[test]
+fn realtime_screenshot_defers_lazy_image_admission_until_resumed() {
+    run_page_vm_large_stack_async_test("realtime-screenshot-lazy-image", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime-screenshot-lazy-image").unwrap(),
+        );
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 96,
+            inner_height: 64,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))
+        .unwrap();
+        page.vm_mut().eval(r#"
+            document.body.style.cssText = 'margin:0;height:2200px';
+            document.body.innerHTML = '<img id=probe loading=lazy ' +
+                'style="position:absolute;top:2000px" width=20 height=20 ' +
+                'src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">';
+        "#).unwrap();
+        let image = page
+            .vm()
+            .document_runtime
+            .get_element_by_id("probe")
+            .unwrap();
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let session = RendererScreencastPaintSession::default();
+        assert!(matches!(
+            page.capture_screencast_frame(crate::runtime::RendererCaptureScreencastFrameRequest {
+                paint_session: Some(session.clone()),
+                ..viewport_screencast_request(None)
+            })
+            .unwrap(),
+            Reply::Captured(_)
+        ));
+        page.vm_mut().eval("probe.style.top = '0px'").unwrap();
+        assert!(!host.borrow().has_pending_image_load_event_for_test(image));
+        assert!(page.vm().has_screencast_paint_for_test());
+        let builds = page.vm().layout_pass_observability_for_test().1;
+
+        let target = page.vm().devtools_target();
+        let pause = target.pause_ref();
+        let agent = page.devtools_agent_token();
+        pause.configure_page_route(RendererTurnOutputJournal::new(
+            RendererOutputStreamIdentity::new_page(
+                RendererOwnerLocalHostId::new_for_testing(1),
+                PageId::new_for_testing(1),
+                agent,
+            ),
+        ));
+        target
+            .outbound_route(agent, DevToolsSessionKey::Primary)
+            .route_notification(
+                &serde_json::json!({"method":"Debugger.paused","params":{"callFrames":[]}}).into(),
+            );
+        assert!(pause.enter_pause().is_some());
+        let request = RendererCaptureScreenshotRequest::viewport_png();
+        let paused = page.capture_screenshot(request.clone());
+        pause.leave_pause();
+        assert!(matches!(
+            paused.unwrap(),
+            RendererCaptureScreenshotReply::Captured(_)
+        ));
+        assert!(!host.borrow().has_pending_image_load_event_for_test(image));
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+
+        assert!(matches!(
+            page.capture_screenshot(request).unwrap(),
+            RendererCaptureScreenshotReply::Captured(_)
+        ));
+        assert!(host.borrow().has_pending_image_load_event_for_test(image));
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+    });
+}
+
+#[test]
 fn realtime_screencast_reuses_published_scroll_and_matches_fresh_pixels() {
     run_page_vm_large_stack_async_test("realtime-screencast-scroll", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
@@ -672,6 +872,7 @@ fn realtime_screencast_reuses_published_scroll_and_matches_fresh_pixels() {
             .unwrap();
         let (after_style, _) = capture(&mut page, &session, Some(known));
         assert_ne!(before_style, after_style);
+        drop(session);
         let RendererCaptureScreenshotReply::Captured(fresh) = page
             .capture_screenshot(RendererCaptureScreenshotRequest::viewport_png())
             .unwrap()

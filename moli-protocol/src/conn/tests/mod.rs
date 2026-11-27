@@ -306,7 +306,7 @@ async fn hidden_scrollbars_survive_idle_reset_and_browser_context_removal() {
                 FetchConfig::default(),
                 OptionalResourceFetchMask::NONE,
                 true,
-                LayoutPolicy::OnDemand,
+                LayoutPolicy::Lazy,
             )
             .with_scrollbars_hidden(true),
         ),

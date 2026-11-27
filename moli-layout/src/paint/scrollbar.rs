@@ -1,9 +1,9 @@
 use std::{fmt::Debug, hash::Hash};
 
 use crate::{
-    LayoutBoxId, LayoutPoint, LayoutRect, LayoutScrollbarAxis, LayoutScrollbarGeometry, PaintBrush,
-    PaintColor, PaintCornerRadii, PaintCornerRadius, PaintFragment, PaintPath, PaintPathElement,
-    PaintShape, PaintSnapshot,
+    LayoutBoxId, LayoutPoint, LayoutRect, LayoutScrollbarAxis, LayoutScrollbarGeometry,
+    LayoutTransform2D, PaintBrush, PaintColor, PaintCornerRadii, PaintCornerRadius, PaintFragment,
+    PaintPath, PaintPathElement, PaintShape, PaintSnapshot,
     projection::{PaintProjection, PaintSpace},
 };
 
@@ -55,11 +55,10 @@ fn paint_thumb(
     scrollbar: LayoutScrollbarGeometry,
     color: PaintColor,
 ) {
-    let rect = scrollbar.painted_thumb;
-    if rect.width <= 0.0 || rect.height <= 0.0 {
+    let Some(rect) = paint_space.pixel_snapped_rect(scrollbar.painted_thumb, snapshot.pixel_grid())
+    else {
         return;
-    }
-    let rect = paint_space.pre_transform_rect(rect);
+    };
     snapshot.push_fragment(PaintFragment::Fill {
         fill_rule: crate::PaintFillRule::NonZero,
         shape: PaintShape::RoundedRect {
@@ -85,22 +84,34 @@ fn paint_button_arrow(
     } else {
         scrollbar.back_button
     };
-    let Some(path) = fluent_arrow_path(
-        paint_space.pre_transform_rect(button),
-        scrollbar.axis,
-        forward,
-    ) else {
+    let grid = snapshot.pixel_grid();
+    let pixel_size = grid.pixel_size();
+    let button = paint_space.pre_transform_rect(button);
+    let (x, width) = grid.snap_axis(f64::from(button.x), f64::from(button.width));
+    let (y, height) = grid.snap_axis(f64::from(button.y), f64::from(button.height));
+    let device_button = LayoutRect::new(
+        (x / pixel_size) as f32,
+        (y / pixel_size) as f32,
+        (width / pixel_size) as f32,
+        (height / pixel_size) as f32,
+    );
+    let Some(path) = fluent_arrow_path(device_button, scrollbar.axis, forward) else {
         return;
     };
     snapshot.push_fragment(PaintFragment::Fill {
         fill_rule: crate::PaintFillRule::NonZero,
         shape: PaintShape::Path(path),
         brush: PaintBrush::Solid(color),
-        transform: paint_space.property_transform(),
+        transform: paint_space
+            .property_transform()
+            .concatenate(LayoutTransform2D::new([
+                pixel_size, 0.0, 0.0, pixel_size, 0.0, 0.0,
+            ])),
     });
 }
 
-/// Ports NativeThemeFluent::GetArrowRect and NativeThemeBase::PathForArrow.
+/// Ports NativeThemeFluent::GetArrowRect and NativeThemeBase::PathForArrow
+/// in device pixels.
 fn fluent_arrow_path(
     button: LayoutRect,
     axis: LayoutScrollbarAxis,
@@ -183,12 +194,15 @@ fn paint_rect(
     rect: LayoutRect,
     color: PaintColor,
 ) {
-    if rect.width <= 0.0 || rect.height <= 0.0 || color.alpha <= 0.0 {
+    if color.alpha <= 0.0 {
         return;
     }
+    let Some(rect) = paint_space.pixel_snapped_rect(rect, snapshot.pixel_grid()) else {
+        return;
+    };
     snapshot.push_fragment(PaintFragment::Fill {
         fill_rule: crate::PaintFillRule::NonZero,
-        shape: PaintShape::Rect(paint_space.pre_transform_rect(rect)),
+        shape: PaintShape::Rect(rect),
         brush: PaintBrush::Solid(color),
         transform: paint_space.property_transform(),
     });

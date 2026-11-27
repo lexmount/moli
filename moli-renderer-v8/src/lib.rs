@@ -156,7 +156,7 @@ pub(crate) fn ensure_v8_for_test() {
 /// geometry or paint. Production defaults are configured outside test helpers.
 #[cfg(test)]
 pub(crate) const fn real_layout_test_policy() -> moli_page_types::LayoutPolicy {
-    moli_page_types::LayoutPolicy::OnDemand
+    moli_page_types::LayoutPolicy::Lazy
 }
 
 /// Builds an owned HTML fixture through the same incremental parser frontier

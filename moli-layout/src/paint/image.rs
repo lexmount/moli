@@ -31,7 +31,6 @@ pub(super) fn project_replaced_image<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let transform = paint_space.local_transform();
     let layout_box = &projection.world.boxes[id.index()];
     let Some(kind) = layout_box
         .element_semantics()
@@ -135,8 +134,9 @@ pub(super) fn project_replaced_image<N>(
     let content_clip_needed = replaced_content_clip_needed(areas, destination);
     if content_clip_needed {
         snapshot.push_fragment(PaintFragment::PushClip {
-            shape: areas.shape(BoxModelBox::Content),
-            transform,
+            shape: paint_space
+                .pixel_snapped_box_clip(areas.shape(BoxModelBox::Content), snapshot.pixel_grid()),
+            transform: paint_space.property_transform(),
         });
     }
     let destination = paint_space.pre_transform_rect(destination);

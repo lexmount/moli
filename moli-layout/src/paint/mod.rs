@@ -34,9 +34,9 @@ use text::{
 
 use crate::{
     LayoutBoxId, LayoutClipChainId, LayoutClipKind, LayoutElementCategory, LayoutError,
-    LayoutFormControlKind, LayoutInputControlKind, LayoutOutputBoxId, LayoutReplacedKind,
-    LayoutWorld, PaintColor, PaintDiagnostic, PaintDiagnosticSeverity, PaintEdgeSizes,
-    PaintFragment, PaintShape, PaintSnapshot,
+    LayoutFormControlKind, LayoutInputControlKind, LayoutOutputBoxId, LayoutRect,
+    LayoutReplacedKind, LayoutWorld, PaintColor, PaintDiagnostic, PaintDiagnosticSeverity,
+    PaintEdgeSizes, PaintFragment, PaintPixelGrid, PaintShape, PaintSnapshot,
     capture::ResolvedPaintCapture,
     projection::{PaintProjection, PaintSpace},
     stacking::PaintOrderEvent,
@@ -134,21 +134,39 @@ impl ActivePaintClipChain {
 }
 
 impl PaintSpace {
-    /// Pixel-snap canonical CSS box geometry after ordinary layout offsets
-    /// and before property transforms.
-    fn pixel_snapped_box_shape(self, shape: PaintShape) -> Option<PaintShape> {
+    /// Snap to the device pixel grid before applying property transforms.
+    /// The result is still in CSS pixels and includes the paint offset.
+    fn pixel_snapped_rect(self, rect: LayoutRect, grid: PaintPixelGrid) -> Option<LayoutRect> {
+        grid.snap_rect(self.pre_transform_rect(rect))
+    }
+
+    fn local_rect(self, rect: LayoutRect) -> LayoutRect {
+        LayoutRect {
+            x: rect.x - self.paint_offset.x,
+            y: rect.y - self.paint_offset.y,
+            ..rect
+        }
+    }
+
+    fn pixel_snapped_box_shape(
+        self,
+        shape: PaintShape,
+        grid: PaintPixelGrid,
+    ) -> Option<PaintShape> {
         match shape {
-            PaintShape::Rect(rect) => {
-                crate::pixel_snap_paint_rect(self.pre_transform_rect(rect)).map(PaintShape::Rect)
-            }
-            PaintShape::RoundedRect { rect, radii } => {
-                crate::pixel_snap_paint_rect(self.pre_transform_rect(rect))
-                    .map(|rect| PaintShape::RoundedRect { rect, radii })
-            }
+            PaintShape::Rect(rect) => self.pixel_snapped_rect(rect, grid).map(PaintShape::Rect),
+            PaintShape::RoundedRect { rect, radii } => self
+                .pixel_snapped_rect(rect, grid)
+                .map(|rect| PaintShape::RoundedRect { rect, radii }),
             // BoxAreas only constructs rectilinear or rounded box geometry.
             // Arbitrary paths retain their own authored coordinate contract.
             PaintShape::Path(_) => None,
         }
+    }
+
+    fn pixel_snapped_box_clip(self, shape: PaintShape, grid: PaintPixelGrid) -> PaintShape {
+        self.pixel_snapped_box_shape(shape, grid)
+            .unwrap_or(PaintShape::Rect(LayoutRect::ZERO))
     }
 }
 
@@ -198,17 +216,21 @@ where
         event_count: projection.metadata.events.len(),
         ..PaintProjectionMetrics::default()
     };
-    let mut current_cull = PaintCullRegion::for_capture(capture.viewport_rect);
+    let mut current_cull =
+        PaintCullRegion::for_capture(capture.viewport_rect, snapshot.pixel_grid());
     if let Some(rect) = parent_cull_rect {
         current_cull = current_cull.intersect(rect);
     }
     if capture.clip_to_viewport {
-        if let Some(rect) = PaintCullRegion::for_capture(crate::LayoutRect::new(
-            0.0,
-            0.0,
-            capture.surface.css_width,
-            capture.surface.css_height,
-        ))
+        if let Some(rect) = PaintCullRegion::for_capture(
+            LayoutRect::new(
+                0.0,
+                0.0,
+                capture.surface.css_width,
+                capture.surface.css_height,
+            ),
+            PaintPixelGrid::new(capture.surface.device_scale),
+        )
         .local_rect(capture.viewport_to_surface)
         {
             current_cull = current_cull.intersect(rect);
@@ -289,6 +311,7 @@ where
                 current_cull,
                 projection.metadata.boxes[id.index()].content_clip,
                 &active_clips.filter_output_clips,
+                snapshot.pixel_grid(),
             );
             if cull_plan.event_misses(event_index, clipped) {
                 metrics.culled_event_count = metrics.culled_event_count.saturating_add(1);
@@ -313,11 +336,10 @@ where
                 let layout_box = &projection.world.boxes[id.index()];
                 let style = &layout_box.style;
                 let geometry = projection.geometry(id.index());
-                let viewport_transform = projection.coordinate_spaces
-                    [geometry.coordinate_space.index()]
-                .paint
-                .local_transform();
-                let transform = capture.viewport_to_surface.concatenate(viewport_transform);
+                let space = &projection.coordinate_spaces[geometry.coordinate_space.index()];
+                let viewport_transform = space.paint.local_transform();
+                let paint_space = space.paint_space(capture.viewport_to_surface);
+                let transform = paint_space.local_transform();
                 let areas = BoxAreas::for_box(projection, id);
                 let filters = project_filters(style);
                 let has_filter_group = filters.has_identity_effect || !filters.effects.is_empty();
@@ -376,8 +398,11 @@ where
                             opacity: 1.0 - f32::EPSILON,
                             blend_mode: crate::PaintBlendMode::Normal,
                             composite: crate::PaintCompositeMode::SrcOver,
-                            clip: areas.shape(BoxModelBox::Border),
-                            transform,
+                            clip: paint_space.pixel_snapped_box_clip(
+                                areas.shape(BoxModelBox::Border),
+                                snapshot.pixel_grid(),
+                            ),
+                            transform: paint_space.property_transform(),
                             filter: None,
                         });
                         true
@@ -657,14 +682,16 @@ where
                     let paint_space = projection.coordinate_spaces
                         [geometry.coordinate_space.index()]
                     .paint_space(capture.viewport_to_surface);
-                    let transform = paint_space.local_transform();
                     let areas = BoxAreas::for_box(projection, id);
                     snapshot.push_fragment(PaintFragment::PushLayer {
                         opacity: 1.0,
                         blend_mode: crate::PaintBlendMode::Normal,
                         composite: crate::PaintCompositeMode::DestIn,
-                        clip: areas.shape(BoxModelBox::Border),
-                        transform,
+                        clip: paint_space.pixel_snapped_box_clip(
+                            areas.shape(BoxModelBox::Border),
+                            snapshot.pixel_grid(),
+                        ),
+                        transform: paint_space.property_transform(),
                         filter: None,
                     });
                     project_css_mask(
@@ -715,6 +742,7 @@ fn clipped_replaced_cull_region<N: Copy + Debug + Eq + Hash>(
     mut region: PaintCullRegion,
     mut clip: Option<LayoutClipChainId>,
     filter_output_clips: &[LayoutOutputBoxId],
+    grid: PaintPixelGrid,
 ) -> PaintCullRegion {
     // A pixel-moving filter takes its source beyond the capture bounds.
     if region == PaintCullRegion::Infinite {
@@ -729,14 +757,15 @@ fn clipped_replaced_cull_region<N: Copy + Debug + Eq + Hash>(
                 let space = projection.coordinate_spaces[node.coordinate_space.index()].paint;
                 // Match the coordinates used by push_clip_node, including
                 // snapping the overflow edge before the CSS transform.
-                let snapped = matches!(node.kind, LayoutClipKind::Overflow(_))
-                    .then(|| crate::pixel_snap_paint_rect(space.pre_transform_rect(node.rect)))
-                    .flatten();
-                let (rect, transform) = snapped.map_or_else(
-                    || (node.rect, space.local_transform()),
-                    |rect| (rect, space.property_transform()),
-                );
-                region = cull::clip_cull_region(region, transform, rect);
+                let (rect, transform) = if matches!(node.kind, LayoutClipKind::Overflow(_)) {
+                    let Some(rect) = space.pixel_snapped_rect(node.rect, grid) else {
+                        return PaintCullRegion::Empty;
+                    };
+                    (rect, space.property_transform())
+                } else {
+                    (node.rect, space.local_transform())
+                };
+                region = cull::clip_cull_region(region, transform, rect, grid);
             }
         }
         clip = node.parent;
@@ -807,10 +836,13 @@ fn push_clip_node<N>(
     // Overflow edges share the box's snapped paint geometry. Fractional clips
     // otherwise blend an edge differently when atomic paint ordering keeps a
     // background and its text in one clip layer instead of reopening it.
-    let snapped = overflow_owner.and_then(|_| paint_space.pixel_snapped_box_shape(shape.clone()));
-    let (shape, transform) = match snapped {
-        Some(shape) => (shape, paint_space.property_transform()),
-        None => (shape, paint_space.local_transform()),
+    let (shape, transform) = if overflow_owner.is_some() {
+        (
+            paint_space.pixel_snapped_box_clip(shape, snapshot.pixel_grid()),
+            paint_space.property_transform(),
+        )
+    } else {
+        (shape, paint_space.local_transform())
     };
     snapshot.push_fragment(PaintFragment::PushClip { shape, transform });
 }
@@ -1211,14 +1243,19 @@ where
         .and_then(|element| element.replaced)
         == Some(LayoutReplacedKind::Frame)
     {
-        let content = BoxAreas::for_box(projection, id).content_rect;
+        let Some(content) = viewport_space.pixel_snapped_rect(
+            BoxAreas::for_box(projection, id).content_rect,
+            snapshot.pixel_grid(),
+        ) else {
+            return Ok(());
+        };
         let origin = crate::LayoutTransform2D::translation(content.x, content.y);
-        let local_to_viewport = viewport_space.local_transform().concatenate(origin);
+        let local_to_viewport = viewport_space.property_transform().concatenate(origin);
         if let Some(child) = paint_frame(id, cull.local_rect(local_to_viewport))? {
             snapshot.append_embedded_snapshot(
                 child,
                 crate::PaintRect::new(0.0, 0.0, content.width, content.height),
-                transform.concatenate(origin),
+                snapshot.viewport_to_surface.concatenate(local_to_viewport),
             );
         } else if include_placeholder {
             project_replaced_placeholder(projection, id, paint_space, snapshot);
@@ -1248,12 +1285,17 @@ fn project_replaced_placeholder<N: Copy + Debug + Eq + Hash>(
 ) {
     let layout_box = &projection.world.boxes[id.index()];
     report_replaced_placeholder(&layout_box.source_label, snapshot);
-    if !style_has_canvas_background(&layout_box.style) {
+    if !style_has_canvas_background(&layout_box.style)
+        && let Some(shape) = paint_space.pixel_snapped_box_shape(
+            BoxAreas::for_box(projection, id).shape(BoxModelBox::Content),
+            snapshot.pixel_grid(),
+        )
+    {
         snapshot.push_fragment(PaintFragment::Fill {
             fill_rule: crate::PaintFillRule::NonZero,
-            shape: BoxAreas::for_box(projection, id).shape(BoxModelBox::Content),
+            shape,
             brush: crate::PaintBrush::Solid(PaintColor::new(0.82, 0.84, 0.87, 1.0)),
-            transform: paint_space.local_transform(),
+            transform: paint_space.property_transform(),
         });
     }
 }

@@ -12,7 +12,7 @@ use url::Url;
 
 use super::super::events::{
     CdpNetworkAutomationEventSink, emit_cdp_network_automation_event,
-    emit_request_served_from_cache, loading_failed_canceled,
+    emit_request_served_from_cache, emit_response_received_extra_info, loading_failed_canceled,
 };
 use super::MainDocumentProgressOutputTarget;
 
@@ -246,27 +246,6 @@ pub(super) fn emit_request_will_be_sent_extra_info(
         super::super::cookie_query_report_to_json(cookie_access_report),
         super::super::associated_cookies_to_json(cookie_access_report),
         request_time,
-    );
-}
-
-pub(super) fn emit_response_received_extra_info(
-    output: &mut MainDocumentProgressOutputTarget<'_>,
-    session_id: Option<&str>,
-    request_id: &str,
-    response_headers: &[(String, Vec<u8>)],
-    status: u16,
-    cookie_set_reports: &[StoredCookieSetReport],
-) {
-    output.push_response_received_extra_info(
-        session_id,
-        request_id,
-        super::super::headers_as_json_object(response_headers),
-        status,
-        cookie_set_reports
-            .iter()
-            .map(super::super::cookie_set_report_to_json)
-            .collect(),
-        Vec::new(),
     );
 }
 
