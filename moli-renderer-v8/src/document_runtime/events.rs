@@ -466,6 +466,11 @@ impl DocumentRuntime {
         // Returns [target, direct_parent_or_shadow_root, ..., Window] (ascending).
         let mut path = vec![target];
         if let EventTargetHandle::Node(mut current) = target {
+            let original_shadow_root = if composed {
+                None
+            } else {
+                self.dom_host.containing_shadow_root(current)
+            };
             loop {
                 if let Some(slot) = self.dom_host.assigned_slot_for_node(current) {
                     path.push(EventTargetHandle::Node(slot));
@@ -478,19 +483,8 @@ impl DocumentRuntime {
                     continue;
                 }
                 if self.dom_host.is_shadow_root(current) {
-                    if !composed {
-                        let Some(host) = self.dom_host.shadow_root_host(current) else {
-                            break;
-                        };
-                        let EventTargetHandle::Node(original_target) = target else {
-                            break;
-                        };
-                        if !self.light_tree_contains(host, original_target) {
-                            break;
-                        }
-                        path.push(EventTargetHandle::Node(host));
-                        current = host;
-                        continue;
+                    if original_shadow_root == Some(current) {
+                        break;
                     }
                     let Some(host) = self.dom_host.shadow_root_host(current) else {
                         break;
@@ -624,20 +618,6 @@ impl DocumentRuntime {
                 stack.push(child_handle);
                 child = self.dom_host.next_sibling(child_handle);
             }
-        }
-        false
-    }
-
-    fn light_tree_contains(&self, root: NativeNodeId, handle: NativeNodeId) -> bool {
-        let mut current = Some(handle);
-        while let Some(candidate) = current {
-            if candidate == root {
-                return true;
-            }
-            current = self
-                .dom_host
-                .node(candidate)
-                .and_then(moli_dom::native::Node::parent_node);
         }
         false
     }
