@@ -597,25 +597,29 @@ pub(super) fn update_top_layer_membership(
     handle: DomHandle,
     update: impl FnOnce(&mut DomHost) -> bool,
 ) -> bool {
-    let dom = runtime.dom_host();
-    // Ancestor selector state can change even when focus stays on the same node.
-    let old_ancestor_states = dom
-        .flat_tree_parent(handle)
-        .filter(|_| dom.element_matches_focus_within(handle))
-        .into_iter()
-        .flat_map(|parent| dom.focus_within_ancestors(parent))
-        .filter(|&ancestor| dom.element(ancestor).is_some())
-        .map(|ancestor| (ancestor, runtime.retained_current_element_state(ancestor)))
-        .collect::<Vec<_>>();
+    let was_in_top_layer = runtime.dom_host().is_in_top_layer(handle);
     if !update(runtime.dom_host_mut()) {
         return false;
     }
-    for (ancestor, old_state) in old_ancestor_states {
-        runtime.note_element_state_style_activity_with_old_state(
-            ancestor,
-            StyloElementState::FOCUS_WITHIN,
-            old_state,
-        );
+    let in_top_layer = runtime.dom_host().is_in_top_layer(handle);
+    if was_in_top_layer != in_top_layer {
+        let ancestors = runtime
+            .dom_host()
+            .focus_within_ancestors_above(handle)
+            .collect::<Vec<_>>();
+        for ancestor in ancestors {
+            let old_state = runtime
+                .retained_current_element_state(ancestor)
+                .map(|mut state| {
+                    state.set(StyloElementState::FOCUS_WITHIN, in_top_layer);
+                    state
+                });
+            runtime.note_element_state_style_activity_with_old_state(
+                ancestor,
+                StyloElementState::FOCUS_WITHIN,
+                old_state,
+            );
+        }
     }
     true
 }

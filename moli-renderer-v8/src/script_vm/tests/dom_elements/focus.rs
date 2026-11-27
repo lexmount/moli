@@ -243,13 +243,63 @@ fn focus_within_tracks_popover_top_layer_membership() {
   menu.showPopover();
   const during = sample();
   menu.hidePopover();
-  return JSON.stringify([before, during, sample()]);
+  const afterHide = sample();
+  menu.showPopover();
+  sample();
+  menu.removeAttribute('popover');
+  return JSON.stringify([before, during, afterHide, sample()]);
 })()
 "#,
         )
         .expect("focus state should follow popover membership");
     assert_eq!(
         result,
-        r#"[[true,true,true,"rgb(255, 0, 0)"],[true,true,false,"rgb(0, 0, 0)"],[true,true,true,"rgb(255, 0, 0)"]]"#
+        r#"[[true,true,true,"rgb(255, 0, 0)"],[true,true,false,"rgb(0, 0, 0)"],[true,true,true,"rgb(255, 0, 0)"],[true,true,true,"rgb(255, 0, 0)"]]"#
+    );
+}
+
+#[test]
+fn focus_within_tracks_modal_dialog_top_layer_membership() {
+    let mut vm = new_parsed_test_vm(
+        "https://focus-within-modal-dialog.test/",
+        r#"<!doctype html>
+        <style>
+          dialog { display: block }
+          #outer { color: black }
+          #outer:focus-within { color: red }
+        </style>
+        <div id="outer"><dialog id="dialog"><input id="input"></dialog></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const outer = document.getElementById('outer');
+  const dialog = document.getElementById('dialog');
+  const input = document.getElementById('input');
+  const style = getComputedStyle(outer);
+  const sample = () => [document.activeElement === input, dialog.matches(':modal'),
+    dialog.matches(':focus-within'), outer.matches(':focus-within'), style.color];
+  dialog.show();
+  input.focus();
+  const states = [sample()];
+  dialog.close();
+  dialog.showModal();
+  states.push(sample());
+  dialog.close();
+  states.push(sample());
+  dialog.showModal();
+  dialog.remove();
+  outer.append(dialog);
+  input.focus();
+  states.push(sample());
+  return JSON.stringify(states);
+})()
+"#,
+        )
+        .expect("focus state should follow modal dialog membership");
+    assert_eq!(
+        result,
+        r#"[[true,false,true,true,"rgb(255, 0, 0)"],[true,true,true,false,"rgb(0, 0, 0)"],[true,false,true,true,"rgb(255, 0, 0)"],[true,false,true,true,"rgb(255, 0, 0)"]]"#
     );
 }
