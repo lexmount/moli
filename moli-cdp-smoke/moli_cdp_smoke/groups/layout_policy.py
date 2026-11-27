@@ -8,6 +8,7 @@ import json
 import traceback
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from html import escape
 from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import quote
 
@@ -37,6 +38,51 @@ for (const name of ['mousemove','wheel','touchstart','dragenter','dragover','cli
 </script>"""
 DATA_URL = "data:text/html," + quote(HTML)
 
+NESTED_FRAME_HTML = """<!doctype html><style>
+body { margin: 0 }
+#viewport-probe { width: 50vw; height: 10px }
+</style><div id="viewport-probe"></div>"""
+CHILD_FRAME_HTML = f"""<!doctype html><style>
+body {{ margin: 0 }}
+#child {{ width: 50vw; height: 40px; background: lime; touch-action: none }}
+@media (min-width: 200px) {{ #child {{ background: blue }} }}
+iframe {{ display: block; width: 50%; height: 20px; border: 0 }}
+</style><div id="child"></div><iframe srcdoc="{escape(NESTED_FRAME_HTML)}"></iframe>"""
+FRAME_DATA_URL = "data:text/html," + quote(f"""<!doctype html><style>
+html {{ scrollbar-width: none; background: white }}
+body {{ margin: 0 }}
+section {{ width: 400px; margin: 60px 0 0 100px }}
+section:has(> iframe[data-wide]) {{ width: 560px }}
+#probe {{ display: block; box-sizing: border-box; width: 50%; height: 160px;
+          padding: 20px; border: 10px solid black }}
+#target {{ position: absolute; left: 450px; top: 60px; width: 40px; height: 40px; background: red }}
+iframe[data-wide] ~ #target {{ pointer-events: none }}
+</style><section><iframe id="probe" srcdoc="{escape(CHILD_FRAME_HTML)}"></iframe>
+<div id="target"></div></section>""")
+
+FRAME_GEOMETRY = """(() => {
+  const frame = document.getElementById('probe');
+  const child = frame.contentWindow;
+  const nested = child.document.querySelector('iframe').contentWindow;
+  return {
+    outerWidth: frame.offsetWidth,
+    viewport: [child.innerWidth, child.innerHeight],
+    viewportUnitWidth: child.document.getElementById('child').offsetWidth,
+    nestedWidth: nested.innerWidth,
+    nestedViewportUnitWidth: nested.document.getElementById('viewport-probe').offsetWidth,
+    wide: child.matchMedia('(min-width: 200px)').matches,
+    siblingHit: document.elementFromPoint(460, 70)?.id === 'target',
+  };
+})()"""
+INITIAL_FRAME_GEOMETRY = {
+    "outerWidth": 200, "viewport": [140, 100], "viewportUnitWidth": 70,
+    "nestedWidth": 70, "nestedViewportUnitWidth": 35, "wide": False, "siblingHit": True,
+}
+WIDE_FRAME_GEOMETRY = {
+    "outerWidth": 280, "viewport": [220, 100], "viewportUnitWidth": 110,
+    "nestedWidth": 110, "nestedViewportUnitWidth": 55, "wide": True, "siblingHit": False,
+}
+
 
 @dataclass
 class Probe:
@@ -52,9 +98,9 @@ class Probe:
             raise SmokeError(f"{method} raised an exception: {result!r}")
         return result
 
-    async def evaluate(self, expression: str) -> Any:
+    async def evaluate(self, expression: str, *, await_promise: bool = False) -> Any:
         result = await self.call("Runtime.evaluate", {
-            "expression": expression, "returnByValue": True,
+            "expression": expression, "returnByValue": True, "awaitPromise": await_promise,
         })
         return result["result"].get("value")
 
@@ -66,10 +112,10 @@ class Probe:
 
 
 @asynccontextmanager
-async def _fresh_probe(client: RawCdpClient) -> AsyncIterator[Probe]:
+async def _fresh_probe(client: RawCdpClient, url: str) -> AsyncIterator[Probe]:
     # Only DOM/Runtime metadata is read here. No Playwright preflight, geometry
     # query, screenshot, or screencast may warm a case before its first command.
-    target, session = await _open_target(client, DATA_URL)
+    target, session = await _open_target(client, url)
     try:
         if not is_moli_browser():
             # Chromium hit testing uses the compositor surface. Wait for the
@@ -243,17 +289,21 @@ async def _frame(probe: Probe, seen: list[dict[str, Any]], previous: int | None)
 async def _screencast(probe: Probe) -> dict[str, Any]:
     previous = None
     for published, mutation in [(80, 120), (120, 160)]:
-        _, _, seen = await _success(probe.client, "Page.startScreencast", {
-            "format": "jpeg", "maxWidth": 400, "maxHeight": 300,
-        }, session_id=probe.session)
-        event = await _frame(probe, seen, previous if is_moli_browser() else None)
-        previous = event["params"]["sessionId"]
-        if not base64.b64decode(event["params"]["data"], validate=True).startswith(b"\xff\xd8"):
-            raise SmokeError("screencast frame did not contain JPEG data")
-        await probe.call("Page.stopScreencast")
+        previous = await _capture_screencast_frame(probe, previous)
         await probe.set_width(mutation)
         assert_equal(await probe.width(), published if is_moli_browser() else mutation, "geometry after screencast and mutation")
     return {"firstFrameWidth": 80, "newFrameWidth": 120}
+
+
+async def _capture_screencast_frame(probe: Probe, previous: int | None = None) -> int:
+    _, _, seen = await _success(probe.client, "Page.startScreencast", {
+        "format": "jpeg", "maxWidth": 400, "maxHeight": 300,
+    }, session_id=probe.session)
+    event = await _frame(probe, seen, previous if is_moli_browser() else None)
+    await probe.call("Page.stopScreencast")
+    if not base64.b64decode(event["params"]["data"], validate=True).startswith(b"\xff\xd8"):
+        raise SmokeError("screencast frame did not contain JPEG data")
+    return event["params"]["sessionId"]
 
 
 async def _invalid_clip(probe: Probe) -> dict[str, Any]:
@@ -346,6 +396,118 @@ async def _svg_publication(probe: Probe) -> dict[str, Any]:
             "published": published}
 
 
+async def _iframe_screenshot(probe: Probe) -> dict[str, Any]:
+    assert_equal(await probe.evaluate(FRAME_GEOMETRY), INITIAL_FRAME_GEOMETRY, "initial iframe geometry")
+    await probe.evaluate("probe.setAttribute('data-wide', '')")
+    assert_equal(await probe.evaluate("getComputedStyle(target).pointerEvents"), "none", "live sibling style")
+    before = await probe.evaluate(FRAME_GEOMETRY)
+    assert_equal(before, INITIAL_FRAME_GEOMETRY if is_moli_browser() else WIDE_FRAME_GEOMETRY,
+                 "geometry and hit testing after stylesheet dependencies change")
+
+    png, _ = await _capture(probe.client, probe.session)
+    assert_equal(decode_png(png).pixel(140, 100), (0, 0, 255, 255), "child media query in captured pixels")
+    after = await probe.evaluate(FRAME_GEOMETRY)
+    assert_equal(after, WIDE_FRAME_GEOMETRY, "screenshot publishes outer and child geometry together")
+    return {"beforeCapture": before, "afterCapture": after}
+
+
+async def _iframe_screencast(probe: Probe) -> dict[str, Any]:
+    previous = await _capture_screencast_frame(probe)
+    assert_equal(await probe.evaluate(FRAME_GEOMETRY), INITIAL_FRAME_GEOMETRY, "first screencast frame geometry")
+    await probe.evaluate("probe.setAttribute('data-wide', '')")
+    assert_equal(await probe.evaluate(FRAME_GEOMETRY),
+                 INITIAL_FRAME_GEOMETRY if is_moli_browser() else WIDE_FRAME_GEOMETRY,
+                 "geometry between screencast frames")
+
+    await _capture_screencast_frame(probe, previous)
+    published = await probe.evaluate(FRAME_GEOMETRY)
+    assert_equal(published, WIDE_FRAME_GEOMETRY, "new screencast frame updates both nested viewport sizes")
+    return {"published": published}
+
+
+async def _iframe_print(probe: Probe) -> dict[str, Any]:
+    assert_equal(await probe.evaluate(FRAME_GEOMETRY), INITIAL_FRAME_GEOMETRY, "initial screen geometry before print")
+    await probe.evaluate("probe.style.width = '300px'; probe.style.height = '180px'")
+    resized = {
+        "outerWidth": 300, "viewport": [240, 120], "viewportUnitWidth": 120,
+        "nestedWidth": 120, "nestedViewportUnitWidth": 60, "wide": True, "siblingHit": True,
+    }
+    await _pdf(probe, 0)
+    after_print = await probe.evaluate(FRAME_GEOMETRY)
+    assert_equal(after_print, INITIAL_FRAME_GEOMETRY if is_moli_browser() else resized,
+                 "print leaves the screen iframe viewport intact")
+    await _capture(probe.client, probe.session)
+    after_capture = await probe.evaluate(FRAME_GEOMETRY)
+    assert_equal(after_capture, resized, "screen capture after printing publishes the new viewport")
+    return {"afterPrint": after_print, "afterCapture": after_capture}
+
+
+async def _iframe_captured_touch(probe: Probe) -> dict[str, Any]:
+    await probe.evaluate("""
+        window.frameTouches = [];
+        const child = probe.contentDocument;
+        for (const type of ['touchstart', 'touchmove', 'touchend']) {
+          child.addEventListener(type, event => {
+            const touch = event.changedTouches[0];
+            frameTouches.push([type, event.target.id, touch.clientX, touch.clientY]);
+          });
+        }
+    """)
+    method = "Input.dispatchTouchEvent"
+    await probe.call(method, {"type": "touchStart", "touchPoints": [{"x": 140, "y": 100, "id": 1}]})
+    await probe.evaluate("probe.parentElement.style.marginLeft = '120px'")
+    await probe.call(method, {"type": "touchMove", "touchPoints": [{"x": 160, "y": 110, "id": 1}]})
+    await _capture(probe.client, probe.session)
+    # This point is outside the moved child viewport, so it also tests routing
+    # to the captured target after publishing the new frame transform.
+    await probe.call(method, {"type": "touchMove", "touchPoints": [{"x": 142, "y": 120, "id": 1}]})
+    await probe.call(method, {"type": "touchEnd", "touchPoints": []})
+    events = await probe.evaluate("frameTouches")
+    assert_equal(events, [
+        ["touchstart", "child", 10, 10],
+        ["touchmove", "child", 30 if is_moli_browser() else 10, 20],
+        ["touchmove", "child", -8, 30],
+        ["touchend", "child", -8, 30],
+    ], "captured touch uses the current screen snapshot")
+    return {"events": events}
+
+
+async def _iframe_browsing_context(probe: Probe) -> dict[str, Any]:
+    assert_equal(await probe.evaluate(FRAME_GEOMETRY), INITIAL_FRAME_GEOMETRY, "old browsing context geometry")
+    await probe.set_width(280)
+    navigated = await probe.evaluate("""
+        new Promise(resolve => {
+          window.oldFrame = document.getElementById('probe');
+          window.oldChild = oldFrame.contentWindow;
+          const oldDocument = oldFrame.contentDocument;
+          oldFrame.addEventListener('load', () => resolve([
+            oldFrame.contentWindow === oldChild,
+            oldFrame.contentDocument !== oldDocument,
+            !!oldFrame.contentDocument.getElementById('replacement'),
+            oldFrame.contentWindow.innerWidth,
+          ]), { once: true });
+          oldFrame.srcdoc = '<p id="replacement">New child document</p>';
+        })
+    """, await_promise=True)
+    assert_equal(navigated, [True, True, True, 140 if is_moli_browser() else 220],
+                 "child navigation keeps its browsing context and viewport")
+
+    assert_equal(await probe.evaluate("oldFrame.remove(); oldFrame.contentWindow === null"), True,
+                 "detached iframe has no Window")
+    reattached = await probe.evaluate("""(() => {
+      document.querySelector('section').prepend(oldFrame);
+      return [oldFrame.contentWindow === oldChild, oldFrame.contentWindow.innerWidth];
+    })()""")
+    # Lazy infers the new context's viewport from the frozen owner width until
+    # screen capture measures the new content box.
+    assert_equal(reattached, [False, 200 if is_moli_browser() else 220],
+                 "reattaching the owner creates a new browsing context without the old content viewport")
+    await _capture(probe.client, probe.session)
+    assert_equal(await probe.evaluate("oldFrame.contentWindow.innerWidth"), 220,
+                 "first new screen layout measures the replacement viewport")
+    return {"sameContextViewport": navigated[-1], "reattachedViewport": reattached[-1], "publishedViewport": 220}
+
+
 async def run_layout_policy_group(endpoint: str, fixture: str, results: list[dict[str, Any]]) -> None:
     object_params = lambda p, phase: {"objectId": p.object_id}
     initializers: list[tuple[str, Operation]] = [
@@ -395,12 +557,22 @@ async def run_layout_policy_group(endpoint: str, fixture: str, results: list[dic
         ("state/svg-shares-frozen-publication", _svg_publication),
         *[("replacement/" + kind, _replacement(kind)) for kind in ["Page.navigate", "Page.reload", "Page.setDocumentContent", "document.open"]],
     ]
+    iframe_checks = [
+        ("iframe/screenshot-publishes-geometry", _iframe_screenshot),
+        ("iframe/screencast-publishes-nested-viewports", _iframe_screencast),
+        ("iframe/print-preserves-screen-geometry", _iframe_print),
+        ("iframe/captured-touch-uses-published-coordinates", _iframe_captured_touch),
+        ("iframe/viewport-follows-browsing-context", _iframe_browsing_context),
+    ]
     client = await connect_raw_cdp(endpoint)
     failures = []
     try:
-        for name, run in checks:
+        for name, run, url in [
+            *((name, run, DATA_URL) for name, run in checks),
+            *((name, run, FRAME_DATA_URL) for name, run in iframe_checks),
+        ]:
             try:
-                async with _fresh_probe(client) as probe:
+                async with _fresh_probe(client, url) as probe:
                     observed = await run(probe)
                 record(results, "layout_policy/" + name, {"policy": "frozen" if is_moli_browser() else "live", **observed})
             except Exception as error:
