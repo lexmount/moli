@@ -450,7 +450,8 @@ where
 
             let inherited = world.boxes[id].style.clone();
             let first_new = world.boxes.len();
-            let mut built = self.build_source_node(world, child, &inherited)?;
+            let may_replace_leaf = previous.is_some_and(|old| world.boxes[old].children.is_empty());
+            let mut built = self.build_source_node(world, child, &inherited, may_replace_leaf)?;
             if let Some(previous) = previous
                 && let [new] = built.as_mut_slice()
                 && world.boxes.index_of(*new) == first_new

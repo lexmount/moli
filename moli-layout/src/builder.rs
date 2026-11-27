@@ -243,6 +243,7 @@ where
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
         inherited_style: &ResolvedLayoutStyle,
+        may_replace_leaf: bool,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let source_kind = self.source.node_kind(source_node);
         match source_kind {
@@ -255,6 +256,9 @@ where
                 let Some(text) = self.source.text(source_node) else {
                     return Ok(Vec::new());
                 };
+                if !may_replace_leaf {
+                    world.numeric_tree = None;
+                }
                 let id = world.allocate(LayoutWorld::new_box(
                     Some(source_node),
                     None,
@@ -271,7 +275,7 @@ where
                 world.map_source(source_node, id);
                 Ok(vec![id])
             }
-            LayoutSourceKind::Element => self.build_element(world, source_node),
+            LayoutSourceKind::Element => self.build_element(world, source_node, may_replace_leaf),
         }
     }
 
@@ -279,6 +283,7 @@ where
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
+        may_replace_leaf: bool,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         self.enter_source(source_node)?;
 
@@ -327,6 +332,11 @@ where
                         style.clone(),
                         metrics,
                     );
+                    // A new principal box retires the old order held by the
+                    // numeric tree before insert makes the working order unique.
+                    if !may_replace_leaf {
+                        world.numeric_tree = None;
+                    }
                     let id = world.allocate(box_node);
                     if matches!(
                         semantics.category,
@@ -485,7 +495,7 @@ where
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?);
         for child in self.checked_flat_children(source_node)? {
-            children.extend(self.build_source_node(world, child, style)?);
+            children.extend(self.build_source_node(world, child, style, false)?);
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::After, after)?);
         Ok(children)
@@ -531,8 +541,11 @@ where
         pseudo: LayoutPseudo,
         style: ResolvedLayoutStyle,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        let generated_child = style
-            .generated_text()
+        let generated_text = style.generated_text();
+        if generated_text.is_some() || style.display() != LayoutDisplay::Contents {
+            world.numeric_tree = None;
+        }
+        let generated_child = generated_text
             .map(|text| self.allocate_generated_text(world, owner, pseudo, &style, text));
 
         // `display: contents` suppresses the pseudo's own principal box, but
