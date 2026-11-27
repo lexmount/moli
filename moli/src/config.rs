@@ -420,6 +420,19 @@ mod tests {
     }
 
     #[test]
+    fn accept_language_requires_a_concrete_preference() {
+        for header in ["*", "en;q=0", "en;q=0,*;q=0"] {
+            let error = Cli::try_parse_from(["moli", "serve", "--accept-language", header])
+                .expect_err("Navigator needs a concrete language preference");
+            assert!(
+                error
+                    .to_string()
+                    .contains("language tag with positive weight")
+            );
+        }
+    }
+
+    #[test]
     fn serve_debugger_pauses_are_opt_in() {
         for (arguments, expected) in [
             (vec!["moli", "serve"], false),

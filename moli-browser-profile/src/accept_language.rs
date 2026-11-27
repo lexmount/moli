@@ -2,12 +2,14 @@ use std::cmp::Reverse;
 
 use icu_locale_core::Locale;
 
-/// Derives the ordered Navigator languages from an HTTP Accept-Language value.
+use crate::window_surface::DEFAULT_ACCEPT_LANGUAGE;
+
+/// Returns the concrete, positive-weight languages in preference order.
 pub fn parse_accept_language(value: &str) -> Vec<String> {
     let mut preferred: Vec<_> = value
         .split(',')
         .filter_map(|entry| parse_range(entry).ok())
-        .filter(|(tag, quality)| *tag != "*" && *quality != 0)
+        .filter(|(tag, quality)| is_preferred_language(tag, *quality))
         .collect();
     preferred.sort_by_key(|(_, quality)| Reverse(*quality));
     preferred
@@ -16,16 +18,36 @@ pub fn parse_accept_language(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// Validates an explicit HTTP value whose concrete ranges are language tags.
+pub(super) fn navigator_languages(value: &str) -> Vec<String> {
+    let preferred = parse_accept_language(value);
+    if preferred.is_empty() {
+        parse_accept_language(DEFAULT_ACCEPT_LANGUAGE)
+    } else {
+        preferred
+    }
+}
+
+/// Validates an explicitly configured browser language preference.
 pub fn validate_accept_language(value: &str) -> Result<(), String> {
     if value.chars().any(|c| c.is_control() && c != '\t') {
         return Err("Accept-Language must not contain control characters".to_owned());
     }
+    let mut has_preferred_language = false;
     for entry in value.split(',') {
-        parse_range(entry)
+        let (tag, quality) = parse_range(entry)
             .map_err(|reason| format!("invalid Accept-Language entry {entry:?}: {reason}"))?;
+        has_preferred_language |= is_preferred_language(tag, quality);
+    }
+    if !has_preferred_language {
+        return Err(
+            "Accept-Language requires at least one language tag with positive weight".to_owned(),
+        );
     }
     Ok(())
+}
+
+fn is_preferred_language(tag: &str, quality: u16) -> bool {
+    tag != "*" && quality > 0
 }
 
 fn parse_range(entry: &str) -> Result<(&str, u16), &'static str> {

@@ -1,4 +1,4 @@
-use crate::parse_accept_language;
+use crate::accept_language::navigator_languages;
 use crate::window_surface::{
     DEFAULT_ACCEPT_LANGUAGE, DEFAULT_NAVIGATOR_PLATFORM, DEFAULT_SEC_CH_UA_ARCH,
     DEFAULT_SEC_CH_UA_BITNESS, DEFAULT_SEC_CH_UA_FORM_FACTORS, DEFAULT_SEC_CH_UA_MODEL,
@@ -111,7 +111,7 @@ impl BrowserIdentityProfile {
             model,
             wow64: has_user_agent_metadata && DEFAULT_SEC_CH_UA_WOW64 == "?1",
             form_factors,
-            languages: parse_accept_language(&accept_language),
+            languages: navigator_languages(&accept_language),
             user_agent,
             accept_language,
             navigator_platform: DEFAULT_NAVIGATOR_PLATFORM.to_owned(),
@@ -245,7 +245,7 @@ impl BrowserIdentityProfile {
     pub fn with_accept_language(&self, accept_language: impl Into<String>) -> Self {
         let accept_language = accept_language.into();
         let mut identity = self.clone();
-        identity.languages = parse_accept_language(&accept_language);
+        identity.languages = navigator_languages(&accept_language);
         identity.accept_language = accept_language;
         identity
     }
@@ -410,6 +410,20 @@ mod tests {
         assert_eq!(identity.platform(), "");
         assert!(identity.form_factors().is_empty());
         assert_eq!(identity.languages(), ["fr-FR", "fr"]);
+    }
+
+    #[test]
+    fn http_only_language_ranges_use_navigator_defaults() {
+        for header in ["*", "en;q=0", "en;q=0,*;q=0"] {
+            for identity in [
+                BrowserIdentityProfile::new(DEFAULT_USER_AGENT, header),
+                BrowserIdentityProfile::default().with_accept_language(header),
+            ] {
+                assert_eq!(identity.accept_language(), header);
+                assert_eq!(identity.language(), "en-US");
+                assert_eq!(identity.languages(), ["en-US", "en"]);
+            }
+        }
     }
 
     #[test]
