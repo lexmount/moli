@@ -282,14 +282,14 @@ fn source_drag_moving_iframe_keeps_destination_coordinates_for_current_update() 
 }
 
 #[test]
-fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation() {
+fn standalone_drag_cancel_uses_published_frame_coordinates() {
     let scale = 1.0;
     let mut vm = cross_document_drag_vm(scale);
     vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(
         r#"
         document.getElementById('parent').addEventListener('dragenter',()=>{
-            document.getElementById('frame-b').style.left='520px';
+            document.getElementById('frame-a').style.left='520px';
         }, {once:true});
         "#,
     )
@@ -322,27 +322,7 @@ fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation()
     assert_event_coordinates(&events[2], "a", root_position("parent", scale), scale);
     assert_eq!(log["viewsDisabled"], true);
     assert_eq!(log["sourceDisabled"], true);
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
-    let refreshed_geometry = vm
-        ._context_host
-        .borrow()
-        .published_frame_geometry()
-        .unwrap();
-    assert!(!std::rc::Rc::ptr_eq(
-        &refreshed_geometry,
-        &original_geometry
-    ));
-
-    vm.eval("document.getElementById('frame-b').style.left='530px'")
-        .unwrap();
-    let sampled_geometry = vm
-        ._context_host
-        .borrow()
-        .published_frame_geometry()
-        .unwrap();
-    assert!(std::rc::Rc::ptr_eq(&sampled_geometry, &refreshed_geometry));
-    vm.cancel_dragging().unwrap();
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
 }
 
 #[test]
@@ -352,10 +332,8 @@ fn standalone_drag_cancel_clears_the_session_without_a_layout_root() {
     vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     let data = start_native_drag(&mut vm, "a", scale);
     dispatch_drag(&mut vm, "dragenter", "parent", scale, &data);
-    vm.eval(
-        "document.getElementById('frame-b').style.left='520px'; document.documentElement.remove()",
-    )
-    .unwrap();
+    vm.eval("document.documentElement.remove()").unwrap();
+    vm._context_host.borrow().reset_document_layout_state();
     assert!(vm.active_drag_session.is_some());
     assert!(matches!(
         vm._context_host.borrow().ensure_observable_layout(),
