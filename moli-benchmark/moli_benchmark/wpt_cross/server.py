@@ -2820,6 +2820,13 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == (
+                "/html/semantics/embedded-content/media-elements/loading-the-media-resource/"
+                "resources/delayed-broken-video.py"
+            ):
+                time.sleep(0.1)
+                self._send_bytes("text/plain", b"FAIL", emit_body=emit_body)
+                return
             if path == CLEAR_SITE_DATA_CONTROLLED_PATH:
                 self._send_python_handler_response(
                     path, parsed.query, b"FROM_NETWORK",
