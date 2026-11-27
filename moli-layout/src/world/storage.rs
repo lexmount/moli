@@ -1,7 +1,4 @@
-use std::{
-    ops::{Index, IndexMut},
-    sync::Arc,
-};
+use std::ops::{Index, IndexMut};
 
 use slotmap::{DenseSlotMap, SecondaryMap};
 
@@ -10,7 +7,7 @@ use super::{LayoutBox, LayoutBoxId};
 type BoxMap<N> = DenseSlotMap<LayoutBoxId, LayoutBox<N>>;
 
 /// Pass-local order. Handles never encode these positions.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct BoxOrder {
     ids: Vec<LayoutBoxId>,
     positions: SecondaryMap<LayoutBoxId, u32>,
@@ -62,7 +59,7 @@ impl BoxOrder {
 #[derive(Debug)]
 pub(crate) struct LayoutBoxes<N> {
     entries: BoxMap<N>,
-    order: Arc<BoxOrder>,
+    order: BoxOrder,
     storage_revision: u64,
 }
 
@@ -70,7 +67,7 @@ impl<N> Default for LayoutBoxes<N> {
     fn default() -> Self {
         Self {
             entries: BoxMap::with_key(),
-            order: Arc::default(),
+            order: BoxOrder::default(),
             storage_revision: 0,
         }
     }
@@ -80,7 +77,7 @@ impl<N> LayoutBoxes<N> {
     pub(crate) fn insert(&mut self, value: LayoutBox<N>) -> LayoutBoxId {
         let id = self.entries.insert(value);
         self.storage_revision += 1;
-        let order = Arc::make_mut(&mut self.order);
+        let order = &mut self.order;
         let index = u32::try_from(order.ids.len()).expect("layout order exceeds u32");
         order.ids.push(id);
         assert!(order.positions.insert(id, index).is_none());
@@ -93,7 +90,7 @@ impl<N> LayoutBoxes<N> {
     }
 
     pub(crate) fn pop(&mut self) -> Option<LayoutBox<N>> {
-        let order = Arc::make_mut(&mut self.order);
+        let order = &mut self.order;
         let id = order.ids.pop()?;
         order.positions.remove(id);
         self.storage_revision += 1;
@@ -124,8 +121,10 @@ impl<N> LayoutBoxes<N> {
     pub(crate) fn order(&self) -> &BoxOrder {
         &self.order
     }
-    pub(crate) fn order_snapshot(&self) -> Arc<BoxOrder> {
-        Arc::clone(&self.order)
+    pub(crate) fn order_and_values_mut(
+        &mut self,
+    ) -> (&BoxOrder, impl Iterator<Item = &mut LayoutBox<N>>) {
+        (&self.order, self.entries.values_mut())
     }
     #[inline]
     pub(crate) fn keys(
@@ -189,7 +188,7 @@ impl<N> LayoutBoxes<N> {
         } else {
             debug_assert!(order.ids.iter().all(|&id| self.entries.contains_key(id)));
         }
-        self.order = Arc::new(order);
+        self.order = order;
         true
     }
 }

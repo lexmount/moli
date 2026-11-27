@@ -99,7 +99,6 @@ fn text_edit_preserves_shared_order_and_numeric_tree() {
     retained.discard_paint();
     let world = &mut retained.world;
     let id = world.source_box(1).unwrap();
-    let order = world.boxes.order_snapshot();
     let storage_revision = world.boxes.storage_revision();
     assert!(world.numeric_tree.is_some());
 
@@ -115,7 +114,6 @@ fn text_edit_preserves_shared_order_and_numeric_tree() {
     assert_eq!(world.source_box(1), Some(id));
     assert_eq!(world.boxes[id].text(), Some(after.text));
     assert_eq!(world.boxes[id].text_selection, Some(after.selection));
-    assert!(Arc::ptr_eq(&order, &world.boxes.order_snapshot()));
     assert_eq!(world.boxes.storage_revision(), storage_revision);
     assert!(reuse_numeric && world.numeric_tree.is_some());
     world.validate_invariants().unwrap();
