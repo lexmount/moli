@@ -10,6 +10,7 @@ pub fn ensure_stylo_browser_compat_prefs() {
         stylo_static_prefs::set_pref!("layout.css.content.alt-text.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.font-palette.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.margin-rules.enabled", true);
+        stylo_static_prefs::set_pref!("layout.css.progress-function.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.scroll-driven-animations.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.starting-style-at-rules.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.style-queries.enabled", true);
