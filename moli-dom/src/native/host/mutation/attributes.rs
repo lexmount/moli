@@ -456,6 +456,24 @@ impl DomHost {
                 namespace,
                 local_name,
             );
+            if namespace == Some("http://www.w3.org/1999/xlink")
+                && local_name == "href"
+                && prior_value.as_deref().is_none_or(str::is_empty)
+                && !value.is_empty()
+                && self
+                    .node(handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| {
+                        element.namespace() == "http://www.w3.org/2000/svg"
+                            && element.is_script_element()
+                            && element.attribute_ns("", "href").is_none()
+                    })
+            {
+                effects.mark_script_prepare_trigger(
+                    handle,
+                    ScriptPrepareTriggerKind::SourceAttributeAdded,
+                );
+            }
             effects.mark_attribute_change(
                 handle,
                 local_name,
@@ -714,6 +732,55 @@ impl DomHost {
 mod tests {
     use super::*;
     use crate::native::NativeDom;
+
+    #[test]
+    fn xlink_href_prepares_svg_scripts_when_it_supplies_the_source() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(
+            url::Url::parse("https://example.test/").unwrap(),
+        ));
+        let svg = Some("http://www.w3.org/2000/svg");
+        let xlink = Some("http://www.w3.org/1999/xlink");
+        let script = host.create_element_ns(svg, "script").unwrap();
+
+        let effects = host.set_attribute_ns_effects(
+            script,
+            xlink,
+            Some("link"),
+            "href",
+            "link:href",
+            "first.js",
+        );
+        let [trigger] = effects.scripts().prepare_triggers() else {
+            panic!("expected one script preparation trigger");
+        };
+        assert_eq!(trigger.handle(), script);
+        assert_eq!(
+            trigger.kind(),
+            ScriptPrepareTriggerKind::SourceAttributeAdded
+        );
+
+        let script = host.create_element_ns(svg, "script").unwrap();
+        let foreign = host.set_attribute_ns_effects(
+            script,
+            Some("urn:test"),
+            Some("other"),
+            "href",
+            "other:href",
+            "ignored.js",
+        );
+        assert!(foreign.scripts().prepare_triggers().is_empty());
+
+        host.set_attribute(script, "href", "");
+        let shadowed = host.set_attribute_ns_effects(
+            script,
+            xlink,
+            Some("xlink"),
+            "href",
+            "xlink:href",
+            "shadowed.js",
+        );
+        assert!(shadowed.scripts().prepare_triggers().is_empty());
+    }
 
     #[test]
     fn changed_attribute_effects_use_the_actual_attribute_identity() {
