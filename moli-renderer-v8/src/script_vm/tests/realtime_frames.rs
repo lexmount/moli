@@ -95,10 +95,10 @@ fn viewport_reads_refresh_only_the_affected_frame_layout() {
         );
         if policy != LayoutPolicy::Realtime {
             let read = "JSON.stringify([viewport.width, viewport.height, query.matches, child.matchMedia('(width:400px)').matches])";
-            let expected_builds = before + u64::from(policy == LayoutPolicy::OnDemand);
+            let expected_builds = before + u64::from(policy == LayoutPolicy::Lazy);
             for _ in 0..2 {
                 let values = vm.eval(read).unwrap();
-                if policy == LayoutPolicy::OnDemand {
+                if policy == LayoutPolicy::Lazy {
                     assert_eq!(values, "[400,100,true,true]");
                 }
                 assert_eq!(

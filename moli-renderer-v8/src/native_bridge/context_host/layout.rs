@@ -179,7 +179,7 @@ impl PageScriptHost {
         if self.layout_policy != policy {
             let mut state = self.document_layout_state.borrow_mut();
             drop(state.take_retained_layout());
-            state.on_demand_frames = Default::default();
+            state.lazy_frames = Default::default();
             self.dom_host().track_layout_changes(None);
             self.realtime_layout_state = policy.is_realtime().then(Box::default);
         }
@@ -301,7 +301,7 @@ impl PageScriptHost {
     pub(crate) fn observed_frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
         let (viewport, needs_validation) = {
             let state = self.document_layout_state.try_borrow().ok()?;
-            let changes = &state.on_demand_frames;
+            let changes = &state.lazy_frames;
             (
                 state.frame_viewport(frame)?,
                 changes.needs_layout || !changes.changed_owners.is_empty(),
@@ -316,33 +316,33 @@ impl PageScriptHost {
         Some(viewport)
     }
 
-    pub(super) fn note_on_demand_frame_style_change(&self, frame: DomHandle) {
+    pub(super) fn note_lazy_frame_style_change(&self, frame: DomHandle) {
         let host = self.dom_host();
-        if self.layout_policy != LayoutPolicy::OnDemand
+        if self.layout_policy != LayoutPolicy::Lazy
             || !host.is_html_element_named(frame, "iframe")
             || !host.is_connected(frame)
         {
             return;
         }
         let mut state = self.document_layout_state.borrow_mut();
-        if state.on_demand_frames.needs_layout
+        if state.lazy_frames.needs_layout
             || (state.frame_viewport(frame).is_none()
                 && state.latest_layout(self.document_handle()).is_none())
         {
             return;
         }
-        state.on_demand_frames.changed_owners.insert(frame);
+        state.lazy_frames.changed_owners.insert(frame);
     }
 
-    fn validate_on_demand_frame_layout(&self) {
-        if self.layout_policy != LayoutPolicy::OnDemand || self.layout_pass_active.get() {
+    fn validate_lazy_frame_layout(&self) {
+        if self.layout_policy != LayoutPolicy::Lazy || self.layout_pass_active.get() {
             return;
         }
         let changed_owners = std::mem::take(
             &mut self
                 .document_layout_state
                 .borrow_mut()
-                .on_demand_frames
+                .lazy_frames
                 .changed_owners,
         );
         let host = self.dom_host();
@@ -369,13 +369,13 @@ impl PageScriptHost {
         if owner_needs_layout
             || owner_documents
                 .iter()
-                .any(|&document| !self.on_demand_restyles_allow_layout_reuse(document))
+                .any(|&document| !self.lazy_restyles_allow_layout_reuse(document))
         {
             // Snapshot readers can still use the published projection until
             // the replacement pass succeeds.
             self.document_layout_state
                 .borrow_mut()
-                .on_demand_frames
+                .lazy_frames
                 .needs_layout = true;
         } else {
             for document in owner_documents {
@@ -384,7 +384,7 @@ impl PageScriptHost {
         }
     }
 
-    fn on_demand_restyles_allow_layout_reuse(&self, document: DomHandle) -> bool {
+    fn lazy_restyles_allow_layout_reuse(&self, document: DomHandle) -> bool {
         // An owner's attribute can restyle its containing block or siblings
         // without changing the owner's computed dimensions.
         let repaint = ServoRestyleDamage::REPAINT;
@@ -517,11 +517,11 @@ impl PageScriptHost {
         if self.layout_pass_active.get() {
             return Err(LayoutError::ReentrantLayoutPass);
         }
-        self.validate_on_demand_frame_layout();
+        self.validate_lazy_frame_layout();
         let document = self.document_handle();
         {
             let state = self.document_layout_state.borrow();
-            if state.latest_layout(document).is_some() && !state.on_demand_frames.needs_layout {
+            if state.latest_layout(document).is_some() && !state.lazy_frames.needs_layout {
                 return Ok(());
             }
         }
@@ -782,7 +782,7 @@ impl PageScriptHost {
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
             if document == self.document_handle() {
-                state.on_demand_frames = Default::default();
+                state.lazy_frames = Default::default();
             }
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
             state.update_frame_viewports(frame_viewports, frame_owner_styles)

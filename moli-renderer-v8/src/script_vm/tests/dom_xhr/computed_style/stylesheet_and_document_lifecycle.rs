@@ -1552,7 +1552,7 @@ yield; // Publish this scene before reading its geometry.
 }
 
 #[test]
-fn ondemand_iframe_attribute_changes_observe_the_used_content_box() {
+fn lazy_iframe_attribute_changes_observe_the_used_content_box() {
     let mut vm = new_parsed_test_vm(
         "https://iframe-content-box.test/",
         r#"<!doctype html>
@@ -1565,7 +1565,7 @@ fn ondemand_iframe_attribute_changes_observe_the_used_content_box() {
            </style>
            <iframe id="frame"></iframe>"#,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(
         r#"
 const frame = document.getElementById('frame');
@@ -1632,7 +1632,7 @@ const readViewport = () => JSON.stringify([
 }
 
 #[test]
-fn ondemand_iframe_refresh_compares_against_the_published_owner_style() {
+fn lazy_iframe_refresh_compares_against_the_published_owner_style() {
     for screenshot in [false, true] {
         for read_style in [false, true] {
             let mut vm = new_parsed_test_vm(
@@ -1645,7 +1645,7 @@ fn ondemand_iframe_refresh_compares_against_the_published_owner_style() {
                    </style>
                    <section id="owner"><iframe id="frame"></iframe></section>"#,
             );
-            vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
             vm.eval("globalThis.child = frame.contentWindow").unwrap();
             if screenshot {
                 publish_layout_for_test(&mut vm);
@@ -1681,7 +1681,7 @@ fn ondemand_iframe_refresh_compares_against_the_published_owner_style() {
 }
 
 #[test]
-fn ondemand_iframe_refresh_follows_relative_selector_layout_damage() {
+fn lazy_iframe_refresh_follows_relative_selector_layout_damage() {
     for read_style in [false, true] {
         let mut vm = new_parsed_test_vm(
             "https://iframe-relative-selector-layout.test/",
@@ -1693,7 +1693,7 @@ fn ondemand_iframe_refresh_follows_relative_selector_layout_damage() {
                </style>
                <iframe id="frame"></iframe>"#,
         );
-        vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         let read_widths = "JSON.stringify([frame.offsetWidth, frame.contentWindow.innerWidth])";
         assert_eq!(vm.eval(read_widths).unwrap(), "[100,100]");
         let builds = vm.layout_pass_observability_for_test().1;
@@ -1721,7 +1721,7 @@ fn ondemand_iframe_refresh_follows_relative_selector_layout_damage() {
 }
 
 #[test]
-fn ondemand_iframe_refresh_updates_sibling_hit_testing() {
+fn lazy_iframe_refresh_updates_sibling_hit_testing() {
     for (property, excluded) in [("pointer-events", "none"), ("visibility", "hidden")] {
         for read_style in [false, true] {
             let mut vm = new_parsed_test_vm(
@@ -1738,7 +1738,7 @@ fn ondemand_iframe_refresh_updates_sibling_hit_testing() {
                        <iframe id="frame"></iframe><div id="target"></div>"#,
                 ),
             );
-            vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
             let hit = "document.elementFromPoint(310, 10) === target";
             assert_eq!(vm.eval(hit).unwrap(), "true");
             let builds = vm.layout_pass_observability_for_test().1;

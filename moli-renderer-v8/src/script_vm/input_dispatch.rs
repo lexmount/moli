@@ -2553,7 +2553,7 @@ impl ScriptVm {
             let runtime = move || unsafe { &*runtime_ptr };
             // Continuing touches may route directly through capture without a hit test.
             if event_name != "touchstart"
-                && runtime().layout_policy() == moli_page_types::LayoutPolicy::OnDemand
+                && runtime().layout_policy() == moli_page_types::LayoutPolicy::Lazy
             {
                 runtime().ensure_observable_layout()?;
             }

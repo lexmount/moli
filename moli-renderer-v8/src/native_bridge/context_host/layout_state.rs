@@ -34,7 +34,7 @@ struct CachedInferredFrameStyleViewport {
 }
 
 #[derive(Default)]
-pub(super) struct OnDemandFrameLayout {
+pub(super) struct LazyFrameLayout {
     pub(super) changed_owners: HashSet<DomHandle>,
     pub(super) needs_layout: bool,
 }
@@ -77,7 +77,7 @@ pub(super) struct DocumentLayoutState {
     /// separate from the single latest-tree slot because a later fresh layout
     /// may replace that slot while the frame view remains live.
     frame_viewports: HashMap<DomHandle, PublishedFrameViewport>,
-    pub(super) on_demand_frames: OnDemandFrameLayout,
+    pub(super) lazy_frames: LazyFrameLayout,
     /// Authored-size fallback used before parent layout publishes an exact
     /// iframe content viewport. The dependency key makes clean style reads
     /// cheap without turning this into independently valid layout state.
