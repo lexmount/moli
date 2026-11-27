@@ -1357,7 +1357,9 @@ where
         viewport_clip: LayoutClipChainId,
         legacy_clips: &mut Vec<LayoutClipChainId>,
     ) {
-        let index = self.world.boxes.index_of(id);
+        let world = self.world;
+        let layout_box = &world.boxes[id];
+        let index = world.boxes.index_of(id);
         // CSS overflow clips follow the containing-block chain, not the box
         // parent chain. In particular, an absolute/fixed descendant skips any
         // overflow clips between itself and its containing block. A
@@ -1366,14 +1368,13 @@ where
         // accumulated by that fixed containing block. Blink maintains the
         // same separate in-flow, absolute-position and fixed-position clip
         // contexts in its paint property tree builder.
-        let mut box_clip = if self.world.boxes[index].style.is_absolute_positioned()
-            || self.world.boxes[index].style.is_fixed_positioned()
+        let mut box_clip = if layout_box.style.is_absolute_positioned()
+            || layout_box.style.is_fixed_positioned()
         {
-            let mut positioned_clip = self.world.boxes[index].positioned_containing_block.map_or(
+            let mut positioned_clip = layout_box.positioned_containing_block.map_or(
                 Some(viewport_clip),
                 |containing_block| {
-                    self.paint_metadata.boxes[self.world.boxes.index_of(containing_block)]
-                        .content_clip
+                    self.paint_metadata.boxes[world.boxes.index_of(containing_block)].content_clip
                 },
             );
             // CSS clip applies to the entire subtree, including descendants
@@ -1406,7 +1407,7 @@ where
         } else {
             ancestor_clip
         };
-        let legacy_rect = self.world.boxes[index]
+        let legacy_rect = layout_box
             .style
             .legacy_clip_rect(self.boxes[index].border_box);
         let owner = LayoutOutputBoxId::from_index(index);
@@ -1422,9 +1423,9 @@ where
         }
         self.boxes[index].clip_chain = box_clip;
 
-        let child_clip = if id != self.world.root
-            && !self.world.is_viewport_defining_body(id)
-            && self.world.boxes[index].clips_descendant_paint()
+        let child_clip = if id != world.root
+            && !world.is_viewport_defining_body(id)
+            && layout_box.clips_descendant_paint()
         {
             Some(self.push_clip(
                 box_clip,
@@ -1436,7 +1437,7 @@ where
             box_clip
         };
         self.paint_metadata.boxes[index].content_clip = child_clip;
-        for child in self.world.boxes[index].children.clone() {
+        for &child in &layout_box.children {
             self.assign_box_clip_metadata(child, child_clip, viewport_clip, legacy_clips);
         }
         if legacy_rect.is_some() {
