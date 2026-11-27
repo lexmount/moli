@@ -63,6 +63,7 @@ pub(super) fn paint_text_shadow(
         &shadow.run,
         shadow.offset,
         glyph_transform,
+        glyph_embolden,
     ) {
         scene.fill(Fill::NonZero, transform, color, None, &path);
         if blur > 0.0 {
@@ -122,6 +123,7 @@ pub(super) fn paint_glyph_run(
         run,
         moli_layout::PaintPoint::default(),
         glyph_transform,
+        glyph_embolden,
     ) {
         let paint_stroke = |scene: &mut _| {
             if let Some((stroke, width)) = stroke {
@@ -284,4 +286,41 @@ fn backend_glyph_transform(skew_radians: Option<f32>) -> Option<Affine> {
         // negating the horizontal shear at this boundary.
         Affine::skew(-f64::from(radians).tan(), 0.0)
     })
+}
+
+#[cfg(any(test, all(target_os = "ios", target_arch = "aarch64", target_abi = "")))]
+fn prepare_native_glyph(mut path: BezPath, transform: Affine, embolden: Vec2) -> BezPath {
+    use glifo::FontEmbolden;
+    use peniko::kurbo::{Diagonal2, expand_path};
+
+    // Match the raster backend's outline expansion before skew and placement.
+    if embolden != Vec2::ZERO {
+        let settings = FontEmbolden::new(Diagonal2::new(embolden.x, embolden.y));
+        path = expand_path(
+            &path,
+            settings.amount,
+            settings.join,
+            settings.miter_limit,
+            settings.tolerance,
+        );
+    }
+    path.apply_affine(transform);
+    path
+}
+
+#[cfg(test)]
+mod tests {
+    use peniko::kurbo::Shape;
+
+    use super::*;
+
+    #[test]
+    fn native_glyph_expands_in_font_space_before_skew_and_placement() {
+        let path = Rect::new(0., 0., 10., 8.).to_path(0.1);
+        let transform = Affine::translate((20., 30.)) * Affine::skew(-0.5, 0.) * Affine::FLIP_Y;
+        let plain = prepare_native_glyph(path.clone(), transform, Vec2::ZERO);
+        let bold = prepare_native_glyph(path, transform, Vec2::new(2., 1.));
+        assert_eq!(plain.bounding_box(), Rect::new(20., 22., 34., 30.));
+        assert_eq!(bold.bounding_box(), Rect::new(17.5, 21., 36.5, 31.));
+    }
 }
