@@ -1396,6 +1396,102 @@ async fn file_navigation_checks_browser_policy_before_opening_existing_or_missin
     Ok(())
 }
 
+#[tokio::test]
+async fn file_script_consumers_bypass_pending_shared_loads() -> Result<()> {
+    use crate::frame_owner_model::{
+        DocumentId, FrameDocumentTaskOwner, FrameSchedulerLaneId, LocalWindowId,
+    };
+    use crate::native_bridge::WindowDocumentOwner;
+    use crate::network::{
+        context::{DocumentFetchContext, DocumentResourceAuthoritySource, DocumentResourceLoader},
+        loads::{ResourceLoadDisposition, ResourceLoadKind},
+        navigation::NavigationResourceLoader,
+    };
+
+    let directory = tempfile::tempdir()?;
+    let page = directory.path().join("page.html");
+    let script = "globalThis.fixtureLoaded = true;";
+    std::fs::write(&page, "<p>fixture</p>")?;
+    std::fs::write(directory.path().join("fixture.js"), script)?;
+    let url = Url::from_file_path(page).expect("fixture path is absolute");
+    let browser = ResourceRequestClient::new(&FetchConfig::default())?;
+    let runner = browser.resource_task_runner();
+    let navigation = NavigationResourceLoader::new(browser.handle(), url.clone(), runner.clone());
+    let navigation_request = browser_navigation_request(url.as_str())?
+        .with_local_file_navigation_access(LocalFileNavigationAccess::BrowserGranted);
+    navigation.fetch(navigation_request).await?;
+    let context = |id| {
+        DocumentFetchContext::new(
+            WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
+                FrameSchedulerLaneId(1),
+                LocalWindowId(1),
+                DocumentId(id),
+            )),
+            url.clone(),
+            url.clone(),
+            "null",
+        )
+    };
+    let authorized = DocumentResourceLoader::for_committed_document(
+        context(1),
+        DocumentResourceAuthoritySource::Navigation(navigation.commit(url.clone())?),
+    );
+    let retired = authorized.fork_for_document(context(2));
+    assert!(retired.begin_detach());
+    retired.finish_detach();
+    let ungranted = DocumentResourceLoader::new(browser.handle(), runner, context(3));
+
+    let request = browser_navigation_request(url.join("fixture.js")?.as_str())?
+        .with_request_mode(RequestMode::NoCors)
+        .with_browser_request_metadata(BrowserRequestMetadata::Script)
+        .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+    let client = authorized.request_client();
+    let loaded = client
+        .fetch_cacheable_script_text_stream(request.clone())
+        .await?;
+    assert_eq!(loaded.body_text(), script);
+    assert_eq!(client.memory_cache_diagnostics().entry_count, 0);
+
+    // Hold an authorized response in a synthetic pending load with the same
+    // cache key as both consumers. This controls completion without a timer.
+    let applied = client.apply_network_policy(request.clone())?;
+    let (key, lookup) = client.lookup_cached_script_text(&applied, "test");
+    let super::ScriptTextCacheLookup::Owner(pending) = lookup else {
+        panic!("expected to create a pending cache entry");
+    };
+    for document in [&retired, &ungranted] {
+        let client = document.request_client();
+        let applied = client.apply_network_policy(request.clone())?;
+        assert_eq!(
+            super::script_text_cache_key(&applied)
+                .for_page_cache_partition(client.page_network_policy.memory_cache_partition_id()),
+            key,
+        );
+    }
+    let callback_load = ungranted
+        .register_load(
+            ResourceLoadKind::Script,
+            ResourceLoadDisposition::Ordinary,
+            None,
+        )
+        .expect("ungranted document is active");
+    let (from_retired, from_ungranted_callback, ()) = tokio::join!(
+        biased;
+        retired.request_client().fetch_cacheable_script_text_stream(request.clone()),
+        ungranted
+            .request_client()
+            .fetch_cacheable_script_text_stream_with_load(request, callback_load),
+        async { client.complete_cached_script_text_load(&key, pending.load(), &applied, Ok(loaded)) },
+    );
+    for result in [from_retired, from_ungranted_callback] {
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "file URL is not accessible from this request"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;

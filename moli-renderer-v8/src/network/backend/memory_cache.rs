@@ -660,7 +660,9 @@ impl SharedMemoryResourceCache {
 }
 
 pub(in crate::network) fn script_text_request_is_memory_cacheable(request: &Request) -> bool {
-    request.effective_cache_mode().allows_memory_cache_store()
+    // The file loader checks each consumer's current Document authority.
+    request.url.scheme() != "file"
+        && request.effective_cache_mode().allows_memory_cache_store()
         // These entries retain a complete response including its redirect
         // history. A resumed fetch must assemble its own history in transport.
         && request.redirect_chain().is_empty()
